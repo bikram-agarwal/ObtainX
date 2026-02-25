@@ -48,7 +48,7 @@ class MainActivity : FlutterActivity() {
         val intent = Intent(Intent.ACTION_VIEW).apply {
             type = "application/vnd.android.package-archive"
         }
-        val resolveInfoList = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        val resolveInfoList = packageManager.queryIntentActivities(intent, 0)
         return resolveInfoList.map { resolveInfo ->
             val label = resolveInfo.loadLabel(packageManager).toString()
             mapOf(

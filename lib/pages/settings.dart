@@ -1225,6 +1225,66 @@ class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
   bool _loading = false;
   String? _error;
 
+  void _showInstallerPicker(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  tr('customInstallerSelect'),
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _installers.length,
+                  itemBuilder: (_, index) {
+                    final entry = _installers[index];
+                    final pkg = entry['packageName'] ?? '';
+                    final label = entry['label'] ?? pkg;
+                    final isSelected =
+                        widget.settingsProvider.customInstallerPackage == pkg;
+                    return RadioListTile<String>(
+                      value: pkg,
+                      groupValue:
+                          widget.settingsProvider.customInstallerPackage,
+                      title: Text(label),
+                      subtitle: Text(
+                        pkg,
+                        style: Theme.of(sheetContext)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(
+                              color: Theme.of(sheetContext)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                      ),
+                      onChanged: (value) {
+                        if (value != null) {
+                          widget.settingsProvider.customInstallerPackage =
+                              value;
+                        }
+                        Navigator.of(sheetContext).pop();
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _refresh() async {
     setState(() {
       _loading = true;
@@ -1295,16 +1355,16 @@ class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
       );
     }
     final selectedPkg = widget.settingsProvider.customInstallerPackage;
-    Map<String, String>? selected;
+    String? selectedLabel;
     if (selectedPkg != null) {
-      try {
-        selected = _installers.firstWhere(
-          (e) => e['packageName'] == selectedPkg,
-        );
-      } catch (_) {
-        selected = null;
+      for (final entry in _installers) {
+        if (entry['packageName'] == selectedPkg) {
+          selectedLabel = entry['label'] ?? entry['packageName'];
+          break;
+        }
       }
     }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1315,23 +1375,43 @@ class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
             IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
           ],
         ),
-        DropdownButtonFormField<Map<String, String>>(
-          value: selected,
-          hint: Text(tr('customInstallerSelect')),
-          decoration: const InputDecoration(),
-          items: _installers.map((e) {
-            return DropdownMenuItem(
-              value: e,
-              child: Text(
-                '${e['label'] ?? e['packageName']} (${e['packageName'] ?? ''})',
-                overflow: TextOverflow.ellipsis,
+        InkWell(
+          onTap: () => _showInstallerPicker(context),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outline,
               ),
-            );
-          }).toList(),
-          onChanged: (value) {
-            widget.settingsProvider.customInstallerPackage =
-                value?['packageName'];
-          },
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        selectedLabel ?? tr('customInstallerSelect'),
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                      if (selectedPkg != null)
+                        Text(
+                          selectedPkg,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_down),
+              ],
+            ),
+          ),
         ),
       ],
     );
