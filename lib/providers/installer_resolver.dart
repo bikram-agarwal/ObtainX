@@ -11,10 +11,17 @@ Future<List<Map<String, String>>> getApkInstallerApps() async {
   return raw.map((e) => Map<String, String>.from(Map<dynamic, dynamic>.from(e as Map))).toList();
 }
 
-Future<void> installApkViaIntent(String apkFilePath, String? targetPackage) async {
+Future<void> installApkViaLegacy(
+  String apkFilePath, {
+  String? targetPackage,
+  String? targetActivity,
+  bool useChooser = false,
+}) async {
   if (!Platform.isAndroid) return;
   await _channel.invokeMethod<void>('launchInstallIntent', <String, dynamic>{
     'path': apkFilePath,
     'package': targetPackage,
+    'activity': targetActivity,
+    'useChooser': useChooser,
   });
 }

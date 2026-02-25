@@ -648,8 +648,8 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             if (Platform.isAndroid)
                               ButtonSegment(
-                                value: SettingsProvider.installerModeCustom,
-                                label: Text(tr('installerModeCustom')),
+                                value: SettingsProvider.installerModeLegacy,
+                                label: Text(tr('installerModeLegacy')),
                               ),
                           ],
                           selected: {settingsProvider.installerMode},
@@ -719,9 +719,28 @@ class _SettingsPageState extends State<SettingsPage> {
                         ],
                         if (Platform.isAndroid &&
                             settingsProvider.installerMode ==
-                                SettingsProvider.installerModeCustom) ...[
+                                SettingsProvider.installerModeLegacy) ...[
                           height16,
-                          _CustomInstallerSelector(
+                          Row(
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
+                            children: [
+                              Flexible(
+                                child: Text(tr('legacyInstallerAlwaysChoose')),
+                              ),
+                              Switch(
+                                value: settingsProvider
+                                    .legacyInstallerAlwaysChoose,
+                                onChanged: (value) {
+                                  settingsProvider
+                                          .legacyInstallerAlwaysChoose =
+                                      value;
+                                },
+                              ),
+                            ],
+                          ),
+                          height8,
+                          _LegacyInstallerSelector(
                             settingsProvider: settingsProvider,
                           ),
                         ],
@@ -1208,19 +1227,19 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
   }
 }
 
-class _CustomInstallerSelector extends StatefulWidget {
-  const _CustomInstallerSelector({
+class _LegacyInstallerSelector extends StatefulWidget {
+  const _LegacyInstallerSelector({
     required this.settingsProvider,
   });
 
   final SettingsProvider settingsProvider;
 
   @override
-  State<_CustomInstallerSelector> createState() =>
-      _CustomInstallerSelectorState();
+  State<_LegacyInstallerSelector> createState() =>
+      _LegacyInstallerSelectorState();
 }
 
-class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
+class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
   List<Map<String, String>> _installers = [];
   bool _loading = false;
   String? _error;
@@ -1248,13 +1267,18 @@ class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
                   itemBuilder: (_, index) {
                     final entry = _installers[index];
                     final pkg = entry['packageName'] ?? '';
+                    final activity = entry['activityName'] ?? '';
                     final label = entry['label'] ?? pkg;
-                    final isSelected =
-                        widget.settingsProvider.customInstallerPackage == pkg;
+                    final value = '$pkg|$activity';
+                    final groupValue = widget.settingsProvider
+                                .customInstallerPackage !=
+                            null &&
+                        widget.settingsProvider.customInstallerActivity != null
+                        ? '${widget.settingsProvider.customInstallerPackage}|${widget.settingsProvider.customInstallerActivity}'
+                        : null;
                     return RadioListTile<String>(
-                      value: pkg,
-                      groupValue:
-                          widget.settingsProvider.customInstallerPackage,
+                      value: value,
+                      groupValue: groupValue,
                       title: Text(label),
                       subtitle: Text(
                         pkg,
@@ -1267,11 +1291,10 @@ class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
                                   .onSurfaceVariant,
                             ),
                       ),
-                      onChanged: (value) {
-                        if (value != null) {
-                          widget.settingsProvider.customInstallerPackage =
-                              value;
-                        }
+                      onChanged: (_) {
+                        widget.settingsProvider.customInstallerPackage = pkg;
+                        widget.settingsProvider.customInstallerActivity =
+                            activity;
                         Navigator.of(sheetContext).pop();
                       },
                     );
@@ -1363,6 +1386,9 @@ class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
           break;
         }
       }
+    }
+    if (widget.settingsProvider.legacyInstallerAlwaysChoose) {
+      return const SizedBox.shrink();
     }
 
     return Column(

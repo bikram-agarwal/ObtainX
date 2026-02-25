@@ -1,5 +1,6 @@
 package dev.imranr.obtainium
 
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -32,7 +33,9 @@ class MainActivity : FlutterActivity() {
                     } else {
                         try {
                             val targetPackage = call.argument<String?>("package")
-                            launchInstallIntent(path, targetPackage)
+                            val targetActivity = call.argument<String?>("activity")
+                            val useChooser = call.argument<Boolean>("useChooser") ?: false
+                            launchInstallIntent(path, targetPackage, targetActivity, useChooser)
                             result.success(null)
                         } catch (e: Exception) {
                             result.error("LAUNCH_FAILED", e.message, null)
@@ -47,31 +50,34 @@ class MainActivity : FlutterActivity() {
     private fun queryApkInstallerActivities(): List<Map<String, String>> {
         val apkMime = "application/vnd.android.package-archive"
         val dummyUri = Uri.parse("content://$packageName/dummy.apk")
+        val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            setDataAndType(dummyUri, apkMime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
         val viewIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(dummyUri, apkMime)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = apkMime
-            putExtra(Intent.EXTRA_STREAM, dummyUri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        val seen = mutableSetOf<String>()
+        val seen = mutableSetOf<Pair<String, String>>()
         val result = mutableListOf<Map<String, String>>()
-        for (resolveInfo in packageManager.queryIntentActivities(viewIntent, 0)) {
+        for (resolveInfo in packageManager.queryIntentActivities(installIntent, 0)) {
             val pkg = resolveInfo.activityInfo.packageName
-            if (seen.add(pkg)) {
+            val activity = resolveInfo.activityInfo.name
+            if (seen.add(pkg to activity)) {
                 result.add(mapOf(
                     "packageName" to pkg,
+                    "activityName" to activity,
                     "label" to resolveInfo.loadLabel(packageManager).toString()
                 ))
             }
         }
-        for (resolveInfo in packageManager.queryIntentActivities(shareIntent, 0)) {
+        for (resolveInfo in packageManager.queryIntentActivities(viewIntent, 0)) {
             val pkg = resolveInfo.activityInfo.packageName
-            if (seen.add(pkg)) {
+            val activity = resolveInfo.activityInfo.name
+            if (seen.add(pkg to activity)) {
                 result.add(mapOf(
                     "packageName" to pkg,
+                    "activityName" to activity,
                     "label" to resolveInfo.loadLabel(packageManager).toString()
                 ))
             }
@@ -79,26 +85,38 @@ class MainActivity : FlutterActivity() {
         return result
     }
 
-    private fun launchInstallIntent(apkFilePath: String, targetPackage: String?) {
+    @Suppress("DEPRECATION")
+    private fun launchInstallIntent(
+        apkFilePath: String,
+        targetPackage: String?,
+        targetActivity: String?,
+        useChooser: Boolean
+    ) {
         val file = File(apkFilePath)
         if (!file.exists()) throw IllegalStateException("APK file not found: $apkFilePath")
         val uri = FileProvider.getUriForFile(this, "$packageName", file)
-        if (targetPackage != null) {
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/vnd.android.package-archive"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                setPackage(targetPackage)
+        val apkMime = "application/vnd.android.package-archive"
+        val installFlag = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+
+        val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            setDataAndType(uri, apkMime)
+            addFlags(installFlag)
+            if (targetPackage != null && targetActivity != null) {
+                component = ComponentName(targetPackage, targetActivity)
             }
-            startActivity(shareIntent)
+        }
+
+        val installIntent = if (useChooser) {
+            Intent.createChooser(intent, getString(R.string.select_installer))
         } else {
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(viewIntent)
+            intent
+        }
+
+        try {
+            startActivity(installIntent)
+        } catch (e: Exception) {
+            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(installIntent)
         }
     }
 }

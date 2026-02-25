@@ -997,14 +997,27 @@ class AppsProvider with ChangeNotifier {
     }
     int? code;
     final installerMode = settingsProvider.installerMode;
-    if (installerMode == SettingsProvider.installerModeCustom) {
+    if (installerMode == SettingsProvider.installerModeLegacy) {
+      final useChooser = settingsProvider.legacyInstallerAlwaysChoose;
       final targetPackage = settingsProvider.customInstallerPackage;
-      if (targetPackage == null || targetPackage.isEmpty) {
+      final targetActivity = settingsProvider.customInstallerActivity;
+      if (!useChooser &&
+          (targetPackage == null || targetActivity == null || targetActivity.isEmpty)) {
         throw ObtainiumError(tr('customInstallerSelect'));
       }
-      await installApkViaIntent(file.file.path, targetPackage);
+      await installApkViaLegacy(
+        file.file.path,
+        targetPackage: targetPackage,
+        targetActivity: targetActivity,
+        useChooser: useChooser,
+      );
       for (final additional in additionalAPKs) {
-        await installApkViaIntent(additional.file.path, targetPackage);
+        await installApkViaLegacy(
+          additional.file.path,
+          targetPackage: targetPackage,
+          targetActivity: targetActivity,
+          useChooser: useChooser,
+        );
       }
       Fluttertoast.showToast(
         msg: tr('customInstallerLaunchToast'),

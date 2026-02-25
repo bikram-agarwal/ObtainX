@@ -97,7 +97,7 @@
             <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
         <intent>
-            <action android:name="android.intent.action.SEND"/>
+            <action android:name="android.intent.action.INSTALL_PACKAGE"/>
             <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
     </queries>

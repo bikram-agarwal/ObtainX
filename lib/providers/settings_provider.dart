@@ -58,15 +58,19 @@ class SettingsProvider with ChangeNotifier {
 
   static const String installerModeStock = 'stock';
   static const String installerModeShizuku = 'shizuku';
-  static const String installerModeCustom = 'custom';
+  static const String installerModeLegacy = 'legacy';
 
   String get installerMode {
     final stored = prefs?.getString('installerMode');
     if (stored != null &&
-        (stored == installerModeStock ||
-            stored == installerModeShizuku ||
-            stored == installerModeCustom)) {
+        (stored == installerModeLegacy ||
+            stored == installerModeStock ||
+            stored == installerModeShizuku)) {
       return stored;
+    }
+    if (stored == 'custom') {
+      prefs?.setString('installerMode', installerModeLegacy);
+      return installerModeLegacy;
     }
     return useShizuku ? installerModeShizuku : installerModeStock;
   }
@@ -74,10 +78,19 @@ class SettingsProvider with ChangeNotifier {
   set installerMode(String mode) {
     if (mode == installerModeShizuku) {
       prefs?.setBool('useShizuku', true);
-    } else if (mode == installerModeStock || mode == installerModeCustom) {
+    } else if (mode == installerModeStock || mode == installerModeLegacy) {
       prefs?.setBool('useShizuku', false);
     }
     prefs?.setString('installerMode', mode);
+    notifyListeners();
+  }
+
+  bool get legacyInstallerAlwaysChoose {
+    return prefs?.getBool('legacyInstallerAlwaysChoose') ?? false;
+  }
+
+  set legacyInstallerAlwaysChoose(bool value) {
+    prefs?.setBool('legacyInstallerAlwaysChoose', value);
     notifyListeners();
   }
 
@@ -91,6 +104,20 @@ class SettingsProvider with ChangeNotifier {
       prefs?.remove('customInstallerPackage');
     } else {
       prefs?.setString('customInstallerPackage', pkg);
+    }
+    notifyListeners();
+  }
+
+  String? get customInstallerActivity {
+    final activity = prefs?.getString('customInstallerActivity');
+    return activity?.isNotEmpty == true ? activity : null;
+  }
+
+  set customInstallerActivity(String? activity) {
+    if (activity == null) {
+      prefs?.remove('customInstallerActivity');
+    } else {
+      prefs?.setString('customInstallerActivity', activity);
     }
     notifyListeners();
   }
