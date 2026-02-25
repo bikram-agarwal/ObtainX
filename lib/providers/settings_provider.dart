@@ -56,6 +56,45 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  static const String installerModeStock = 'stock';
+  static const String installerModeShizuku = 'shizuku';
+  static const String installerModeCustom = 'custom';
+
+  String get installerMode {
+    final stored = prefs?.getString('installerMode');
+    if (stored != null &&
+        (stored == installerModeStock ||
+            stored == installerModeShizuku ||
+            stored == installerModeCustom)) {
+      return stored;
+    }
+    return useShizuku ? installerModeShizuku : installerModeStock;
+  }
+
+  set installerMode(String mode) {
+    if (mode == installerModeShizuku) {
+      prefs?.setBool('useShizuku', true);
+    } else if (mode == installerModeStock || mode == installerModeCustom) {
+      prefs?.setBool('useShizuku', false);
+    }
+    prefs?.setString('installerMode', mode);
+    notifyListeners();
+  }
+
+  String? get customInstallerPackage {
+    final pkg = prefs?.getString('customInstallerPackage');
+    return pkg?.isNotEmpty == true ? pkg : null;
+  }
+
+  set customInstallerPackage(String? pkg) {
+    if (pkg == null) {
+      prefs?.remove('customInstallerPackage');
+    } else {
+      prefs?.setString('customInstallerPackage', pkg);
+    }
+    notifyListeners();
+  }
+
   ThemeSettings get theme {
     return ThemeSettings.values[prefs?.getInt('theme') ??
         ThemeSettings.system.index];

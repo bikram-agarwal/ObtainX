@@ -27,6 +27,7 @@ import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/installer_resolver.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -995,16 +996,32 @@ class AppsProvider with ChangeNotifier {
       ], attemptToCorrectInstallStatus: false);
     }
     int? code;
-    if (!settingsProvider.useShizuku) {
+    final installerMode = settingsProvider.installerMode;
+    if (installerMode == SettingsProvider.installerModeCustom) {
+      final targetPackage = settingsProvider.customInstallerPackage;
+      if (targetPackage == null || targetPackage.isEmpty) {
+        throw ObtainiumError(tr('customInstallerSelect'));
+      }
+      await installApkViaIntent(file.file.path, targetPackage);
+      for (final additional in additionalAPKs) {
+        await installApkViaIntent(additional.file.path, targetPackage);
+      }
+      Fluttertoast.showToast(
+        msg: tr('customInstallerLaunchToast'),
+        toastLength: Toast.LENGTH_LONG,
+      );
+      await saveApps([apps[file.appId]!.app]);
+      return false;
+    } else if (installerMode == SettingsProvider.installerModeShizuku) {
+      code = await ShizukuApkInstaller.installAPK(
+        file.file.uri.toString(),
+        shizukuPretendToBeGooglePlay ? "com.android.vending" : "",
+      );
+    } else {
       var allAPKs = [file.file.path];
       allAPKs.addAll(additionalAPKs.map((a) => a.file.path));
       code = await AndroidPackageInstaller.installApk(
         apkFilePath: allAPKs.join(','),
-      );
-    } else {
-      code = await ShizukuApkInstaller.installAPK(
-        file.file.uri.toString(),
-        shizukuPretendToBeGooglePlay ? "com.android.vending" : "",
       );
     }
     bool installed = false;

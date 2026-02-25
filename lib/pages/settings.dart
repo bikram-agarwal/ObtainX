@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:equations/equations.dart';
@@ -9,6 +11,7 @@ import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/installer_resolver.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -625,70 +628,103 @@ class _SettingsPageState extends State<SettingsPage> {
                           ],
                         ),
                         height16,
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Flexible(child: Text(tr('useShizuku'))),
-                            Switch(
-                              value: settingsProvider.useShizuku,
-                              onChanged: (useShizuku) {
-                                if (useShizuku) {
-                                  ShizukuApkInstaller.checkPermission().then((
-                                    resCode,
-                                  ) {
-                                    settingsProvider.useShizuku = resCode!
-                                        .startsWith('granted');
-                                    switch (resCode) {
-                                      case 'binder_not_found':
-                                        showError(
-                                          ObtainiumError(
-                                            tr('shizukuBinderNotFound'),
-                                          ),
-                                          context,
-                                        );
-                                      case 'old_shizuku':
-                                        showError(
-                                          ObtainiumError(tr('shizukuOld')),
-                                          context,
-                                        );
-                                      case 'old_android_with_adb':
-                                        showError(
-                                          ObtainiumError(
-                                            tr('shizukuOldAndroidWithADB'),
-                                          ),
-                                          context,
-                                        );
-                                      case 'denied':
-                                        showError(
-                                          ObtainiumError(tr('cancelled')),
-                                          context,
-                                        );
-                                    }
-                                  });
-                                } else {
-                                  settingsProvider.useShizuku = false;
+                        Text(
+                          tr('installerMode'),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        height8,
+                        SegmentedButton<String>(
+                          segments: [
+                            ButtonSegment(
+                              value: SettingsProvider.installerModeStock,
+                              label: Text(tr('installerModeStock')),
+                            ),
+                            ButtonSegment(
+                              value: SettingsProvider.installerModeShizuku,
+                              label: Text(tr('installerModeShizuku')),
+                            ),
+                            if (Platform.isAndroid)
+                              ButtonSegment(
+                                value: SettingsProvider.installerModeCustom,
+                                label: Text(tr('installerModeCustom')),
+                              ),
+                          ],
+                          selected: {settingsProvider.installerMode},
+                          onSelectionChanged: (Set<String> selected) {
+                            final mode = selected.first;
+                            if (mode == SettingsProvider.installerModeShizuku) {
+                              ShizukuApkInstaller.checkPermission().then((
+                                resCode,
+                              ) {
+                                if (resCode!.startsWith('granted')) {
+                                  settingsProvider.installerMode = mode;
                                 }
-                              },
-                            ),
-                          ],
+                                switch (resCode) {
+                                  case 'binder_not_found':
+                                    showError(
+                                      ObtainiumError(
+                                        tr('shizukuBinderNotFound'),
+                                      ),
+                                      context,
+                                    );
+                                  case 'old_shizuku':
+                                    showError(
+                                      ObtainiumError(tr('shizukuOld')),
+                                      context,
+                                    );
+                                  case 'old_android_with_adb':
+                                    showError(
+                                      ObtainiumError(
+                                        tr('shizukuOldAndroidWithADB'),
+                                      ),
+                                      context,
+                                    );
+                                  case 'denied':
+                                    showError(
+                                      ObtainiumError(tr('cancelled')),
+                                      context,
+                                    );
+                                }
+                              });
+                            } else {
+                              settingsProvider.installerMode = mode;
+                            }
+                          },
                         ),
-                        height16,
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Flexible(
-                              child: Text(tr('shizukuPretendToBeGooglePlay')),
-                            ),
-                            Switch(
-                              value:
-                                  settingsProvider.shizukuPretendToBeGooglePlay,
-                              onChanged: (value) {
-                                settingsProvider.shizukuPretendToBeGooglePlay =
-                                    value;
-                              },
-                            ),
-                          ],
-                        ),
+                        if (settingsProvider.installerMode ==
+                            SettingsProvider.installerModeShizuku) ...[
+                          height16,
+                          Row(
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                    tr('shizukuPretendToBeGooglePlay')),
+                              ),
+                              Switch(
+                                value: settingsProvider
+                                    .shizukuPretendToBeGooglePlay,
+                                onChanged: (value) {
+                                  settingsProvider
+                                          .shizukuPretendToBeGooglePlay =
+                                      value;
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (Platform.isAndroid &&
+                            settingsProvider.installerMode ==
+                                SettingsProvider.installerModeCustom) ...[
+                          height16,
+                          _CustomInstallerSelector(
+                            settingsProvider: settingsProvider,
+                          ),
+                        ],
                         height32,
                         Text(
                           tr('sourceSpecific'),
@@ -1168,6 +1204,136 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
           }
         }
       }),
+    );
+  }
+}
+
+class _CustomInstallerSelector extends StatefulWidget {
+  const _CustomInstallerSelector({
+    required this.settingsProvider,
+  });
+
+  final SettingsProvider settingsProvider;
+
+  @override
+  State<_CustomInstallerSelector> createState() =>
+      _CustomInstallerSelectorState();
+}
+
+class _CustomInstallerSelectorState extends State<_CustomInstallerSelector> {
+  List<Map<String, String>> _installers = [];
+  bool _loading = false;
+  String? _error;
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final installers = await getApkInstallerApps();
+      if (mounted) {
+        setState(() {
+          _installers = installers;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return Row(
+        children: [
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 12),
+          Text(tr('customInstallerRefreshing')),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: null,
+          ),
+        ],
+      );
+    }
+    if (_error != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tr('customInstallerEmpty'), style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refresh,
+          ),
+        ],
+      );
+    }
+    if (_installers.isEmpty) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Flexible(child: Text(tr('customInstallerEmpty'))),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+        ],
+      );
+    }
+    final selectedPkg = widget.settingsProvider.customInstallerPackage;
+    Map<String, String>? selected;
+    if (selectedPkg != null) {
+      try {
+        selected = _installers.firstWhere(
+          (e) => e['packageName'] == selectedPkg,
+        );
+      } catch (_) {
+        selected = null;
+      }
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Flexible(child: Text(tr('customInstallerSelect'))),
+            IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+          ],
+        ),
+        DropdownButtonFormField<Map<String, String>>(
+          value: selected,
+          hint: Text(tr('customInstallerSelect')),
+          decoration: const InputDecoration(),
+          items: _installers.map((e) {
+            return DropdownMenuItem(
+              value: e,
+              child: Text(
+                '${e['label'] ?? e['packageName']} (${e['packageName'] ?? ''})',
+                overflow: TextOverflow.ellipsis,
+              ),
+            );
+          }).toList(),
+          onChanged: (value) {
+            widget.settingsProvider.customInstallerPackage =
+                value?['packageName'];
+          },
+        ),
+      ],
     );
   }
 }

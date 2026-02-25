@@ -1,0 +1,45 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK (normal flavor)
+        run: |
+          flutter build apk --flavor normal
+          flutter build apk --split-per-abi --flavor normal
+          for f in build/app/outputs/flutter-apk/app-*normal*.apk*; do
+            [ -e "$f" ] && mv "$f" "${f//-normal/}" || true
+          done
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: obtainx-apks
+          path: build/app/outputs/flutter-apk/*.apk
