@@ -4,6 +4,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.system.Os
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -85,6 +87,30 @@ class MainActivity : FlutterActivity() {
         return result
     }
 
+    private fun copyToReleaseCache(sourceFile: File): File {
+        val releasesDir = File(cacheDir, "releases").apply { mkdirs() }
+        val releaseFile = File(releasesDir, sourceFile.name)
+        sourceFile.inputStream().use { input ->
+            releaseFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                val cacheRoot = cacheDir.parentFile!!.parentFile!!
+                generateSequence(releaseFile) { it.parentFile }
+                    .takeWhile { it != cacheRoot }
+                    .forEach { f ->
+                        val mode = if (f.isDirectory) 0b001001001 else 0b100100100
+                        val oldMode = Os.stat(f.path).st_mode and 0b111111111111
+                        val newMode = oldMode or mode
+                        if (newMode != oldMode) Os.chmod(f.path, newMode)
+                    }
+            } catch (_: Exception) { }
+        }
+        return releaseFile
+    }
+
     @Suppress("DEPRECATION")
     private fun launchInstallIntent(
         apkFilePath: String,
@@ -92,11 +118,16 @@ class MainActivity : FlutterActivity() {
         targetActivity: String?,
         useChooser: Boolean
     ) {
-        val file = File(apkFilePath)
-        if (!file.exists()) throw IllegalStateException("APK file not found: $apkFilePath")
-        val uri = FileProvider.getUriForFile(this, "$packageName", file)
+        val sourceFile = File(apkFilePath)
+        if (!sourceFile.exists()) throw IllegalStateException("APK file not found: $apkFilePath")
+        val releaseFile = copyToReleaseCache(sourceFile)
+        val uri = FileProvider.getUriForFile(this, "$packageName", releaseFile)
         val apkMime = "application/vnd.android.package-archive"
-        val installFlag = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+        val installFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+        } else {
+            0
+        }
 
         val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
             setDataAndType(uri, apkMime)
@@ -115,7 +146,7 @@ class MainActivity : FlutterActivity() {
         try {
             startActivity(installIntent)
         } catch (e: Exception) {
-            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            installIntent.addFlags(installFlag or Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(installIntent)
         }
     }
