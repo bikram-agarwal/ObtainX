@@ -45,8 +45,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun queryApkInstallerActivities(): List<Map<String, String>> {
+        val dummyUri = Uri.parse("content://$packageName/dummy.apk")
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            type = "application/vnd.android.package-archive"
+            setDataAndType(dummyUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val resolveInfoList = packageManager.queryIntentActivities(intent, 0)
         return resolveInfoList.map { resolveInfo ->
