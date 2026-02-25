@@ -14,6 +14,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -24,19 +33,12 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Flutter doctor
-        run: flutter doctor -v
-
-      - name: Accept Android licenses
-        run: yes | flutter doctor --android-licenses 2>/dev/null || true
-
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build APK (normal flavor)
+      - name: Build APK (debug-signed for installable testing)
         run: |
-          flutter build apk --flavor normal
-          flutter build apk --split-per-abi --flavor normal
+          flutter build apk --debug --flavor normal
           for f in build/app/outputs/flutter-apk/app-*normal*.apk*; do
             [ -e "$f" ] && mv "$f" "${f//-normal/}" || true
           done
@@ -44,5 +46,5 @@ jobs:
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: obtainx-apks
+          name: obtainx-apks-debug
           path: build/app/outputs/flutter-apk/*.apk
