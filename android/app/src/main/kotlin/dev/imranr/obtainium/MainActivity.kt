@@ -26,13 +26,17 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "launchInstallIntent" -> {
-                    try {
-                        val path = call.argument<String>("path") ?: return result.error("INVALID_ARGS", "path required", null)
-                        val targetPackage = call.argument<String?>("package")
-                        launchInstallIntent(path, targetPackage)
-                        result.success(null)
-                    } catch (e: Exception) {
-                        result.error("LAUNCH_FAILED", e.message, null)
+                    val path = call.argument<String>("path")
+                    if (path == null) {
+                        result.error("INVALID_ARGS", "path required", null)
+                    } else {
+                        try {
+                            val targetPackage = call.argument<String?>("package")
+                            launchInstallIntent(path, targetPackage)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("LAUNCH_FAILED", e.message, null)
+                        }
                     }
                 }
                 else -> result.notImplemented()

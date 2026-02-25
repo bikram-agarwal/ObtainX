@@ -27,6 +27,9 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
+      - name: Accept Android licenses
+        run: yes | flutter doctor --android-licenses 2>/dev/null || true
+
       - name: Get dependencies
         run: flutter pub get
 
