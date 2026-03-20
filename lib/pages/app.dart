@@ -54,6 +54,39 @@ bool _trackedUrlMatchesApkmirror(String? trackedUrl) {
   return uri.host.toLowerCase().contains('apkmirror.com');
 }
 
+/// Surfaces from [ColorScheme.fromImageProvider] are often very dark in dark mode;
+/// blend them toward [ColorScheme.primary] so the hue reads clearly on the app page.
+ColorScheme _appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
+  Color tintTowardPrimary(Color base) =>
+      Color.lerp(base, scheme.primary, 0.22) ?? base;
+  Color tintOutline(Color base) =>
+      Color.lerp(base, scheme.primary, 0.32) ?? base;
+
+  if (scheme.brightness == Brightness.dark) {
+    return scheme.copyWith(
+      surface: tintTowardPrimary(scheme.surface),
+      surfaceDim: tintTowardPrimary(scheme.surfaceDim),
+      surfaceBright: tintTowardPrimary(scheme.surfaceBright),
+      surfaceContainerLowest:
+          tintTowardPrimary(scheme.surfaceContainerLowest),
+      surfaceContainerLow: tintTowardPrimary(scheme.surfaceContainerLow),
+      surfaceContainer: tintTowardPrimary(scheme.surfaceContainer),
+      surfaceContainerHigh: tintTowardPrimary(scheme.surfaceContainerHigh),
+      surfaceContainerHighest:
+          tintTowardPrimary(scheme.surfaceContainerHighest),
+      outline: tintOutline(scheme.outline),
+      outlineVariant: tintOutline(scheme.outlineVariant),
+    );
+  }
+  return scheme.copyWith(
+    surfaceContainer: tintTowardPrimary(scheme.surfaceContainer),
+    surfaceContainerHigh: tintTowardPrimary(scheme.surfaceContainerHigh),
+    surfaceContainerHighest:
+        tintTowardPrimary(scheme.surfaceContainerHighest),
+    outlineVariant: tintOutline(scheme.outlineVariant),
+  );
+}
+
 class AppPage extends StatefulWidget {
   const AppPage({
     super.key,
@@ -267,6 +300,18 @@ class _AppPageState extends State<AppPage> {
         });
       }
     }
+
+    final ThemeData parentThemeForPage = Theme.of(context);
+    final bool applyIconDerivedPageTheming =
+        useIconPageColors && _iconDerivedColorScheme != null;
+    final ColorScheme pageColorSchemeForPage = !applyIconDerivedPageTheming
+        ? parentThemeForPage.colorScheme
+        : _appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!);
+    final ThemeData pageThemeForPage = parentThemeForPage.copyWith(
+      colorScheme: pageColorSchemeForPage,
+      primaryColor: pageColorSchemeForPage.primary,
+      cardColor: pageColorSchemeForPage.surfaceContainerHighest,
+    );
 
     if (!areDownloadsRunning &&
         prevApp == null &&
@@ -611,7 +656,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _buildAboutBlock() {
+    Widget _buildAboutBlock(BuildContext themeContext) {
       if (app?.app.additionalSettings['about'] is! String ||
           (app?.app.additionalSettings['about'] as String).isEmpty)
         return const SizedBox.shrink();
@@ -628,7 +673,7 @@ class _AppPageState extends State<AppPage> {
           shrinkWrap: true,
           styleSheet: MarkdownStyleSheet(
             blockquoteDecoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
+              color: Theme.of(themeContext).cardColor,
             ),
             textAlign: WrapAlignment.center,
           ),
@@ -649,7 +694,8 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getInfoColumn({bool small = false}) {
+    getInfoColumn(BuildContext pageThemeContext, {bool small = false}) {
+      final ThemeData pageTheme = Theme.of(pageThemeContext);
       final undeterminedTrackOnlyInstalled =
           trackOnly &&
               app?.app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] ==
@@ -761,18 +807,18 @@ class _AppPageState extends State<AppPage> {
       final versionCardChildren = <Widget>[];
       if (undeterminedTrackOnlyInstalled) {
         versionCardChildren.add(
-          _versionRow(context, tr('installed'), tr('unknown')),
+          _versionRow(pageThemeContext, tr('installed'), tr('unknown')),
         );
         versionCardChildren.add(
-          _versionRow(context, tr('latest'), app?.app.latestVersion ?? '-'),
+          _versionRow(pageThemeContext, tr('latest'), app?.app.latestVersion ?? '-'),
         );
         versionCardChildren.add(
-          _versionRow(context, lastUpdateCheckLabel, lastUpdateCheckValue),
+          _versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
             _versionRowWithLink(
-              context,
+              pageThemeContext,
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
@@ -784,7 +830,7 @@ class _AppPageState extends State<AppPage> {
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
             _versionRowWithLink(
-              context,
+              pageThemeContext,
               tr('assets'),
               app!.app.apkUrls.length == 1
                   ? app!.app.apkUrls[0].key
@@ -805,29 +851,29 @@ class _AppPageState extends State<AppPage> {
       } else {
         if (installed) {
           versionCardChildren.add(
-            _versionRow(context, tr('installed'), app?.app.installedVersion ?? ''),
+            _versionRow(pageThemeContext, tr('installed'), app?.app.installedVersion ?? ''),
           );
         } else {
           versionCardChildren.add(
-            _versionRow(context, tr('installed'), tr('notInstalled')),
+            _versionRow(pageThemeContext, tr('installed'), tr('notInstalled')),
           );
         }
         versionCardChildren.add(
-          _versionRow(context, tr('latest'), app?.app.latestVersion ?? '-'),
+          _versionRow(pageThemeContext, tr('latest'), app?.app.latestVersion ?? '-'),
         );
         if (effectivelyEqual) {
           versionCardChildren.add(_versionVerdictRow(
-            context,
+            pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.tertiaryContainer,
+                color: pageTheme.colorScheme.tertiaryContainer,
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 tr('effectivelyEqual'),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                style: pageTheme.textTheme.labelSmall?.copyWith(
+                      color: pageTheme.colorScheme.onTertiaryContainer,
                       fontWeight: FontWeight.w500,
                     ),
               ),
@@ -835,19 +881,19 @@ class _AppPageState extends State<AppPage> {
           ));
         } else if (upToDate) {
           versionCardChildren.add(_versionVerdictRow(
-            context,
+            pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
+                color: pageTheme.brightness == Brightness.dark
                     ? const Color(0xFF2E7D32).withAlpha(60)
                     : const Color(0xFFC8E6C9),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 tr('sameVersion'),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).brightness == Brightness.dark
+                style: pageTheme.textTheme.labelSmall?.copyWith(
+                      color: pageTheme.brightness == Brightness.dark
                           ? const Color(0xFFA5D6A7)
                           : const Color(0xFF1B5E20),
                       fontWeight: FontWeight.w500,
@@ -857,17 +903,17 @@ class _AppPageState extends State<AppPage> {
           ));
         } else if (installed) {
           versionCardChildren.add(_versionVerdictRow(
-            context,
+            pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.secondaryContainer,
+                color: pageTheme.colorScheme.secondaryContainer,
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 tr('updateAvailable'),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                style: pageTheme.textTheme.labelSmall?.copyWith(
+                      color: pageTheme.colorScheme.onSecondaryContainer,
                       fontWeight: FontWeight.w500,
                     ),
               ),
@@ -875,12 +921,12 @@ class _AppPageState extends State<AppPage> {
           ));
         }
         versionCardChildren.add(
-          _versionRow(context, lastUpdateCheckLabel, lastUpdateCheckValue),
+          _versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
             _versionRowWithLink(
-              context,
+              pageThemeContext,
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
@@ -892,7 +938,7 @@ class _AppPageState extends State<AppPage> {
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
             _versionRowWithLink(
-              context,
+              pageThemeContext,
               tr('assets'),
               app!.app.apkUrls.length == 1
                   ? app!.app.apkUrls[0].key
@@ -912,14 +958,14 @@ class _AppPageState extends State<AppPage> {
         }
       }
       final versionCard = _sectionCard(
-        context,
+        pageThemeContext,
         tr('version').toUpperCase(),
         versionCardChildren,
       );
 
       final Widget? trackOnlyInstalledErrorCard = undeterminedTrackOnlyInstalled
           ? _sectionCard(
-              context,
+              pageThemeContext,
               tr('error').toUpperCase(),
               [
                 SelectableText(
@@ -927,8 +973,8 @@ class _AppPageState extends State<AppPage> {
                           true
                       ? tr('trackOnlyTempPackageIdInstalledVersion')
                       : tr('trackOnlyUndeterminedInstalledVersion'),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onErrorContainer,
+                  style: pageTheme.textTheme.bodySmall?.copyWith(
+                        color: pageTheme.colorScheme.onErrorContainer,
                         height: 1.35,
                       ),
                 ),
@@ -945,21 +991,21 @@ class _AppPageState extends State<AppPage> {
                 ),
               ],
               sectionBackgroundColor:
-                  Theme.of(context).colorScheme.errorContainer,
+                  pageTheme.colorScheme.errorContainer,
               sectionTitleColor:
-                  Theme.of(context).colorScheme.onErrorContainer,
+                  pageTheme.colorScheme.onErrorContainer,
             )
           : null;
 
       final detailsValueStyle =
-          Theme.of(context).textTheme.bodySmall!.copyWith(
+          pageTheme.textTheme.bodySmall!.copyWith(
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
               );
       final detailsMonoValueStyle =
           detailsValueStyle.copyWith(fontFamily: 'monospace');
       final detailsLinkStyle = detailsValueStyle.copyWith(
-        color: Theme.of(context).colorScheme.primary,
+        color: pageTheme.colorScheme.primary,
         decoration: TextDecoration.underline,
       );
 
@@ -1016,14 +1062,14 @@ class _AppPageState extends State<AppPage> {
       final detailsChildren = <Widget>[
         if (app?.app.id != null && app!.app.id!.isNotEmpty)
           _detailRow(
-            context,
+            pageThemeContext,
             tr('package'),
             app!.app.id!,
             valueStyle: detailsMonoValueStyle,
           ),
         if (app?.app.url != null && app!.app.url!.isNotEmpty)
           _detailRowWithLink(
-            context,
+            pageThemeContext,
             tr('trackedSource'),
             app!.app.url!,
             () => launchUrlString(
@@ -1042,8 +1088,8 @@ class _AppPageState extends State<AppPage> {
                   width: 100,
                   child: Text(
                     tr('otherSources'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    style: pageTheme.textTheme.bodySmall?.copyWith(
+                          color: pageTheme.colorScheme.onSurfaceVariant,
                           fontSize: 12,
                         ),
                   ),
@@ -1056,7 +1102,7 @@ class _AppPageState extends State<AppPage> {
                     children: [
                       if (showPlayStoreIcon)
                         _buildAlternateStoreChip(
-                          chipContext: context,
+                          chipContext: pageThemeContext,
                           label: tr('playStore'),
                           backgroundColor: _alternateStorePlayGreen,
                           onPressed: () => launchUrlString(
@@ -1066,7 +1112,7 @@ class _AppPageState extends State<AppPage> {
                         ),
                       if (showApkmirrorIcon)
                         _buildAlternateStoreChip(
-                          chipContext: context,
+                          chipContext: pageThemeContext,
                           label: tr('apkmirror'),
                           backgroundColor: _alternateStoreApkmirrorOrange,
                           onPressed: () => launchUrlString(
@@ -1076,7 +1122,7 @@ class _AppPageState extends State<AppPage> {
                         ),
                       if (showFdroidIcon)
                         _buildAlternateStoreChip(
-                          chipContext: context,
+                          chipContext: pageThemeContext,
                           label: tr('fdroidStore'),
                           backgroundColor: _alternateStoreFdroidLightBlue,
                           onPressed: () => launchUrlString(
@@ -1099,8 +1145,8 @@ class _AppPageState extends State<AppPage> {
                 width: 100,
                 child: Text(
                   tr('categories'),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  style: pageTheme.textTheme.bodySmall?.copyWith(
+                        color: pageTheme.colorScheme.onSurfaceVariant,
                         fontSize: 12,
                       ),
                 ),
@@ -1178,7 +1224,7 @@ class _AppPageState extends State<AppPage> {
         ),
       ];
       final detailsCard = _sectionCard(
-        context,
+        pageThemeContext,
         tr('details').toUpperCase(),
         detailsChildren,
       );
@@ -1194,20 +1240,20 @@ class _AppPageState extends State<AppPage> {
           if (app?.app.additionalSettings['about'] is String &&
               app?.app.additionalSettings['about'].isNotEmpty)
             _sectionCard(
-              context,
+              pageThemeContext,
               tr('about').toUpperCase(),
-              [_buildAboutBlock()],
+              [_buildAboutBlock(pageThemeContext)],
             ),
         ],
       );
     }
 
-    Widget _buildDetailHeroContent() {
+    Widget _buildDetailHeroContent(BuildContext themeContext) {
       const double heroScale = 1.2;
       const heroIconSize = 58.0;
       final scaledIconSize = heroIconSize * heroScale;
-      final titleStyle = Theme.of(context).textTheme.titleLarge;
-      final bylineStyle = Theme.of(context).textTheme.bodySmall;
+      final titleStyle = Theme.of(themeContext).textTheme.titleLarge;
+      final bylineStyle = Theme.of(themeContext).textTheme.bodySmall;
       final iconWidget = FutureBuilder(
         future: appsProvider.updateAppIcon(app?.app.id, ignoreCache: true),
         builder: (ctx, val) {
@@ -1235,8 +1281,8 @@ class _AppPageState extends State<AppPage> {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Theme.of(context).colorScheme.primary,
-                  Theme.of(context).colorScheme.primary.withAlpha(200),
+                  Theme.of(themeContext).colorScheme.primary,
+                  Theme.of(themeContext).colorScheme.primary.withAlpha(200),
                 ],
               ),
             ),
@@ -1270,7 +1316,7 @@ class _AppPageState extends State<AppPage> {
                   Text(
                     tr('byX', args: [app?.author ?? tr('unknown')]),
                     style: bylineStyle?.copyWith(
-                          color: Theme.of(context)
+                          color: Theme.of(themeContext)
                               .colorScheme
                               .onSurfaceVariant,
                           fontSize:
@@ -1287,7 +1333,8 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getFullInfoColumn({bool small = false}) {
+    getFullInfoColumn(BuildContext themeContext, {bool small = false}) {
+      final ThemeData dialogColumnTheme = Theme.of(themeContext);
       const heroIconSize = 48.0;
       final iconWidget = FutureBuilder(
         future: appsProvider.updateAppIcon(app?.app.id, ignoreCache: true),
@@ -1319,8 +1366,8 @@ class _AppPageState extends State<AppPage> {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Theme.of(context).colorScheme.primary,
-                  Theme.of(context).colorScheme.primary.withAlpha(200),
+                  dialogColumnTheme.colorScheme.primary,
+                  dialogColumnTheme.colorScheme.primary.withAlpha(200),
                 ],
               ),
             ),
@@ -1342,15 +1389,15 @@ class _AppPageState extends State<AppPage> {
             Text(
               app?.name ?? tr('app'),
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.displaySmall,
+              style: dialogColumnTheme.textTheme.displaySmall,
             ),
             Text(
               tr('byX', args: [app?.author ?? tr('unknown')]),
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineSmall,
+              style: dialogColumnTheme.textTheme.headlineSmall,
             ),
             SizedBox(height: settingsProvider.highlightTouchTargets ? 2 : 8),
-            getInfoColumn(small: true),
+            getInfoColumn(themeContext, small: true),
             const SizedBox(height: 24),
           ],
         );
@@ -1374,7 +1421,7 @@ class _AppPageState extends State<AppPage> {
                     children: [
                       Text(
                         app?.name ?? tr('app'),
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        style: dialogColumnTheme.textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.w700,
                             ),
                         maxLines: 2,
@@ -1383,8 +1430,9 @@ class _AppPageState extends State<AppPage> {
                       const SizedBox(height: 2),
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        style: dialogColumnTheme.textTheme.bodySmall?.copyWith(
+                              color: dialogColumnTheme
+                                  .colorScheme.onSurfaceVariant,
                             ),
                       ),
                     ],
@@ -1393,17 +1441,18 @@ class _AppPageState extends State<AppPage> {
               ],
             ),
           ),
-          getInfoColumn(small: false),
+          getInfoColumn(themeContext, small: false),
           const SizedBox(height: 24),
         ],
       );
     }
 
-    getAppWebView() => app != null
+    getAppWebView(BuildContext themeContext) => app != null
         ? WebViewWidget(
             key: ObjectKey(_webViewController),
             controller: _webViewController
-              ..setBackgroundColor(Theme.of(context).colorScheme.surface),
+              ..setBackgroundColor(
+                  Theme.of(themeContext).colorScheme.surface),
           )
         : Container();
 
@@ -1506,7 +1555,8 @@ class _AppPageState extends State<AppPage> {
       }
     }
 
-    getBottomCenterActions() {
+    getBottomCenterActions(BuildContext themeContext) {
+      final ThemeData actionTheme = Theme.of(themeContext);
       const double expressiveRadius = 26;
       const EdgeInsets expressivePadding =
           EdgeInsets.symmetric(horizontal: 16, vertical: 14);
@@ -1521,7 +1571,13 @@ class _AppPageState extends State<AppPage> {
         padding: expressivePadding,
         shape: expressiveShape,
         elevation: 1,
-        shadowColor: Theme.of(context).colorScheme.shadow,
+        shadowColor: actionTheme.colorScheme.shadow,
+        backgroundColor: actionTheme.colorScheme.primary,
+        foregroundColor: actionTheme.colorScheme.onPrimary,
+        disabledBackgroundColor:
+            actionTheme.colorScheme.onSurface.withAlpha(31),
+        disabledForegroundColor:
+            actionTheme.colorScheme.onSurface.withAlpha(97),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
       final ButtonStyle expressiveTonal = FilledButton.styleFrom(
@@ -1529,6 +1585,12 @@ class _AppPageState extends State<AppPage> {
         maximumSize: expressiveMaximumSize,
         padding: expressivePadding,
         shape: expressiveShape,
+        backgroundColor: actionTheme.colorScheme.secondaryContainer,
+        foregroundColor: actionTheme.colorScheme.onSecondaryContainer,
+        disabledBackgroundColor:
+            actionTheme.colorScheme.onSurface.withAlpha(31),
+        disabledForegroundColor:
+            actionTheme.colorScheme.onSurface.withAlpha(97),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
 
@@ -1637,32 +1699,38 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getBottomSheetMenu() => Padding(
+    getBottomSheetMenu(BuildContext themeContext) => Padding(
       padding: EdgeInsets.fromLTRB(
         0,
         0,
         0,
-        MediaQuery.of(context).padding.bottom,
+        MediaQuery.of(themeContext).padding.bottom,
       ),
       child: Container(
         decoration: BoxDecoration(
-          color: Theme.of(context).brightness == Brightness.dark
-              ? Theme.of(context).colorScheme.surfaceContainerHigh
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          color: Theme.of(themeContext).brightness == Brightness.dark
+              ? Theme.of(themeContext).colorScheme.surfaceContainerHigh
+              : Theme.of(themeContext).colorScheme.surfaceContainerHighest,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           border: Border(
             top: BorderSide(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Theme.of(context).colorScheme.outlineVariant.withAlpha(140)
-                  : Theme.of(context).colorScheme.outlineVariant.withAlpha(70),
+              color: Theme.of(themeContext).brightness == Brightness.dark
+                  ? Theme.of(themeContext)
+                      .colorScheme.outlineVariant
+                      .withAlpha(140)
+                  : Theme.of(themeContext)
+                      .colorScheme.outlineVariant
+                      .withAlpha(70),
             ),
           ),
           boxShadow: [
             BoxShadow(
-              color: Theme.of(context).colorScheme.shadow.withAlpha(
-                    Theme.of(context).brightness == Brightness.dark ? 130 : 40,
+              color: Theme.of(themeContext).colorScheme.shadow.withAlpha(
+                    Theme.of(themeContext).brightness == Brightness.dark
+                        ? 130
+                        : 40,
                   ),
-              blurRadius: Theme.of(context).brightness == Brightness.dark
+              blurRadius: Theme.of(themeContext).brightness == Brightness.dark
                   ? 18
                   : 12,
               offset: const Offset(0, -3),
@@ -1682,7 +1750,7 @@ class _AppPageState extends State<AppPage> {
                 if (source != null &&
                     source.combinedAppSpecificSettingFormItems.isNotEmpty)
                   IconButton(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(themeContext).colorScheme.primary,
                     iconSize: 24,
                     onPressed: app?.downloadProgress != null || updating
                         ? null
@@ -1695,7 +1763,7 @@ class _AppPageState extends State<AppPage> {
                   ),
                 if (app != null && app.installedInfo != null)
                   IconButton(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(themeContext).colorScheme.primary,
                     iconSize: 24,
                     onPressed: () {
                       appsProvider.openAppSettings(app.app.id);
@@ -1705,24 +1773,35 @@ class _AppPageState extends State<AppPage> {
                   ),
                 if (app != null && showAppWebpageFinal)
                   IconButton(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(themeContext).colorScheme.primary,
                     iconSize: 24,
                     onPressed: () {
-                      showDialog(
+                      showDialog<void>(
                         context: context,
-                        builder: (BuildContext ctx) {
-                          return AlertDialog(
-                            scrollable: true,
-                            content: getFullInfoColumn(small: true),
-                            title: Text(app.name),
-                            actions: [
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                },
-                                child: Text(tr('continue')),
-                              ),
-                            ],
+                        builder: (BuildContext dialogRouteContext) {
+                          return Theme(
+                            data: pageThemeForPage,
+                            child: Builder(
+                              builder: (BuildContext dialogThemedContext) {
+                                return AlertDialog(
+                                  scrollable: true,
+                                  content: getFullInfoColumn(
+                                    dialogThemedContext,
+                                    small: true,
+                                  ),
+                                  title: Text(app.name),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () {
+                                        Navigator.of(dialogRouteContext)
+                                            .pop();
+                                      },
+                                      child: Text(tr('continue')),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
                           );
                         },
                       );
@@ -1739,7 +1818,7 @@ class _AppPageState extends State<AppPage> {
                     !isVersionDetectionStandard &&
                     !trackOnly)
                   IconButton(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(themeContext).colorScheme.primary,
                     iconSize: 24,
                     onPressed: app?.downloadProgress != null || updating
                         ? null
@@ -1755,7 +1834,7 @@ class _AppPageState extends State<AppPage> {
                         installedVersionIsNewerOrEqual(
                             app!.app.installedVersion!, app.app.latestVersion)))
                   IconButton(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(themeContext).colorScheme.primary,
                     iconSize: 24,
                     onPressed: app?.app == null || updating
                         ? null
@@ -1767,7 +1846,7 @@ class _AppPageState extends State<AppPage> {
                     tooltip: tr('resetInstallStatus'),
                   ),
                 IconButton(
-                  color: Theme.of(context).colorScheme.primary,
+                  color: Theme.of(themeContext).colorScheme.primary,
                   iconSize: 24,
                   onPressed: app?.downloadProgress != null || updating
                       ? null
@@ -1804,76 +1883,85 @@ class _AppPageState extends State<AppPage> {
       ),
     );
 
-    final ThemeData parentTheme = Theme.of(context);
-    final ColorScheme pageColorScheme =
-        useIconPageColors && _iconDerivedColorScheme != null
-            ? _iconDerivedColorScheme!
-            : parentTheme.colorScheme;
-    final ThemeData pageTheme = parentTheme.copyWith(
-      colorScheme: pageColorScheme,
-      primaryColor: pageColorScheme.primary,
-      cardColor: pageColorScheme.surfaceContainerHighest,
-    );
-
     return Theme(
-      data: pageTheme,
-      child: Scaffold(
-        appBar: showAppWebpageFinal ? AppBar() : null,
-        backgroundColor: pageColorScheme.surface,
-        body: RefreshIndicator(
-          child: showAppWebpageFinal
-              ? getAppWebView()
-              : CustomScrollView(
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: SafeArea(
-                        top: true,
-                        bottom: false,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
+      data: pageThemeForPage,
+      child: Builder(
+        builder: (BuildContext themedPageContext) {
+          return Scaffold(
+            appBar: showAppWebpageFinal ? AppBar() : null,
+            backgroundColor: pageColorSchemeForPage.surface,
+            body: RefreshIndicator(
+              child: showAppWebpageFinal
+                  ? getAppWebView(themedPageContext)
+                  : CustomScrollView(
+                      slivers: [
+                        SliverToBoxAdapter(
+                          child: SafeArea(
+                            top: true,
+                            bottom: false,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.stretch,
                                 children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.arrow_back),
-                                    onPressed: () => Navigator.pop(context),
-                                    tooltip: MaterialLocalizations.of(context)
-                                        .backButtonTooltip,
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.arrow_back),
+                                        onPressed: () =>
+                                            Navigator.pop(context),
+                                        tooltip:
+                                            MaterialLocalizations.of(context)
+                                                .backButtonTooltip,
+                                      ),
+                                      Expanded(
+                                        child: _buildDetailHeroContent(
+                                          themedPageContext,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  Expanded(child: _buildDetailHeroContent()),
+                                  getInfoColumn(
+                                    themedPageContext,
+                                    small: false,
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                        16, 0, 16, 16),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: getBottomCenterActions(
+                                            themedPageContext,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    height: MediaQuery.of(themedPageContext)
+                                        .padding
+                                        .bottom,
+                                  ),
                                 ],
                               ),
-                              getInfoColumn(small: false),
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                                child: Row(
-                                  children: [
-                                    Expanded(child: getBottomCenterActions()),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                height:
-                                    MediaQuery.of(context).padding.bottom,
-                              ),
-                            ],
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
-                ),
-          onRefresh: () async {
-            if (app != null) {
-              getUpdate(app.app.id);
-            }
-          },
-        ),
-        bottomSheet: getBottomSheetMenu(),
+              onRefresh: () async {
+                if (app != null) {
+                  getUpdate(app.app.id);
+                }
+              },
+            ),
+            bottomSheet: getBottomSheetMenu(themedPageContext),
+          );
+        },
       ),
     );
   }
