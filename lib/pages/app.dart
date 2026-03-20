@@ -36,39 +36,20 @@ bool _trackedUrlMatchesPlayStore(String? trackedUrl, String packageId) {
   return uri.path.contains(packageId);
 }
 
-bool _trackedUrlMatchesFdroid(String? trackedUrl, String packageId) {
-  if (trackedUrl == null ||
-      trackedUrl.isEmpty ||
-      packageId.isEmpty) {
-    return false;
-  }
+/// True when the tracked source URL is already on F-Droid (hide F-Droid chip).
+bool _trackedUrlMatchesFdroid(String? trackedUrl) {
+  if (trackedUrl == null || trackedUrl.isEmpty) return false;
   final uri = Uri.tryParse(trackedUrl);
   if (uri == null || uri.host.isEmpty) return false;
-  if (!uri.host.toLowerCase().contains('f-droid.org')) return false;
-  final segments = uri.pathSegments;
-  final packageIndex = segments.indexOf('packages');
-  if (packageIndex >= 0 && packageIndex + 1 < segments.length) {
-    final slug = segments[packageIndex + 1];
-    if (slug == packageId || slug.startsWith('$packageId.')) return true;
-  }
-  return uri.path.contains('/packages/$packageId');
+  return uri.host.toLowerCase().contains('f-droid.org');
 }
 
-bool _trackedUrlMatchesApkmirror(String? trackedUrl, String packageId) {
-  if (trackedUrl == null ||
-      trackedUrl.isEmpty ||
-      packageId.isEmpty) {
-    return false;
-  }
+/// True when the tracked source URL is already on APKMirror (hide APKMirror chip).
+bool _trackedUrlMatchesApkmirror(String? trackedUrl) {
+  if (trackedUrl == null || trackedUrl.isEmpty) return false;
   final uri = Uri.tryParse(trackedUrl);
   if (uri == null || uri.host.isEmpty) return false;
-  if (!uri.host.toLowerCase().contains('apkmirror.com')) return false;
-  final searchQuery = uri.queryParameters['s'];
-  if (searchQuery != null) {
-    if (searchQuery == packageId) return true;
-    if (Uri.decodeComponent(searchQuery) == packageId) return true;
-  }
-  return uri.path.toLowerCase().contains(packageId.toLowerCase());
+  return uri.host.toLowerCase().contains('apkmirror.com');
 }
 
 class AppPage extends StatefulWidget {
@@ -216,16 +197,19 @@ class _AppPageState extends State<AppPage> {
     Widget _sectionCard(
       BuildContext ctx,
       String sectionTitle,
-      List<Widget> children,
-    ) {
+      List<Widget> children, {
+      Color? sectionBackgroundColor,
+      Color? sectionTitleColor,
+    }) {
       final isDark = Theme.of(ctx).brightness == Brightness.dark;
       final colorScheme = Theme.of(ctx).colorScheme;
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: isDark
-              ? colorScheme.surfaceContainerHighest
-              : colorScheme.surfaceContainer,
+          color: sectionBackgroundColor ??
+              (isDark
+                  ? colorScheme.surfaceContainerHighest
+                  : colorScheme.surfaceContainer),
           borderRadius: BorderRadius.circular(28),
           border: Border.all(
             color: colorScheme.outlineVariant,
@@ -258,7 +242,8 @@ class _AppPageState extends State<AppPage> {
                 style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.5,
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      color: sectionTitleColor ??
+                          Theme.of(ctx).colorScheme.onSurfaceVariant,
                     ),
               ),
               const SizedBox(height: 12),
@@ -598,13 +583,90 @@ class _AppPageState extends State<AppPage> {
           ? tr('never')
           : _formatDateTimeToMinute(app!.app.lastUpdateCheck!);
 
+      Future<void> openFixTrackOnlyPackageIdDialog() async {
+        if (app == null) return;
+        final packageIdController = TextEditingController(text: app!.app.id);
+        final submittedPackageId = await showDialog<String>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(tr('fixPackageId')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    tr('fixPackageIdExplanation'),
+                    style: Theme.of(dialogContext).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: packageIdController,
+                    decoration: InputDecoration(
+                      labelText: tr('package'),
+                      isDense: true,
+                    ),
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    keyboardType: TextInputType.visiblePassword,
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: updating ? null : () => Navigator.pop(dialogContext),
+                child: Text(tr('cancel')),
+              ),
+              FilledButton(
+                onPressed: updating
+                    ? null
+                    : () => Navigator.pop(
+                          dialogContext,
+                          packageIdController.text.trim(),
+                        ),
+                child: Text(tr('ok')),
+              ),
+            ],
+          ),
+        );
+        packageIdController.dispose();
+        if (!context.mounted) return;
+        if (submittedPackageId == null || submittedPackageId.isEmpty) return;
+        if (submittedPackageId == widget.appId) return;
+        try {
+          setState(() {
+            updating = true;
+          });
+          await appsProvider.changeTrackOnlyAppPackageId(
+            widget.appId,
+            submittedPackageId,
+          );
+          if (!context.mounted) return;
+          await appsProvider.checkUpdate(submittedPackageId);
+          if (!context.mounted) return;
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute<void>(
+              builder: (ctx) => AppPage(appId: submittedPackageId),
+            ),
+          );
+        } catch (err) {
+          if (context.mounted) {
+            showError(err, context);
+          }
+        } finally {
+          if (context.mounted) {
+            setState(() {
+              updating = false;
+            });
+          }
+        }
+      }
+
       final versionCardChildren = <Widget>[];
       if (undeterminedTrackOnlyInstalled) {
-        final installedLabel = app?.app.additionalSettings['trackOnlyTemporaryPackageId'] == true
-            ? tr('trackOnlyTempPackageIdInstalledVersion')
-            : tr('trackOnlyUndeterminedInstalledVersion');
         versionCardChildren.add(
-          _versionRow(context, tr('installed'), installedLabel),
+          _versionRow(context, tr('installed'), tr('unknown')),
         );
         versionCardChildren.add(
           _versionRow(context, tr('latest'), app?.app.latestVersion ?? '-'),
@@ -760,6 +822,40 @@ class _AppPageState extends State<AppPage> {
         versionCardChildren,
       );
 
+      final Widget? trackOnlyInstalledErrorCard = undeterminedTrackOnlyInstalled
+          ? _sectionCard(
+              context,
+              tr('error').toUpperCase(),
+              [
+                SelectableText(
+                  app?.app.additionalSettings['trackOnlyTemporaryPackageId'] ==
+                          true
+                      ? tr('trackOnlyTempPackageIdInstalledVersion')
+                      : tr('trackOnlyUndeterminedInstalledVersion'),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                        height: 1.35,
+                      ),
+                ),
+                const SizedBox(height: 14),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: FilledButton.tonalIcon(
+                    onPressed: updating || app == null
+                        ? null
+                        : openFixTrackOnlyPackageIdDialog,
+                    icon: const Icon(Icons.edit_outlined, size: 20),
+                    label: Text(tr('fixPackageId')),
+                  ),
+                ),
+              ],
+              sectionBackgroundColor:
+                  Theme.of(context).colorScheme.errorContainer,
+              sectionTitleColor:
+                  Theme.of(context).colorScheme.onErrorContainer,
+            )
+          : null;
+
       final detailsValueStyle =
           Theme.of(context).textTheme.bodySmall!.copyWith(
                 fontSize: 14,
@@ -782,16 +878,10 @@ class _AppPageState extends State<AppPage> {
           );
       final bool showApkmirrorIcon = alternateStoresPackageId != null &&
           alternateStoresPackageId.isNotEmpty &&
-          !_trackedUrlMatchesApkmirror(
-            alternateStoresTrackedUrl,
-            alternateStoresPackageId,
-          );
+          !_trackedUrlMatchesApkmirror(alternateStoresTrackedUrl);
       final bool showFdroidIcon = alternateStoresPackageId != null &&
           alternateStoresPackageId.isNotEmpty &&
-          !_trackedUrlMatchesFdroid(
-            alternateStoresTrackedUrl,
-            alternateStoresPackageId,
-          );
+          !_trackedUrlMatchesFdroid(alternateStoresTrackedUrl);
       final bool showAlternateSourcesRow = showPlayStoreIcon ||
           showApkmirrorIcon ||
           showFdroidIcon;
@@ -1003,6 +1093,7 @@ class _AppPageState extends State<AppPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: 12),
+          if (trackOnlyInstalledErrorCard != null) trackOnlyInstalledErrorCard,
           versionCard,
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&

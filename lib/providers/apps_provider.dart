@@ -45,6 +45,10 @@ import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 final pm = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
 
+final RegExp _androidApplicationIdPattern = RegExp(
+  r'^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$',
+);
+
 /// True if both versions are equal or one is a prefix of the other with a
 /// non-digit next (e.g. 50.5.19 and 50.5.19-31 [0] [PR] 879778031), or both
 /// contain the same commit-hash-like token (6+ hex chars), e.g. 1.5.3-DEV (75094D8) vs debug-75094d8.
@@ -1974,6 +1978,38 @@ class AppsProvider with ChangeNotifier {
       notifyListeners();
       export(isAuto: true);
     }
+  }
+
+  Future<void> changeTrackOnlyAppPackageId(
+    String previousPackageId,
+    String newPackageId,
+  ) async {
+    final trimmed = newPackageId.trim();
+    if (!_androidApplicationIdPattern.hasMatch(trimmed)) {
+      throw ObtainiumError(tr('invalidAndroidPackageId'));
+    }
+    if (trimmed == previousPackageId) {
+      return;
+    }
+    if (!apps.containsKey(previousPackageId)) {
+      throw ObtainiumError(tr('unexpectedError'));
+    }
+    final existingApp = apps[previousPackageId]!.app;
+    if (existingApp.additionalSettings['trackOnly'] != true) {
+      throw ObtainiumError(tr('unexpectedError'));
+    }
+    if (apps.containsKey(trimmed)) {
+      throw ObtainiumError(tr('appAlreadyAdded'));
+    }
+    final updatedApp = existingApp.deepCopy();
+    updatedApp.id = trimmed;
+    if (!isTempId(updatedApp)) {
+      updatedApp.additionalSettings['trackOnlyTemporaryPackageId'] = false;
+    } else {
+      updatedApp.additionalSettings['trackOnlyTemporaryPackageId'] = true;
+    }
+    await removeApps([previousPackageId]);
+    await saveApps([updatedApp], onlyIfExists: false);
   }
 
   Future<bool> removeAppsWithModal(BuildContext context, List<App> apps) async {
