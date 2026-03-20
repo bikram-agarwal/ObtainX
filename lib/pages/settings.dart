@@ -655,6 +655,23 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ),
                         height8,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: Text(tr('matchAppPageToIconColors')),
+                            ),
+                            Switch(
+                              value:
+                                  settingsProvider.matchAppPageToIconColors,
+                              onChanged: (value) {
+                                settingsProvider.matchAppPageToIconColors =
+                                    value;
+                              },
+                            ),
+                          ],
+                        ),
+                        height16,
                         if (!settingsProvider.useMaterialYou) colorPicker,
                         height16,
                         localeDropdown,

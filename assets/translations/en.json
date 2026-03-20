@@ -141,6 +141,7 @@
     "bgUpdateCheckInterval": "Background update checking interval",
     "neverManualOnly": "Never - manual only",
     "appearance": "Appearance",
+    "matchAppPageToIconColors": "Match app page to icon colors",
     "showWebInAppView": "Show source webpage in app view",
     "pinUpdates": "Pin updates to top of apps view",
     "updates": "Updates",

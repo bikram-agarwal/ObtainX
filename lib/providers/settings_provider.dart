@@ -148,6 +148,15 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  bool get matchAppPageToIconColors {
+    return prefs?.getBool('matchAppPageToIconColors') ?? true;
+  }
+
+  set matchAppPageToIconColors(bool matchAppPageToIconColors) {
+    prefs?.setBool('matchAppPageToIconColors', matchAppPageToIconColors);
+    notifyListeners();
+  }
+
   int get updateInterval {
     return prefs?.getInt('updateInterval') ?? 360;
   }

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -74,6 +76,68 @@ class _AppPageState extends State<AppPage> {
   AppInMemory? prevApp;
   bool updating = false;
 
+  ColorScheme? _iconDerivedColorScheme;
+  String? _iconSchemeCacheKey;
+  String? _iconSchemeLoadingForKey;
+  String? _iconSchemeFailedCacheKey;
+
+  @override
+  void didUpdateWidget(covariant AppPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.appId != widget.appId) {
+      _iconDerivedColorScheme = null;
+      _iconSchemeCacheKey = null;
+      _iconSchemeLoadingForKey = null;
+      _iconSchemeFailedCacheKey = null;
+    }
+  }
+
+  void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
+    if (!mounted) return;
+    if (_iconSchemeCacheKey == cacheKey) return;
+    if (_iconSchemeLoadingForKey == cacheKey) return;
+    _iconSchemeLoadingForKey = cacheKey;
+    _extractColorSchemeFromIcon(iconBytes, cacheKey);
+  }
+
+  Future<void> _extractColorSchemeFromIcon(
+    Uint8List iconBytes,
+    String cacheKey,
+  ) async {
+    try {
+      if (!mounted) return;
+      final brightness = Theme.of(context).brightness;
+      final ColorScheme scheme = await ColorScheme.fromImageProvider(
+        MemoryImage(iconBytes),
+        brightness: brightness,
+        dynamicSchemeVariant: DynamicSchemeVariant.expressive,
+      );
+      if (!context.mounted) return;
+      final AppsProvider apps =
+          Provider.of<AppsProvider>(context, listen: false);
+      if (!identical(apps.apps[widget.appId]?.icon, iconBytes)) return;
+      final SettingsProvider settings =
+          Provider.of<SettingsProvider>(context, listen: false);
+      if (!settings.matchAppPageToIconColors) return;
+      setState(() {
+        if (_iconSchemeLoadingForKey == cacheKey) {
+          _iconDerivedColorScheme = scheme;
+          _iconSchemeCacheKey = cacheKey;
+          _iconSchemeLoadingForKey = null;
+          _iconSchemeFailedCacheKey = null;
+        }
+      });
+    } catch (_) {
+      if (!context.mounted) return;
+      setState(() {
+        if (_iconSchemeLoadingForKey == cacheKey) {
+          _iconSchemeLoadingForKey = null;
+          _iconSchemeFailedCacheKey = cacheKey;
+        }
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -133,6 +197,7 @@ class _AppPageState extends State<AppPage> {
   Widget build(BuildContext context) {
     var appsProvider = context.watch<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
+    final bool useIconPageColors = settingsProvider.matchAppPageToIconColors;
     var showAppWebpageFinal =
         (settingsProvider.showAppWebpage &&
             !widget.showOppositeOfPreferredView) ||
@@ -173,6 +238,36 @@ class _AppPageState extends State<AppPage> {
             overrideSource: app.app.overrideSource,
           )
         : null;
+
+    final Uint8List? iconBytes = app?.icon;
+    final Brightness themeBrightness = Theme.of(context).brightness;
+    if (useIconPageColors && iconBytes != null) {
+      final String iconSchemeCacheKey =
+          '${identityHashCode(iconBytes)}_${themeBrightness.name}';
+      if (_iconSchemeCacheKey != iconSchemeCacheKey &&
+          _iconSchemeLoadingForKey != iconSchemeCacheKey &&
+          _iconSchemeFailedCacheKey != iconSchemeCacheKey) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _startIconSchemeLoadIfNeeded(iconBytes, iconSchemeCacheKey);
+        });
+      }
+    } else {
+      if (_iconDerivedColorScheme != null ||
+          _iconSchemeCacheKey != null ||
+          _iconSchemeLoadingForKey != null ||
+          _iconSchemeFailedCacheKey != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            _iconDerivedColorScheme = null;
+            _iconSchemeCacheKey = null;
+            _iconSchemeLoadingForKey = null;
+            _iconSchemeFailedCacheKey = null;
+          });
+        });
+      }
+    }
+
     if (!areDownloadsRunning &&
         prevApp == null &&
         app != null &&
@@ -1709,59 +1804,77 @@ class _AppPageState extends State<AppPage> {
       ),
     );
 
-    return Scaffold(
-      appBar: showAppWebpageFinal ? AppBar() : null,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      body: RefreshIndicator(
-        child: showAppWebpageFinal
-            ? getAppWebView()
-            : CustomScrollView(
-                slivers: [
-                  SliverToBoxAdapter(
-                    child: SafeArea(
-                      top: true,
-                      bottom: false,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
+    final ThemeData parentTheme = Theme.of(context);
+    final ColorScheme pageColorScheme =
+        useIconPageColors && _iconDerivedColorScheme != null
+            ? _iconDerivedColorScheme!
+            : parentTheme.colorScheme;
+    final ThemeData pageTheme = parentTheme.copyWith(
+      colorScheme: pageColorScheme,
+      primaryColor: pageColorScheme.primary,
+      cardColor: pageColorScheme.surfaceContainerHighest,
+    );
+
+    return Theme(
+      data: pageTheme,
+      child: Scaffold(
+        appBar: showAppWebpageFinal ? AppBar() : null,
+        backgroundColor: pageColorScheme.surface,
+        body: RefreshIndicator(
+          child: showAppWebpageFinal
+              ? getAppWebView()
+              : CustomScrollView(
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: SafeArea(
+                        top: true,
+                        bottom: false,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              IconButton(
-                                icon: const Icon(Icons.arrow_back),
-                                onPressed: () => Navigator.pop(context),
-                                tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.arrow_back),
+                                    onPressed: () => Navigator.pop(context),
+                                    tooltip: MaterialLocalizations.of(context)
+                                        .backButtonTooltip,
+                                  ),
+                                  Expanded(child: _buildDetailHeroContent()),
+                                ],
                               ),
-                              Expanded(child: _buildDetailHeroContent()),
+                              getInfoColumn(small: false),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                                child: Row(
+                                  children: [
+                                    Expanded(child: getBottomCenterActions()),
+                                  ],
+                                ),
+                              ),
+                              SizedBox(
+                                height:
+                                    MediaQuery.of(context).padding.bottom,
+                              ),
                             ],
                           ),
-                          getInfoColumn(small: false),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                            child: Row(
-                              children: [
-                                Expanded(child: getBottomCenterActions()),
-                              ],
-                            ),
-                          ),
-                          SizedBox(
-                              height: MediaQuery.of(context).padding.bottom),
-                        ],
-                      ),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-        onRefresh: () async {
-          if (app != null) {
-            getUpdate(app.app.id);
-          }
-        },
+                  ],
+                ),
+          onRefresh: () async {
+            if (app != null) {
+              getUpdate(app.app.id);
+            }
+          },
+        ),
+        bottomSheet: getBottomSheetMenu(),
       ),
-      bottomSheet: getBottomSheetMenu(),
     );
   }
 }
