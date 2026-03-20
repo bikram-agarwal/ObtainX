@@ -140,10 +140,13 @@ class _AppPageState extends State<AppPage> {
     try {
       if (!mounted) return;
       final brightness = Theme.of(context).brightness;
+      // Use fidelity, not expressive: expressive deliberately shifts primary hue
+      // away from the seed for variety, which makes icon-based theming wrong
+      // (e.g. blue icon producing green accents).
       final ColorScheme scheme = await ColorScheme.fromImageProvider(
         provider: MemoryImage(iconBytes),
         brightness: brightness,
-        dynamicSchemeVariant: DynamicSchemeVariant.expressive,
+        dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
       );
       if (!context.mounted) return;
       final AppsProvider apps =
