@@ -57,10 +57,12 @@ bool _trackedUrlMatchesApkmirror(String? trackedUrl) {
 /// Surfaces from [ColorScheme.fromImageProvider] are often very dark in dark mode;
 /// blend them toward [ColorScheme.primary] so the hue reads clearly on the app page.
 ColorScheme _appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
+  final double surfaceTint = scheme.brightness == Brightness.dark ? 0.12 : 0.18;
+  final double outlineTint = scheme.brightness == Brightness.dark ? 0.18 : 0.28;
   Color tintTowardPrimary(Color base) =>
-      Color.lerp(base, scheme.primary, 0.22) ?? base;
+      Color.lerp(base, scheme.primary, surfaceTint) ?? base;
   Color tintOutline(Color base) =>
-      Color.lerp(base, scheme.primary, 0.32) ?? base;
+      Color.lerp(base, scheme.primary, outlineTint) ?? base;
 
   if (scheme.brightness == Brightness.dark) {
     return scheme.copyWith(
@@ -84,6 +86,59 @@ ColorScheme _appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
     surfaceContainerHighest:
         tintTowardPrimary(scheme.surfaceContainerHighest),
     outlineVariant: tintOutline(scheme.outlineVariant),
+  );
+}
+
+/// Pulls icon-derived dark schemes a few steps toward black so UI feels less neon.
+ColorScheme _darkenIconPageSchemeInDarkMode(ColorScheme scheme) {
+  if (scheme.brightness != Brightness.dark) return scheme;
+  const Color black = Color(0xFF000000);
+  Color darken(Color color, double mix) =>
+      Color.lerp(color, black, mix) ?? color;
+
+  return scheme.copyWith(
+    primary: darken(scheme.primary, 0.08),
+    onPrimary: scheme.onPrimary,
+    primaryContainer: darken(scheme.primaryContainer, 0.12),
+    onPrimaryContainer: scheme.onPrimaryContainer,
+    primaryFixed: darken(scheme.primaryFixed, 0.1),
+    primaryFixedDim: darken(scheme.primaryFixedDim, 0.1),
+    onPrimaryFixed: scheme.onPrimaryFixed,
+    onPrimaryFixedVariant: scheme.onPrimaryFixedVariant,
+    secondary: darken(scheme.secondary, 0.08),
+    onSecondary: scheme.onSecondary,
+    secondaryContainer: darken(scheme.secondaryContainer, 0.12),
+    onSecondaryContainer: scheme.onSecondaryContainer,
+    secondaryFixed: darken(scheme.secondaryFixed, 0.1),
+    secondaryFixedDim: darken(scheme.secondaryFixedDim, 0.1),
+    onSecondaryFixed: scheme.onSecondaryFixed,
+    onSecondaryFixedVariant: scheme.onSecondaryFixedVariant,
+    tertiary: darken(scheme.tertiary, 0.08),
+    onTertiary: scheme.onTertiary,
+    tertiaryContainer: darken(scheme.tertiaryContainer, 0.12),
+    onTertiaryContainer: scheme.onTertiaryContainer,
+    tertiaryFixed: darken(scheme.tertiaryFixed, 0.1),
+    tertiaryFixedDim: darken(scheme.tertiaryFixedDim, 0.1),
+    onTertiaryFixed: scheme.onTertiaryFixed,
+    onTertiaryFixedVariant: scheme.onTertiaryFixedVariant,
+    surface: darken(scheme.surface, 0.14),
+    onSurface: scheme.onSurface,
+    surfaceDim: darken(scheme.surfaceDim, 0.14),
+    surfaceBright: darken(scheme.surfaceBright, 0.12),
+    surfaceContainerLowest: darken(scheme.surfaceContainerLowest, 0.14),
+    surfaceContainerLow: darken(scheme.surfaceContainerLow, 0.14),
+    surfaceContainer: darken(scheme.surfaceContainer, 0.14),
+    surfaceContainerHigh: darken(scheme.surfaceContainerHigh, 0.14),
+    surfaceContainerHighest: darken(scheme.surfaceContainerHighest, 0.14),
+    onSurfaceVariant: scheme.onSurfaceVariant,
+    outline: darken(scheme.outline, 0.07),
+    outlineVariant: darken(scheme.outlineVariant, 0.09),
+    shadow: scheme.shadow,
+    scrim: scheme.scrim,
+    inverseSurface: scheme.inverseSurface,
+    onInverseSurface: scheme.onInverseSurface,
+    inversePrimary: scheme.inversePrimary,
+    surfaceTint: darken(scheme.surfaceTint, 0.06),
   );
 }
 
@@ -309,7 +364,9 @@ class _AppPageState extends State<AppPage> {
         useIconPageColors && _iconDerivedColorScheme != null;
     final ColorScheme pageColorSchemeForPage = !applyIconDerivedPageTheming
         ? parentThemeForPage.colorScheme
-        : _appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!);
+        : _darkenIconPageSchemeInDarkMode(
+            _appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
+          );
     final ThemeData pageThemeForPage = parentThemeForPage.copyWith(
       colorScheme: pageColorSchemeForPage,
       primaryColor: pageColorSchemeForPage.primary,
