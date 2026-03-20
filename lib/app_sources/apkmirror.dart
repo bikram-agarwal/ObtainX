@@ -9,6 +9,27 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
+/// Image and static asset URL suffixes that appear in page HTML after a string
+/// that looks like `com.vendor.app`, e.g. `com.google.android.calendar.png`.
+const _apkMirrorTrailingNonPackageSegments = <String>{
+  'avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'webp',
+};
+
+String _apkMirrorNormalizeInferredPackageCandidate(String rawCandidate) {
+  var normalized = rawCandidate;
+  while (true) {
+    final lastDotIndex = normalized.lastIndexOf('.');
+    if (lastDotIndex <= 0) break;
+    final tailSegment = normalized.substring(lastDotIndex + 1).toLowerCase();
+    if (_apkMirrorTrailingNonPackageSegments.contains(tailSegment)) {
+      normalized = normalized.substring(0, lastDotIndex);
+    } else {
+      break;
+    }
+  }
+  return normalized;
+}
+
 /// RSS puts the release URL in `<link>https://...</link>`. The HTML parser
 /// treats `<link>` as void, so [parse] drops that text. Read from raw XML.
 String? releaseUrlFromApkMirrorRssItemInner(String itemInnerXml) {
@@ -162,11 +183,15 @@ class APKMirror extends AppSource {
     Response res = await sourceRequest(standardUrl, additionalSettings);
     if (res.statusCode != 200) return null;
     const packagePattern = r'com(?:\.[a-zA-Z0-9_]+){2,}';
+    final packageFullMatch = RegExp('^$packagePattern\$');
     for (final match in RegExp(packagePattern).allMatches(res.body)) {
-      final candidate = match.group(0)!;
+      final candidate = _apkMirrorNormalizeInferredPackageCandidate(
+        match.group(0)!,
+      );
       if (candidate.length >= 10 &&
           !candidate.startsWith('com.apkmirror') &&
-          !candidate.contains('apkmirror')) {
+          !candidate.contains('apkmirror') &&
+          packageFullMatch.hasMatch(candidate)) {
         return candidate;
       }
     }
