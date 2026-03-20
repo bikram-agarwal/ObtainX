@@ -4,29 +4,27 @@
 
 ObtainX is a fork of Obtainium. These are the extra features you get in this fork:
 
-- **Installer choice** – In Settings, you can choose how APKs are installed: **Stock** (default), **Shizuku**, or **Legacy**. Legacy mode lets you pick a custom installer (e.g. InstallerX, App Manager etc.) to handle the APK.
+- **Installer choice** - Added a new **Legacy** install path. IT sends APKs to another installer you pick (e.g. InstallerX, App Manager). Useful when you cannot grant Obtainium "install unknown apps" permission (e.g. when _Advanced Protection_ is enabled) but another privileged installer can still install.
 
-- **Smarter version handling** – If you have a **higher** version installed than what the remote reports (e.g. you're on a dev build or a newer release), ObtainX does **not** show "Update available." Only when the remote version is actually newer does it show an update. Same logic is used for "up to date" and "same build (different labels)" so you get accurate status chips.
+- **More Material UI** - Different parts of the app has been given some more Material UI love, with grouping in cards, slide up panels, expressive buttons, auto-hide menu bars, and small visual consistency tweaks. 
 
-- **Better tracking for track-only sources like APKMirror**
+- **Better handling of Track-only sources (e.g. APKMirror)** 
+  - Shows installed version from the device when the package ID is known; 
+  - New **Update** button opens the concrete release page, not only the app listing. 
+  - Fewer wrong package IDs when adding from APKMirror. 
+  - If the installed version cannot be determined, a dedicated error section explains it and you can **fix the package ID** from the app page.
 
-  - For track-only apps, Obtainium did not fetch the already installed app version and always showed "latest is installed," which was wrong. That is fixed here: the installed version is now read from the device when a package ID is available.
-  - Added a new "Update" button to track-only app pages, tapping which opens the **specific update version page** (not just the app landing page).
-  - Smarter version comparison so strings like `50.5.19` and `50.5.19-31 [PR]` are treated as the same.
+- **Organized App detail layout** 
+  - Repalced plaintext heavy app page with Card-style sections (Hero, Versions, Details etc.), clearer grouping & hierarchy, Material 3 surfaces, and consistent treatment of links and timestamps.
+  - **Other sources** - Other store shortcut chips on the app page.
 
-- **Modernized app detail page** – The app page is no longer a single top-to-bottom text column. It is reorganized into clear sections with visual separation:
-  - **Hero** – Back button and app info (icon, name, developer) on one row below the status bar.
-  - **Version card** – Installed / Latest / Changelog as label-value rows, version status chip (e.g. "Same build (different labels)", "Update available"), and timestamps in `yyyy-mm-dd hh:mm` format.
-  - **Details card** – Package, Source (as link), Last update check, Assets (as link to download). Certificate hash is included here. No separate "Download release asset" line; the Assets value is the download link.
-  - **Categories card** – Category chips only, no duplicate labels.
-  Cards use Material 3 surfaces and shadows so they read clearly in both light and dark themes.
-
-- **UI polish** – Material 3 expressive buttons, SafeArea so the top row is not hidden by the status bar, and consistent link styling for Source, Assets, and Changelog.
-
+- **Smarter version handling** - Fewer false "update available" / "up to date" states when your installed build and the source label differ in harmless ways (including dev vs release labels).
 
 ## Screenshots
-| <img src="./assets/screenshots/8.installer_choice.png" alt="Apps Page" /> | <img src="./assets/screenshots/9.material_buttons.png" alt="Dark Theme" /> | 
-| ------------------------------------------------------ | ----------------------------------------------------------------------- | 
+| <img src="./assets/screenshots/1.apps.png" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.png" alt="Themes and View Options" /> | <img src="./assets/screenshots/6.installer_choice.png" alt="Choose your own installer" /> | 
+| ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | 
+| <img src="./assets/screenshots/4.app.png" alt="Individual App Page" /> | <img src="./assets/screenshots/5.categories.png" alt="Editing Categories" /> |  | 
+
 
 ## Original Obtainium
 
