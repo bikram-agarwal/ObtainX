@@ -108,7 +108,7 @@ class _AppPageState extends State<AppPage> {
       if (!mounted) return;
       final brightness = Theme.of(context).brightness;
       final ColorScheme scheme = await ColorScheme.fromImageProvider(
-        MemoryImage(iconBytes),
+        provider: MemoryImage(iconBytes),
         brightness: brightness,
         dynamicSchemeVariant: DynamicSchemeVariant.expressive,
       );
