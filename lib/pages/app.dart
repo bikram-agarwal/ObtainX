@@ -142,8 +142,8 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
     _additionalSettingsRebuildToken(model.additionalSettings),
     model.categories.length,
     Object.hashAll(model.categories),
-    inMemory.certificateHashes.length,
-    Object.hashAll(inMemory.certificateHashes),
+    // Do not touch [AppInMemory.certificateHashes] here: it runs SHA256 per hash
+    // and this selector runs on every [AppsProvider.notifyListeners].
     packageInfo?.versionName,
     packageInfo?.packageName,
     model.iconUrl,

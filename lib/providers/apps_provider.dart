@@ -622,6 +622,9 @@ class AppsProvider with ChangeNotifier {
   late StreamSubscription<FGBGType>? foregroundSubscription;
   late Directory APKDir;
   late Directory iconsCacheDir;
+  /// User-chosen PNG overrides; under app storage, not [iconsCacheDir], so they
+  /// survive Android "clear cache".
+  late Directory userAppIconsDir;
   late SettingsProvider settingsProvider = SettingsProvider();
 
   Iterable<AppInMemory> getAppValues() => apps.values.map((a) => a.deepCopy());
@@ -638,6 +641,11 @@ class AppsProvider with ChangeNotifier {
     () async {
       await settingsProvider.initializeSettings();
       var cacheDirs = await getExternalCacheDirectories();
+      final Directory appStorageRoot = await getAppStorageDir();
+      userAppIconsDir = Directory('${appStorageRoot.path}/user_icons');
+      if (!userAppIconsDir.existsSync()) {
+        userAppIconsDir.createSync(recursive: true);
+      }
       if (cacheDirs?.isNotEmpty ?? false) {
         APKDir = cacheDirs!.first;
         iconsCacheDir = Directory('${cacheDirs.first.path}/icons');
@@ -645,15 +653,16 @@ class AppsProvider with ChangeNotifier {
           iconsCacheDir.createSync();
         }
       } else {
-        APKDir = Directory('${(await getAppStorageDir()).path}/apks');
+        APKDir = Directory('${appStorageRoot.path}/apks');
         if (!APKDir.existsSync()) {
           APKDir.createSync();
         }
-        iconsCacheDir = Directory('${(await getAppStorageDir()).path}/icons');
+        iconsCacheDir = Directory('${appStorageRoot.path}/icons');
         if (!iconsCacheDir.existsSync()) {
           iconsCacheDir.createSync();
         }
       }
+      _migrateUserIconsFromLegacyCacheDir();
       if (!isBg) {
         // Load Apps into memory (in background processes, this is done later instead of in the constructor)
         await loadApps();
@@ -1921,6 +1930,36 @@ class AppsProvider with ChangeNotifier {
         bytes[7] == 0x0A;
   }
 
+  void _migrateUserIconsFromLegacyCacheDir() {
+    try {
+      if (!iconsCacheDir.existsSync()) return;
+      for (final FileSystemEntity entity in iconsCacheDir.listSync()) {
+        if (entity is! File) continue;
+        final String fileName = entity.uri.pathSegments.last;
+        if (!fileName.endsWith('.user.png')) continue;
+        final File destination = File('${userAppIconsDir.path}/$fileName');
+        if (destination.existsSync()) {
+          try {
+            entity.deleteSync();
+          } catch (_) {}
+          continue;
+        }
+        try {
+          entity.copySync(destination.path);
+          entity.deleteSync();
+        } catch (e) {
+          logs.add('User icon migrate $fileName: $e');
+        }
+      }
+    } catch (e) {
+      logs.add('User icon migrate: $e');
+    }
+  }
+
+  File _userAppIconPngFile(String appId) {
+    return File('${userAppIconsDir.path}/$appId.user.png');
+  }
+
   Future<Uint8List?> _fetchIconFromUrl(String url) async {
     try {
       final uri = Uri.tryParse(url);
@@ -1939,7 +1978,7 @@ class AppsProvider with ChangeNotifier {
   Future<void> updateAppIcon(String? appId, {bool ignoreCache = false}) async {
     if (appId == null || apps[appId] == null) return;
 
-    final userIconFile = File('${iconsCacheDir.path}/$appId.user.png');
+    final File userIconFile = _userAppIconPngFile(appId);
     if (userIconFile.existsSync()) {
       try {
         final Uint8List iconBytes = await userIconFile.readAsBytes();
@@ -2026,9 +2065,9 @@ class AppsProvider with ChangeNotifier {
   }
 
   bool hasUserAppIconOverride(String appId) =>
-      File('${iconsCacheDir.path}/$appId.user.png').existsSync();
+      _userAppIconPngFile(appId).existsSync();
 
-  /// Copies a user-selected PNG into [appId].user.png and updates memory.
+  /// Copies a user-selected PNG into app storage ([userAppIconsDir]) and updates memory.
   /// Returns null on success, or a translated error string.
   Future<String?> setUserAppIconFromPngPath(String appId, String filePath) async {
     if (apps[appId] == null) {
@@ -2043,7 +2082,7 @@ class AppsProvider with ChangeNotifier {
       if (!_bytesLookLikePng(bytes)) {
         return tr('changeAppIconInvalidPng');
       }
-      final File dest = File('${iconsCacheDir.path}/$appId.user.png');
+      final File dest = _userAppIconPngFile(appId);
       await dest.writeAsBytes(bytes);
       apps.update(
         appId,
@@ -2064,7 +2103,7 @@ class AppsProvider with ChangeNotifier {
 
   Future<void> resetAppIconToDefault(String appId) async {
     if (apps[appId] == null) return;
-    final File userFile = File('${iconsCacheDir.path}/$appId.user.png');
+    final File userFile = _userAppIconPngFile(appId);
     if (userFile.existsSync()) {
       deleteFile(userFile);
     }
@@ -2131,9 +2170,14 @@ class AppsProvider with ChangeNotifier {
         if (standardIconCache.existsSync()) {
           deleteFile(standardIconCache);
         }
-        final File userIconCache = File('${iconsCacheDir.path}/$appId.user.png');
-        if (userIconCache.existsSync()) {
-          deleteFile(userIconCache);
+        final File userIconStored = _userAppIconPngFile(appId);
+        if (userIconStored.existsSync()) {
+          deleteFile(userIconStored);
+        }
+        final File legacyUserIconInCache =
+            File('${iconsCacheDir.path}/$appId.user.png');
+        if (legacyUserIconInCache.existsSync()) {
+          deleteFile(legacyUserIconInCache);
         }
         if (apps.containsKey(appId)) {
           apps.remove(appId);
