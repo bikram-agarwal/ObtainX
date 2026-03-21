@@ -1094,7 +1094,7 @@ class _LogsDialogState extends State<LogsDialog> {
                       title: tr('appLogs'),
                       items: const [],
                       initValid: true,
-                      message: tr('removeFromObtainium'),
+                      message: tr('removeFromObtainX'),
                     );
                   },
                 )) !=

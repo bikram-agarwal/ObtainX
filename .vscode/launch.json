@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Obtainium (debug mode)",
+            "name": "ObtainX (debug mode)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "debug",
@@ -16,7 +16,7 @@
             ]
         },
         {
-            "name": "Obtainium (profile mode)",
+            "name": "ObtainX (profile mode)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",
@@ -27,7 +27,7 @@
             ]
         },
         {
-            "name": "Obtainium (release mode)",
+            "name": "ObtainX (release mode)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "release",

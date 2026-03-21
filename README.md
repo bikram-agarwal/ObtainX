@@ -1,10 +1,10 @@
-# ![Obtainium Icon](./assets/graphics/icon_small.png) ObtainX
+# ![ObtainX icon](./assets/graphics/icon_small.png) ObtainX
 
 ## Extra features in ObtainX
 
 ObtainX is a fork of Obtainium. These are the extra features you get in this fork:
 
-- **Installer choice** - Added a new **Legacy** install path. IT sends APKs to another installer you pick (e.g. InstallerX, App Manager). Useful when you cannot grant Obtainium "install unknown apps" permission (e.g. when _Advanced Protection_ is enabled) but another privileged installer can still install.
+- **Installer choice** - Added a new **Legacy** install path. It sends APKs to another installer you pick (e.g. InstallerX, App Manager). Useful when you cannot grant "install unknown apps" permission (e.g. when _Advanced Protection_ is enabled) to noarmal apps but another privileged installer can still install.
 
 - **More Material UI** - Different parts of the app has been given some more Material UI love, with grouping in cards, slide up panels, expressive buttons, auto-hide menu bars, and small visual consistency tweaks. 
 

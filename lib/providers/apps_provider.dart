@@ -2198,7 +2198,7 @@ class AppsProvider with ChangeNotifier {
                   [
                     GeneratedFormSwitch(
                       'rmAppEntry',
-                      label: tr('removeFromObtainium'),
+                      label: tr('removeFromObtainX'),
                       defaultValue: true,
                     ),
                   ],
