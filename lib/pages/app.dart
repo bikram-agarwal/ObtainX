@@ -241,6 +241,31 @@ class _AppPageState extends State<AppPage> {
                   },
                 ),
                 ListTile(
+                  leading: const Icon(Icons.image_search_outlined),
+                  title: Text(tr('searchWebForAppIcon')),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    final AppInMemory? appInMem =
+                        appsProviderRead.apps[widget.appId];
+                    final String appLabel =
+                        appInMem?.name ?? widget.appId;
+                    final String imageSearchQuery =
+                        '$appLabel square logo png';
+                    final Uri googleImageSearchUri = Uri.https(
+                      'www.google.com',
+                      '/search',
+                      <String, String>{
+                        'q': imageSearchQuery,
+                        'tbm': 'isch',
+                      },
+                    );
+                    launchUrlString(
+                      googleImageSearchUri.toString(),
+                      mode: LaunchMode.externalApplication,
+                    );
+                  },
+                ),
+                ListTile(
                   leading: const Icon(Icons.restore),
                   title: Text(tr('resetAppIcon')),
                   enabled: canReset,
@@ -878,6 +903,29 @@ class _AppPageState extends State<AppPage> {
           ? tr('never')
           : _formatDateTimeToMinute(app!.app.lastUpdateCheck!);
 
+      Future<void> markTrackOnlyAsNotInstalledOnDevice() async {
+        if (app == null) return;
+        setState(() {
+          updating = true;
+        });
+        try {
+          final App appToSave = app!.app.deepCopy();
+          appToSave.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
+              false;
+          await appsProvider.saveApps([appToSave]);
+        } catch (err) {
+          if (context.mounted) {
+            showError(err, context);
+          }
+        } finally {
+          if (context.mounted) {
+            setState(() {
+              updating = false;
+            });
+          }
+        }
+      }
+
       Future<void> openFixTrackOnlyPackageIdDialog() async {
         if (app == null) return;
         final packageIdController = TextEditingController(text: app!.app.id);
@@ -1117,39 +1165,51 @@ class _AppPageState extends State<AppPage> {
         versionCardChildren,
       );
 
-      final Widget? trackOnlyInstalledErrorCard = undeterminedTrackOnlyInstalled
-          ? _sectionCard(
-              pageThemeContext,
-              tr('error').toUpperCase(),
-              [
-                SelectableText(
-                  app?.app.additionalSettings['trackOnlyTemporaryPackageId'] ==
-                          true
-                      ? tr('trackOnlyTempPackageIdInstalledVersion')
-                      : tr('trackOnlyUndeterminedInstalledVersion'),
-                  style: pageTheme.textTheme.bodySmall?.copyWith(
-                        color: pageTheme.colorScheme.onErrorContainer,
-                        height: 1.35,
-                      ),
-                ),
-                const SizedBox(height: 14),
-                Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: FilledButton.tonalIcon(
-                    onPressed: updating || app == null
-                        ? null
-                        : openFixTrackOnlyPackageIdDialog,
-                    icon: const Icon(Icons.edit_outlined, size: 20),
-                    label: Text(tr('fixPackageId')),
-                  ),
-                ),
-              ],
-              sectionBackgroundColor:
-                  pageTheme.colorScheme.errorContainer,
-              sectionTitleColor:
-                  pageTheme.colorScheme.onErrorContainer,
-            )
-          : null;
+      final bool trackOnlyUsesTemporaryPackageId =
+          app?.app.additionalSettings['trackOnlyTemporaryPackageId'] == true;
+      final Widget? trackOnlyInstalledErrorCard =
+          undeterminedTrackOnlyInstalled
+              ? _sectionCard(
+                  pageThemeContext,
+                  tr('error').toUpperCase(),
+                  [
+                    SelectableText(
+                      trackOnlyUsesTemporaryPackageId
+                          ? tr('trackOnlyTempPackageIdInstalledVersion')
+                          : tr('trackOnlyUndeterminedInstalledVersion'),
+                      style: pageTheme.textTheme.bodySmall?.copyWith(
+                            color: pageTheme.colorScheme.onErrorContainer,
+                            height: 1.35,
+                          ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        FilledButton.tonalIcon(
+                          onPressed: updating || app == null
+                              ? null
+                              : openFixTrackOnlyPackageIdDialog,
+                          icon: const Icon(Icons.edit_outlined, size: 20),
+                          label: Text(tr('fixPackageId')),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: updating || app == null
+                              ? null
+                              : markTrackOnlyAsNotInstalledOnDevice,
+                          child: Text(tr('itsNotInstalled')),
+                        ),
+                      ],
+                    ),
+                  ],
+                  sectionBackgroundColor:
+                      pageTheme.colorScheme.errorContainer,
+                  sectionTitleColor:
+                      pageTheme.colorScheme.onErrorContainer,
+                )
+              : null;
 
       final detailsValueStyle =
           pageTheme.textTheme.bodySmall!.copyWith(
@@ -1388,7 +1448,8 @@ class _AppPageState extends State<AppPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: 12),
-          if (trackOnlyInstalledErrorCard != null) trackOnlyInstalledErrorCard,
+          if (trackOnlyInstalledErrorCard != null)
+            trackOnlyInstalledErrorCard,
           versionCard,
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&
@@ -1963,7 +2024,17 @@ class _AppPageState extends State<AppPage> {
                       pm.openApp(app.app.id);
                     },
                     tooltip: tr('openApp'),
-                    icon: const Icon(Icons.smartphone_outlined),
+                    icon: const Icon(Icons.open_in_new),
+                  ),
+                if (app != null && app.installedInfo != null)
+                  IconButton(
+                    color: Theme.of(themeContext).colorScheme.primary,
+                    iconSize: 24,
+                    onPressed: () {
+                      appsProvider.openAppSettings(app.app.id);
+                    },
+                    icon: const Icon(Icons.settings),
+                    tooltip: tr('settings'),
                   ),
                 if (source != null &&
                     source.combinedAppSpecificSettingFormItems.isNotEmpty)
@@ -1978,16 +2049,6 @@ class _AppPageState extends State<AppPage> {
                           },
                     tooltip: tr('additionalOptions'),
                     icon: const Icon(Icons.edit),
-                  ),
-                if (app != null && app.installedInfo != null)
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: () {
-                      appsProvider.openAppSettings(app.app.id);
-                    },
-                    icon: const Icon(Icons.settings),
-                    tooltip: tr('settings'),
                   ),
                 if (app != null && showAppWebpageFinal)
                   IconButton(

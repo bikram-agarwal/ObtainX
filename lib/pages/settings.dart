@@ -715,25 +715,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         SettingsSectionCard(
                           title: tr('appearance'),
                           children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Flexible(
-                              child: Text(tr('matchAppPageToIconColors')),
-                            ),
-                            Switch(
-                              value:
-                                  settingsProvider.matchAppPageToIconColors,
-                              onChanged: (value) {
-                                settingsProvider.matchAppPageToIconColors =
-                                    value;
-                              },
-                            ),
-                          ],
-                        ),
-                        height16,
-                        if (!settingsProvider.useMaterialYou) colorPicker,
-                        height16,
+                        if (!settingsProvider.useMaterialYou) ...[
+                          colorPicker,
+                          height16,
+                        ],
                         localeDropdown,
                         FutureBuilder(
                           builder: (ctx, val) {

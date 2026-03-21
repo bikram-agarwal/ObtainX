@@ -312,6 +312,16 @@ void showAppsViewOptionsSheet(BuildContext context) {
                         },
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(tr('matchAppPageToIconColors')),
+                      value: settingsProvider.matchAppPageToIconColors,
+                      onChanged: (value) {
+                        settingsProvider.matchAppPageToIconColors = value;
+                        setSheetState(() {});
+                      },
+                    ),
                     const SizedBox(height: 16),
                     Divider(color: colorScheme.outlineVariant),
                     const SizedBox(height: 8),
@@ -486,6 +496,113 @@ void showAppsViewOptionsSheet(BuildContext context) {
   );
 }
 
+/// Keeps auto-hide/show of the apps footer local to this state so scrolling
+/// does not call [setState] on [AppsPageState] and rebuild the whole list.
+class _ScrollLinkedAppFooter extends StatefulWidget {
+  const _ScrollLinkedAppFooter({
+    required this.scrollController,
+    required this.selectionActive,
+    required this.footer,
+  });
+
+  final ScrollController scrollController;
+  final bool selectionActive;
+  final Widget footer;
+
+  @override
+  State<_ScrollLinkedAppFooter> createState() => _ScrollLinkedAppFooterState();
+}
+
+class _ScrollLinkedAppFooterState extends State<_ScrollLinkedAppFooter> {
+  bool _footerExpanded = true;
+  double _previousOffset = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ScrollLinkedAppFooter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController.removeListener(_onScroll);
+      widget.scrollController.addListener(_onScroll);
+    }
+    if (oldWidget.selectionActive != widget.selectionActive) {
+      if (widget.scrollController.hasClients) {
+        _previousOffset = widget.scrollController.offset;
+      }
+      if (!_footerExpanded) {
+        setState(() {
+          _footerExpanded = true;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final ScrollController controller = widget.scrollController;
+    if (!controller.hasClients) {
+      return;
+    }
+    if (widget.selectionActive) {
+      _previousOffset = controller.offset;
+      if (!_footerExpanded) {
+        setState(() {
+          _footerExpanded = true;
+        });
+      }
+      return;
+    }
+    final double currentOffset = controller.offset;
+    final double delta = currentOffset - _previousOffset;
+    _previousOffset = currentOffset;
+    if (currentOffset <= 24) {
+      if (!_footerExpanded) {
+        setState(() {
+          _footerExpanded = true;
+        });
+      }
+      return;
+    }
+    const double scrollSensitivity = 10;
+    if (delta > scrollSensitivity) {
+      if (_footerExpanded) {
+        setState(() {
+          _footerExpanded = false;
+        });
+      }
+    } else if (delta < -scrollSensitivity) {
+      if (!_footerExpanded) {
+        setState(() {
+          _footerExpanded = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.fastOutSlowIn,
+      alignment: Alignment.topCenter,
+      clipBehavior: Clip.hardEdge,
+      child: _footerExpanded || widget.selectionActive
+          ? widget.footer
+          : const SizedBox(width: double.infinity),
+    );
+  }
+}
+
 class AppsPageState extends State<AppsPage> {
   AppsFilter filter = AppsFilter();
   final AppsFilter neutralFilter = AppsFilter();
@@ -500,7 +617,6 @@ class AppsPageState extends State<AppsPage> {
     if (selectedAppIds.isNotEmpty) {
       setState(() {
         selectedAppIds.clear();
-        appsFooterVisible = true;
       });
       return true;
     }
@@ -511,8 +627,6 @@ class AppsPageState extends State<AppsPage> {
       GlobalKey<RefreshIndicatorState>();
 
   late final ScrollController scrollController;
-  bool appsFooterVisible = true;
-  double appsScrollPreviousOffset = 0;
 
   var sourceProvider = SourceProvider();
 
@@ -520,52 +634,10 @@ class AppsPageState extends State<AppsPage> {
   void initState() {
     super.initState();
     scrollController = ScrollController();
-    scrollController.addListener(_onAppsScrollForFooterVisibility);
-  }
-
-  void _onAppsScrollForFooterVisibility() {
-    if (!scrollController.hasClients) {
-      return;
-    }
-    if (selectedAppIds.isNotEmpty) {
-      appsScrollPreviousOffset = scrollController.offset;
-      if (!appsFooterVisible) {
-        setState(() {
-          appsFooterVisible = true;
-        });
-      }
-      return;
-    }
-    final double currentOffset = scrollController.offset;
-    final double delta = currentOffset - appsScrollPreviousOffset;
-    appsScrollPreviousOffset = currentOffset;
-    if (currentOffset <= 24) {
-      if (!appsFooterVisible) {
-        setState(() {
-          appsFooterVisible = true;
-        });
-      }
-      return;
-    }
-    const double scrollSensitivity = 10;
-    if (delta > scrollSensitivity) {
-      if (appsFooterVisible) {
-        setState(() {
-          appsFooterVisible = false;
-        });
-      }
-    } else if (delta < -scrollSensitivity) {
-      if (!appsFooterVisible) {
-        setState(() {
-          appsFooterVisible = true;
-        });
-      }
-    }
   }
 
   @override
   void dispose() {
-    scrollController.removeListener(_onAppsScrollForFooterVisibility);
     scrollController.dispose();
     super.dispose();
   }
@@ -1092,7 +1164,8 @@ class AppsPageState extends State<AppsPage> {
       if (stops.length == 2) {
         stops[0] = 0.9999;
       }
-      return Container(
+      return RepaintBoundary(
+        child: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             stops: stops,
@@ -1175,6 +1248,7 @@ class AppsPageState extends State<AppsPage> {
             }
           },
         ),
+      ),
       );
     }
 
@@ -2055,6 +2129,7 @@ class AppsPageState extends State<AppsPage> {
                   child: CustomScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     controller: scrollController,
+                    cacheExtent: 500,
                     slivers: <Widget>[
                       CustomAppBar(title: tr('appsString')),
                       ...getLoadingWidgets(),
@@ -2065,28 +2140,23 @@ class AppsPageState extends State<AppsPage> {
               ),
             ),
             if (appsProvider.apps.isNotEmpty)
-              AnimatedSize(
-                duration: const Duration(milliseconds: 240),
-                curve: Curves.fastOutSlowIn,
-                alignment: Alignment.topCenter,
-                clipBehavior: Clip.hardEdge,
-                child: (appsFooterVisible || selectedAppIds.isNotEmpty)
-                    ? Material(
-                        elevation: 3,
-                        surfaceTintColor:
-                            Theme.of(context).colorScheme.surfaceTint,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerLow,
-                        child: SafeArea(
-                          top: false,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: getFilterButtonsRow(),
-                          ),
-                        ),
-                      )
-                    : const SizedBox(width: double.infinity),
+              _ScrollLinkedAppFooter(
+                scrollController: scrollController,
+                selectionActive: selectedAppIds.isNotEmpty,
+                footer: Material(
+                  elevation: 3,
+                  surfaceTintColor:
+                      Theme.of(context).colorScheme.surfaceTint,
+                  color:
+                      Theme.of(context).colorScheme.surfaceContainerLow,
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: getFilterButtonsRow(),
+                    ),
+                  ),
+                ),
               ),
           ],
         ),

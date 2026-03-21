@@ -1988,6 +1988,25 @@ class AppsProvider with ChangeNotifier {
     if (icon != null && !alreadyCached) {
       await cachedIcon.writeAsBytes(icon);
     }
+    if (ignoreCache) {
+      apps.update(
+        apps[appId]!.app.id,
+        (value) => AppInMemory(
+          value.app,
+          value.downloadProgress,
+          value.installedInfo,
+          icon,
+        ),
+        ifAbsent: () => AppInMemory(
+          apps[appId]!.app,
+          null,
+          apps[appId]?.installedInfo,
+          icon,
+        ),
+      );
+      notifyListeners();
+      return;
+    }
     if (icon != null) {
       apps.update(
         apps[appId]!.app.id,
