@@ -15,6 +15,7 @@
     "includePrereleases": "Include prereleases",
     "fallbackToOlderReleases": "Fallback to older releases",
     "filterReleaseTitlesByRegEx": "Filter release titles by regular expression",
+    "enableDirectDownload": "Enable direct APK download (scans release page for variants)",
     "invalidRegEx": "Invalid regular expression",
     "noDescription": "No description",
     "cancel": "Cancel",
@@ -455,5 +456,15 @@
     "certificateHash": {
       "one": "Certificate Hash",
       "other": "Certificate Hashes"
-    }
+    },
+    "gestures": "Gestures",
+    "rightSwipeAction": "Right swipe action",
+    "leftSwipeAction": "Left swipe action",
+    "swipeAction_update": "Update / Install",
+    "swipeAction_pin": "Pin / Unpin",
+    "swipeAction_edit": "Edit App",
+    "swipeAction_delete": "Delete App",
+    "swipeAction_open": "Open App",
+    "swipeAction_appInfo": "App Info (System Settings)",
+    "swipeAction_none": "Disabled"
 }

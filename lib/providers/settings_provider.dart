@@ -32,6 +32,8 @@ enum SortOrderSettings { ascending, descending }
 
 enum AppsListGroupBy { none, category, source }
 
+enum SwipeAction { update, pin, edit, delete, open, appInfo, none }
+
 class SettingsProvider with ChangeNotifier {
   SharedPreferences? prefs;
   String? defaultAppDir;
@@ -627,6 +629,26 @@ class SettingsProvider with ChangeNotifier {
 
   set useFGService(bool val) {
     prefs?.setBool('useFGService', val);
+    notifyListeners();
+  }
+
+  SwipeAction get rightSwipeAction {
+    final index = prefs?.getInt('rightSwipeAction') ?? SwipeAction.update.index;
+    return SwipeAction.values[index.clamp(0, SwipeAction.values.length - 1)];
+  }
+
+  set rightSwipeAction(SwipeAction action) {
+    prefs?.setInt('rightSwipeAction', action.index);
+    notifyListeners();
+  }
+
+  SwipeAction get leftSwipeAction {
+    final index = prefs?.getInt('leftSwipeAction') ?? SwipeAction.pin.index;
+    return SwipeAction.values[index.clamp(0, SwipeAction.values.length - 1)];
+  }
+
+  set leftSwipeAction(SwipeAction action) {
+    prefs?.setInt('leftSwipeAction', action.index);
     notifyListeners();
   }
 }

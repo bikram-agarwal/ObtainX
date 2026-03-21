@@ -223,56 +223,6 @@ class _SettingsPageState extends State<SettingsPage> {
       future: DeviceInfoPlugin().androidInfo,
     );
 
-    var sortDropdown = DropdownButtonFormField(
-      isExpanded: true,
-      decoration: InputDecoration(labelText: tr('appSortBy')),
-      value: settingsProvider.sortColumn,
-      items: [
-        DropdownMenuItem(
-          value: SortColumnSettings.authorName,
-          child: Text(tr('authorName')),
-        ),
-        DropdownMenuItem(
-          value: SortColumnSettings.nameAuthor,
-          child: Text(tr('nameAuthor')),
-        ),
-        DropdownMenuItem(
-          value: SortColumnSettings.added,
-          child: Text(tr('asAdded')),
-        ),
-        DropdownMenuItem(
-          value: SortColumnSettings.releaseDate,
-          child: Text(tr('releaseDate')),
-        ),
-      ],
-      onChanged: (value) {
-        if (value != null) {
-          settingsProvider.sortColumn = value;
-        }
-      },
-    );
-
-    var orderDropdown = DropdownButtonFormField(
-      isExpanded: true,
-      decoration: InputDecoration(labelText: tr('appSortOrder')),
-      value: settingsProvider.sortOrder,
-      items: [
-        DropdownMenuItem(
-          value: SortOrderSettings.ascending,
-          child: Text(tr('ascending')),
-        ),
-        DropdownMenuItem(
-          value: SortOrderSettings.descending,
-          child: Text(tr('descending')),
-        ),
-      ],
-      onChanged: (value) {
-        if (value != null) {
-          settingsProvider.sortOrder = value;
-        }
-      },
-    );
-
     var localeDropdown = DropdownButtonFormField(
       decoration: InputDecoration(labelText: tr('language')),
       value: settingsProvider.forcedLocale,
@@ -779,16 +729,6 @@ class _SettingsPageState extends State<SettingsPage> {
                         height8,
                         useMaterialThemeSwitch,
                         if (!settingsProvider.useMaterialYou) colorPicker,
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: sortDropdown),
-                            const SizedBox(width: 16),
-                            Expanded(child: orderDropdown),
-                          ],
-                        ),
-                        height16,
                         localeDropdown,
                         FutureBuilder(
                           builder: (ctx, val) {
@@ -833,47 +773,6 @@ class _SettingsPageState extends State<SettingsPage> {
                               value: settingsProvider.showAppWebpage,
                               onChanged: (value) {
                                 settingsProvider.showAppWebpage = value;
-                              },
-                            ),
-                          ],
-                        ),
-                        height16,
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Flexible(child: Text(tr('pinUpdates'))),
-                            Switch(
-                              value: settingsProvider.pinUpdates,
-                              onChanged: (value) {
-                                settingsProvider.pinUpdates = value;
-                              },
-                            ),
-                          ],
-                        ),
-                        height16,
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Flexible(
-                              child: Text(tr('moveNonInstalledAppsToBottom')),
-                            ),
-                            Switch(
-                              value: settingsProvider.buryNonInstalled,
-                              onChanged: (value) {
-                                settingsProvider.buryNonInstalled = value;
-                              },
-                            ),
-                          ],
-                        ),
-                        height16,
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Flexible(child: Text(tr('groupByCategory'))),
-                            Switch(
-                              value: settingsProvider.groupByCategory,
-                              onChanged: (value) {
-                                settingsProvider.groupByCategory = value;
                               },
                             ),
                           ],
@@ -949,6 +848,56 @@ class _SettingsPageState extends State<SettingsPage> {
                               },
                             ),
                           ],
+                        ),
+                        height32,
+                        Text(
+                          tr('gestures'),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        height16,
+                        DropdownButtonFormField<SwipeAction>(
+                          key: ValueKey(settingsProvider.rightSwipeAction),
+                          decoration: InputDecoration(
+                            labelText: tr('rightSwipeAction'),
+                          ),
+                          initialValue: settingsProvider.rightSwipeAction,
+                          items: SwipeAction.values
+                              .map(
+                                (action) => DropdownMenuItem(
+                                  value: action,
+                                  child: Text(tr('swipeAction_${action.name}')),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              settingsProvider.rightSwipeAction = value;
+                            }
+                          },
+                        ),
+                        height16,
+                        DropdownButtonFormField<SwipeAction>(
+                          key: ValueKey(settingsProvider.leftSwipeAction),
+                          decoration: InputDecoration(
+                            labelText: tr('leftSwipeAction'),
+                          ),
+                          initialValue: settingsProvider.leftSwipeAction,
+                          items: SwipeAction.values
+                              .map(
+                                (action) => DropdownMenuItem(
+                                  value: action,
+                                  child: Text(tr('swipeAction_${action.name}')),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              settingsProvider.leftSwipeAction = value;
+                            }
+                          },
                         ),
                         height32,
                         Text(

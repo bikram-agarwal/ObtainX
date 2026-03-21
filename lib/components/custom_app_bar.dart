@@ -6,6 +6,7 @@ class CustomAppBar extends StatefulWidget {
     required this.title,
     this.actions,
     this.bottom,
+    this.searchWidget,
   });
 
   final String title;
@@ -15,6 +16,12 @@ class CustomAppBar extends StatefulWidget {
   /// Pass a [PreferredSizeWidget] such as [PreferredSize].
   final PreferredSizeWidget? bottom;
 
+  /// When provided, replaces the expanding-title layout with a compact inline
+  /// row: [Title text]  [Expanded(searchWidget)]  [actions].
+  /// This puts the search bar on the same line as the title, eliminating any
+  /// visual overlap between the "Apps" heading and the search field.
+  final Widget? searchWidget;
+
   @override
   State<CustomAppBar> createState() => _CustomAppBarState();
 }
@@ -22,6 +29,34 @@ class CustomAppBar extends StatefulWidget {
 class _CustomAppBarState extends State<CustomAppBar> {
   @override
   Widget build(BuildContext context) {
+    if (widget.searchWidget != null) {
+      // Compact layout: title and search bar share the same toolbar row.
+      return SliverAppBar(
+        pinned: true,
+        automaticallyImplyLeading: false,
+        actions: widget.actions,
+        titleSpacing: 0,
+        title: Padding(
+          padding: const EdgeInsets.only(left: 20, right: 4),
+          child: Row(
+            children: [
+              Text(
+                widget.title,
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodyMedium?.color,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: widget.searchWidget!),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Default: large expanding title with optional pinned bottom widget.
     return SliverAppBar(
       pinned: true,
       automaticallyImplyLeading: false,

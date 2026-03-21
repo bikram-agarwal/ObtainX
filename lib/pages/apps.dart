@@ -345,25 +345,29 @@ class _AppListItem extends StatelessWidget {
 }
 
 /// Wraps a list row with horizontal-swipe action hints.
-///
-/// Right swipe → trigger update (shown only when an update is available).
-/// Left  swipe → toggle pin.
+/// The left/right actions are configurable via [SettingsProvider].
 class _SwipeableListItem extends StatefulWidget {
   const _SwipeableListItem({
     super.key,
     required this.appId,
     required this.hasUpdate,
     required this.isPinned,
+    required this.isInstalled,
     required this.areDownloadsRunning,
     required this.keepAlive,
+    required this.rightAction,
+    required this.leftAction,
     required this.child,
   });
 
   final String appId;
   final bool hasUpdate;
   final bool isPinned;
+  final bool isInstalled;
   final bool areDownloadsRunning;
   final bool keepAlive;
+  final SwipeAction rightAction;
+  final SwipeAction leftAction;
   final Widget child;
 
   @override
@@ -383,6 +387,81 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     if (oldWidget.keepAlive != widget.keepAlive) updateKeepAlive();
   }
 
+  bool _canExecute(SwipeAction action) {
+    switch (action) {
+      case SwipeAction.update:
+        return widget.hasUpdate && !widget.areDownloadsRunning;
+      case SwipeAction.open:
+        return widget.isInstalled;
+      case SwipeAction.none:
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  (IconData, Color) _actionVisuals(SwipeAction action, BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    switch (action) {
+      case SwipeAction.update:
+        return (Icons.install_mobile, Colors.green);
+      case SwipeAction.pin:
+        return (
+          widget.isPinned ? Icons.push_pin_outlined : Icons.push_pin,
+          cs.primary,
+        );
+      case SwipeAction.edit:
+        return (Icons.edit_outlined, Colors.blue);
+      case SwipeAction.delete:
+        return (Icons.delete_outline, Colors.red);
+      case SwipeAction.open:
+        return (Icons.open_in_new, Colors.orange);
+      case SwipeAction.appInfo:
+        return (Icons.info_outline, Colors.teal);
+      case SwipeAction.none:
+        return (Icons.circle, Colors.transparent);
+    }
+  }
+
+  void _executeAction(SwipeAction action, BuildContext context) {
+    final provider = context.read<AppsProvider>();
+    final app = provider.apps[widget.appId]?.app;
+    switch (action) {
+      case SwipeAction.update:
+        provider
+            .downloadAndInstallLatestApps(
+                [widget.appId], globalNavigatorKey.currentContext)
+            .catchError((e) {
+          showError(e, globalNavigatorKey.currentContext!);
+          return <String>[];
+        });
+      case SwipeAction.pin:
+        if (app != null) {
+          provider.saveApps([app..pinned = !widget.isPinned]);
+        }
+      case SwipeAction.edit:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AppPage(
+              appId: widget.appId,
+              showOppositeOfPreferredView: true,
+            ),
+          ),
+        );
+      case SwipeAction.delete:
+        if (app != null) {
+          provider.removeAppsWithModal(context, [app]);
+        }
+      case SwipeAction.open:
+        pm.openApp(widget.appId);
+      case SwipeAction.appInfo:
+        provider.openAppSettings(widget.appId);
+      case SwipeAction.none:
+        break;
+    }
+  }
+
   @override
   @override
   Widget build(BuildContext context) {
@@ -390,7 +469,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     const swipeThreshold = 80.0;
     const maxDrag = 120.0;
 
-    final canSwipeRight = widget.hasUpdate && !widget.areDownloadsRunning;
+    final canSwipeRight = _canExecute(widget.rightAction);
+    final canSwipeLeft = _canExecute(widget.leftAction);
 
     Color bgColor;
     IconData bgIcon;
@@ -398,15 +478,17 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     Color iconColor;
 
     if (_dragOffset > 0 && canSwipeRight) {
-      bgColor = Colors.green.withValues(alpha: 0.25);
-      bgIcon = Icons.install_mobile;
+      final (icon, color) = _actionVisuals(widget.rightAction, context);
+      bgColor = color.withValues(alpha: 0.25);
+      bgIcon = icon;
       bgAlign = Alignment.centerLeft;
-      iconColor = Colors.green;
-    } else if (_dragOffset < 0) {
-      bgColor = Theme.of(context).colorScheme.primary.withValues(alpha: 0.15);
-      bgIcon = widget.isPinned ? Icons.push_pin_outlined : Icons.push_pin;
+      iconColor = color;
+    } else if (_dragOffset < 0 && canSwipeLeft) {
+      final (icon, color) = _actionVisuals(widget.leftAction, context);
+      bgColor = color.withValues(alpha: 0.20);
+      bgIcon = icon;
       bgAlign = Alignment.centerRight;
-      iconColor = Theme.of(context).colorScheme.primary;
+      iconColor = color;
     } else {
       bgColor = Colors.transparent;
       bgIcon = Icons.circle;
@@ -418,26 +500,17 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       onHorizontalDragUpdate: (details) {
         setState(() {
           _dragOffset += details.delta.dx;
-          _dragOffset =
-              _dragOffset.clamp(-maxDrag, canSwipeRight ? maxDrag : 0.0);
+          _dragOffset = _dragOffset.clamp(
+            canSwipeLeft ? -maxDrag : 0.0,
+            canSwipeRight ? maxDrag : 0.0,
+          );
         });
       },
       onHorizontalDragEnd: (_) {
         if (_dragOffset > swipeThreshold && canSwipeRight) {
-          context
-              .read<AppsProvider>()
-              .downloadAndInstallLatestApps(
-                  [widget.appId], globalNavigatorKey.currentContext)
-              .catchError((e) {
-            showError(e, context);
-            return <String>[];
-          });
-        } else if (_dragOffset < -swipeThreshold) {
-          final provider = context.read<AppsProvider>();
-          final app = provider.apps[widget.appId]?.app;
-          if (app != null) {
-            provider.saveApps([app..pinned = !widget.isPinned]);
-          }
+          _executeAction(widget.rightAction, context);
+        } else if (_dragOffset < -swipeThreshold && canSwipeLeft) {
+          _executeAction(widget.leftAction, context);
         }
         setState(() => _dragOffset = 0);
       },
@@ -1099,15 +1172,57 @@ class AppsPageState extends State<AppsPage> {
   // ── Inline search ─────────────────────────────────────────────────────────
   late final TextEditingController _searchController;
 
+  /// Which field the search bar is currently filtering on.
+  /// One of: 'appName' | 'author' | 'appId'.
+  String _searchField = 'appName';
+
+  /// Guards against the listener re-firing when we programmatically change
+  /// the controller text during a field switch.
+  bool _changingSearchField = false;
+
+  String _searchFieldValue(String field) => switch (field) {
+        'author' => filter.authorFilter,
+        'appId' => filter.idFilter,
+        _ => filter.nameFilter,
+      };
+
+  void _applySearchText(String field, String text) {
+    switch (field) {
+      case 'author':
+        filter.authorFilter = text;
+        break;
+      case 'appId':
+        filter.idFilter = text;
+        break;
+      default:
+        filter.nameFilter = text;
+    }
+  }
+
+  /// Switches the active search field, preserving any text in the old field
+  /// and loading the new field's current value into the controller.
+  void _changeSearchField(String newField) {
+    if (newField == _searchField) return;
+    _changingSearchField = true;
+    setState(() {
+      // Commit whatever is in the controller to the current field.
+      _applySearchText(_searchField, _searchController.text);
+      _searchField = newField;
+      _searchController.text = _searchFieldValue(newField);
+    });
+    _changingSearchField = false;
+  }
+
   @override
   void initState() {
     super.initState();
     scrollController = ScrollController();
     _searchController = TextEditingController();
     _searchController.addListener(() {
-      // Live-update the name filter on every keystroke.
-      if (_searchController.text != filter.nameFilter) {
-        setState(() => filter.nameFilter = _searchController.text);
+      if (_changingSearchField) return;
+      final text = _searchController.text;
+      if (text != _searchFieldValue(_searchField)) {
+        setState(() => _applySearchText(_searchField, text));
       }
     });
   }
@@ -1117,6 +1232,97 @@ class AppsPageState extends State<AppsPage> {
     scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// Builds the compact search bar that lives inline with the "Apps" title.
+  ///
+  /// The right-hand chip shows the currently-active search field. Tapping it
+  /// opens the full filter sheet. When any filter is active (or the field is
+  /// not the default) the chip uses a primary-container colour as a visual cue.
+  Widget _buildSearchBar({
+    required ColorScheme colorScheme,
+    required VoidCallback showFilterSheet,
+    required AppsFilter neutralFilter,
+    required SettingsProvider settingsProvider,
+  }) {
+    final bool anyFilterActive =
+        !filter.isIdenticalTo(neutralFilter, settingsProvider) ||
+        _searchField != 'appName';
+
+    final String fieldLabel = switch (_searchField) {
+      'author' => tr('author'),
+      'appId' => tr('appId'),
+      _ => tr('appName'),
+    };
+
+    return TextField(
+      controller: _searchController,
+      decoration: InputDecoration(
+        hintText: tr('search'),
+        prefixIcon: const Icon(Icons.search, size: 18),
+        isDense: true,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(30),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        suffix: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Clear button — only when there is text in the field.
+            if (_searchController.text.isNotEmpty)
+              GestureDetector(
+                onTap: _searchController.clear,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Icon(
+                    Icons.close,
+                    size: 16,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            // Field-selector chip.
+            GestureDetector(
+              onTap: showFilterSheet,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: anyFilterActive
+                      ? colorScheme.primaryContainer
+                      : colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      fieldLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: anyFilterActive
+                            ? colorScheme.onPrimaryContainer
+                            : colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      size: 14,
+                      color: anyFilterActive
+                          ? colorScheme.onPrimaryContainer
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1529,8 +1735,11 @@ class AppsPageState extends State<AppsPage> {
         appId: appId,
         hasUpdate: hasUpdate,
         isPinned: app.app.pinned,
+        isInstalled: installed != null,
         areDownloadsRunning: downloadsRunning,
         keepAlive: _heroKeepaliveAppId == appId,
+        rightAction: settingsProvider.rightSwipeAction,
+        leftAction: settingsProvider.leftSwipeAction,
         child: _AppListItem(
           appId: appId,
           isSelected: selectedAppIds.contains(appId),
@@ -2132,91 +2341,198 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    showFilterDialog() async {
-      var values = await showDialog<Map<String, dynamic>?>(
+    // ── Filter bottom sheet ──────────────────────────────────────────────────
+    // Shows all filter/search options in a modal bottom sheet.
+    // Changes to toggles and dropdown are applied live; the sheet is dismissed
+    // by dragging down or tapping outside.
+    showFilterSheet() {
+      showModalBottomSheet<void>(
         context: context,
-        builder: (BuildContext ctx) {
-          var vals = filter.toFormValuesMap();
-          return GeneratedFormModal(
-            initValid: true,
-            title: tr('filterApps'),
-            items: [
-              [
-                GeneratedFormTextField(
-                  'appName',
-                  label: tr('appName'),
-                  required: false,
-                  defaultValue: vals['appName'],
+        isScrollControlled: true,
+        useSafeArea: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder: (sheetCtx) {
+          return StatefulBuilder(
+            builder: (sheetCtx, setSheetState) {
+              final colorScheme = Theme.of(context).colorScheme;
+
+              // Call both parent and sheet setState when the filter changes.
+              void update(VoidCallback fn) {
+                fn();
+                setState(() {});
+                setSheetState(() {});
+              }
+
+              // ── Search field selector ─────────────────────────────────────
+              Widget fieldChip(String field, String label) {
+                final selected = _searchField == field;
+                return ChoiceChip(
+                  label: Text(label),
+                  selected: selected,
+                  showCheckmark: false,
+                  onSelected: (v) {
+                    if (v) {
+                      update(() => _changeSearchField(field));
+                    }
+                  },
+                );
+              }
+
+              // ── Source items ──────────────────────────────────────────────
+              final sourceItems = [
+                MapEntry('', tr('none')),
+                ...sourceProvider.sources.map(
+                  (e) => MapEntry(e.runtimeType.toString(), e.name),
                 ),
-                GeneratedFormTextField(
-                  'author',
-                  label: tr('author'),
-                  required: false,
-                  defaultValue: vals['author'],
+              ];
+
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.viewInsetsOf(sheetCtx).bottom,
                 ),
-              ],
-              [
-                GeneratedFormTextField(
-                  'appId',
-                  label: tr('appId'),
-                  required: false,
-                  defaultValue: vals['appId'],
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Drag handle
+                      Center(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 12),
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: colorScheme.outlineVariant,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      // Title row
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 8, 12),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                tr('filterApps'),
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                update(() {
+                                  filter = AppsFilter();
+                                  _searchField = 'appName';
+                                  _searchController.clear();
+                                });
+                                Navigator.of(sheetCtx).pop();
+                              },
+                              child: Text(tr('remove')),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // ── Search field selector ─────────────────────────────
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                        child: Text(
+                          tr('search'),
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+                        child: Wrap(
+                          spacing: 8,
+                          children: [
+                            fieldChip('appName', tr('appName')),
+                            fieldChip('author', tr('author')),
+                            fieldChip('appId', tr('appId')),
+                          ],
+                        ),
+                      ),
+
+                      const Divider(height: 1),
+                      const SizedBox(height: 8),
+
+                      // ── Visibility toggles ────────────────────────────────
+                      SwitchListTile(
+                        dense: true,
+                        title: Text(tr('upToDateApps')),
+                        value: filter.includeUptodate,
+                        onChanged: (v) => update(() => filter.includeUptodate = v),
+                      ),
+                      SwitchListTile(
+                        dense: true,
+                        title: Text(tr('nonInstalledApps')),
+                        value: filter.includeNonInstalled,
+                        onChanged: (v) =>
+                            update(() => filter.includeNonInstalled = v),
+                      ),
+
+                      const SizedBox(height: 8),
+                      const Divider(height: 1),
+                      const SizedBox(height: 8),
+
+                      // ── Source dropdown ───────────────────────────────────
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                        child: DropdownButtonFormField<String>(
+                          key: ValueKey(filter.sourceFilter),
+                          decoration: InputDecoration(
+                            labelText: tr('appSource'),
+                            isDense: true,
+                            border: const OutlineInputBorder(),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                          ),
+                          initialValue: filter.sourceFilter,
+                          items: sourceItems
+                              .map(
+                                (e) => DropdownMenuItem(
+                                  value: e.key,
+                                  child: Text(e.value),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) =>
+                              update(() => filter.sourceFilter = v ?? ''),
+                        ),
+                      ),
+
+                      // ── Category selector ─────────────────────────────────
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                        child: CategoryEditorSelector(
+                          preselected: filter.categoryFilter,
+                          onSelected: (categories) {
+                            update(() {
+                              filter.categoryFilter = categories.toSet();
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-              [
-                GeneratedFormSwitch(
-                  'upToDateApps',
-                  label: tr('upToDateApps'),
-                  defaultValue: vals['upToDateApps'],
-                ),
-              ],
-              [
-                GeneratedFormSwitch(
-                  'nonInstalledApps',
-                  label: tr('nonInstalledApps'),
-                  defaultValue: vals['nonInstalledApps'],
-                ),
-              ],
-              [
-                GeneratedFormDropdown(
-                  'sourceFilter',
-                  label: tr('appSource'),
-                  defaultValue: filter.sourceFilter,
-                  [
-                    MapEntry('', tr('none')),
-                    ...sourceProvider.sources.map(
-                      (e) => MapEntry(e.runtimeType.toString(), e.name),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-            additionalWidgets: [
-              const SizedBox(height: 16),
-              CategoryEditorSelector(
-                preselected: filter.categoryFilter,
-                onSelected: (categories) {
-                  filter.categoryFilter = categories.toSet();
-                },
-              ),
-            ],
+              );
+            },
           );
         },
       );
-      if (values != null) {
-        setState(() {
-          filter.setFormValuesFromMap(values);
-          // Keep the inline search field in sync with nameFilter.
-          if (_searchController.text != filter.nameFilter) {
-            _searchController.text = filter.nameFilter;
-          }
-        });
-      }
     }
 
     getFilterButtonsRow() {
       final colorScheme = Theme.of(context).colorScheme;
-      final isFilterOff = filter.isIdenticalTo(neutralFilter, settingsProvider);
       final selectAllFooterStyle = TextButton.styleFrom(
         foregroundColor: colorScheme.primary,
         visualDensity: VisualDensity.compact,
@@ -2336,31 +2652,6 @@ class AppsPageState extends State<AppsPage> {
           Expanded(
             child: Center(
               child: IconButton(
-                color: colorScheme.primary,
-                iconSize: 24,
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                tooltip: isFilterOff
-                    ? tr('filterApps')
-                    : '${tr('filter')} - ${tr('remove')}',
-                onPressed: isFilterOff
-                    ? showFilterDialog
-                    : () {
-                        setState(() {
-                          filter = AppsFilter();
-                          _searchController.clear();
-                        });
-                      },
-                icon: Icon(
-                  isFilterOff
-                      ? Icons.search_rounded
-                      : Icons.search_off_rounded,
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: Center(
-              child: IconButton(
                 visualDensity: VisualDensity.compact,
                 iconSize: 24,
                 color: colorScheme.primary,
@@ -2464,40 +2755,11 @@ class AppsPageState extends State<AppsPage> {
                     slivers: <Widget>[
                       CustomAppBar(
                         title: tr('appsString'),
-                        bottom: PreferredSize(
-                          preferredSize: const Size.fromHeight(48),
-                          child: Padding(
-                            padding:
-                                const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                            child: TextField(
-                              controller: _searchController,
-                              decoration: InputDecoration(
-                                hintText: tr('search'),
-                                prefixIcon: const Icon(
-                                  Icons.search,
-                                  size: 20,
-                                ),
-                                suffixIcon: _searchController.text.isNotEmpty
-                                    ? IconButton(
-                                        icon: const Icon(
-                                          Icons.close,
-                                          size: 20,
-                                        ),
-                                        onPressed:
-                                            _searchController.clear,
-                                      )
-                                    : null,
-                                isDense: true,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(30),
-                                ),
-                                contentPadding:
-                                    const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                ),
-                              ),
-                            ),
-                          ),
+                        searchWidget: _buildSearchBar(
+                          colorScheme: Theme.of(context).colorScheme,
+                          showFilterSheet: showFilterSheet,
+                          neutralFilter: neutralFilter,
+                          settingsProvider: settingsProvider,
                         ),
                       ),
                       ...getLoadingWidgets(),

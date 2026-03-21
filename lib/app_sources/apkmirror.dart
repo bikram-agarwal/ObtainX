@@ -130,6 +130,146 @@ DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
   return null;
 }
 
+/// Known Android ABI strings to detect from APKMirror variant URLs/text.
+const _knownAndroidArchs = [
+  'arm64-v8a',
+  'armeabi-v7a',
+  'x86_64',
+  'x86',
+  'universal',
+];
+
+/// Extracts an arch label from an APKMirror variant URL slug.
+/// E.g. `.../chrome-124-arm64-v8a-android-apk-download/` → `arm64-v8a`
+String? _extractArchFromApkMirrorUrl(String url) {
+  final lower = url.toLowerCase();
+  for (final arch in _knownAndroidArchs) {
+    if (lower.contains(arch)) return arch;
+  }
+  return null;
+}
+
+/// Parses APK variant rows from an APKMirror release page.
+///
+/// Returns a list of entries where the key is a display label containing arch
+/// info (used by [filterApksByArch] for auto-filtering) and the value is the
+/// absolute URL of the variant detail/download page.
+List<MapEntry<String, String>> _parseApkMirrorVariants(
+  String html,
+  String releasePageUrl,
+) {
+  final doc = parse(html);
+  final baseUri = Uri.tryParse(releasePageUrl);
+  final results = <MapEntry<String, String>>[];
+  final seenUrls = <String>{};
+
+  String resolveHref(String href) {
+    if (href.startsWith('http')) return href;
+    if (baseUri != null) return baseUri.resolve(href).toString();
+    return 'https://www.apkmirror.com$href';
+  }
+
+  // Strategy 1: variants table rows (class "table-row headerFont")
+  for (final row in doc.querySelectorAll('div.table-row.headerFont')) {
+    final cells = row.querySelectorAll('div.table-cell');
+    if (cells.isEmpty) continue;
+
+    // Determine type from badge span or first-cell link text
+    final badgeEl = row.querySelector('.apkm-badge');
+    final typeText =
+        (badgeEl?.text ?? cells[0].querySelector('a')?.text ?? '').trim().toUpperCase();
+    // Only include plain APK (skip XAPK, APKS, Bundle, etc.)
+    if (typeText != 'APK') continue;
+
+    // The download-page link is inside the first cell
+    final downloadLink =
+        cells[0].querySelector('a[href*="-apk-download"]') ??
+        cells[0].querySelector('a[href*="download"]');
+    if (downloadLink == null) continue;
+
+    final href = downloadLink.attributes['href'] ?? '';
+    if (href.isEmpty) continue;
+
+    final variantUrl = resolveHref(href);
+    if (!seenUrls.add(variantUrl)) continue;
+
+    final arch = cells.length > 1 ? cells[1].text.trim() : '';
+    final dpi = cells.length > 2 ? cells[2].text.trim() : '';
+
+    final parts = [arch, dpi]
+        .where((s) => s.isNotEmpty && s != '-' && s.toLowerCase() != 'nodpi')
+        .toList();
+    final displayKey = parts.isEmpty ? 'APK' : parts.join(' - ');
+
+    results.add(MapEntry(displayKey, variantUrl));
+  }
+
+  // Strategy 2: fallback – find all "-android-apk-download" links on the page
+  if (results.isEmpty) {
+    for (final a in doc.querySelectorAll('a[href*="-android-apk-download"]')) {
+      final href = a.attributes['href'] ?? '';
+      if (href.isEmpty) continue;
+
+      final variantUrl = resolveHref(href);
+      if (!seenUrls.add(variantUrl)) continue;
+
+      final arch = _extractArchFromApkMirrorUrl(variantUrl);
+      final displayKey = arch ?? 'APK';
+      results.add(MapEntry(displayKey, variantUrl));
+    }
+  }
+
+  return results;
+}
+
+/// Fetches an APKMirror variant detail page and returns the direct APK
+/// download URL (the `download.php?id=…&key=…` link).
+///
+/// Returns `null` if the page cannot be fetched or the link is not found.
+Future<String?> _getApkMirrorDownloadUrl(
+  String variantPageUrl,
+  Map<String, dynamic> additionalSettings,
+  Future<Response> Function(String, Map<String, dynamic>) sourceRequest,
+) async {
+  try {
+    final res = await sourceRequest(variantPageUrl, additionalSettings);
+    if (res.statusCode != 200) return null;
+
+    final doc = parse(res.body);
+    final baseUri = Uri.tryParse(variantPageUrl);
+
+    String resolveHref(String href) {
+      if (href.startsWith('http')) return href;
+      if (href.startsWith('?')) {
+        return '${variantPageUrl.split('?')[0]}$href';
+      }
+      if (baseUri != null) return baseUri.resolve(href).toString();
+      return 'https://www.apkmirror.com$href';
+    }
+
+    // Primary: APKMirror download.php link with key parameter
+    for (final a in doc.querySelectorAll('a[href]')) {
+      final href = a.attributes['href'] ?? '';
+      if (href.contains('download.php') && href.contains('key=')) {
+        return resolveHref(href);
+      }
+    }
+
+    // Fallback: any link with key= that looks like a download action
+    for (final a in doc.querySelectorAll('a[href*="key="]')) {
+      final href = a.attributes['href'] ?? '';
+      final text = a.text.toLowerCase();
+      final rel = a.attributes['rel'] ?? '';
+      if (text.contains('download') ||
+          rel.contains('nofollow') ||
+          a.classes.any((c) => c.toLowerCase().contains('download'))) {
+        return resolveHref(href);
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 class APKMirror extends AppSource {
   APKMirror() {
     hosts = ['apkmirror.com'];
@@ -155,6 +295,13 @@ class APKMirror extends AppSource {
               return regExValidator(value);
             },
           ],
+        ),
+      ],
+      [
+        GeneratedFormSwitch(
+          'enableDirectDownload',
+          label: tr('enableDirectDownload'),
+          defaultValue: false,
         ),
       ],
     ];
@@ -299,25 +446,58 @@ class APKMirror extends AppSource {
             RegExp('[0-9]').firstMatch(titleString)?.start ?? 0,
             RegExp(' by ').allMatches(titleString).last.start,
           )
-          ?.trim();
+          .trim();
       if (version == null || version.isEmpty) {
         version = titleString;
       }
       if (version == null || version.isEmpty) {
         throw NoVersionError();
       }
+
+      // Fetch icon from the app's main listing page (optional).
       String? iconUrl;
       try {
         final pageRes = await sourceRequest(standardUrl, additionalSettings);
         if (pageRes.statusCode == 200) {
           iconUrl = iconUrlFromApkMirrorAppPageHtml(pageRes.body, standardUrl);
         }
-      } catch (e) {
-        // Icon is optional
+      } catch (_) {
+        // Icon is optional – ignore errors.
       }
+
+      // When direct download is enabled, scrape variant APK URLs from the
+      // release page so the user can download without leaving the app.
+      List<MapEntry<String, String>> apkUrls = [];
+      if (additionalSettings['enableDirectDownload'] == true &&
+          releasePageUrl != null) {
+        try {
+          final releaseRes =
+              await sourceRequest(releasePageUrl, additionalSettings);
+          if (releaseRes.statusCode == 200) {
+            final variants =
+                _parseApkMirrorVariants(releaseRes.body, releasePageUrl);
+            if (variants.isNotEmpty) {
+              // Resolve final download URLs for all variants in parallel.
+              final futures = variants.map((variant) async {
+                final url = await _getApkMirrorDownloadUrl(
+                  variant.value,
+                  additionalSettings,
+                  sourceRequest,
+                );
+                return url != null ? MapEntry(variant.key, url) : null;
+              }).toList();
+              final resolved = await Future.wait(futures);
+              apkUrls = resolved.nonNulls.toList();
+            }
+          }
+        } catch (_) {
+          // Fall back to track-only behaviour (empty apkUrls).
+        }
+      }
+
       return APKDetails(
         version,
-        [],
+        apkUrls,
         getAppNames(standardUrl),
         releaseDate: releaseDate,
         changeLog: releasePageUrl,
