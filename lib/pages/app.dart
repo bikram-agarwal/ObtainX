@@ -637,9 +637,13 @@ class _AppPageState extends State<AppPage> {
       _scheduledDetailPageRefresh = true;
       final String refreshAppId = app.app.id;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _runCheckUpdate(refreshAppId);
-        }
+        if (!mounted) return;
+        // Let the push transition start before network + notifyListeners churn.
+        Future<void>.delayed(const Duration(milliseconds: 320), () {
+          if (mounted) {
+            _runCheckUpdate(refreshAppId);
+          }
+        });
       });
     }
     var trackOnly = app?.app.additionalSettings['trackOnly'] == true;

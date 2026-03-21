@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -628,6 +629,10 @@ class AppsPageState extends State<AppsPage> {
 
   late final ScrollController scrollController;
 
+  /// One [Future] per app id so [FutureBuilder] does not restart [updateAppIcon]
+  /// on every [AppsPage] rebuild (that caused jank when popping from [AppPage]).
+  final Map<String, Future<void>> _appListIconWarmFutures = {};
+
   var sourceProvider = SourceProvider();
 
   @override
@@ -646,12 +651,15 @@ class AppsPageState extends State<AppsPage> {
   Widget build(BuildContext context) {
     var appsProvider = context.watch<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
-    var listedApps = appsProvider.getAppValues().toList();
+    // Live references: avoid deep-copying every app on each notify (very costly
+    // while [AppPage] is open and when returning to this tab).
+    var listedApps = appsProvider.apps.values.toList();
 
     refresh() {
       HapticFeedback.lightImpact();
       setState(() {
         refreshingSince = DateTime.now();
+        _appListIconWarmFutures.clear();
       });
       return appsProvider
           .checkUpdates()
@@ -952,8 +960,7 @@ class AppsPageState extends State<AppsPage> {
             child: LinearProgressIndicator(
               value: appsProvider.loadingApps
                   ? null
-                  : appsProvider
-                            .getAppValues()
+                  : appsProvider.apps.values
                             .where(
                               (element) =>
                                   !(element.app.lastUpdateCheck?.isBefore(
@@ -1003,50 +1010,77 @@ class AppsPageState extends State<AppsPage> {
     }
 
     getAppIcon(int appIndex) {
-      return GestureDetector(
-        child: FutureBuilder(
-          future: appsProvider.updateAppIcon(listedApps[appIndex].app.id),
-          builder: (ctx, val) {
-            return listedApps[appIndex].icon != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.memory(
-                      listedApps[appIndex].icon!,
-                      width: 40,
-                      height: 40,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      opacity: AlwaysStoppedAnimation(
-                        listedApps[appIndex].installedInfo == null ? 0.6 : 1,
-                      ),
+      final AppInMemory rowApp = listedApps[appIndex];
+      final String rowAppId = rowApp.app.id;
+      if (rowApp.icon == null) {
+        _appListIconWarmFutures.putIfAbsent(
+          rowAppId,
+          () => appsProvider.updateAppIcon(rowAppId),
+        );
+      }
+      Widget iconChild;
+      if (rowApp.icon != null) {
+        iconChild = ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Image.memory(
+            rowApp.icon!,
+            width: 40,
+            height: 40,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            opacity: AlwaysStoppedAnimation(
+              rowApp.installedInfo == null ? 0.6 : 1,
+            ),
+          ),
+        );
+      } else {
+        iconChild = FutureBuilder<void>(
+          future: _appListIconWarmFutures[rowAppId],
+          builder: (BuildContext ctx, AsyncSnapshot<void> snapshot) {
+            final Uint8List? bytes = rowApp.icon;
+            if (bytes != null) {
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(
+                  bytes,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  opacity: AlwaysStoppedAnimation(
+                    rowApp.installedInfo == null ? 0.6 : 1,
+                  ),
+                ),
+              );
+            }
+            return SizedBox(
+              width: 40,
+              height: 40,
+              child: Center(
+                child: Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.rotationZ(0.31),
+                  child: Image(
+                    image: const AssetImage(
+                      'assets/graphics/icon_small.png',
                     ),
-                  )
-                : SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: Center(
-                      child: Transform(
-                        alignment: Alignment.center,
-                        transform: Matrix4.rotationZ(0.31),
-                        child: Image(
-                          image: const AssetImage(
-                            'assets/graphics/icon_small.png',
-                          ),
-                          width: 28,
-                          height: 28,
-                          fit: BoxFit.contain,
-                          color:
-                              Theme.of(context).brightness == Brightness.dark
-                                  ? Colors.white.withOpacity(0.4)
-                                  : Colors.white.withOpacity(0.3),
-                          colorBlendMode: BlendMode.modulate,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                  );
+                    width: 28,
+                    height: 28,
+                    fit: BoxFit.contain,
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white.withOpacity(0.4)
+                        : Colors.white.withOpacity(0.3),
+                    colorBlendMode: BlendMode.modulate,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              ),
+            );
           },
-        ),
+        );
+      }
+      return GestureDetector(
+        child: iconChild,
         onDoubleTap: () {
           pm.openApp(listedApps[appIndex].app.id);
         },
