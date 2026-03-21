@@ -2360,16 +2360,26 @@ class AppsProvider with ChangeNotifier {
     bool installedOnly = false,
     bool nonInstalledOnly = false,
   }) {
-    List<String> updateAppIds = [];
-    List<String> appIds = apps.keys.toList();
-    for (int i = 0; i < appIds.length; i++) {
-      App? app = apps[appIds[i]]!.app;
-      if (app.installedVersion != app.latestVersion &&
-          (!installedOnly || !nonInstalledOnly)) {
-        if ((app.installedVersion == null &&
-                (nonInstalledOnly || !installedOnly) ||
-            (app.installedVersion != null &&
-                (installedOnly || !nonInstalledOnly)))) {
+    if (installedOnly && nonInstalledOnly) {
+      return [];
+    }
+    final List<String> updateAppIds = [];
+    for (final appInMemory in apps.values) {
+      final app = appInMemory.app;
+      final installed = app.installedVersion;
+      final latest = app.latestVersion;
+
+      if (installed == null) {
+        if (!(nonInstalledOnly || !installedOnly)) continue;
+        if (installed != latest) {
+          updateAppIds.add(app.id);
+        }
+      } else {
+        if (!(installedOnly || !nonInstalledOnly)) continue;
+        final hasEffectiveUpdate = installed != latest &&
+            !versionsEffectivelyEqual(installed, latest) &&
+            !installedVersionIsNewerOrEqual(installed, latest);
+        if (hasEffectiveUpdate) {
           updateAppIds.add(app.id);
         }
       }

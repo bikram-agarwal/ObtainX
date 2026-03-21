@@ -1021,29 +1021,29 @@ class AppsPageState extends State<AppsPage> {
                       ),
                     ),
                   )
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Transform(
+                : SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: Center(
+                      child: Transform(
                         alignment: Alignment.center,
                         transform: Matrix4.rotationZ(0.31),
-                        child: Padding(
-                          padding: const EdgeInsets.all(15),
-                          child: Image(
-                            image: const AssetImage(
-                              'assets/graphics/icon_small.png',
-                            ),
-                            color:
-                                Theme.of(context).brightness == Brightness.dark
-                                ? Colors.white.withOpacity(0.4)
-                                : Colors.white.withOpacity(0.3),
-                            colorBlendMode: BlendMode.modulate,
-                            gaplessPlayback: true,
+                        child: Image(
+                          image: const AssetImage(
+                            'assets/graphics/icon_small.png',
                           ),
+                          width: 28,
+                          height: 28,
+                          fit: BoxFit.contain,
+                          color:
+                              Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.white.withOpacity(0.4)
+                                  : Colors.white.withOpacity(0.3),
+                          colorBlendMode: BlendMode.modulate,
+                          gaplessPlayback: true,
                         ),
                       ),
-                    ],
+                    ),
                   );
           },
         ),
