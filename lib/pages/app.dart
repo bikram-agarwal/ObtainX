@@ -367,10 +367,17 @@ class _AppPageState extends State<AppPage> {
         : _darkenIconPageSchemeInDarkMode(
             _appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
           );
+    final Brightness pageBrightness = pageColorSchemeForPage.brightness;
+    final double appPageSurfaceDeepen =
+        pageBrightness == Brightness.dark ? 0.055 : 0.045;
+    Color appPageDeeperSurface(Color base) =>
+        Color.lerp(base, Colors.black, appPageSurfaceDeepen) ?? base;
     final ThemeData pageThemeForPage = parentThemeForPage.copyWith(
       colorScheme: pageColorSchemeForPage,
       primaryColor: pageColorSchemeForPage.primary,
-      cardColor: pageColorSchemeForPage.surfaceContainerHighest,
+      cardColor: appPageDeeperSurface(
+        pageColorSchemeForPage.surfaceContainerHighest,
+      ),
     );
 
     if (!areDownloadsRunning &&
@@ -403,13 +410,16 @@ class _AppPageState extends State<AppPage> {
     }) {
       final isDark = Theme.of(ctx).brightness == Brightness.dark;
       final colorScheme = Theme.of(ctx).colorScheme;
+      final double sectionDeepen = isDark ? 0.055 : 0.045;
+      final Color defaultSectionFill = isDark
+          ? colorScheme.surfaceContainerHighest
+          : colorScheme.surfaceContainer;
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: sectionBackgroundColor ??
-              (isDark
-                  ? colorScheme.surfaceContainerHighest
-                  : colorScheme.surfaceContainer),
+              (Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
+                  defaultSectionFill),
           borderRadius: BorderRadius.circular(28),
           border: Border.all(
             color: colorScheme.outlineVariant,
@@ -1512,7 +1522,15 @@ class _AppPageState extends State<AppPage> {
             key: ObjectKey(_webViewController),
             controller: _webViewController
               ..setBackgroundColor(
-                  Theme.of(themeContext).colorScheme.surface),
+                Color.lerp(
+                      Theme.of(themeContext).colorScheme.surface,
+                      Colors.black,
+                      Theme.of(themeContext).brightness == Brightness.dark
+                          ? 0.055
+                          : 0.045,
+                    ) ??
+                    Theme.of(themeContext).colorScheme.surface,
+              ),
           )
         : Container();
 
@@ -1662,6 +1680,8 @@ class _AppPageState extends State<AppPage> {
           !versionsEffectivelyEqual(installedVersion, app.app.latestVersion) &&
           !installedVersionIsNewerOrEqual(installedVersion, app.app.latestVersion);
       final bool trackOnlyHasVersionUpdate = trackOnly && versionBehind;
+      final bool nonStandardVersionBehind =
+          !trackOnly && !isVersionDetectionStandard && versionBehind;
       final bool primaryActionEnabled =
           !actionBlocked && (installedVersionIsNull || versionBehind);
 
@@ -1726,6 +1746,52 @@ class _AppPageState extends State<AppPage> {
                 child: FilledButton.tonal(
                   style: expressiveTonal,
                   onPressed: actionBlocked ? null : runInstallOrMarkUpdated,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.center,
+                    child: Text(
+                      tr('markUpdated'),
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      if (nonStandardVersionBehind) {
+        const double dualButtonBarHeight = 52;
+        final bool markUpdatedActionBlocked =
+            updating || app?.downloadProgress != null;
+        return SizedBox(
+          height: dualButtonBarHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: FilledButton(
+                  style: expressiveFilled,
+                  onPressed: actionBlocked ? null : runInstallOrMarkUpdated,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.center,
+                    child: Text(
+                      tr('update'),
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.tonal(
+                  style: expressiveTonal,
+                  onPressed:
+                      markUpdatedActionBlocked ? null : showMarkUpdatedDialog,
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.center,
@@ -1869,23 +1935,6 @@ class _AppPageState extends State<AppPage> {
                     icon: const Icon(Icons.more_horiz),
                     tooltip: tr('more'),
                   ),
-                if (app?.app.installedVersion != null &&
-                    app?.app.installedVersion != app?.app.latestVersion &&
-                    !versionsEffectivelyEqual(
-                        app!.app.installedVersion!, app.app.latestVersion) &&
-                    !installedVersionIsNewerOrEqual(
-                        app!.app.installedVersion!, app.app.latestVersion) &&
-                    !isVersionDetectionStandard &&
-                    !trackOnly)
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: app?.downloadProgress != null || updating
-                        ? null
-                        : showMarkUpdatedDialog,
-                    tooltip: tr('markUpdated'),
-                    icon: const Icon(Icons.done),
-                  ),
                 if ((!isVersionDetectionStandard || trackOnly) &&
                     app?.app.installedVersion != null &&
                     (app?.app.installedVersion == app?.app.latestVersion ||
@@ -1949,7 +1998,7 @@ class _AppPageState extends State<AppPage> {
         builder: (BuildContext themedPageContext) {
           return Scaffold(
             appBar: showAppWebpageFinal ? AppBar() : null,
-            backgroundColor: pageColorSchemeForPage.surface,
+            backgroundColor: appPageDeeperSurface(pageColorSchemeForPage.surface),
             body: RefreshIndicator(
               child: showAppWebpageFinal
                   ? getAppWebView(themedPageContext)
