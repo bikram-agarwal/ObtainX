@@ -156,28 +156,36 @@ class _HomePageState extends State<HomePage> {
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
 
+    /// Waits for [key.currentState] to become non-null by checking once per
+    /// frame instead of busy-looping with microsecond delays.
+    Future<T> waitForState<T extends State>(GlobalKey<T> key) {
+      if (key.currentState != null) return Future.value(key.currentState!);
+      final completer = Completer<T>();
+      void check(Duration _) {
+        if (key.currentState != null) {
+          completer.complete(key.currentState!);
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback(check);
+        }
+      }
+      WidgetsBinding.instance.addPostFrameCallback(check);
+      return completer.future;
+    }
+
     goToAddApp(String data) async {
       switchToPage(1);
-      while ((pages[1].widget.key as GlobalKey<AddAppPageState>?)
-              ?.currentState ==
-          null) {
-        await Future.delayed(const Duration(microseconds: 1));
-      }
-      (pages[1].widget.key as GlobalKey<AddAppPageState>?)?.currentState
-          ?.linkFn(data);
+      final state = await waitForState(
+          pages[1].widget.key as GlobalKey<AddAppPageState>);
+      state.linkFn(data);
     }
 
     goToExistingApp(String appId) async {
       // Go to Apps page
       switchToPage(0);
-      while ((pages[0].widget.key as GlobalKey<AppsPageState>?)?.currentState ==
-          null) {
-        await Future.delayed(const Duration(microseconds: 1));
-      }
-
+      final state = await waitForState(
+          pages[0].widget.key as GlobalKey<AppsPageState>);
       // Navigate to the app
-      (pages[0].widget.key as GlobalKey<AppsPageState>?)?.currentState
-          ?.openAppById(appId);
+      state.openAppById(appId);
     }
 
     interpretLink(Uri uri) async {

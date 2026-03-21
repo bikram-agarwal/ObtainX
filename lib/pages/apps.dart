@@ -103,6 +103,337 @@ class _AppIconWidget extends StatelessWidget {
   }
 }
 
+/// A single row in the apps list.
+///
+/// Subscribes directly to [AppsProvider] for [AppInMemory.downloadProgress]
+/// so download-progress ticks only rebuild the one row that is downloading,
+/// not the entire page.  All other per-row data is received from the parent
+/// (already gated behind the page-level list-build token).
+class _AppListItem extends StatelessWidget {
+  const _AppListItem({
+    required this.appId,
+    required this.isSelected,
+    required this.areDownloadsRunning,
+    required this.iconWidget,
+    required this.onTap,
+    required this.onLongPress,
+    required this.highlightTouchTargets,
+    required this.categoryColors,
+  });
+
+  final String appId;
+  final bool isSelected;
+  final bool areDownloadsRunning;
+  final Widget iconWidget;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final bool highlightTouchTargets;
+  final Map<String?, int> categoryColors;
+
+  @override
+  Widget build(BuildContext context) {
+    // Full app data — rebuilds when any field changes (gated by page token).
+    final AppInMemory? app =
+        context.select<AppsProvider, AppInMemory?>((p) => p.apps[appId]);
+    if (app == null) return const SizedBox.shrink();
+
+    // Download progress watched independently so only this row rebuilds on ticks.
+    final double? downloadProgress = context
+        .select<AppsProvider, double?>((p) => p.apps[appId]?.downloadProgress);
+
+    final showChangesFn = getChangeLogFn(context, app.app);
+    final installed = app.app.installedVersion;
+    final latest = app.app.latestVersion;
+    final hasUpdate = installed != null &&
+        installed != latest &&
+        !versionsEffectivelyEqual(installed, latest) &&
+        !installedVersionIsNewerOrEqual(installed, latest);
+
+    Widget buildUpdateButton() {
+      final trackOnly = app.app.additionalSettings['trackOnly'] == true;
+      return IconButton(
+        visualDensity: VisualDensity.compact,
+        color: Theme.of(context).colorScheme.primary,
+        tooltip: trackOnly ? tr('openDownloadPage') : tr('update'),
+        onPressed: areDownloadsRunning
+            ? null
+            : () {
+                if (trackOnly) {
+                  launchUrlString(
+                    trackOnlyDownloadPageUrl(app.app),
+                    mode: LaunchMode.externalApplication,
+                  );
+                } else {
+                  context
+                      .read<AppsProvider>()
+                      .downloadAndInstallLatestApps(
+                          [app.app.id], globalNavigatorKey.currentContext)
+                      .catchError((e) {
+                    showError(e, context);
+                    return <String>[];
+                  });
+                }
+              },
+        icon: const Icon(Icons.install_mobile),
+      );
+    }
+
+    final String versionText =
+        app.app.installedVersion ?? tr('notInstalled');
+    final String changesButtonString = app.app.releaseDate == null
+        ? (showChangesFn != null ? tr('changes') : '')
+        : DateFormat('yyyy-MM-dd').format(app.app.releaseDate!.toLocal());
+
+    final Widget trailingRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (hasUpdate) ...[buildUpdateButton(), const SizedBox(width: 5)],
+        GestureDetector(
+          onTap: showChangesFn,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: highlightTouchTargets && showChangesFn != null
+                  ? (Theme.of(context).brightness == Brightness.light
+                            ? Theme.of(context).primaryColor
+                            : Theme.of(context).primaryColorLight)
+                        .withAlpha(
+                          Theme.of(context).brightness == Brightness.light
+                              ? 20
+                              : 40,
+                        )
+                  : null,
+            ),
+            padding: highlightTouchTargets
+                ? const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 0)
+                : const EdgeInsetsDirectional.fromSTEB(24, 0, 0, 0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.of(context).size.width / 4,
+                      ),
+                      child: Text(
+                        versionText,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.end,
+                        style: isVersionPseudo(app.app)
+                            ? const TextStyle(fontStyle: FontStyle.italic)
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      changesButtonString,
+                      style: TextStyle(
+                        fontStyle: FontStyle.italic,
+                        decoration: showChangesFn != null
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+
+    final int transparent =
+        Theme.of(context).colorScheme.surface.withAlpha(0).value;
+    List<double> stops = [
+      ...app.app.categories.asMap().entries.map(
+        (e) =>
+            ((e.key / (app.app.categories.length - 1)) - 0.0001),
+      ),
+      1,
+    ];
+    if (stops.length == 2) stops[0] = 0.9999;
+
+    return RepaintBoundary(
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            stops: stops,
+            begin: const Alignment(-1, 0),
+            end: const Alignment(-0.97, 0),
+            colors: [
+              ...app.app.categories.map(
+                (e) =>
+                    Color(categoryColors[e] ?? transparent).withAlpha(255),
+              ),
+              Color(transparent),
+            ],
+          ),
+        ),
+        child: ListTile(
+          tileColor: app.app.pinned
+              ? Colors.grey.withOpacity(0.1)
+              : Colors.transparent,
+          selectedTileColor:
+              Theme.of(context).colorScheme.primary.withOpacity(
+            app.app.pinned ? 0.2 : 0.1,
+          ),
+          selected: isSelected,
+          onLongPress: onLongPress,
+          leading: iconWidget,
+          title: Text(
+            app.name,
+            maxLines: 1,
+            style: TextStyle(
+              overflow: TextOverflow.ellipsis,
+              fontWeight:
+                  app.app.pinned ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          subtitle: Text(
+            tr('byX', args: [app.author]),
+            maxLines: 1,
+            style: TextStyle(
+              overflow: TextOverflow.ellipsis,
+              fontWeight:
+                  app.app.pinned ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          trailing: downloadProgress != null
+              ? SizedBox(
+                  child: Text(
+                    downloadProgress >= 0
+                        ? tr('percentProgress',
+                            args: [downloadProgress.toInt().toString()])
+                        : tr('installing'),
+                    textAlign: downloadProgress >= 0
+                        ? TextAlign.start
+                        : TextAlign.end,
+                  ),
+                )
+              : trailingRow,
+          onTap: onTap,
+        ),
+      ),
+    );
+  }
+}
+
+/// Wraps a list row with horizontal-swipe action hints.
+///
+/// Right swipe → trigger update (shown only when an update is available).
+/// Left  swipe → toggle pin.
+class _SwipeableListItem extends StatefulWidget {
+  const _SwipeableListItem({
+    super.key,
+    required this.appId,
+    required this.hasUpdate,
+    required this.isPinned,
+    required this.areDownloadsRunning,
+    required this.child,
+  });
+
+  final String appId;
+  final bool hasUpdate;
+  final bool isPinned;
+  final bool areDownloadsRunning;
+  final Widget child;
+
+  @override
+  State<_SwipeableListItem> createState() => _SwipeableListItemState();
+}
+
+class _SwipeableListItemState extends State<_SwipeableListItem> {
+  double _dragOffset = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    const swipeThreshold = 80.0;
+    const maxDrag = 120.0;
+
+    final canSwipeRight = widget.hasUpdate && !widget.areDownloadsRunning;
+
+    Color bgColor;
+    IconData bgIcon;
+    Alignment bgAlign;
+    Color iconColor;
+
+    if (_dragOffset > 0 && canSwipeRight) {
+      bgColor = Colors.green.withValues(alpha: 0.25);
+      bgIcon = Icons.install_mobile;
+      bgAlign = Alignment.centerLeft;
+      iconColor = Colors.green;
+    } else if (_dragOffset < 0) {
+      bgColor = Theme.of(context).colorScheme.primary.withValues(alpha: 0.15);
+      bgIcon = widget.isPinned ? Icons.push_pin_outlined : Icons.push_pin;
+      bgAlign = Alignment.centerRight;
+      iconColor = Theme.of(context).colorScheme.primary;
+    } else {
+      bgColor = Colors.transparent;
+      bgIcon = Icons.circle;
+      bgAlign = Alignment.center;
+      iconColor = Colors.transparent;
+    }
+
+    return GestureDetector(
+      onHorizontalDragUpdate: (details) {
+        setState(() {
+          _dragOffset += details.delta.dx;
+          _dragOffset =
+              _dragOffset.clamp(-maxDrag, canSwipeRight ? maxDrag : 0.0);
+        });
+      },
+      onHorizontalDragEnd: (_) {
+        if (_dragOffset > swipeThreshold && canSwipeRight) {
+          context
+              .read<AppsProvider>()
+              .downloadAndInstallLatestApps(
+                  [widget.appId], globalNavigatorKey.currentContext)
+              .catchError((e) {
+            showError(e, context);
+            return <String>[];
+          });
+        } else if (_dragOffset < -swipeThreshold) {
+          final provider = context.read<AppsProvider>();
+          final app = provider.apps[widget.appId]?.app;
+          if (app != null) {
+            provider.saveApps([app..pinned = !widget.isPinned]);
+          }
+        }
+        setState(() => _dragOffset = 0);
+      },
+      onHorizontalDragCancel: () => setState(() => _dragOffset = 0),
+      child: ClipRect(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                color: bgColor,
+                alignment: bgAlign,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Icon(bgIcon, color: iconColor),
+              ),
+            ),
+            Transform.translate(
+              offset: Offset(_dragOffset, 0),
+              child: widget.child,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class AppsPage extends StatefulWidget {
   const AppsPage({super.key});
 
@@ -721,6 +1052,12 @@ class AppsPageState extends State<AppsPage> {
   int? _lastListBuildToken;
   List<AppInMemory> _listedAppsCache = const [];
   List<String> _existingUpdatesCache = const [];
+  List<String> _newInstallsCache = const [];
+
+  // ── Group expansion state ─────────────────────────────────────────────────
+  // Groups start expanded. When the user collapses one its key goes here and
+  // its child tiles are no longer built, saving widget-tree work on rebuilds.
+  final Set<String> _collapsedGroups = {};
 
   @override
   void initState() {
@@ -777,7 +1114,7 @@ class AppsPageState extends State<AppsPage> {
 
     toggleAppSelected(App app) {
       setState(() {
-        if (selectedAppIds.map((e) => e).contains(app.id)) {
+        if (selectedAppIds.contains(app.id)) {
           selectedAppIds.removeWhere((a) => a == app.id);
         } else {
           selectedAppIds.add(app.id);
@@ -926,6 +1263,8 @@ class AppsPageState extends State<AppsPage> {
       // depends on it and it's a pure function of app state (in the token).
       _existingUpdatesCache =
           appsProvider.findExistingUpdates(installedOnly: true).toList();
+      _newInstallsCache =
+          appsProvider.findExistingUpdates(nonInstalledOnly: true).toList();
 
       if (settingsProvider.pinUpdates) {
         final temp = <AppInMemory>[];
@@ -965,6 +1304,7 @@ class AppsPageState extends State<AppsPage> {
     // ── Use cached results ──────────────────────────────────────────────────
     final listedApps = _listedAppsCache;
     final existingUpdates = _existingUpdatesCache;
+    final newInstalls = _newInstallsCache;
 
     var existingUpdateIdsAllOrSelected = existingUpdates
         .where(
@@ -973,8 +1313,7 @@ class AppsPageState extends State<AppsPage> {
               : selectedAppIds.contains(element),
         )
         .toList();
-    var newInstallIdsAllOrSelected = appsProvider
-        .findExistingUpdates(nonInstalledOnly: true)
+    var newInstallIdsAllOrSelected = newInstalls
         .where(
           (element) => selectedAppIds.isEmpty
               ? listedApps.any((a) => a.app.id == element)
@@ -1093,38 +1432,6 @@ class AppsPageState extends State<AppsPage> {
       ];
     }
 
-    getUpdateButton(int appIndex) {
-      final app = listedApps[appIndex].app;
-      final trackOnly = app.additionalSettings['trackOnly'] == true;
-      return IconButton(
-        visualDensity: VisualDensity.compact,
-        color: Theme.of(context).colorScheme.primary,
-        tooltip:
-            trackOnly ? tr('openDownloadPage') : tr('update'),
-        onPressed: appsProvider.areDownloadsRunning()
-            ? null
-            : () {
-                if (trackOnly) {
-                  launchUrlString(
-                    trackOnlyDownloadPageUrl(app),
-                    mode: LaunchMode.externalApplication,
-                  );
-                } else {
-                  appsProvider
-                      .downloadAndInstallLatestApps(
-                          [app.id], globalNavigatorKey.currentContext)
-                      .catchError((e) {
-                    showError(e, context);
-                    return <String>[];
-                  });
-                }
-              },
-        icon: Icon(
-          Icons.install_mobile,
-        ),
-      );
-    }
-
     getAppIcon(int appIndex) {
       final String rowAppId = listedApps[appIndex].app.id;
       // Kick off icon loading once; putIfAbsent prevents duplicate loads.
@@ -1137,7 +1444,13 @@ class AppsPageState extends State<AppsPage> {
         );
       }
       return GestureDetector(
-        child: _AppIconWidget(appId: rowAppId),
+        child: Hero(
+          tag: 'app-icon-$rowAppId',
+          // Preserve the ClipRRect/shape during the flight.
+          flightShuttleBuilder: (_, animation, _, _, _) =>
+              _AppIconWidget(appId: rowAppId),
+          child: _AppIconWidget(appId: rowAppId),
+        ),
         onDoubleTap: () => pm.openApp(rowAppId),
         onLongPress: () {
           Navigator.push(
@@ -1153,217 +1466,58 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    getVersionText(int appIndex) {
-      return listedApps[appIndex].app.installedVersion ?? tr('notInstalled');
-    }
-
-    getChangesButtonString(int appIndex, bool hasChangeLogFn) {
-      return listedApps[appIndex].app.releaseDate == null
-          ? hasChangeLogFn
-                ? tr('changes')
-                : ''
-          : DateFormat(
-              'yyyy-MM-dd',
-            ).format(listedApps[appIndex].app.releaseDate!.toLocal());
-    }
-
     getSingleAppHorizTile(int index) {
-      var showChangesFn = getChangeLogFn(context, listedApps[index].app);
-      final installed = listedApps[index].app.installedVersion;
-      final latest = listedApps[index].app.latestVersion;
-      var hasUpdate = installed != null &&
+      final app = listedApps[index];
+      final appId = app.app.id;
+      final installed = app.app.installedVersion;
+      final latest = app.app.latestVersion;
+      final hasUpdate = installed != null &&
           installed != latest &&
           !versionsEffectivelyEqual(installed, latest) &&
           !installedVersionIsNewerOrEqual(installed, latest);
-      Widget trailingRow = Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          hasUpdate ? getUpdateButton(index) : const SizedBox.shrink(),
-          hasUpdate ? const SizedBox(width: 5) : const SizedBox.shrink(),
-          GestureDetector(
-            onTap: showChangesFn,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color:
-                    settingsProvider.highlightTouchTargets &&
-                        showChangesFn != null
-                    ? (Theme.of(context).brightness == Brightness.light
-                              ? Theme.of(context).primaryColor
-                              : Theme.of(context).primaryColorLight)
-                          .withAlpha(
-                            Theme.of(context).brightness == Brightness.light
-                                ? 20
-                                : 40,
-                          )
-                    : null,
-              ),
-              padding: settingsProvider.highlightTouchTargets
-                  ? const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 0)
-                  : const EdgeInsetsDirectional.fromSTEB(24, 0, 0, 0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width / 4,
-                        ),
-                        child: Text(
-                          getVersionText(index),
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.end,
-                          style: isVersionPseudo(listedApps[index].app)
-                              ? TextStyle(fontStyle: FontStyle.italic)
-                              : null,
-                        ),
-                      ),
-                    ],
+      final downloadsRunning = appsProvider.areDownloadsRunning();
+      return _SwipeableListItem(
+        key: ValueKey(appId),
+        appId: appId,
+        hasUpdate: hasUpdate,
+        isPinned: app.app.pinned,
+        areDownloadsRunning: downloadsRunning,
+        child: _AppListItem(
+          appId: appId,
+          isSelected: selectedAppIds.contains(appId),
+          areDownloadsRunning: downloadsRunning,
+          iconWidget: getAppIcon(index),
+          onTap: selectedAppIds.isNotEmpty
+              ? () => toggleAppSelected(app.app)
+              : () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AppPage(appId: appId),
+                    ),
                   ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        getChangesButtonString(index, showChangesFn != null),
-                        style: TextStyle(
-                          fontStyle: FontStyle.italic,
-                          decoration: showChangesFn != null
-                              ? TextDecoration.underline
-                              : TextDecoration.none,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      );
-
-      var transparent = Theme.of(
-        context,
-      ).colorScheme.surface.withAlpha(0).value;
-      List<double> stops = [
-        ...listedApps[index].app.categories.asMap().entries.map(
-          (e) =>
-              ((e.key / (listedApps[index].app.categories.length - 1)) -
-              0.0001),
+          onLongPress: () => toggleAppSelected(app.app),
+          highlightTouchTargets: settingsProvider.highlightTouchTargets,
+          categoryColors: settingsProvider.categories,
         ),
-        1,
-      ];
-      if (stops.length == 2) {
-        stops[0] = 0.9999;
-      }
-      return RepaintBoundary(
-        child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            stops: stops,
-            begin: const Alignment(-1, 0),
-            end: const Alignment(-0.97, 0),
-            colors: [
-              ...listedApps[index].app.categories.map(
-                (e) => Color(
-                  settingsProvider.categories[e] ?? transparent,
-                ).withAlpha(255),
-              ),
-              Color(transparent),
-            ],
-          ),
-        ),
-        child: ListTile(
-          tileColor: listedApps[index].app.pinned
-              ? Colors.grey.withOpacity(0.1)
-              : Colors.transparent,
-          selectedTileColor: Theme.of(context).colorScheme.primary.withOpacity(
-            listedApps[index].app.pinned ? 0.2 : 0.1,
-          ),
-          selected: selectedAppIds
-              .map((e) => e)
-              .contains(listedApps[index].app.id),
-          onLongPress: () {
-            toggleAppSelected(listedApps[index].app);
-          },
-          leading: getAppIcon(index),
-          title: Text(
-            maxLines: 1,
-            listedApps[index].name,
-            style: TextStyle(
-              overflow: TextOverflow.ellipsis,
-              fontWeight: listedApps[index].app.pinned
-                  ? FontWeight.bold
-                  : FontWeight.normal,
-            ),
-          ),
-          subtitle: Text(
-            tr('byX', args: [listedApps[index].author]),
-            maxLines: 1,
-            style: TextStyle(
-              overflow: TextOverflow.ellipsis,
-              fontWeight: listedApps[index].app.pinned
-                  ? FontWeight.bold
-                  : FontWeight.normal,
-            ),
-          ),
-          trailing: listedApps[index].downloadProgress != null
-              ? SizedBox(
-                  child: Text(
-                    listedApps[index].downloadProgress! >= 0
-                        ? tr(
-                            'percentProgress',
-                            args: [
-                              listedApps[index].downloadProgress!
-                                  .toInt()
-                                  .toString(),
-                            ],
-                          )
-                        : tr('installing'),
-                    textAlign: (listedApps[index].downloadProgress! >= 0)
-                        ? TextAlign.start
-                        : TextAlign.end,
-                  ),
-                )
-              : trailingRow,
-          onTap: () {
-            if (selectedAppIds.isNotEmpty) {
-              toggleAppSelected(listedApps[index].app);
-            } else {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      AppPage(appId: listedApps[index].app.id),
-                ),
-              );
-            }
-          },
-        ),
-      ),
       );
     }
 
     getCategoryCollapsibleTile(int index) {
-      var tiles = listedApps
-          .asMap()
-          .entries
-          .where(
-            (e) {
-              if (segregateNonInstalled &&
-                  e.value.app.installedVersion == null) {
-                return false;
-              }
-              return e.value.app.categories.contains(listedCategories[index]) ||
-                  e.value.app.categories.isEmpty &&
-                      listedCategories[index] == null;
-            },
-          )
-          .map((e) => getSingleAppHorizTile(e.key))
-          .toList();
+      final catKey = 'cat:${listedCategories[index] ?? '__null__'}';
+      final isExpanded = !_collapsedGroups.contains(catKey);
+
+      // Always compute matching entries so we can show the count badge even
+      // when collapsed; only build widgets when the group is expanded.
+      final matchingEntries = listedApps.asMap().entries.where((e) {
+        if (segregateNonInstalled && e.value.app.installedVersion == null) {
+          return false;
+        }
+        return e.value.app.categories.contains(listedCategories[index]) ||
+            e.value.app.categories.isEmpty && listedCategories[index] == null;
+      }).toList();
+      final tiles = isExpanded
+          ? matchingEntries.map((e) => getSingleAppHorizTile(e.key)).toList()
+          : const <Widget>[];
 
       capFirstChar(String str) => str[0].toUpperCase() + str.substring(1);
       final theme = Theme.of(context);
@@ -1379,6 +1533,7 @@ class AppsPageState extends State<AppsPage> {
           child: Theme(
             data: theme.copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
+              key: PageStorageKey(catKey),
               shape: const RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(
                   Radius.circular(_appsListGroupCardRadius),
@@ -1389,13 +1544,20 @@ class AppsPageState extends State<AppsPage> {
                   Radius.circular(_appsListGroupCardRadius),
                 ),
               ),
-              initiallyExpanded: true,
+              initiallyExpanded: isExpanded,
+              onExpansionChanged: (expanded) => setState(() {
+                if (expanded) {
+                  _collapsedGroups.remove(catKey);
+                } else {
+                  _collapsedGroups.add(catKey);
+                }
+              }),
               title: Text(
                 capFirstChar(listedCategories[index] ?? tr('noCategory')),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               controlAffinity: ListTileControlAffinity.leading,
-              trailing: Text(tiles.length.toString()),
+              trailing: Text(matchingEntries.length.toString()),
               children: tiles,
             ),
           ),
@@ -1404,14 +1566,17 @@ class AppsPageState extends State<AppsPage> {
     }
 
     getNonInstalledCollapsibleTile() {
-      var tiles = listedApps
+      const nonInstalledKey = '__nonInstalled__';
+      final isExpanded = !_collapsedGroups.contains(nonInstalledKey);
+
+      final matchingEntries = listedApps
           .asMap()
           .entries
-          .where(
-            (e) => e.value.app.installedVersion == null,
-          )
-          .map((e) => getSingleAppHorizTile(e.key))
+          .where((e) => e.value.app.installedVersion == null)
           .toList();
+      final tiles = isExpanded
+          ? matchingEntries.map((e) => getSingleAppHorizTile(e.key)).toList()
+          : const <Widget>[];
 
       final theme = Theme.of(context);
       return Padding(
@@ -1426,6 +1591,7 @@ class AppsPageState extends State<AppsPage> {
           child: Theme(
             data: theme.copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
+              key: const PageStorageKey(nonInstalledKey),
               shape: const RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(
                   Radius.circular(_appsListGroupCardRadius),
@@ -1436,13 +1602,20 @@ class AppsPageState extends State<AppsPage> {
                   Radius.circular(_appsListGroupCardRadius),
                 ),
               ),
-              initiallyExpanded: true,
+              initiallyExpanded: isExpanded,
+              onExpansionChanged: (expanded) => setState(() {
+                if (expanded) {
+                  _collapsedGroups.remove(nonInstalledKey);
+                } else {
+                  _collapsedGroups.add(nonInstalledKey);
+                }
+              }),
               title: Text(
                 tr('notInstalled'),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               controlAffinity: ListTileControlAffinity.leading,
-              trailing: Text(tiles.length.toString()),
+              trailing: Text(matchingEntries.length.toString()),
               children: tiles,
             ),
           ),
@@ -1452,27 +1625,25 @@ class AppsPageState extends State<AppsPage> {
 
     getSourceCollapsibleTile(int index) {
       final sourceKey = listedSources[index];
-      final tiles = listedApps
-          .asMap()
-          .entries
-          .where(
-            (entry) {
-              if (segregateNonInstalled &&
-                  entry.value.app.installedVersion == null) {
-                return false;
-              }
-              return sourceProvider
-                      .getSource(
-                        entry.value.app.url,
-                        overrideSource: entry.value.app.overrideSource,
-                      )
-                      .runtimeType
-                      .toString() ==
-                  sourceKey;
-            },
-          )
-          .map((entry) => getSingleAppHorizTile(entry.key))
-          .toList();
+      final groupKey = 'src:$sourceKey';
+      final isExpanded = !_collapsedGroups.contains(groupKey);
+
+      final matchingEntries = listedApps.asMap().entries.where((entry) {
+        if (segregateNonInstalled && entry.value.app.installedVersion == null) {
+          return false;
+        }
+        return sourceProvider
+                .getSource(
+                  entry.value.app.url,
+                  overrideSource: entry.value.app.overrideSource,
+                )
+                .runtimeType
+                .toString() ==
+            sourceKey;
+      }).toList();
+      final tiles = isExpanded
+          ? matchingEntries.map((e) => getSingleAppHorizTile(e.key)).toList()
+          : const <Widget>[];
 
       final firstForTitle = listedApps.firstWhere(
         (appInMem) =>
@@ -1505,6 +1676,7 @@ class AppsPageState extends State<AppsPage> {
           child: Theme(
             data: theme.copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
+              key: PageStorageKey(groupKey),
               shape: const RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(
                   Radius.circular(_appsListGroupCardRadius),
@@ -1515,13 +1687,20 @@ class AppsPageState extends State<AppsPage> {
                   Radius.circular(_appsListGroupCardRadius),
                 ),
               ),
-              initiallyExpanded: true,
+              initiallyExpanded: isExpanded,
+              onExpansionChanged: (expanded) => setState(() {
+                if (expanded) {
+                  _collapsedGroups.remove(groupKey);
+                } else {
+                  _collapsedGroups.add(groupKey);
+                }
+              }),
               title: Text(
                 sourceTitle,
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               controlAffinity: ListTileControlAffinity.leading,
-              trailing: Text(tiles.length.toString()),
+              trailing: Text(matchingEntries.length.toString()),
               children: tiles,
             ),
           ),

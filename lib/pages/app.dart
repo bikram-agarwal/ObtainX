@@ -241,6 +241,13 @@ class _AppPageState extends State<AppPage> {
   String? _iconSchemeLoadingForKey;
   String? _iconSchemeFailedCacheKey;
 
+  final SourceProvider _sourceProvider = SourceProvider();
+
+  // Cache for the per-page ThemeData derived from the icon color scheme.
+  // Recomputed only when the icon scheme key or parent brightness changes.
+  ThemeData? _cachedPageTheme;
+  String? _cachedPageThemeKey;
+
   @override
   void didUpdateWidget(covariant AppPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -249,6 +256,8 @@ class _AppPageState extends State<AppPage> {
       _iconSchemeCacheKey = null;
       _iconSchemeLoadingForKey = null;
       _iconSchemeFailedCacheKey = null;
+      _cachedPageTheme = null;
+      _cachedPageThemeKey = null;
       _webViewUrlLoaded = false;
       _scheduledDetailPageRefresh = false;
       _requestedMissingIconLoad = false;
@@ -265,9 +274,11 @@ class _AppPageState extends State<AppPage> {
     required double size,
     required double borderRadius,
     required Widget emptyPlaceholder,
+    Object? heroTag,
   }) {
+    Widget iconChild;
     if (appInMemory?.icon != null) {
-      return GestureDetector(
+      iconChild = GestureDetector(
         onTap: appInMemory == null ? null : _showAppIconSheet,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(borderRadius),
@@ -280,11 +291,16 @@ class _AppPageState extends State<AppPage> {
           ),
         ),
       );
+    } else {
+      iconChild = GestureDetector(
+        onTap: appInMemory == null ? null : _showAppIconSheet,
+        child: emptyPlaceholder,
+      );
     }
-    return GestureDetector(
-      onTap: appInMemory == null ? null : _showAppIconSheet,
-      child: emptyPlaceholder,
-    );
+    if (heroTag != null) {
+      return Hero(tag: heroTag, child: iconChild);
+    }
+    return iconChild;
   }
 
   Future<void> _showAppIconSheet() async {
@@ -561,7 +577,6 @@ class _AppPageState extends State<AppPage> {
 
     bool areDownloadsRunning = appsProvider.areDownloadsRunning();
 
-    var sourceProvider = SourceProvider();
     AppInMemory? app = appsProvider.apps[widget.appId];
     if (!_requestedMissingIconLoad &&
         app != null &&
@@ -574,7 +589,7 @@ class _AppPageState extends State<AppPage> {
       });
     }
     var source = app != null
-        ? sourceProvider.getSource(
+        ? _sourceProvider.getSource(
             app.app.url,
             overrideSource: app.app.overrideSource,
           )
@@ -622,13 +637,21 @@ class _AppPageState extends State<AppPage> {
         pageBrightness == Brightness.dark ? 0.055 : 0.045;
     Color appPageDeeperSurface(Color base) =>
         Color.lerp(base, Colors.black, appPageSurfaceDeepen) ?? base;
-    final ThemeData pageThemeForPage = parentThemeForPage.copyWith(
-      colorScheme: pageColorSchemeForPage,
-      primaryColor: pageColorSchemeForPage.primary,
-      cardColor: appPageDeeperSurface(
-        pageColorSchemeForPage.surfaceContainerHighest,
-      ),
-    );
+    // ThemeData.copyWith() is expensive — cache it and recompute only when the
+    // icon scheme or parent brightness actually changes.
+    final String pageThemeKey =
+        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}';
+    if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
+      _cachedPageThemeKey = pageThemeKey;
+      _cachedPageTheme = parentThemeForPage.copyWith(
+        colorScheme: pageColorSchemeForPage,
+        primaryColor: pageColorSchemeForPage.primary,
+        cardColor: appPageDeeperSurface(
+          pageColorSchemeForPage.surfaceContainerHighest,
+        ),
+      );
+    }
+    final ThemeData pageThemeForPage = _cachedPageTheme!;
 
     if (!_scheduledDetailPageRefresh &&
         app != null &&
@@ -1629,6 +1652,7 @@ class _AppPageState extends State<AppPage> {
         appInMemory: app,
         size: scaledIconSize,
         borderRadius: 16,
+        heroTag: 'app-icon-${widget.appId}',
         emptyPlaceholder: Container(
           height: scaledIconSize,
           width: scaledIconSize,
