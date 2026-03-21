@@ -36,6 +36,7 @@ class _CustomAppBarState extends State<CustomAppBar> {
         automaticallyImplyLeading: false,
         actions: widget.actions,
         titleSpacing: 0,
+        bottom: widget.bottom,
         title: Padding(
           padding: const EdgeInsets.only(left: 20, right: 4),
           child: Row(

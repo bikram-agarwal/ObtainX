@@ -423,7 +423,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     }
   }
 
-  void _executeAction(SwipeAction action, BuildContext context) {
+  Future<void> _executeAction(SwipeAction action, BuildContext context) async {
     final provider = context.read<AppsProvider>();
     final app = provider.apps[widget.appId]?.app;
     switch (action) {
@@ -445,13 +445,31 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           MaterialPageRoute(
             builder: (_) => AppPage(
               appId: widget.appId,
-              showOppositeOfPreferredView: true,
+              // showOppositeOfPreferredView flips the view; to always land on
+              // the info/edit page we need to flip only when the user prefers
+              // the web view (so the "opposite" is the info view).
+              showOppositeOfPreferredView:
+                  context.read<SettingsProvider>().showAppWebpage,
             ),
           ),
         );
       case SwipeAction.delete:
         if (app != null) {
-          provider.removeAppsWithModal(context, [app]);
+          final snapshot = [app.deepCopy()];
+          final removed = await provider.removeAppsWithModal(context, [app]);
+          if (removed && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(tr('xAppsRemoved', args: ['1'])),
+                action: SnackBarAction(
+                  label: tr('undo'),
+                  onPressed: () => context
+                      .read<AppsProvider>()
+                      .saveApps(snapshot, onlyIfExists: false),
+                ),
+              ),
+            );
+          }
         }
       case SwipeAction.open:
         pm.openApp(widget.appId);
@@ -1320,6 +1338,80 @@ class AppsPageState extends State<AppsPage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Returns the human-readable display name for a source given its
+  /// runtimeType string (the value stored in [AppsFilter.sourceFilter]).
+  String _getSourceName(String sourceKey) {
+    for (final s in sourceProvider.sources) {
+      if (s.runtimeType.toString() == sourceKey) return s.name;
+    }
+    return sourceKey;
+  }
+
+  /// Builds a single dismissible [InputChip] for the filter chips row.
+  Widget _filterChip(String label, VoidCallback onDelete) {
+    return InputChip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      onDeleted: onDelete,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+    );
+  }
+
+  /// Builds a pinned row of dismissible filter chips for every active
+  /// non-text filter. Returns [null] when no non-text filters are active
+  /// (which causes [CustomAppBar] to omit the bottom bar entirely).
+  PreferredSizeWidget? _buildFilterChipsRow() {
+    final chips = <Widget>[];
+
+    if (!filter.includeUptodate) {
+      chips.add(_filterChip(
+        tr('updatesOnly'),
+        () => setState(() => filter.includeUptodate = true),
+      ));
+    }
+
+    if (!filter.includeNonInstalled) {
+      chips.add(_filterChip(
+        tr('installedOnly'),
+        () => setState(() => filter.includeNonInstalled = true),
+      ));
+    }
+
+    if (filter.sourceFilter.isNotEmpty) {
+      chips.add(_filterChip(
+        '${tr('source')}: ${_getSourceName(filter.sourceFilter)}',
+        () => setState(() => filter.sourceFilter = ''),
+      ));
+    }
+
+    for (final cat in filter.categoryFilter) {
+      chips.add(_filterChip(
+        cat,
+        () => setState(
+          () => filter.categoryFilter = Set.from(filter.categoryFilter)
+            ..remove(cat),
+        ),
+      ));
+    }
+
+    if (chips.isEmpty) return null;
+
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(44),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+        child: Row(
+          children: chips
+              .expand((c) => [c, const SizedBox(width: 6)])
+              .toList()
+            ..removeLast(),
         ),
       ),
     );
@@ -2588,11 +2680,33 @@ class AppsPageState extends State<AppsPage> {
                   visualDensity: VisualDensity.compact,
                   iconSize: 24,
                   color: colorScheme.primary,
-                  onPressed: () {
-                    appsProvider.removeAppsWithModal(
+                  onPressed: () async {
+                    final snapshot = selectedApps
+                        .map((a) => a.deepCopy())
+                        .toList();
+                    final removed = await appsProvider.removeAppsWithModal(
                       context,
                       selectedApps.toList(),
                     );
+                    if (removed && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            tr('xAppsRemoved',
+                                args: ['${snapshot.length}']),
+                          ),
+                          action: SnackBarAction(
+                            label: tr('undo'),
+                            onPressed: () => context
+                                .read<AppsProvider>()
+                                .saveApps(
+                                  snapshot,
+                                  onlyIfExists: false,
+                                ),
+                          ),
+                        ),
+                      );
+                    }
                   },
                   tooltip: tr('removeSelectedApps'),
                   icon: const Icon(Icons.delete_outline_outlined),
@@ -2761,6 +2875,7 @@ class AppsPageState extends State<AppsPage> {
                           neutralFilter: neutralFilter,
                           settingsProvider: settingsProvider,
                         ),
+                        bottom: _buildFilterChipsRow(),
                       ),
                       ...getLoadingWidgets(),
                       getDisplayedList(),

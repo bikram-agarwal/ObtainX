@@ -457,6 +457,10 @@
       "one": "Certificate Hash",
       "other": "Certificate Hashes"
     },
+    "undo": "Undo",
+    "xAppsRemoved": "{} app(s) removed",
+    "updatesOnly": "Updates only",
+    "installedOnly": "Installed only",
     "gestures": "Gestures",
     "rightSwipeAction": "Right swipe action",
     "leftSwipeAction": "Left swipe action",
