@@ -24,7 +24,8 @@ import 'package:markdown/markdown.dart' as md;
 const double _appsListGroupCardRadius = 20;
 
 /// Fingerprint so [AppsPage] rebuilds only when app-list data changes,
-/// not on every [AppsProvider.notifyListeners] (e.g. download-progress ticks).
+/// not on every [AppsProvider.notifyListeners] (e.g. download-progress ticks
+/// or icon-load completions — icons are watched per-row by [_AppIconWidget]).
 int _appsPageAppsRebuildToken(AppsProvider provider) {
   return Object.hashAll([
     provider.loadingApps,
@@ -40,11 +41,66 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
         a.app.pinned,
         a.app.categories.length,
         Object.hashAll(a.app.categories),
-        identityHashCode(a.icon),
-        a.icon?.length,
+        // Icon fields deliberately excluded: each row watches its own icon
+        // via _AppIconWidget.context.select, so icon loads only rebuild that
+        // one row widget instead of the entire apps list.
       ]),
     ),
   ]);
+}
+
+/// An isolated icon widget that subscribes only to its own app's icon bytes.
+/// When an icon finishes loading, only this widget rebuilds — not [AppsPage].
+class _AppIconWidget extends StatelessWidget {
+  const _AppIconWidget({required this.appId});
+
+  final String appId;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Uint8List? icon, bool notInstalled) =
+        context.select<AppsProvider, (Uint8List?, bool)>(
+      (p) {
+        final a = p.apps[appId];
+        return (a?.icon, a?.installedInfo == null);
+      },
+    );
+    if (icon != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.memory(
+          icon,
+          width: 40,
+          height: 40,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          opacity: AlwaysStoppedAnimation(notInstalled ? 0.6 : 1.0),
+        ),
+      );
+    }
+    // Placeholder shown while the icon is still loading.
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Center(
+        child: Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.rotationZ(0.31),
+          child: Image(
+            image: const AssetImage('assets/graphics/icon_small.png'),
+            width: 28,
+            height: 28,
+            fit: BoxFit.contain,
+            color: Theme.of(context).brightness == Brightness.dark
+                ? Colors.white.withOpacity(0.4)
+                : Colors.white.withOpacity(0.3),
+            colorBlendMode: BlendMode.modulate,
+            gaplessPlayback: true,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class AppsPage extends StatefulWidget {
@@ -653,11 +709,18 @@ class AppsPageState extends State<AppsPage> {
 
   late final ScrollController scrollController;
 
-  /// One [Future] per app id so [FutureBuilder] does not restart [updateAppIcon]
-  /// on every [AppsPage] rebuild (that caused jank when popping from [AppPage]).
+  /// One [Future] per app id so icon loading is not restarted on every rebuild.
   final Map<String, Future<void>> _appListIconWarmFutures = {};
 
   var sourceProvider = SourceProvider();
+
+  // ── List-computation cache ────────────────────────────────────────────────
+  // The filter → sort → pin/bury pass is O(n log n) and runs inside build().
+  // We skip it entirely when the inputs haven't changed (e.g. a setState() for
+  // row selection or the refresh-indicator doesn't need a new sort).
+  int? _lastListBuildToken;
+  List<AppInMemory> _listedAppsCache = const [];
+  List<String> _existingUpdatesCache = const [];
 
   @override
   void initState() {
@@ -673,14 +736,13 @@ class AppsPageState extends State<AppsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Use select() so this page only rebuilds when app-list data actually
-    // changes, not on every download-progress tick from AppsProvider.
-    context.select<AppsProvider, int>(_appsPageAppsRebuildToken);
+    // select() prevents rebuilds for notifications that don't affect list data
+    // (download-progress ticks, icon-load completions). The returned token is
+    // also used as part of the list-computation cache key below.
+    final int appsToken =
+        context.select<AppsProvider, int>(_appsPageAppsRebuildToken);
     var appsProvider = context.read<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
-    // Live references: avoid deep-copying every app on each notify (very costly
-    // while [AppPage] is open and when returning to this tab).
-    var listedApps = appsProvider.apps.values.toList();
 
     refresh() {
       HapticFeedback.lightImpact();
@@ -708,8 +770,9 @@ class AppsPageState extends State<AppsPage> {
       _refreshIndicatorKey.currentState?.show();
     }
 
+    // Keep only IDs that still exist in the provider (e.g. after a delete).
     selectedAppIds = selectedAppIds
-        .where((element) => listedApps.map((e) => e.app.id).contains(element))
+        .where((element) => appsProvider.apps.containsKey(element))
         .toSet();
 
     toggleAppSelected(App app) {
@@ -722,139 +785,200 @@ class AppsPageState extends State<AppsPage> {
       });
     }
 
-    listedApps = listedApps.where((app) {
-      final upToDate = app.app.installedVersion == app.app.latestVersion ||
-          (app.app.installedVersion != null &&
-              (versionsEffectivelyEqual(
-                  app.app.installedVersion!, app.app.latestVersion) ||
-                  installedVersionIsNewerOrEqual(
-                      app.app.installedVersion!, app.app.latestVersion)));
-      if (upToDate && !(filter.includeUptodate)) {
-        return false;
-      }
-      if (app.app.installedVersion == null && !(filter.includeNonInstalled)) {
-        return false;
-      }
-      if (filter.nameFilter.isNotEmpty || filter.authorFilter.isNotEmpty) {
-        List<String> nameTokens = filter.nameFilter
-            .split(' ')
-            .where((element) => element.trim().isNotEmpty)
-            .toList();
-        List<String> authorTokens = filter.authorFilter
-            .split(' ')
-            .where((element) => element.trim().isNotEmpty)
-            .toList();
+    // ── Cached filter / sort / reorder ─────────────────────────────────────
+    // filter+sort is O(n log n). We skip the entire pass when nothing that
+    // affects list ordering has changed — e.g. tapping to select a row or
+    // toggling the refresh indicator doesn't need a new sort.
+    final int listBuildToken = Object.hashAll([
+      appsToken,
+      filter.nameFilter,
+      filter.authorFilter,
+      filter.idFilter,
+      filter.includeUptodate,
+      filter.includeNonInstalled,
+      Object.hashAll(filter.categoryFilter.toList()..sort()),
+      filter.sourceFilter,
+      settingsProvider.sortColumn.index,
+      settingsProvider.sortOrder.index,
+      settingsProvider.pinUpdates,
+      settingsProvider.buryNonInstalled,
+      settingsProvider.groupNonInstalledSeparately,
+    ]);
+    if (listBuildToken != _lastListBuildToken) {
+      _lastListBuildToken = listBuildToken;
+      var workingList = appsProvider.apps.values.toList();
 
-        for (var t in nameTokens) {
-          if (!app.name.toLowerCase().contains(t.toLowerCase())) {
-            return false;
-          }
-        }
-        for (var t in authorTokens) {
-          if (!app.author.toLowerCase().contains(t.toLowerCase())) {
-            return false;
-          }
-        }
-      }
-      if (filter.idFilter.isNotEmpty) {
-        if (!app.app.id.contains(filter.idFilter)) {
+      workingList = workingList.where((app) {
+        final upToDate = app.app.installedVersion == app.app.latestVersion ||
+            (app.app.installedVersion != null &&
+                (versionsEffectivelyEqual(
+                    app.app.installedVersion!, app.app.latestVersion) ||
+                    installedVersionIsNewerOrEqual(
+                        app.app.installedVersion!, app.app.latestVersion)));
+        if (upToDate && !(filter.includeUptodate)) {
           return false;
         }
-      }
-      if (filter.categoryFilter.isNotEmpty &&
-          filter.categoryFilter
-              .intersection(app.app.categories.toSet())
-              .isEmpty) {
-        return false;
-      }
-      if (filter.sourceFilter.isNotEmpty &&
-          sourceProvider
-                  .getSource(
-                    app.app.url,
-                    overrideSource: app.app.overrideSource,
-                  )
-                  .runtimeType
-                  .toString() !=
-              filter.sourceFilter) {
-        return false;
-      }
-      return true;
-    }).toList();
+        if (app.app.installedVersion == null && !(filter.includeNonInstalled)) {
+          return false;
+        }
+        if (filter.nameFilter.isNotEmpty || filter.authorFilter.isNotEmpty) {
+          final nameTokens = filter.nameFilter
+              .split(' ')
+              .where((element) => element.trim().isNotEmpty)
+              .toList();
+          final authorTokens = filter.authorFilter
+              .split(' ')
+              .where((element) => element.trim().isNotEmpty)
+              .toList();
+          for (final t in nameTokens) {
+            if (!app.name.toLowerCase().contains(t.toLowerCase())) {
+              return false;
+            }
+          }
+          for (final t in authorTokens) {
+            if (!app.author.toLowerCase().contains(t.toLowerCase())) {
+              return false;
+            }
+          }
+        }
+        if (filter.idFilter.isNotEmpty) {
+          if (!app.app.id.contains(filter.idFilter)) {
+            return false;
+          }
+        }
+        if (filter.categoryFilter.isNotEmpty &&
+            filter.categoryFilter
+                .intersection(app.app.categories.toSet())
+                .isEmpty) {
+          return false;
+        }
+        if (filter.sourceFilter.isNotEmpty &&
+            sourceProvider
+                    .getSource(
+                      app.app.url,
+                      overrideSource: app.app.overrideSource,
+                    )
+                    .runtimeType
+                    .toString() !=
+                filter.sourceFilter) {
+          return false;
+        }
+        return true;
+      }).toList();
 
-    listedApps.sort((a, b) {
-      int result = 0;
-      if (settingsProvider.sortColumn == SortColumnSettings.authorName) {
-        result = ((a.author + a.name).toLowerCase()).compareTo(
-          (b.author + b.name).toLowerCase(),
-        );
-      } else if (settingsProvider.sortColumn == SortColumnSettings.nameAuthor) {
-        result = ((a.name + a.author).toLowerCase()).compareTo(
-          (b.name + b.author).toLowerCase(),
-        );
-      } else if (settingsProvider.sortColumn ==
-          SortColumnSettings.releaseDate) {
-        // Handle null dates: apps with unknown release dates are grouped at the end
-        final aDate = a.app.releaseDate;
-        final bDate = b.app.releaseDate;
-        final isDescending =
-            settingsProvider.sortOrder == SortOrderSettings.descending;
-        if (aDate == null && bDate == null) {
-          // Both null: sort by name for consistency
+      workingList.sort((a, b) {
+        int result = 0;
+        if (settingsProvider.sortColumn == SortColumnSettings.authorName) {
+          result = ((a.author + a.name).toLowerCase()).compareTo(
+            (b.author + b.name).toLowerCase(),
+          );
+        } else if (settingsProvider.sortColumn ==
+            SortColumnSettings.nameAuthor) {
           result = ((a.name + a.author).toLowerCase()).compareTo(
             (b.name + b.author).toLowerCase(),
           );
-        } else if (aDate == null) {
-          // a has no date, always push to end regardless of sort direction
-          result = isDescending ? -1 : 1;
-        } else if (bDate == null) {
-          // b has no date, always push to end regardless of sort direction
-          result = isDescending ? 1 : -1;
-        } else {
-          result = aDate.compareTo(bDate);
+        } else if (settingsProvider.sortColumn ==
+            SortColumnSettings.releaseDate) {
+          // Handle null dates: apps with unknown release dates go to end.
+          final aDate = a.app.releaseDate;
+          final bDate = b.app.releaseDate;
+          final isDescending =
+              settingsProvider.sortOrder == SortOrderSettings.descending;
+          if (aDate == null && bDate == null) {
+            result = ((a.name + a.author).toLowerCase()).compareTo(
+              (b.name + b.author).toLowerCase(),
+            );
+          } else if (aDate == null) {
+            result = isDescending ? -1 : 1;
+          } else if (bDate == null) {
+            result = isDescending ? 1 : -1;
+          } else {
+            result = aDate.compareTo(bDate);
+          }
+        } else if (settingsProvider.sortColumn ==
+            SortColumnSettings.lastUpdateCheck) {
+          final aDate = a.app.lastUpdateCheck;
+          final bDate = b.app.lastUpdateCheck;
+          final isDescending =
+              settingsProvider.sortOrder == SortOrderSettings.descending;
+          if (aDate == null && bDate == null) {
+            result = ((a.name + a.author).toLowerCase()).compareTo(
+              (b.name + b.author).toLowerCase(),
+            );
+          } else if (aDate == null) {
+            result = isDescending ? -1 : 1;
+          } else if (bDate == null) {
+            result = isDescending ? 1 : -1;
+          } else {
+            result = aDate.compareTo(bDate);
+          }
+        } else if (settingsProvider.sortColumn == SortColumnSettings.added) {
+          result = 0;
         }
-      } else if (settingsProvider.sortColumn ==
-          SortColumnSettings.lastUpdateCheck) {
-        final aDate = a.app.lastUpdateCheck;
-        final bDate = b.app.lastUpdateCheck;
-        final isDescending =
-            settingsProvider.sortOrder == SortOrderSettings.descending;
-        if (aDate == null && bDate == null) {
-          result = ((a.name + a.author).toLowerCase()).compareTo(
-            (b.name + b.author).toLowerCase(),
-          );
-        } else if (aDate == null) {
-          result = isDescending ? -1 : 1;
-        } else if (bDate == null) {
-          result = isDescending ? 1 : -1;
-        } else {
-          result = aDate.compareTo(bDate);
-        }
-      } else if (settingsProvider.sortColumn == SortColumnSettings.added) {
-        // Preserve order from apps map (insertion / add order); sort is stable.
-        result = 0;
-      }
-      return result;
-    });
+        return result;
+      });
 
-    if (settingsProvider.sortOrder == SortOrderSettings.descending) {
-      listedApps = listedApps.reversed.toList();
+      if (settingsProvider.sortOrder == SortOrderSettings.descending) {
+        workingList = workingList.reversed.toList();
+      }
+
+      // Cache existingUpdates together with the list: pinUpdates ordering
+      // depends on it and it's a pure function of app state (in the token).
+      _existingUpdatesCache =
+          appsProvider.findExistingUpdates(installedOnly: true).toList();
+
+      if (settingsProvider.pinUpdates) {
+        final temp = <AppInMemory>[];
+        workingList = workingList.where((sa) {
+          if (_existingUpdatesCache.contains(sa.app.id)) {
+            temp.add(sa);
+            return false;
+          }
+          return true;
+        }).toList();
+        workingList = [...temp, ...workingList];
+      }
+
+      if (settingsProvider.buryNonInstalled) {
+        final temp = <AppInMemory>[];
+        workingList = workingList.where((sa) {
+          if (sa.app.installedVersion == null) {
+            temp.add(sa);
+            return false;
+          }
+          return true;
+        }).toList();
+        workingList = [...workingList, ...temp];
+      }
+
+      final tempPinned = <AppInMemory>[];
+      final tempNotPinned = <AppInMemory>[];
+      for (final a in workingList) {
+        if (a.app.pinned) {
+          tempPinned.add(a);
+        } else {
+          tempNotPinned.add(a);
+        }
+      }
+      _listedAppsCache = [...tempPinned, ...tempNotPinned];
     }
-
-    var existingUpdates = appsProvider.findExistingUpdates(installedOnly: true);
+    // ── Use cached results ──────────────────────────────────────────────────
+    final listedApps = _listedAppsCache;
+    final existingUpdates = _existingUpdatesCache;
 
     var existingUpdateIdsAllOrSelected = existingUpdates
         .where(
           (element) => selectedAppIds.isEmpty
-              ? listedApps.where((a) => a.app.id == element).isNotEmpty
-              : selectedAppIds.map((e) => e).contains(element),
+              ? listedApps.any((a) => a.app.id == element)
+              : selectedAppIds.contains(element),
         )
         .toList();
     var newInstallIdsAllOrSelected = appsProvider
         .findExistingUpdates(nonInstalledOnly: true)
         .where(
           (element) => selectedAppIds.isEmpty
-              ? listedApps.where((a) => a.app.id == element).isNotEmpty
-              : selectedAppIds.map((e) => e).contains(element),
+              ? listedApps.any((a) => a.app.id == element)
+              : selectedAppIds.contains(element),
         )
         .toList();
 
@@ -873,41 +997,6 @@ class AppsPageState extends State<AppsPage> {
       }
       return true;
     }).toList();
-
-    if (settingsProvider.pinUpdates) {
-      var temp = [];
-      listedApps = listedApps.where((sa) {
-        if (existingUpdates.contains(sa.app.id)) {
-          temp.add(sa);
-          return false;
-        }
-        return true;
-      }).toList();
-      listedApps = [...temp, ...listedApps];
-    }
-
-    if (settingsProvider.buryNonInstalled) {
-      var temp = [];
-      listedApps = listedApps.where((sa) {
-        if (sa.app.installedVersion == null) {
-          temp.add(sa);
-          return false;
-        }
-        return true;
-      }).toList();
-      listedApps = [...listedApps, ...temp];
-    }
-
-    var tempPinned = [];
-    var tempNotPinned = [];
-    for (var a in listedApps) {
-      if (a.app.pinned) {
-        tempPinned.add(a);
-      } else {
-        tempNotPinned.add(a);
-      }
-    }
-    listedApps = [...tempPinned, ...tempNotPinned];
 
     final segregateNonInstalled =
         settingsProvider.groupNonInstalledSeparately &&
@@ -1037,86 +1126,25 @@ class AppsPageState extends State<AppsPage> {
     }
 
     getAppIcon(int appIndex) {
-      final AppInMemory rowApp = listedApps[appIndex];
-      final String rowAppId = rowApp.app.id;
-      if (rowApp.icon == null) {
+      final String rowAppId = listedApps[appIndex].app.id;
+      // Kick off icon loading once; putIfAbsent prevents duplicate loads.
+      // _AppIconWidget independently watches the icon bytes via context.select,
+      // so only that widget rebuilds when the icon arrives — not the full page.
+      if (appsProvider.apps[rowAppId]?.icon == null) {
         _appListIconWarmFutures.putIfAbsent(
           rowAppId,
           () => appsProvider.updateAppIcon(rowAppId),
         );
       }
-      Widget iconChild;
-      if (rowApp.icon != null) {
-        iconChild = ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Image.memory(
-            rowApp.icon!,
-            width: 40,
-            height: 40,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            opacity: AlwaysStoppedAnimation(
-              rowApp.installedInfo == null ? 0.6 : 1,
-            ),
-          ),
-        );
-      } else {
-        iconChild = FutureBuilder<void>(
-          future: _appListIconWarmFutures[rowAppId],
-          builder: (BuildContext ctx, AsyncSnapshot<void> snapshot) {
-            final Uint8List? bytes = rowApp.icon;
-            if (bytes != null) {
-              return ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.memory(
-                  bytes,
-                  width: 40,
-                  height: 40,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  opacity: AlwaysStoppedAnimation(
-                    rowApp.installedInfo == null ? 0.6 : 1,
-                  ),
-                ),
-              );
-            }
-            return SizedBox(
-              width: 40,
-              height: 40,
-              child: Center(
-                child: Transform(
-                  alignment: Alignment.center,
-                  transform: Matrix4.rotationZ(0.31),
-                  child: Image(
-                    image: const AssetImage(
-                      'assets/graphics/icon_small.png',
-                    ),
-                    width: 28,
-                    height: 28,
-                    fit: BoxFit.contain,
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white.withOpacity(0.4)
-                        : Colors.white.withOpacity(0.3),
-                    colorBlendMode: BlendMode.modulate,
-                    gaplessPlayback: true,
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      }
       return GestureDetector(
-        child: iconChild,
-        onDoubleTap: () {
-          pm.openApp(listedApps[appIndex].app.id);
-        },
+        child: _AppIconWidget(appId: rowAppId),
+        onDoubleTap: () => pm.openApp(rowAppId),
         onLongPress: () {
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => AppPage(
-                appId: listedApps[appIndex].app.id,
+                appId: rowAppId,
                 showOppositeOfPreferredView: true,
               ),
             ),

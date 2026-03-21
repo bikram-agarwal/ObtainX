@@ -317,7 +317,6 @@ class _HomePageState extends State<HomePage> {
         context.select<AppsProvider, (int, bool)>(
       (p) => (p.apps.length, p.loadingApps),
     );
-    AppsProvider appsProvider = context.read<AppsProvider>();
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
 
     if (!prevIsLoading &&
