@@ -91,6 +91,75 @@ ColorScheme _appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
 }
 
 /// Pulls icon-derived dark schemes a few steps toward black so UI feels less neon.
+int _additionalSettingsRebuildToken(Map<String, dynamic> map) {
+  if (map.isEmpty) return 0;
+  final List<String> keys = map.keys.map((k) => k.toString()).toList()..sort();
+  int accumulator = map.length;
+  for (final String key in keys) {
+    accumulator = Object.hash(accumulator, key, map[key]?.hashCode ?? 0);
+  }
+  return accumulator;
+}
+
+int _apkUrlEntriesRebuildToken(List<MapEntry<String, String>> entries) {
+  int accumulator = entries.length;
+  for (final MapEntry<String, String> entry in entries) {
+    accumulator = Object.hash(accumulator, entry.key, entry.value);
+  }
+  return accumulator;
+}
+
+/// Fingerprint so [AppPage] rebuilds only when this app or global download
+/// state changes, not on every [AppsProvider.notifyListeners].
+int appPageAppsRebuildToken(AppsProvider provider, String appId) {
+  final bool downloadsRunning = provider.areDownloadsRunning();
+  final AppInMemory? inMemory = provider.apps[appId];
+  if (inMemory == null) {
+    return Object.hash(appId, downloadsRunning, 0);
+  }
+  final App model = inMemory.app;
+  final dynamic packageInfo = inMemory.installedInfo;
+  return Object.hashAll([
+    downloadsRunning,
+    appId,
+    inMemory.downloadProgress,
+    identityHashCode(inMemory.icon),
+    inMemory.icon?.length,
+    model.id,
+    model.url,
+    model.name,
+    model.author,
+    model.installedVersion,
+    model.latestVersion,
+    model.pinned,
+    model.lastUpdateCheck,
+    model.releaseDate,
+    model.changeLog?.hashCode,
+    model.preferredApkIndex,
+    model.overrideSource,
+    _apkUrlEntriesRebuildToken(model.apkUrls),
+    _apkUrlEntriesRebuildToken(model.otherAssetUrls),
+    _additionalSettingsRebuildToken(model.additionalSettings),
+    model.categories.length,
+    Object.hashAll(model.categories),
+    inMemory.certificateHashes.length,
+    Object.hashAll(inMemory.certificateHashes),
+    packageInfo?.versionName,
+    packageInfo?.packageName,
+    model.iconUrl,
+  ]);
+}
+
+int appPageSettingsRebuildToken(SettingsProvider settings) {
+  return Object.hash(
+    settings.matchAppPageToIconColors,
+    settings.showAppWebpage,
+    settings.checkUpdateOnDetailPage,
+    settings.highlightTouchTargets,
+    settings.categories.hashCode,
+  );
+}
+
 ColorScheme _darkenIconPageSchemeInDarkMode(ColorScheme scheme) {
   if (scheme.brightness != Brightness.dark) return scheme;
   const Color black = Color(0xFF000000);
@@ -161,8 +230,9 @@ class _AppPageState extends State<AppPage> {
   static const double _versionRowLabelWidth = 120;
 
   late final WebViewController _webViewController;
-  bool _wasWebViewOpened = false;
-  AppInMemory? prevApp;
+  bool _webViewUrlLoaded = false;
+  bool _scheduledDetailPageRefresh = false;
+  Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
 
   ColorScheme? _iconDerivedColorScheme;
@@ -178,6 +248,9 @@ class _AppPageState extends State<AppPage> {
       _iconSchemeCacheKey = null;
       _iconSchemeLoadingForKey = null;
       _iconSchemeFailedCacheKey = null;
+      _webViewUrlLoaded = false;
+      _scheduledDetailPageRefresh = false;
+      _lastWebViewSurfaceColorApplied = null;
     }
   }
 
@@ -364,6 +437,46 @@ class _AppPageState extends State<AppPage> {
       );
   }
 
+  Future<void> _runCheckUpdate(String id, {bool resetVersion = false}) async {
+    final AppsProvider appsProvider =
+        Provider.of<AppsProvider>(context, listen: false);
+    try {
+      setState(() {
+        updating = true;
+      });
+      await appsProvider.checkUpdate(id);
+      if (resetVersion) {
+        appsProvider.apps[id]?.app.additionalSettings['versionDetection'] =
+            true;
+        if (appsProvider.apps[id]?.app.installedVersion != null) {
+          appsProvider.apps[id]?.app.installedVersion =
+              appsProvider.apps[id]?.app.latestVersion;
+        }
+        appsProvider.saveApps([appsProvider.apps[id]!.app]);
+      }
+    } catch (err) {
+      if (context.mounted) {
+        showError(err, context);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          updating = false;
+        });
+      }
+    }
+  }
+
+  void _applyWebViewSurfaceColorIfNeeded(Color background) {
+    if (_lastWebViewSurfaceColorApplied == background) return;
+    _lastWebViewSurfaceColorApplied = background;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _webViewController.setBackgroundColor(background);
+      }
+    });
+  }
+
   static const Color _alternateStorePlayGreen = Color(0xFF3DDC84);
   static const Color _alternateStoreFdroidLightBlue = Color(0xFF81D4FA);
   static const Color _alternateStoreApkmirrorOrange = Color(0xFFFF9800);
@@ -395,43 +508,28 @@ class _AppPageState extends State<AppPage> {
 
   @override
   Widget build(BuildContext context) {
-    var appsProvider = context.watch<AppsProvider>();
-    var settingsProvider = context.watch<SettingsProvider>();
+    context.select<SettingsProvider, int>(appPageSettingsRebuildToken);
+    context.select<AppsProvider, int>(
+      (AppsProvider provider) =>
+          appPageAppsRebuildToken(provider, widget.appId),
+    );
+
+    final AppsProvider appsProvider =
+        Provider.of<AppsProvider>(context, listen: false);
+    final SettingsProvider settingsProvider =
+        Provider.of<SettingsProvider>(context, listen: false);
+
     final bool useIconPageColors = settingsProvider.matchAppPageToIconColors;
     var showAppWebpageFinal =
         (settingsProvider.showAppWebpage &&
             !widget.showOppositeOfPreferredView) ||
         (!settingsProvider.showAppWebpage &&
             widget.showOppositeOfPreferredView);
-    getUpdate(String id, {bool resetVersion = false}) async {
-      try {
-        setState(() {
-          updating = true;
-        });
-        await appsProvider.checkUpdate(id);
-        if (resetVersion) {
-          appsProvider.apps[id]?.app.additionalSettings['versionDetection'] =
-              true;
-          if (appsProvider.apps[id]?.app.installedVersion != null) {
-            appsProvider.apps[id]?.app.installedVersion =
-                appsProvider.apps[id]?.app.latestVersion;
-          }
-          appsProvider.saveApps([appsProvider.apps[id]!.app]);
-        }
-      } catch (err) {
-        // ignore: use_build_context_synchronously
-        showError(err, context);
-      } finally {
-        setState(() {
-          updating = false;
-        });
-      }
-    }
 
     bool areDownloadsRunning = appsProvider.areDownloadsRunning();
 
     var sourceProvider = SourceProvider();
-    AppInMemory? app = appsProvider.apps[widget.appId]?.deepCopy();
+    AppInMemory? app = appsProvider.apps[widget.appId];
     var source = app != null
         ? sourceProvider.getSource(
             app.app.url,
@@ -489,12 +587,17 @@ class _AppPageState extends State<AppPage> {
       ),
     );
 
-    if (!areDownloadsRunning &&
-        prevApp == null &&
+    if (!_scheduledDetailPageRefresh &&
         app != null &&
-        settingsProvider.checkUpdateOnDetailPage) {
-      prevApp = app;
-      getUpdate(app.app.id);
+        settingsProvider.checkUpdateOnDetailPage &&
+        !areDownloadsRunning) {
+      _scheduledDetailPageRefresh = true;
+      final String refreshAppId = app.app.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _runCheckUpdate(refreshAppId);
+        }
+      });
     }
     var trackOnly = app?.app.additionalSettings['trackOnly'] == true;
 
@@ -505,9 +608,14 @@ class _AppPageState extends State<AppPage> {
         ? isVersionPseudo(app!.app)
         : false;
 
-    if (app != null && !_wasWebViewOpened) {
-      _wasWebViewOpened = true;
-      _webViewController.loadRequest(Uri.parse(app.app.url));
+    if (showAppWebpageFinal && app != null && !_webViewUrlLoaded) {
+      _webViewUrlLoaded = true;
+      final String webUrl = app.app.url;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _webViewController.loadRequest(Uri.parse(webUrl));
+        }
+      });
     }
 
     Widget _sectionCard(
@@ -1673,22 +1781,22 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getAppWebView(BuildContext themeContext) => app != null
-        ? WebViewWidget(
-            key: ObjectKey(_webViewController),
-            controller: _webViewController
-              ..setBackgroundColor(
-                Color.lerp(
-                      Theme.of(themeContext).colorScheme.surface,
-                      Colors.black,
-                      Theme.of(themeContext).brightness == Brightness.dark
-                          ? 0.055
-                          : 0.045,
-                    ) ??
-                    Theme.of(themeContext).colorScheme.surface,
-              ),
-          )
-        : Container();
+    Widget getAppWebView(BuildContext themeContext) {
+      if (app == null) return const SizedBox.shrink();
+      final Color webViewSurface = Color.lerp(
+            Theme.of(themeContext).colorScheme.surface,
+            Colors.black,
+            Theme.of(themeContext).brightness == Brightness.dark
+                ? 0.055
+                : 0.045,
+          ) ??
+          Theme.of(themeContext).colorScheme.surface;
+      _applyWebViewSurfaceColorIfNeeded(webViewSurface);
+      return WebViewWidget(
+        key: ObjectKey(_webViewController),
+        controller: _webViewController,
+      );
+    }
 
     showMarkUpdatedDialog() {
       return showDialog(
@@ -1784,7 +1892,7 @@ class _AppPageState extends State<AppPage> {
           app.app.additionalSettings['releaseDateAsVersion'] = false;
         }
         appsProvider.saveApps([app.app]).then((value) {
-          getUpdate(app.app.id, resetVersion: versionDetectionEnabled);
+          _runCheckUpdate(app.app.id, resetVersion: versionDetectionEnabled);
         });
       }
     }
@@ -2217,7 +2325,7 @@ class _AppPageState extends State<AppPage> {
                     ),
               onRefresh: () async {
                 if (app != null) {
-                  getUpdate(app.app.id);
+                  await _runCheckUpdate(app.app.id);
                 }
               },
             ),
