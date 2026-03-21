@@ -250,7 +250,7 @@ class _AppPageState extends State<AppPage> {
                     final String appLabel =
                         appInMem?.name ?? widget.appId;
                     final String imageSearchQuery =
-                        '$appLabel square logo png';
+                        '$appLabel square logo transparent background png';
                     final Uri googleImageSearchUri = Uri.https(
                       'www.google.com',
                       '/search',
