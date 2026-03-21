@@ -440,6 +440,20 @@ void showAppsViewOptionsSheet(BuildContext context) {
                         ),
                       ],
                     ),
+                    if (settingsProvider.appsListGroupBy !=
+                        AppsListGroupBy.none) ...[
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(tr('groupNonInstalledSeparately')),
+                        subtitle: Text(tr('groupNonInstalledSeparatelyDescription')),
+                        value: settingsProvider.groupNonInstalledSeparately,
+                        onChanged: (value) {
+                          settingsProvider.groupNonInstalledSeparately = value;
+                          setSheetState(() {});
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     Divider(color: colorScheme.outlineVariant),
                     const SizedBox(height: 4),
@@ -788,8 +802,21 @@ class AppsPageState extends State<AppsPage> {
     }
     listedApps = [...tempPinned, ...tempNotPinned];
 
-    List<String?> getListedCategories() {
-      var temp = listedApps.map(
+    final segregateNonInstalled =
+        settingsProvider.groupNonInstalledSeparately &&
+            (settingsProvider.appsListGroupBy == AppsListGroupBy.category ||
+                settingsProvider.appsListGroupBy == AppsListGroupBy.source);
+    final appsListedForCategoryKeys = segregateNonInstalled
+        ? listedApps.where((e) => e.app.installedVersion != null).toList()
+        : listedApps;
+    final appsListedForSourceKeys = segregateNonInstalled
+        ? listedApps.where((e) => e.app.installedVersion != null).toList()
+        : listedApps;
+    final showNonInstalledGroupSection = segregateNonInstalled &&
+        listedApps.any((e) => e.app.installedVersion == null);
+
+    List<String?> getListedCategories(List<AppInMemory> appsSource) {
+      var temp = appsSource.map(
         (e) => e.app.categories.isNotEmpty ? e.app.categories : [null],
       );
       return temp.isNotEmpty
@@ -799,7 +826,7 @@ class AppsPageState extends State<AppsPage> {
           : [];
     }
 
-    var listedCategories = getListedCategories();
+    var listedCategories = getListedCategories(appsListedForCategoryKeys);
     listedCategories.sort((a, b) {
       return a != null && b != null
           ? a.toLowerCase().compareTo(b.toLowerCase())
@@ -808,9 +835,9 @@ class AppsPageState extends State<AppsPage> {
           : -1;
     });
 
-    List<String> getListedSourceKeys() {
-      if (listedApps.isEmpty) return [];
-      final keys = listedApps
+    List<String> getListedSourceKeys(List<AppInMemory> appsSource) {
+      if (appsSource.isEmpty) return [];
+      final keys = appsSource
           .map(
             (e) => sourceProvider
                 .getSource(e.app.url, overrideSource: e.app.overrideSource)
@@ -825,7 +852,7 @@ class AppsPageState extends State<AppsPage> {
       return keys;
     }
 
-    var listedSources = getListedSourceKeys();
+    var listedSources = getListedSourceKeys(appsListedForSourceKeys);
 
     Set<App> selectedApps = listedApps
         .map((e) => e.app)
@@ -1156,10 +1183,15 @@ class AppsPageState extends State<AppsPage> {
           .asMap()
           .entries
           .where(
-            (e) =>
-                e.value.app.categories.contains(listedCategories[index]) ||
-                e.value.app.categories.isEmpty &&
-                    listedCategories[index] == null,
+            (e) {
+              if (segregateNonInstalled &&
+                  e.value.app.installedVersion == null) {
+                return false;
+              }
+              return e.value.app.categories.contains(listedCategories[index]) ||
+                  e.value.app.categories.isEmpty &&
+                      listedCategories[index] == null;
+            },
           )
           .map((e) => getSingleAppHorizTile(e.key))
           .toList();
@@ -1202,21 +1234,73 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
+    getNonInstalledCollapsibleTile() {
+      var tiles = listedApps
+          .asMap()
+          .entries
+          .where(
+            (e) => e.value.app.installedVersion == null,
+          )
+          .map((e) => getSingleAppHorizTile(e.key))
+          .toList();
+
+      final theme = Theme.of(context);
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+        child: Material(
+          elevation: 3,
+          shadowColor: theme.colorScheme.shadow.withAlpha(100),
+          surfaceTintColor: theme.colorScheme.surfaceTint,
+          borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+          color: theme.colorScheme.surfaceContainerLow,
+          clipBehavior: Clip.antiAlias,
+          child: Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(
+                  Radius.circular(_appsListGroupCardRadius),
+                ),
+              ),
+              collapsedShape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(
+                  Radius.circular(_appsListGroupCardRadius),
+                ),
+              ),
+              initiallyExpanded: true,
+              title: Text(
+                tr('notInstalled'),
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              controlAffinity: ListTileControlAffinity.leading,
+              trailing: Text(tiles.length.toString()),
+              children: tiles,
+            ),
+          ),
+        ),
+      );
+    }
+
     getSourceCollapsibleTile(int index) {
       final sourceKey = listedSources[index];
       final tiles = listedApps
           .asMap()
           .entries
           .where(
-            (entry) =>
-                sourceProvider
-                    .getSource(
-                      entry.value.app.url,
-                      overrideSource: entry.value.app.overrideSource,
-                    )
-                    .runtimeType
-                    .toString() ==
-                sourceKey,
+            (entry) {
+              if (segregateNonInstalled &&
+                  entry.value.app.installedVersion == null) {
+                return false;
+              }
+              return sourceProvider
+                      .getSource(
+                        entry.value.app.url,
+                        overrideSource: entry.value.app.overrideSource,
+                      )
+                      .runtimeType
+                      .toString() ==
+                  sourceKey;
+            },
           )
           .map((entry) => getSingleAppHorizTile(entry.key))
           .toList();
@@ -1900,26 +1984,43 @@ class AppsPageState extends State<AppsPage> {
     getDisplayedList() {
       final groupBy = settingsProvider.appsListGroupBy;
       final useCategoryGroups = groupBy == AppsListGroupBy.category &&
-          !(listedCategories.isEmpty ||
-              (listedCategories.length == 1 && listedCategories[0] == null));
+          (segregateNonInstalled
+              ? (listedCategories.isNotEmpty || showNonInstalledGroupSection)
+              : !(listedCategories.isEmpty ||
+                  (listedCategories.length == 1 &&
+                      listedCategories[0] == null)));
       if (useCategoryGroups) {
+        final categoryChildCount = listedCategories.length +
+            (showNonInstalledGroupSection ? 1 : 0);
         return SliverList(
           delegate: SliverChildBuilderDelegate((
             BuildContext context,
             int index,
           ) {
+            if (showNonInstalledGroupSection &&
+                index == listedCategories.length) {
+              return getNonInstalledCollapsibleTile();
+            }
             return getCategoryCollapsibleTile(index);
-          }, childCount: listedCategories.length),
+          }, childCount: categoryChildCount),
         );
       }
-      if (groupBy == AppsListGroupBy.source && listedSources.isNotEmpty) {
+      final useSourceGroups = groupBy == AppsListGroupBy.source &&
+          (listedSources.isNotEmpty || showNonInstalledGroupSection);
+      if (useSourceGroups) {
+        final sourceChildCount =
+            listedSources.length + (showNonInstalledGroupSection ? 1 : 0);
         return SliverList(
           delegate: SliverChildBuilderDelegate((
             BuildContext context,
             int index,
           ) {
+            if (showNonInstalledGroupSection &&
+                index == listedSources.length) {
+              return getNonInstalledCollapsibleTile();
+            }
             return getSourceCollapsibleTile(index);
-          }, childCount: listedSources.length),
+          }, childCount: sourceChildCount),
         );
       }
       return SliverList(

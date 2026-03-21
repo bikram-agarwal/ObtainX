@@ -255,18 +255,26 @@ class FDroidRepo extends AppSource {
       }
       String? added = selectedReleases[0].querySelector('added')?.innerHtml;
       DateTime? releaseDate = added != null ? DateTime.parse(added) : null;
+      final repoBase =
+          res.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/');
       List<String> apkUrls = selectedReleases
           .map(
             (e) =>
-                '${res.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/')}/${e.querySelector('apkname')!.innerHtml}',
+                '$repoBase/${e.querySelector('apkname')!.innerHtml}',
           )
           .toList();
+      String? iconFile = foundApps[0].querySelector('icon')?.innerHtml.trim();
+      String? iconUrl;
+      if (iconFile != null && iconFile.isNotEmpty) {
+        iconUrl = '$repoBase/icons/$iconFile';
+      }
       return APKDetails(
         selectedVersion,
         getApkUrlsFromUrls(apkUrls),
         AppNames(authorName, appName),
         releaseDate: releaseDate,
         changeLog: changeLog,
+        iconUrl: iconUrl,
       );
     } else {
       throw getObtainiumHttpError(res);

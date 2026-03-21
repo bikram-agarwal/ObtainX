@@ -17,6 +17,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
@@ -1882,35 +1883,175 @@ class AppsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  bool _bytesLookLikeRasterImage(Uint8List bytes) {
+    if (bytes.length < 12) return false;
+    // PNG
+    if (bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return true;
+    }
+    // JPEG
+    if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+      return true;
+    }
+    // WebP (RIFF....WEBP)
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _bytesLookLikePng(Uint8List bytes) {
+    if (bytes.length < 8) return false;
+    return bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0D &&
+        bytes[5] == 0x0A &&
+        bytes[6] == 0x1A &&
+        bytes[7] == 0x0A;
+  }
+
+  Future<Uint8List?> _fetchIconFromUrl(String url) async {
+    try {
+      final uri = Uri.tryParse(url);
+      if (uri == null || !uri.hasScheme) return null;
+      final res = await get(uri);
+      if (res.statusCode != 200) return null;
+      final bytes = res.bodyBytes;
+      if (!_bytesLookLikeRasterImage(bytes)) return null;
+      return bytes;
+    } catch (e) {
+      logs.add('Icon fetch failed for $url: $e');
+      return null;
+    }
+  }
+
   Future<void> updateAppIcon(String? appId, {bool ignoreCache = false}) async {
-    if (apps[appId]?.icon == null) {
-      var cachedIcon = File('${iconsCacheDir.path}/$appId.png');
-      var alreadyCached = cachedIcon.existsSync() && !ignoreCache;
-      var icon = alreadyCached
-          ? (await cachedIcon.readAsBytes())
-          : (await apps[appId]?.installedInfo?.applicationInfo?.getAppIcon());
-      if (icon != null && !alreadyCached) {
-        cachedIcon.writeAsBytes(icon.toList());
-      }
-      if (icon != null) {
-        apps.update(
-          apps[appId]!.app.id,
-          (value) => AppInMemory(
-            apps[appId]!.app,
-            value.downloadProgress,
-            value.installedInfo,
-            icon,
-          ),
-          ifAbsent: () => AppInMemory(
-            apps[appId]!.app,
-            null,
-            apps[appId]?.installedInfo,
-            icon,
-          ),
-        );
-        notifyListeners();
+    if (appId == null || apps[appId] == null) return;
+
+    final userIconFile = File('${iconsCacheDir.path}/$appId.user.png');
+    if (userIconFile.existsSync()) {
+      try {
+        final Uint8List iconBytes = await userIconFile.readAsBytes();
+        if (_bytesLookLikePng(iconBytes)) {
+          final Uint8List? currentIcon = apps[appId]!.icon;
+          if (currentIcon != null &&
+              currentIcon.length == iconBytes.length &&
+              listEquals(currentIcon, iconBytes)) {
+            return;
+          }
+          apps.update(
+            appId,
+            (value) => AppInMemory(
+              value.app,
+              value.downloadProgress,
+              value.installedInfo,
+              iconBytes,
+            ),
+          );
+          notifyListeners();
+          return;
+        }
+      } catch (e) {
+        logs.add('User icon load failed for $appId: $e');
       }
     }
+
+    if (apps[appId]!.icon != null && !ignoreCache) return;
+
+    var cachedIcon = File('${iconsCacheDir.path}/$appId.png');
+    if (ignoreCache && cachedIcon.existsSync()) {
+      await cachedIcon.delete();
+    }
+    var alreadyCached = cachedIcon.existsSync() && !ignoreCache;
+    Uint8List? icon = alreadyCached
+        ? await cachedIcon.readAsBytes()
+        : await apps[appId]!.installedInfo?.applicationInfo?.getAppIcon();
+    if (icon == null && !alreadyCached) {
+      final url = apps[appId]!.app.iconUrl;
+      if (url != null && url.isNotEmpty) {
+        icon = await _fetchIconFromUrl(url);
+      }
+    }
+    if (icon != null && !alreadyCached) {
+      await cachedIcon.writeAsBytes(icon);
+    }
+    if (icon != null) {
+      apps.update(
+        apps[appId]!.app.id,
+        (value) => AppInMemory(
+          apps[appId]!.app,
+          value.downloadProgress,
+          value.installedInfo,
+          icon,
+        ),
+        ifAbsent: () => AppInMemory(
+          apps[appId]!.app,
+          null,
+          apps[appId]?.installedInfo,
+          icon,
+        ),
+      );
+      notifyListeners();
+    }
+  }
+
+  bool hasUserAppIconOverride(String appId) =>
+      File('${iconsCacheDir.path}/$appId.user.png').existsSync();
+
+  /// Copies a user-selected PNG into [appId].user.png and updates memory.
+  /// Returns null on success, or a translated error string.
+  Future<String?> setUserAppIconFromPngPath(String appId, String filePath) async {
+    if (apps[appId] == null) {
+      return tr('unexpectedError');
+    }
+    try {
+      final File sourceFile = File(filePath);
+      if (!sourceFile.existsSync()) {
+        return tr('unexpectedError');
+      }
+      final Uint8List bytes = await sourceFile.readAsBytes();
+      if (!_bytesLookLikePng(bytes)) {
+        return tr('changeAppIconInvalidPng');
+      }
+      final File dest = File('${iconsCacheDir.path}/$appId.user.png');
+      await dest.writeAsBytes(bytes);
+      apps.update(
+        appId,
+        (value) => AppInMemory(
+          value.app,
+          value.downloadProgress,
+          value.installedInfo,
+          bytes,
+        ),
+      );
+      notifyListeners();
+      return null;
+    } catch (e) {
+      logs.add('setUserAppIconFromPngPath: $e');
+      return tr('unexpectedError');
+    }
+  }
+
+  Future<void> resetAppIconToDefault(String appId) async {
+    if (apps[appId] == null) return;
+    final File userFile = File('${iconsCacheDir.path}/$appId.user.png');
+    if (userFile.existsSync()) {
+      deleteFile(userFile);
+    }
+    await updateAppIcon(appId, ignoreCache: true);
   }
 
   Future<void> saveApps(
@@ -1969,6 +2110,14 @@ class AppsProvider with ChangeNotifier {
             .forEach((element) {
               element.delete(recursive: true);
             });
+        final File standardIconCache = File('${iconsCacheDir.path}/$appId.png');
+        if (standardIconCache.existsSync()) {
+          deleteFile(standardIconCache);
+        }
+        final File userIconCache = File('${iconsCacheDir.path}/$appId.user.png');
+        if (userIconCache.existsSync()) {
+          deleteFile(userIconCache);
+        }
         if (apps.containsKey(appId)) {
           apps.remove(appId);
         }

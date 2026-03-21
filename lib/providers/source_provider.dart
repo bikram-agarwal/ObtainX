@@ -55,6 +55,8 @@ class APKDetails {
   late DateTime? releaseDate;
   late String? changeLog;
   late List<MapEntry<String, String>> allAssetUrls;
+  /// Optional absolute URL to a raster app icon from the source (for non-installed apps).
+  String? iconUrl;
 
   APKDetails(
     this.version,
@@ -63,6 +65,7 @@ class APKDetails {
     this.releaseDate,
     this.changeLog,
     this.allAssetUrls = const [],
+    this.iconUrl,
   });
 }
 
@@ -327,6 +330,7 @@ class App {
   late String? changeLog;
   late String? overrideSource;
   bool allowIdChange = false;
+  String? iconUrl;
   App(
     this.id,
     this.url,
@@ -345,6 +349,7 @@ class App {
     this.overrideSource,
     this.allowIdChange = false,
     this.otherAssetUrls = const [],
+    this.iconUrl,
   });
 
   @override
@@ -388,6 +393,7 @@ class App {
     overrideSource: overrideSource,
     allowIdChange: allowIdChange,
     otherAssetUrls: otherAssetUrls,
+    iconUrl: iconUrl,
   );
 
   factory App.fromJson(Map<String, dynamic> json) {
@@ -434,6 +440,7 @@ class App {
       otherAssetUrls: assumed2DlistToStringMapList(
         jsonDecode((json['otherAssetUrls'] ?? '[]')),
       ),
+      iconUrl: json['iconUrl'] as String?,
     );
   }
 
@@ -455,6 +462,7 @@ class App {
     'changeLog': changeLog,
     'overrideSource': overrideSource,
     'allowIdChange': allowIdChange,
+    if (iconUrl != null) 'iconUrl': iconUrl,
   };
 }
 
@@ -1297,6 +1305,7 @@ class SourceProvider {
       otherAssetUrls: apk.allAssetUrls
           .where((a) => apk.apkUrls.indexWhere((p) => a.key == p.key) < 0)
           .toList(),
+      iconUrl: apk.iconUrl ?? currentApp?.iconUrl,
     );
     return source.endOfGetAppChanges(finalApp);
   }

@@ -96,6 +96,20 @@ String? titleFromApkMirrorRssItemInner(String itemInnerXml) {
   return titleMatch?.group(1)?.trim();
 }
 
+/// Resolves Open Graph / Twitter image URL from an APKMirror app listing page.
+String? iconUrlFromApkMirrorAppPageHtml(String html, String pageUrl) {
+  final doc = parse(html);
+  String? raw =
+      doc.querySelector('meta[property="og:image"]')?.attributes['content'] ??
+          doc.querySelector('meta[name="twitter:image"]')?.attributes['content'] ??
+          doc
+              .querySelector('meta[name="twitter:image:src"]')
+              ?.attributes['content'];
+  if (raw == null || raw.trim().isEmpty) return null;
+  final baseUri = Uri.parse(pageUrl);
+  return baseUri.resolveUri(Uri.parse(raw.trim())).toString();
+}
+
 DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
   final pubDateMatch = RegExp(
     r'<pubDate>([^<]+)</pubDate>',
@@ -292,12 +306,22 @@ class APKMirror extends AppSource {
       if (version == null || version.isEmpty) {
         throw NoVersionError();
       }
+      String? iconUrl;
+      try {
+        final pageRes = await sourceRequest(standardUrl, additionalSettings);
+        if (pageRes.statusCode == 200) {
+          iconUrl = iconUrlFromApkMirrorAppPageHtml(pageRes.body, standardUrl);
+        }
+      } catch (e) {
+        // Icon is optional
+      }
       return APKDetails(
         version,
         [],
         getAppNames(standardUrl),
         releaseDate: releaseDate,
         changeLog: releasePageUrl,
+        iconUrl: iconUrl,
       );
     } else {
       throw getObtainiumHttpError(res);

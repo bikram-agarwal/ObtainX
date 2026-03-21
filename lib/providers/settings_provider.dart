@@ -290,6 +290,15 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  bool get groupNonInstalledSeparately {
+    return prefs?.getBool('groupNonInstalledSeparately') ?? false;
+  }
+
+  set groupNonInstalledSeparately(bool show) {
+    prefs?.setBool('groupNonInstalledSeparately', show);
+    notifyListeners();
+  }
+
   AppsListGroupBy get appsListGroupBy {
     if (prefs?.containsKey('appsListGroupBy') == true) {
       final stored = prefs!.getInt('appsListGroupBy');

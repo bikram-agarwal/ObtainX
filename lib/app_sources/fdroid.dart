@@ -81,7 +81,7 @@ class FDroid extends AppSource {
   ) async {
     String? appId = await tryInferringAppId(standardUrl);
     String host = Uri.parse(standardUrl).host;
-    var details = getAPKUrlsFromFDroidPackagesAPIResponse(
+    var details = await getAPKUrlsFromFDroidPackagesAPIResponse(
       await sourceRequest(
         'https://$host/api/v1/packages/$appId',
         additionalSettings,
@@ -180,13 +180,13 @@ class FDroid extends AppSource {
     }
   }
 
-  APKDetails getAPKUrlsFromFDroidPackagesAPIResponse(
+  Future<APKDetails> getAPKUrlsFromFDroidPackagesAPIResponse(
     Response res,
     String apkUrlPrefix,
     String standardUrl,
     String sourceName, {
     Map<String, dynamic> additionalSettings = const {},
-  }) {
+  }) async {
     var autoSelectHighestVersionCode =
         additionalSettings['autoSelectHighestVersionCode'] == true;
     var trySelectingSuggestedVersionCode =
@@ -279,10 +279,36 @@ class FDroid extends AppSource {
       List<String> apkUrls = releaseChoices
           .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
           .toList();
+      String? iconUrl;
+      if (!hostChanged) {
+        try {
+          final pkgName =
+              response['packageName'] as String? ??
+              Uri.parse(standardUrl).pathSegments.last;
+          final pageHost = Uri.parse(standardUrl).host;
+          if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {
+            final pageRes = await sourceRequest(
+              'https://$pageHost/packages/$pkgName/',
+              additionalSettings,
+            );
+            if (pageRes.statusCode == 200) {
+              final doc = parse(pageRes.body);
+              iconUrl =
+                  doc
+                      .querySelector('meta[property="og:image"]')
+                      ?.attributes['content'] ??
+                  doc.querySelector('img.package-icon')?.attributes['src'];
+            }
+          }
+        } catch (e) {
+          // Icon is optional
+        }
+      }
       return APKDetails(
         version,
         getApkUrlsFromUrls(apkUrls.toSet().toList()),
         AppNames(sourceName, Uri.parse(standardUrl).pathSegments.last),
+        iconUrl: iconUrl,
       );
     } else {
       throw getObtainiumHttpError(res);

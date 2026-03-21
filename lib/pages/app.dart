@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -178,6 +179,89 @@ class _AppPageState extends State<AppPage> {
       _iconSchemeLoadingForKey = null;
       _iconSchemeFailedCacheKey = null;
     }
+  }
+
+  Future<void> _showAppIconSheet() async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) {
+        final AppsProvider appsProviderRead =
+            Provider.of<AppsProvider>(sheetContext, listen: false);
+        final bool canReset =
+            appsProviderRead.hasUserAppIconOverride(widget.appId);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+                  child: Text(
+                    tr('appIconActionsTitle'),
+                    style: Theme.of(sheetContext).textTheme.titleMedium,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.image_outlined),
+                  title: Text(tr('changeAppIcon')),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    final FilePickerResult? result =
+                        await FilePicker.platform.pickFiles(
+                      type: FileType.custom,
+                      allowedExtensions: const ['png'],
+                    );
+                    if (!mounted) return;
+                    if (result != null &&
+                        result.files.isNotEmpty &&
+                        result.files.single.path != null) {
+                      final AppsProvider appsProvider =
+                          Provider.of<AppsProvider>(context, listen: false);
+                      final String? err =
+                          await appsProvider.setUserAppIconFromPngPath(
+                        widget.appId,
+                        result.files.single.path!,
+                      );
+                      if (!mounted) return;
+                      if (err != null) {
+                        showError(ObtainiumError(err), context);
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(tr('changeAppIconSuccess')),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.restore),
+                  title: Text(tr('resetAppIcon')),
+                  enabled: canReset,
+                  onTap: !canReset
+                      ? null
+                      : () async {
+                          Navigator.pop(sheetContext);
+                          final AppsProvider appsProvider =
+                              Provider.of<AppsProvider>(context, listen: false);
+                          await appsProvider.resetAppIconToDefault(
+                            widget.appId,
+                          );
+                          if (mounted) setState(() {});
+                        },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
@@ -1327,76 +1411,85 @@ class _AppPageState extends State<AppPage> {
       final iconWidget = FutureBuilder(
         future: appsProvider.updateAppIcon(app?.app.id, ignoreCache: true),
         builder: (ctx, val) {
+          late final Widget inner;
           if (app?.icon != null) {
-            return GestureDetector(
-              onTap: app == null ? null : () => pm.openApp(app.app.id),
-              child: ClipRRect(
+            inner = ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.memory(
+                app!.icon!,
+                height: scaledIconSize,
+                width: scaledIconSize,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
+            );
+          } else {
+            inner = Container(
+              height: scaledIconSize,
+              width: scaledIconSize,
+              decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
-                child: Image.memory(
-                  app!.icon!,
-                  height: scaledIconSize,
-                  width: scaledIconSize,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Theme.of(themeContext).colorScheme.primary,
+                    Theme.of(themeContext).colorScheme.primary.withAlpha(200),
+                  ],
                 ),
               ),
             );
           }
-          return Container(
-            height: scaledIconSize,
-            width: scaledIconSize,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Theme.of(themeContext).colorScheme.primary,
-                  Theme.of(themeContext).colorScheme.primary.withAlpha(200),
-                ],
-              ),
-            ),
+          return GestureDetector(
+            onTap: app == null ? null : _showAppIconSheet,
+            child: inner,
           );
         },
       );
       return Padding(
         padding: const EdgeInsets.only(right: 16, bottom: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            iconWidget,
-            SizedBox(width: 12 * heroScale),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    app?.name ?? tr('app'),
-                    style: titleStyle?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          fontSize: (titleStyle?.fontSize ?? 22) *
-                              heroScale *
-                              1.06,
-                        ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                iconWidget,
+                SizedBox(width: 12 * heroScale),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        app?.name ?? tr('app'),
+                        style: titleStyle?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              fontSize: (titleStyle?.fontSize ?? 22) *
+                                  heroScale *
+                                  1.06,
+                            ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      SizedBox(height: 2 * heroScale),
+                      Text(
+                        tr('byX', args: [app?.author ?? tr('unknown')]),
+                        style: bylineStyle?.copyWith(
+                              color: Theme.of(themeContext)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontSize: (bylineStyle?.fontSize ?? 12) *
+                                  heroScale *
+                                  1.08,
+                            ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
-                  SizedBox(height: 2 * heroScale),
-                  Text(
-                    tr('byX', args: [app?.author ?? tr('unknown')]),
-                    style: bylineStyle?.copyWith(
-                          color: Theme.of(themeContext)
-                              .colorScheme
-                              .onSurfaceVariant,
-                          fontSize:
-                              (bylineStyle?.fontSize ?? 12) * heroScale * 1.08,
-                        ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1409,38 +1502,40 @@ class _AppPageState extends State<AppPage> {
       final iconWidget = FutureBuilder(
         future: appsProvider.updateAppIcon(app?.app.id, ignoreCache: true),
         builder: (ctx, val) {
+          late final Widget inner;
           if (app?.icon != null) {
-            return GestureDetector(
-              onTap: app == null ? null : () => pm.openApp(app.app.id),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(small ? 12 : 16),
-                child: Image.memory(
-                  app!.icon!,
-                  height: small ? 70 : heroIconSize,
-                  width: small ? 70 : heroIconSize,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
+            inner = ClipRRect(
+              borderRadius: BorderRadius.circular(small ? 12 : 16),
+              child: Image.memory(
+                app!.icon!,
+                height: small ? 70 : heroIconSize,
+                width: small ? 70 : heroIconSize,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
+            );
+          } else if (small) {
+            inner = const SizedBox(height: 70, width: 70);
+          } else {
+            inner = Container(
+              height: heroIconSize,
+              width: heroIconSize,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    dialogColumnTheme.colorScheme.primary,
+                    dialogColumnTheme.colorScheme.primary.withAlpha(200),
+                  ],
                 ),
               ),
             );
           }
-          if (small) {
-            return SizedBox(height: 70, width: 70);
-          }
-          return Container(
-            height: heroIconSize,
-            width: heroIconSize,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  dialogColumnTheme.colorScheme.primary,
-                  dialogColumnTheme.colorScheme.primary.withAlpha(200),
-                ],
-              ),
-            ),
+          return GestureDetector(
+            onTap: app == null ? null : _showAppIconSheet,
+            child: inner,
           );
         },
       );
@@ -1860,6 +1955,16 @@ class _AppPageState extends State<AppPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
+                if (app != null && app.installedInfo != null)
+                  IconButton(
+                    color: Theme.of(themeContext).colorScheme.primary,
+                    iconSize: 24,
+                    onPressed: () {
+                      pm.openApp(app.app.id);
+                    },
+                    tooltip: tr('openApp'),
+                    icon: const Icon(Icons.smartphone_outlined),
+                  ),
                 if (source != null &&
                     source.combinedAppSpecificSettingFormItems.isNotEmpty)
                   IconButton(

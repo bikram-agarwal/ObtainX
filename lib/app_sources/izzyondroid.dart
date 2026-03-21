@@ -47,7 +47,7 @@ class IzzyOnDroid extends AppSource {
     Map<String, dynamic> additionalSettings,
   ) async {
     String? appId = await tryInferringAppId(standardUrl);
-    return fd.getAPKUrlsFromFDroidPackagesAPIResponse(
+    return await fd.getAPKUrlsFromFDroidPackagesAPIResponse(
       await sourceRequest(
         'https://apt.izzysoft.de/fdroid/api/v1/packages/$appId',
         additionalSettings,
