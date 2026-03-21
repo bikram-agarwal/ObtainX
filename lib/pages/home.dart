@@ -319,11 +319,16 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // Only the app-count and loading flag are needed here; using select() avoids
-    // rebuilding the whole home scaffold on every download-progress notification.
-    final (int appsCount, bool isLoading) =
-        context.select<AppsProvider, (int, bool)>(
-      (p) => (p.apps.length, p.loadingApps),
+    // Only the app-count, loading flag, and update count are needed here;
+    // using select() avoids rebuilding the home scaffold on every
+    // download-progress notification.
+    final (int appsCount, bool isLoading, int updateCount) =
+        context.select<AppsProvider, (int, bool, int)>(
+      (p) => (
+        p.apps.length,
+        p.loadingApps,
+        p.findExistingUpdates(installedOnly: true).length,
+      ),
     );
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
 
@@ -369,9 +374,18 @@ class _HomePageState extends State<HomePage> {
         ),
         bottomNavigationBar: NavigationBar(
           destinations: pages
+              .asMap()
+              .entries
               .map(
-                (e) =>
-                    NavigationDestination(icon: Icon(e.icon), label: e.title),
+                (entry) => NavigationDestination(
+                  icon: entry.key == 0 && updateCount > 0
+                      ? Badge(
+                          label: Text(updateCount.toString()),
+                          child: Icon(entry.value.icon),
+                        )
+                      : Icon(entry.value.icon),
+                  label: entry.value.title,
+                ),
               )
               .toList(),
           onDestinationSelected: (int index) async {

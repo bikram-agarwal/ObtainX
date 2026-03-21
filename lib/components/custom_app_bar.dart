@@ -5,10 +5,15 @@ class CustomAppBar extends StatefulWidget {
     super.key,
     required this.title,
     this.actions,
+    this.bottom,
   });
 
   final String title;
   final List<Widget>? actions;
+
+  /// Optional widget pinned below the flexible title (e.g. a search field).
+  /// Pass a [PreferredSizeWidget] such as [PreferredSize].
+  final PreferredSizeWidget? bottom;
 
   @override
   State<CustomAppBar> createState() => _CustomAppBarState();
@@ -22,6 +27,7 @@ class _CustomAppBarState extends State<CustomAppBar> {
       automaticallyImplyLeading: false,
       actions: widget.actions,
       expandedHeight: 100,
+      bottom: widget.bottom,
       flexibleSpace: FlexibleSpaceBar(
         titlePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         title: Text(

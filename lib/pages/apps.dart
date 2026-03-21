@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:animations/animations.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
@@ -105,6 +106,22 @@ class _AppIconWidget extends StatelessWidget {
 
 /// A single row in the apps list.
 ///
+/// A [PageRouteBuilder] with a horizontal [SharedAxisTransition] so that
+/// pushing [AppPage] matches the feel of the bottom-tab page-switcher.
+PageRouteBuilder<T> _sharedAxisRoute<T>(WidgetBuilder builder) =>
+    PageRouteBuilder<T>(
+      pageBuilder: (context, _, _) => builder(context),
+      transitionsBuilder: (_, animation, secondaryAnimation, child) =>
+          SharedAxisTransition(
+            animation: animation,
+            secondaryAnimation: secondaryAnimation,
+            transitionType: SharedAxisTransitionType.horizontal,
+            child: child,
+          ),
+      transitionDuration: const Duration(milliseconds: 300),
+      reverseTransitionDuration: const Duration(milliseconds: 300),
+    );
+
 /// Subscribes directly to [AppsProvider] for [AppInMemory.downloadProgress]
 /// so download-progress ticks only rebuild the one row that is downloading,
 /// not the entire page.  All other per-row data is received from the parent
@@ -338,6 +355,7 @@ class _SwipeableListItem extends StatefulWidget {
     required this.hasUpdate,
     required this.isPinned,
     required this.areDownloadsRunning,
+    required this.keepAlive,
     required this.child,
   });
 
@@ -345,17 +363,30 @@ class _SwipeableListItem extends StatefulWidget {
   final bool hasUpdate;
   final bool isPinned;
   final bool areDownloadsRunning;
+  final bool keepAlive;
   final Widget child;
 
   @override
   State<_SwipeableListItem> createState() => _SwipeableListItemState();
 }
 
-class _SwipeableListItemState extends State<_SwipeableListItem> {
+class _SwipeableListItemState extends State<_SwipeableListItem>
+    with AutomaticKeepAliveClientMixin {
   double _dragOffset = 0;
 
   @override
+  bool get wantKeepAlive => widget.keepAlive;
+
+  @override
+  void didUpdateWidget(_SwipeableListItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.keepAlive != widget.keepAlive) updateKeepAlive();
+  }
+
+  @override
+  @override
   Widget build(BuildContext context) {
+    super.build(context); // required by AutomaticKeepAliveClientMixin
     const swipeThreshold = 80.0;
     const maxDrag = 120.0;
 
@@ -1059,15 +1090,32 @@ class AppsPageState extends State<AppsPage> {
   // its child tiles are no longer built, saving widget-tree work on rebuilds.
   final Set<String> _collapsedGroups = {};
 
+  // ── Hero keep-alive ───────────────────────────────────────────────────────
+  // While AppPage is open for a given app, its list row must stay built so
+  // the Hero destination exists when the user swipes back. This id is set
+  // when Navigator.push fires and cleared when the route pops.
+  String? _heroKeepaliveAppId;
+
+  // ── Inline search ─────────────────────────────────────────────────────────
+  late final TextEditingController _searchController;
+
   @override
   void initState() {
     super.initState();
     scrollController = ScrollController();
+    _searchController = TextEditingController();
+    _searchController.addListener(() {
+      // Live-update the name filter on every keystroke.
+      if (_searchController.text != filter.nameFilter) {
+        setState(() => filter.nameFilter = _searchController.text);
+      }
+    });
   }
 
   @override
   void dispose() {
     scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -1455,8 +1503,8 @@ class AppsPageState extends State<AppsPage> {
         onLongPress: () {
           Navigator.push(
             context,
-            MaterialPageRoute(
-              builder: (context) => AppPage(
+            _sharedAxisRoute(
+              (_) => AppPage(
                 appId: rowAppId,
                 showOppositeOfPreferredView: true,
               ),
@@ -1482,6 +1530,7 @@ class AppsPageState extends State<AppsPage> {
         hasUpdate: hasUpdate,
         isPinned: app.app.pinned,
         areDownloadsRunning: downloadsRunning,
+        keepAlive: _heroKeepaliveAppId == appId,
         child: _AppListItem(
           appId: appId,
           isSelected: selectedAppIds.contains(appId),
@@ -1489,12 +1538,15 @@ class AppsPageState extends State<AppsPage> {
           iconWidget: getAppIcon(index),
           onTap: selectedAppIds.isNotEmpty
               ? () => toggleAppSelected(app.app)
-              : () => Navigator.push(
+              : () {
+                  setState(() => _heroKeepaliveAppId = appId);
+                  Navigator.push(
                     context,
-                    MaterialPageRoute(
-                      builder: (_) => AppPage(appId: appId),
-                    ),
-                  ),
+                    _sharedAxisRoute((_) => AppPage(appId: appId)),
+                  ).then((_) {
+                    if (mounted) setState(() => _heroKeepaliveAppId = null);
+                  });
+                },
           onLongPress: () => toggleAppSelected(app.app),
           highlightTouchTargets: settingsProvider.highlightTouchTargets,
           categoryColors: settingsProvider.categories,
@@ -2154,6 +2206,10 @@ class AppsPageState extends State<AppsPage> {
       if (values != null) {
         setState(() {
           filter.setFormValuesFromMap(values);
+          // Keep the inline search field in sync with nameFilter.
+          if (_searchController.text != filter.nameFilter) {
+            _searchController.text = filter.nameFilter;
+          }
         });
       }
     }
@@ -2291,6 +2347,7 @@ class AppsPageState extends State<AppsPage> {
                     : () {
                         setState(() {
                           filter = AppsFilter();
+                          _searchController.clear();
                         });
                       },
                 icon: Icon(
@@ -2405,7 +2462,44 @@ class AppsPageState extends State<AppsPage> {
                     controller: scrollController,
                     cacheExtent: 500,
                     slivers: <Widget>[
-                      CustomAppBar(title: tr('appsString')),
+                      CustomAppBar(
+                        title: tr('appsString'),
+                        bottom: PreferredSize(
+                          preferredSize: const Size.fromHeight(48),
+                          child: Padding(
+                            padding:
+                                const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                            child: TextField(
+                              controller: _searchController,
+                              decoration: InputDecoration(
+                                hintText: tr('search'),
+                                prefixIcon: const Icon(
+                                  Icons.search,
+                                  size: 20,
+                                ),
+                                suffixIcon: _searchController.text.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(
+                                          Icons.close,
+                                          size: 20,
+                                        ),
+                                        onPressed:
+                                            _searchController.clear,
+                                      )
+                                    : null,
+                                isDense: true,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                                contentPadding:
+                                    const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                       ...getLoadingWidgets(),
                       getDisplayedList(),
                     ],
@@ -2450,9 +2544,7 @@ class AppsPageState extends State<AppsPage> {
 
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (BuildContext context) => AppPage(appId: app.app.id),
-      ),
+      _sharedAxisRoute((_) => AppPage(appId: app.app.id)),
     );
   }
 }
