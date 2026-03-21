@@ -1547,7 +1547,7 @@ class AppsPageState extends State<AppsPage> {
                       urls = urls.substring(0, urls.length - 1);
                       Share.share(
                         urls,
-                        subject: 'Obtainium - ${tr('appsString')}',
+                        subject: 'ObtainX - ${tr('appsString')}',
                       );
                       Navigator.of(context).pop();
                     },
@@ -1568,7 +1568,7 @@ class AppsPageState extends State<AppsPage> {
                             }
                             Share.share(
                               urls,
-                              subject: 'Obtainium - ${tr('appsString')}',
+                              subject: 'ObtainX - ${tr('appsString')}',
                             );
                           },
                     child: Text(

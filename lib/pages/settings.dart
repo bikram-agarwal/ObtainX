@@ -120,7 +120,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool showIntervalLabel = true;
   final Map<ColorSwatch<Object>, String> colorsNameMap =
       <ColorSwatch<Object>, String>{
-        ColorTools.createPrimarySwatch(obtainiumThemeColor): 'Obtainium',
+        ColorTools.createPrimarySwatch(obtainiumThemeColor): 'ObtainX',
       };
 
   void initUpdateIntervalInterpolator() {
