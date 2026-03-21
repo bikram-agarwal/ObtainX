@@ -19,6 +19,79 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+/// Rounded section container matching the app detail page card style.
+class SettingsSectionCard extends StatelessWidget {
+  const SettingsSectionCard({
+    super.key,
+    required this.title,
+    required this.children,
+  });
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colorScheme = Theme.of(context).colorScheme;
+    const double sectionDeepenDark = 0.055;
+    const double sectionDeepenLight = 0.045;
+    final double sectionDeepen = isDark ? sectionDeepenDark : sectionDeepenLight;
+    final Color defaultSectionFill = isDark
+        ? colorScheme.surfaceContainerHighest
+        : colorScheme.surfaceContainer;
+    final Color fillColor =
+        Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
+            defaultSectionFill;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: fillColor,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: colorScheme.outlineVariant,
+          width: 1,
+        ),
+        boxShadow: [
+          if (isDark)
+            BoxShadow(
+              color: colorScheme.shadow.withAlpha(180),
+              blurRadius: 16,
+              spreadRadius: 0,
+              offset: const Offset(0, 4),
+            )
+          else
+            BoxShadow(
+              color: colorScheme.shadow.withAlpha(40),
+              blurRadius: 12,
+              offset: const Offset(0, 2),
+            ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -278,21 +351,15 @@ class _SettingsPageState extends State<SettingsPage> {
           CustomAppBar(title: tr('settings')),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(0, 16, 0, 16),
               child: settingsProvider.prefs == null
                   ? const SizedBox()
                   : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          tr('updates'),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        //intervalDropdown,
-                        height16,
+                        SettingsSectionCard(
+                          title: tr('updates'),
+                          children: [
                         if (showIntervalLabel)
                           SizedBox(
                             child: Text(
@@ -637,24 +704,17 @@ class _SettingsPageState extends State<SettingsPage> {
                           _LegacyInstallerSelector(
                             settingsProvider: settingsProvider,
                           ),
-                        height32,
-                        Text(
-                          tr('sourceSpecific'),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
+                          ],
                         ),
-                        ...sourceSpecificFields,
-                        height32,
-                        Text(
-                          tr('appearance'),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
+                        SettingsSectionCard(
+                          title: tr('sourceSpecific'),
+                          children: [
+                            ...sourceSpecificFields,
+                          ],
                         ),
-                        height8,
+                        SettingsSectionCard(
+                          title: tr('appearance'),
+                          children: [
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -800,17 +860,15 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ],
                         ),
-                        height32,
-                        Text(
-                          tr('categories'),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
+                          ],
                         ),
-                        height16,
-                        const CategoryEditorSelector(
-                          showLabelWhenNotEmpty: false,
+                        SettingsSectionCard(
+                          title: tr('categories'),
+                          children: [
+                            const CategoryEditorSelector(
+                              showLabelWhenNotEmpty: false,
+                            ),
+                          ],
                         ),
                       ],
                     ),

@@ -1658,19 +1658,6 @@ class _AppPageState extends State<AppPage> {
             actionTheme.colorScheme.onSurface.withAlpha(97),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
-      final ButtonStyle expressiveTonal = FilledButton.styleFrom(
-        minimumSize: expressiveMinimumSize,
-        maximumSize: expressiveMaximumSize,
-        padding: expressivePadding,
-        shape: expressiveShape,
-        backgroundColor: actionTheme.colorScheme.secondaryContainer,
-        foregroundColor: actionTheme.colorScheme.onSecondaryContainer,
-        disabledBackgroundColor:
-            actionTheme.colorScheme.onSurface.withAlpha(31),
-        disabledForegroundColor:
-            actionTheme.colorScheme.onSurface.withAlpha(97),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      );
 
       final bool actionBlocked = updating || areDownloadsRunning;
       final installedVersion = app?.app.installedVersion;
@@ -1743,8 +1730,8 @@ class _AppPageState extends State<AppPage> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: FilledButton.tonal(
-                  style: expressiveTonal,
+                child: FilledButton(
+                  style: expressiveFilled,
                   onPressed: actionBlocked ? null : runInstallOrMarkUpdated,
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
@@ -1788,8 +1775,8 @@ class _AppPageState extends State<AppPage> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: FilledButton.tonal(
-                  style: expressiveTonal,
+                child: FilledButton(
+                  style: expressiveFilled,
                   onPressed:
                       markUpdatedActionBlocked ? null : showMarkUpdatedDialog,
                   child: FittedBox(
