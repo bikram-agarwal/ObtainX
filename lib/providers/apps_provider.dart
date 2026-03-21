@@ -616,6 +616,10 @@ class AppsProvider with ChangeNotifier {
   bool gettingUpdates = false;
   LogsProvider logs = LogsProvider();
 
+  // Debounce timer for download-progress notifications so widgets that watch
+  // the whole provider (e.g. AppPage) don't get hammered on every byte chunk.
+  Timer? _progressNotifyTimer;
+
   // Variables to keep track of the app foreground status (installs can't run in the background)
   bool isForeground = true;
   late Stream<FGBGType>? foregroundStream;
@@ -762,7 +766,13 @@ class AppsProvider with ChangeNotifier {
           int? prog = progress?.ceil();
           if (apps[app.id] != null) {
             apps[app.id]!.downloadProgress = progress;
-            notifyListeners();
+            // Throttle UI notifications to ~250 ms so AppPage's progress
+            // indicator stays smooth without flooding the widget tree.
+            _progressNotifyTimer?.cancel();
+            _progressNotifyTimer = Timer(
+              const Duration(milliseconds: 250),
+              notifyListeners,
+            );
           }
           notif = DownloadNotification(app.finalName, prog ?? 100);
           if (prog != null && prevProg != prog) {

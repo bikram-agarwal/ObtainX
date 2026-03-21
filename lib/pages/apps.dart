@@ -23,6 +23,30 @@ import 'package:markdown/markdown.dart' as md;
 
 const double _appsListGroupCardRadius = 20;
 
+/// Fingerprint so [AppsPage] rebuilds only when app-list data changes,
+/// not on every [AppsProvider.notifyListeners] (e.g. download-progress ticks).
+int _appsPageAppsRebuildToken(AppsProvider provider) {
+  return Object.hashAll([
+    provider.loadingApps,
+    provider.areDownloadsRunning(),
+    ...provider.apps.values.map(
+      (a) => Object.hashAll([
+        a.app.id,
+        a.app.name,
+        a.app.author,
+        a.app.latestVersion,
+        a.app.installedVersion,
+        a.app.lastUpdateCheck,
+        a.app.pinned,
+        a.app.categories.length,
+        Object.hashAll(a.app.categories),
+        identityHashCode(a.icon),
+        a.icon?.length,
+      ]),
+    ),
+  ]);
+}
+
 class AppsPage extends StatefulWidget {
   const AppsPage({super.key});
 
@@ -649,7 +673,10 @@ class AppsPageState extends State<AppsPage> {
 
   @override
   Widget build(BuildContext context) {
-    var appsProvider = context.watch<AppsProvider>();
+    // Use select() so this page only rebuilds when app-list data actually
+    // changes, not on every download-progress tick from AppsProvider.
+    context.select<AppsProvider, int>(_appsPageAppsRebuildToken);
+    var appsProvider = context.read<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
     // Live references: avoid deep-copying every app on each notify (very costly
     // while [AppPage] is open and when returning to this tab).

@@ -311,19 +311,25 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    AppsProvider appsProvider = context.watch<AppsProvider>();
+    // Only the app-count and loading flag are needed here; using select() avoids
+    // rebuilding the whole home scaffold on every download-progress notification.
+    final (int appsCount, bool isLoading) =
+        context.select<AppsProvider, (int, bool)>(
+      (p) => (p.apps.length, p.loadingApps),
+    );
+    AppsProvider appsProvider = context.read<AppsProvider>();
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
 
     if (!prevIsLoading &&
         prevAppCount >= 0 &&
-        appsProvider.apps.length > prevAppCount &&
+        appsCount > prevAppCount &&
         selectedIndexHistory.isNotEmpty &&
         selectedIndexHistory.last == 1 &&
         !isLinkActivity) {
       switchToPage(0);
     }
-    prevAppCount = appsProvider.apps.length;
-    prevIsLoading = appsProvider.loadingApps;
+    prevAppCount = appsCount;
+    prevIsLoading = isLoading;
 
     return WillPopScope(
       child: Scaffold(
