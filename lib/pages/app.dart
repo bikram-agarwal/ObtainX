@@ -232,6 +232,7 @@ class _AppPageState extends State<AppPage> {
   late final WebViewController _webViewController;
   bool _webViewUrlLoaded = false;
   bool _scheduledDetailPageRefresh = false;
+  bool _requestedMissingIconLoad = false;
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
 
@@ -250,8 +251,40 @@ class _AppPageState extends State<AppPage> {
       _iconSchemeFailedCacheKey = null;
       _webViewUrlLoaded = false;
       _scheduledDetailPageRefresh = false;
+      _requestedMissingIconLoad = false;
       _lastWebViewSurfaceColorApplied = null;
     }
+  }
+
+  /// Hero / dialog icons must not use [FutureBuilder] + [updateAppIcon] in build:
+  /// a new [Future] every rebuild restarts the work, and [ignoreCache] forces
+  /// expensive installed-app icon reloads and [notifyListeners] in a loop.
+  Widget _tappableAppIconDisplay({
+    required BuildContext themeContext,
+    required AppInMemory? appInMemory,
+    required double size,
+    required double borderRadius,
+    required Widget emptyPlaceholder,
+  }) {
+    if (appInMemory?.icon != null) {
+      return GestureDetector(
+        onTap: appInMemory == null ? null : _showAppIconSheet,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(borderRadius),
+          child: Image.memory(
+            appInMemory!.icon!,
+            height: size,
+            width: size,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
+        ),
+      );
+    }
+    return GestureDetector(
+      onTap: appInMemory == null ? null : _showAppIconSheet,
+      child: emptyPlaceholder,
+    );
   }
 
   Future<void> _showAppIconSheet() async {
@@ -530,6 +563,16 @@ class _AppPageState extends State<AppPage> {
 
     var sourceProvider = SourceProvider();
     AppInMemory? app = appsProvider.apps[widget.appId];
+    if (!_requestedMissingIconLoad &&
+        app != null &&
+        app.icon == null) {
+      _requestedMissingIconLoad = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Provider.of<AppsProvider>(context, listen: false)
+            .updateAppIcon(widget.appId, ignoreCache: false);
+      });
+    }
     var source = app != null
         ? sourceProvider.getSource(
             app.app.url,
@@ -1577,43 +1620,26 @@ class _AppPageState extends State<AppPage> {
       final scaledIconSize = heroIconSize * heroScale;
       final titleStyle = Theme.of(themeContext).textTheme.titleLarge;
       final bylineStyle = Theme.of(themeContext).textTheme.bodySmall;
-      final iconWidget = FutureBuilder(
-        future: appsProvider.updateAppIcon(app?.app.id, ignoreCache: true),
-        builder: (ctx, val) {
-          late final Widget inner;
-          if (app?.icon != null) {
-            inner = ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image.memory(
-                app!.icon!,
-                height: scaledIconSize,
-                width: scaledIconSize,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              ),
-            );
-          } else {
-            inner = Container(
-              height: scaledIconSize,
-              width: scaledIconSize,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Theme.of(themeContext).colorScheme.primary,
-                    Theme.of(themeContext).colorScheme.primary.withAlpha(200),
-                  ],
-                ),
-              ),
-            );
-          }
-          return GestureDetector(
-            onTap: app == null ? null : _showAppIconSheet,
-            child: inner,
-          );
-        },
+      final iconWidget = _tappableAppIconDisplay(
+        themeContext: themeContext,
+        appInMemory: app,
+        size: scaledIconSize,
+        borderRadius: 16,
+        emptyPlaceholder: Container(
+          height: scaledIconSize,
+          width: scaledIconSize,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Theme.of(themeContext).colorScheme.primary,
+                Theme.of(themeContext).colorScheme.primary.withAlpha(200),
+              ],
+            ),
+          ),
+        ),
       );
       return Padding(
         padding: const EdgeInsets.only(right: 16, bottom: 8),
@@ -1668,45 +1694,30 @@ class _AppPageState extends State<AppPage> {
     getFullInfoColumn(BuildContext themeContext, {bool small = false}) {
       final ThemeData dialogColumnTheme = Theme.of(themeContext);
       const heroIconSize = 48.0;
-      final iconWidget = FutureBuilder(
-        future: appsProvider.updateAppIcon(app?.app.id, ignoreCache: true),
-        builder: (ctx, val) {
-          late final Widget inner;
-          if (app?.icon != null) {
-            inner = ClipRRect(
-              borderRadius: BorderRadius.circular(small ? 12 : 16),
-              child: Image.memory(
-                app!.icon!,
-                height: small ? 70 : heroIconSize,
-                width: small ? 70 : heroIconSize,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              ),
-            );
-          } else if (small) {
-            inner = const SizedBox(height: 70, width: 70);
-          } else {
-            inner = Container(
-              height: heroIconSize,
-              width: heroIconSize,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    dialogColumnTheme.colorScheme.primary,
-                    dialogColumnTheme.colorScheme.primary.withAlpha(200),
-                  ],
+      final double dialogIconSize = small ? 70 : heroIconSize;
+      final double dialogIconRadius = small ? 12 : 16;
+      final iconWidget = _tappableAppIconDisplay(
+        themeContext: themeContext,
+        appInMemory: app,
+        size: dialogIconSize,
+        borderRadius: dialogIconRadius,
+        emptyPlaceholder: small
+            ? const SizedBox(height: 70, width: 70)
+            : Container(
+                height: heroIconSize,
+                width: heroIconSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      dialogColumnTheme.colorScheme.primary,
+                      dialogColumnTheme.colorScheme.primary.withAlpha(200),
+                    ],
+                  ),
                 ),
               ),
-            );
-          }
-          return GestureDetector(
-            onTap: app == null ? null : _showAppIconSheet,
-            child: inner,
-          );
-        },
       );
 
       if (small) {
