@@ -9,8 +9,8 @@ import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
-import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/installer_provider.dart' as installer;
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -18,79 +18,6 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:url_launcher/url_launcher_string.dart';
-
-/// Rounded section container matching the app detail page card style.
-class SettingsSectionCard extends StatelessWidget {
-  const SettingsSectionCard({
-    super.key,
-    required this.title,
-    required this.children,
-  });
-
-  final String title;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final colorScheme = Theme.of(context).colorScheme;
-    const double sectionDeepenDark = 0.055;
-    const double sectionDeepenLight = 0.045;
-    final double sectionDeepen = isDark ? sectionDeepenDark : sectionDeepenLight;
-    final Color defaultSectionFill = isDark
-        ? colorScheme.surfaceContainerHighest
-        : colorScheme.surfaceContainer;
-    final Color fillColor =
-        Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
-            defaultSectionFill;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: fillColor,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: colorScheme.outlineVariant,
-          width: 1,
-        ),
-        boxShadow: [
-          if (isDark)
-            BoxShadow(
-              color: colorScheme.shadow.withAlpha(180),
-              blurRadius: 16,
-              spreadRadius: 0,
-              offset: const Offset(0, 4),
-            )
-          else
-            BoxShadow(
-              color: colorScheme.shadow.withAlpha(40),
-              blurRadius: 12,
-              offset: const Offset(0, 2),
-            ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-            ),
-            const SizedBox(height: 12),
-            ...children,
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -120,7 +47,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool showIntervalLabel = true;
   final Map<ColorSwatch<Object>, String> colorsNameMap =
       <ColorSwatch<Object>, String>{
-        ColorTools.createPrimarySwatch(obtainiumThemeColor): 'ObtainX',
+        ColorTools.createPrimarySwatch(obtainiumThemeColor): 'Obtainium',
       };
 
   void initUpdateIntervalInterpolator() {
@@ -176,6 +103,18 @@ class _SettingsPageState extends State<SettingsPage> {
     if (settingsProvider.prefs == null) settingsProvider.initializeSettings();
     initUpdateIntervalInterpolator();
     processIntervalSliderValue(settingsProvider.updateIntervalSliderVal);
+
+    var followSystemThemeExplanation = FutureBuilder(
+      builder: (ctx, val) {
+        return ((val.data?.version.sdkInt ?? 30) < 29)
+            ? Text(
+                tr('followSystemThemeExplanation'),
+                style: Theme.of(context).textTheme.labelSmall,
+              )
+            : const SizedBox.shrink();
+      },
+      future: DeviceInfoPlugin().androidInfo,
+    );
 
     Future<bool> colorPickerDialog() async {
       return ColorPicker(
@@ -262,6 +201,76 @@ class _SettingsPageState extends State<SettingsPage> {
           }
         },
       ),
+    );
+
+    var useMaterialThemeSwitch = FutureBuilder(
+      builder: (ctx, val) {
+        return ((val.data?.version.sdkInt ?? 0) >= 31)
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(child: Text(tr('useMaterialYou'))),
+                  Switch(
+                    value: settingsProvider.useMaterialYou,
+                    onChanged: (value) {
+                      settingsProvider.useMaterialYou = value;
+                    },
+                  ),
+                ],
+              )
+            : const SizedBox.shrink();
+      },
+      future: DeviceInfoPlugin().androidInfo,
+    );
+
+    var sortDropdown = DropdownButtonFormField(
+      isExpanded: true,
+      decoration: InputDecoration(labelText: tr('appSortBy')),
+      value: settingsProvider.sortColumn,
+      items: [
+        DropdownMenuItem(
+          value: SortColumnSettings.authorName,
+          child: Text(tr('authorName')),
+        ),
+        DropdownMenuItem(
+          value: SortColumnSettings.nameAuthor,
+          child: Text(tr('nameAuthor')),
+        ),
+        DropdownMenuItem(
+          value: SortColumnSettings.added,
+          child: Text(tr('asAdded')),
+        ),
+        DropdownMenuItem(
+          value: SortColumnSettings.releaseDate,
+          child: Text(tr('releaseDate')),
+        ),
+      ],
+      onChanged: (value) {
+        if (value != null) {
+          settingsProvider.sortColumn = value;
+        }
+      },
+    );
+
+    var orderDropdown = DropdownButtonFormField(
+      isExpanded: true,
+      decoration: InputDecoration(labelText: tr('appSortOrder')),
+      value: settingsProvider.sortOrder,
+      items: [
+        DropdownMenuItem(
+          value: SortOrderSettings.ascending,
+          child: Text(tr('ascending')),
+        ),
+        DropdownMenuItem(
+          value: SortOrderSettings.descending,
+          child: Text(tr('descending')),
+        ),
+      ],
+      onChanged: (value) {
+        if (value != null) {
+          settingsProvider.sortOrder = value;
+        }
+      },
     );
 
     var localeDropdown = DropdownButtonFormField(
@@ -351,15 +360,21 @@ class _SettingsPageState extends State<SettingsPage> {
           CustomAppBar(title: tr('settings')),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(0, 16, 0, 16),
+              padding: const EdgeInsets.all(16),
               child: settingsProvider.prefs == null
                   ? const SizedBox()
                   : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        SettingsSectionCard(
-                          title: tr('updates'),
-                          children: [
+                        Text(
+                          tr('updates'),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        //intervalDropdown,
+                        height16,
                         if (showIntervalLabel)
                           SizedBox(
                             child: Text(
@@ -634,14 +649,14 @@ class _SettingsPageState extends State<SettingsPage> {
                             onSelectionChanged: (selected) {
                               final mode = selected.first;
                               if (mode == 'shizuku') {
-                                ShizukuApkInstaller.checkPermission().then((
+                                ShizukuApkInstaller().checkPermission().then((
                                   resCode,
                                 ) {
                                   if (resCode!.startsWith('granted')) {
                                     settingsProvider.installerMode = 'shizuku';
                                   } else {
                                     switch (resCode) {
-                                      case 'binder_not_found':
+                                      case 'services_not_found':
                                         showError(
                                           ObtainiumError(
                                             tr('shizukuBinderNotFound'),
@@ -704,51 +719,100 @@ class _SettingsPageState extends State<SettingsPage> {
                           _LegacyInstallerSelector(
                             settingsProvider: settingsProvider,
                           ),
+                        height32,
+                        Text(
+                          tr('sourceSpecific'),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        ...sourceSpecificFields,
+                        height32,
+                        Text(
+                          tr('appearance'),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        DropdownButtonFormField(
+                          decoration: InputDecoration(labelText: tr('theme')),
+                          value: settingsProvider.theme,
+                          items: [
+                            DropdownMenuItem(
+                              value: ThemeSettings.system,
+                              child: Text(tr('followSystem')),
+                            ),
+                            DropdownMenuItem(
+                              value: ThemeSettings.light,
+                              child: Text(tr('light')),
+                            ),
+                            DropdownMenuItem(
+                              value: ThemeSettings.dark,
+                              child: Text(tr('dark')),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              settingsProvider.theme = value;
+                            }
+                          },
+                        ),
+                        height8,
+                        if (settingsProvider.theme == ThemeSettings.system)
+                          followSystemThemeExplanation,
+                        height16,
+                        if (settingsProvider.theme != ThemeSettings.light)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Flexible(child: Text(tr('useBlackTheme'))),
+                              Switch(
+                                value: settingsProvider.useBlackTheme,
+                                onChanged: (value) {
+                                  settingsProvider.useBlackTheme = value;
+                                },
+                              ),
+                            ],
+                          ),
+                        height8,
+                        useMaterialThemeSwitch,
+                        if (!settingsProvider.useMaterialYou) colorPicker,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: sortDropdown),
+                            const SizedBox(width: 16),
+                            Expanded(child: orderDropdown),
                           ],
                         ),
-                        SettingsSectionCard(
-                          title: tr('sourceSpecific'),
-                          children: [
-                            ...sourceSpecificFields,
-                          ],
-                        ),
-                        SettingsSectionCard(
-                          title: tr('appearance'),
-                          children: [
-                        if (!settingsProvider.useMaterialYou) ...[
-                          colorPicker,
-                          height16,
-                        ],
+                        height16,
                         localeDropdown,
                         FutureBuilder(
                           builder: (ctx, val) {
-                            return (val.data?.version.sdkInt ?? 0) >= 34
+                            return (val.data?.version.sdkInt ?? 0) >= 29
                                 ? Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       height16,
                                       Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                         children: [
                                           Flexible(
                                             child: Text(tr('useSystemFont')),
                                           ),
                                           Switch(
-                                            value:
-                                                settingsProvider.useSystemFont,
+                                            value: settingsProvider.useSystemFont,
                                             onChanged: (useSystemFont) {
                                               if (useSystemFont) {
                                                 NativeFeatures.loadSystemFont()
                                                     .then((val) {
-                                                      settingsProvider
-                                                              .useSystemFont =
-                                                          true;
+                                                      settingsProvider.useSystemFont = true;
                                                     });
                                               } else {
-                                                settingsProvider.useSystemFont =
-                                                    false;
+                                                settingsProvider.useSystemFont = false;
                                               }
                                             },
                                           ),
@@ -769,6 +833,47 @@ class _SettingsPageState extends State<SettingsPage> {
                               value: settingsProvider.showAppWebpage,
                               onChanged: (value) {
                                 settingsProvider.showAppWebpage = value;
+                              },
+                            ),
+                          ],
+                        ),
+                        height16,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(child: Text(tr('pinUpdates'))),
+                            Switch(
+                              value: settingsProvider.pinUpdates,
+                              onChanged: (value) {
+                                settingsProvider.pinUpdates = value;
+                              },
+                            ),
+                          ],
+                        ),
+                        height16,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: Text(tr('moveNonInstalledAppsToBottom')),
+                            ),
+                            Switch(
+                              value: settingsProvider.buryNonInstalled,
+                              onChanged: (value) {
+                                settingsProvider.buryNonInstalled = value;
+                              },
+                            ),
+                          ],
+                        ),
+                        height16,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(child: Text(tr('groupByCategory'))),
+                            Switch(
+                              value: settingsProvider.groupByCategory,
+                              onChanged: (value) {
+                                settingsProvider.groupByCategory = value;
                               },
                             ),
                           ],
@@ -845,15 +950,17 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ],
                         ),
-                          ],
+                        height32,
+                        Text(
+                          tr('categories'),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
                         ),
-                        SettingsSectionCard(
-                          title: tr('categories'),
-                          children: [
-                            const CategoryEditorSelector(
-                              showLabelWhenNotEmpty: false,
-                            ),
-                          ],
+                        height16,
+                        const CategoryEditorSelector(
+                          showLabelWhenNotEmpty: false,
                         ),
                       ],
                     ),
@@ -867,7 +974,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     IconButton(
-                      color: Theme.of(context).colorScheme.primary,
                       onPressed: () {
                         launchUrlString(
                           settingsProvider.sourceUrl,
@@ -878,7 +984,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       tooltip: tr('appSource'),
                     ),
                     IconButton(
-                      color: Theme.of(context).colorScheme.primary,
                       onPressed: () {
                         launchUrlString(
                           'https://wiki.obtainium.imranr.dev/',
@@ -889,7 +994,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       tooltip: tr('wiki'),
                     ),
                     IconButton(
-                      color: Theme.of(context).colorScheme.primary,
                       onPressed: () {
                         launchUrlString(
                           'https://apps.obtainium.imranr.dev/',
@@ -900,7 +1004,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       tooltip: tr('crowdsourcedConfigsLabel'),
                     ),
                     IconButton(
-                      color: Theme.of(context).colorScheme.primary,
                       onPressed: () {
                         context.read<LogsProvider>().get().then((logs) {
                           if (logs.isEmpty) {

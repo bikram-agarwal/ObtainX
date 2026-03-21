@@ -1105,7 +1105,7 @@ class AppsProvider with ChangeNotifier {
         apkFilePath: allAPKs.join(','),
       );
     } else {
-      code = await ShizukuApkInstaller.installAPK(
+      code = await ShizukuApkInstaller().installAPK(
         file.file.uri.toString(),
         shizukuPretendToBeGooglePlay ? "com.android.vending" : "",
       );
@@ -1402,15 +1402,13 @@ class AppsProvider with ChangeNotifier {
         }
         id = downloadedFile?.appId ?? downloadedDir!.appId;
         willBeSilent = await canInstallSilently(apps[id]!.app);
-        if (settingsProvider.installerMode == 'legacy') {
-          // Legacy installer bypasses the standard permission check
-        } else if (!settingsProvider.useShizuku) {
+        if (!settingsProvider.useShizuku) {
           if (!(await settingsProvider.getInstallPermission(enforce: false))) {
             throw ObtainiumError(tr('cancelled'));
           }
         } else {
-          switch ((await ShizukuApkInstaller.checkPermission())!) {
-            case 'binder_not_found':
+          switch ((await ShizukuApkInstaller().checkPermission())!) {
+            case 'services_not_found':
               throw ObtainiumError(tr('shizukuBinderNotFound'));
             case 'old_shizuku':
               throw ObtainiumError(tr('shizukuOld'));
@@ -2366,12 +2364,8 @@ class AppsProvider with ChangeNotifier {
     List<String> appIds = apps.keys.toList();
     for (int i = 0; i < appIds.length; i++) {
       App? app = apps[appIds[i]]!.app;
-      final installedVersion = app.installedVersion;
-      final hasUpdateOrNeedsInstall = installedVersion == null ||
-          (installedVersion != app.latestVersion &&
-              !versionsEffectivelyEqual(installedVersion, app.latestVersion) &&
-              !installedVersionIsNewerOrEqual(installedVersion, app.latestVersion));
-      if (hasUpdateOrNeedsInstall && (!installedOnly || !nonInstalledOnly)) {
+      if (app.installedVersion != app.latestVersion &&
+          (!installedOnly || !nonInstalledOnly)) {
         if ((app.installedVersion == null &&
                 (nonInstalledOnly || !installedOnly) ||
             (app.installedVersion != null &&
