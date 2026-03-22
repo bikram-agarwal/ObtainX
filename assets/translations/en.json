@@ -15,7 +15,6 @@
     "includePrereleases": "Include prereleases",
     "fallbackToOlderReleases": "Fallback to older releases",
     "filterReleaseTitlesByRegEx": "Filter release titles by regular expression",
-    "enableDirectDownload": "Enable direct APK download (scans release page for variants)",
     "invalidRegEx": "Invalid regular expression",
     "noDescription": "No description",
     "cancel": "Cancel",

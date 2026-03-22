@@ -1238,12 +1238,6 @@ class SourceProvider {
       standardUrl,
       additionalSettings,
     );
-    // If the source enforces track-only by default but managed to resolve direct
-    // APK download URLs (e.g. APKMirror with enableDirectDownload), allow the
-    // download to proceed.
-    if (!trackOnlyOverride && source.enforceTrackOnly && apk.apkUrls.isNotEmpty) {
-      additionalSettings['trackOnly'] = false;
-    }
     var trackOnly = additionalSettings['trackOnly'] == true;
 
     if (source.runtimeType !=

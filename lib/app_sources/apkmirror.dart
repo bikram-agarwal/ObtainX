@@ -130,98 +130,6 @@ DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
   return null;
 }
 
-/// Known Android ABI strings to detect from APKMirror variant URLs/text.
-const _knownAndroidArchs = [
-  'arm64-v8a',
-  'armeabi-v7a',
-  'x86_64',
-  'x86',
-  'universal',
-];
-
-/// Extracts an arch label from an APKMirror variant URL slug.
-/// E.g. `.../chrome-124-arm64-v8a-android-apk-download/` → `arm64-v8a`
-String? _extractArchFromApkMirrorUrl(String url) {
-  final lower = url.toLowerCase();
-  for (final arch in _knownAndroidArchs) {
-    if (lower.contains(arch)) return arch;
-  }
-  return null;
-}
-
-/// Parses APK variant rows from an APKMirror release page.
-///
-/// Returns a list of entries where the key is a display label containing arch
-/// info (used by [filterApksByArch] for auto-filtering) and the value is the
-/// absolute URL of the variant detail/download page.
-List<MapEntry<String, String>> _parseApkMirrorVariants(
-  String html,
-  String releasePageUrl,
-) {
-  final doc = parse(html);
-  final baseUri = Uri.tryParse(releasePageUrl);
-  final results = <MapEntry<String, String>>[];
-  final seenUrls = <String>{};
-
-  String resolveHref(String href) {
-    if (href.startsWith('http')) return href;
-    if (baseUri != null) return baseUri.resolve(href).toString();
-    return 'https://www.apkmirror.com$href';
-  }
-
-  // Strategy 1: variants table rows (class "table-row headerFont")
-  for (final row in doc.querySelectorAll('div.table-row.headerFont')) {
-    final cells = row.querySelectorAll('div.table-cell');
-    if (cells.isEmpty) continue;
-
-    // Determine type from badge span or first-cell link text
-    final badgeEl = row.querySelector('.apkm-badge');
-    final typeText =
-        (badgeEl?.text ?? cells[0].querySelector('a')?.text ?? '').trim().toUpperCase();
-    // Only include plain APK (skip XAPK, APKS, Bundle, etc.)
-    if (typeText != 'APK') continue;
-
-    // The download-page link is inside the first cell
-    final downloadLink =
-        cells[0].querySelector('a[href*="-apk-download"]') ??
-        cells[0].querySelector('a[href*="download"]');
-    if (downloadLink == null) continue;
-
-    final href = downloadLink.attributes['href'] ?? '';
-    if (href.isEmpty) continue;
-
-    final variantUrl = resolveHref(href);
-    if (!seenUrls.add(variantUrl)) continue;
-
-    final arch = cells.length > 1 ? cells[1].text.trim() : '';
-    final dpi = cells.length > 2 ? cells[2].text.trim() : '';
-
-    final parts = [arch, dpi]
-        .where((s) => s.isNotEmpty && s != '-' && s.toLowerCase() != 'nodpi')
-        .toList();
-    final displayKey = parts.isEmpty ? 'APK' : parts.join(' - ');
-
-    results.add(MapEntry(displayKey, variantUrl));
-  }
-
-  // Strategy 2: fallback – find all "-android-apk-download" links on the page
-  if (results.isEmpty) {
-    for (final a in doc.querySelectorAll('a[href*="-android-apk-download"]')) {
-      final href = a.attributes['href'] ?? '';
-      if (href.isEmpty) continue;
-
-      final variantUrl = resolveHref(href);
-      if (!seenUrls.add(variantUrl)) continue;
-
-      final arch = _extractArchFromApkMirrorUrl(variantUrl);
-      final displayKey = arch ?? 'APK';
-      results.add(MapEntry(displayKey, variantUrl));
-    }
-  }
-
-  return results;
-}
-
 
 class APKMirror extends AppSource {
   APKMirror() {
@@ -250,13 +158,6 @@ class APKMirror extends AppSource {
           ],
         ),
       ],
-      [
-        GeneratedFormSwitch(
-          'enableDirectDownload',
-          label: tr('enableDirectDownload'),
-          defaultValue: false,
-        ),
-      ],
     ];
   }
 
@@ -270,111 +171,6 @@ class APKMirror extends AppSource {
       "User-Agent":
           "ObtainX/${(await getInstalledInfo(obtainiumId))?.versionName ?? '1.0.0'}",
     };
-  }
-
-  /// Resolves a stable APKMirror variant-page URL to the actual APK CDN URL.
-  ///
-  /// The stored [assetUrl] is a variant download page (e.g. `…-apk-download/`).
-  /// We fetch that page to obtain a fresh `download.php?key=…` link, then
-  /// follow its redirect chain — carrying any cookies accumulated along the
-  /// way — until we land on the real CDN URL.  This is done at download time
-  /// so the key is never stale and cookies flow through the full chain.
-  @override
-  Future<String> assetUrlPrefetchModifier(
-    String assetUrl,
-    String standardUrl,
-    Map<String, dynamic> additionalSettings,
-  ) async {
-    if (!assetUrl.contains('apkmirror.com')) return assetUrl;
-
-    final client = createHttpClient(false);
-    final List<Cookie> cookies = [];
-    final ua =
-        "ObtainX/${(await getInstalledInfo(obtainiumId))?.versionName ?? '1.0.0'}";
-
-    Future<HttpClientResponse?> get(String url) async {
-      var uri = Uri.parse(url);
-      for (int i = 0; i < 8; i++) {
-        final req = await client.openUrl('GET', uri);
-        req.headers.set(HttpHeaders.userAgentHeader, ua);
-        req.headers.set(
-          HttpHeaders.acceptHeader,
-          'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-        );
-        for (final c in cookies) {
-          req.cookies.add(c);
-        }
-        req.followRedirects = false;
-        final res = await req.close();
-        cookies.addAll(res.cookies);
-        if (res.statusCode >= 300 && res.statusCode < 400) {
-          final loc = res.headers.value(HttpHeaders.locationHeader);
-          await res.drain<void>();
-          if (loc == null) return null;
-          uri = uri.resolve(loc);
-          continue;
-        }
-        return res;
-      }
-      return null;
-    }
-
-    try {
-      // Step 1: fetch the variant page, read its body.
-      final varRes = await get(assetUrl);
-      if (varRes == null || varRes.statusCode != 200) return assetUrl;
-      final bytes = <int>[];
-      await for (final chunk in varRes) {
-        bytes.addAll(chunk);
-      }
-      final body = String.fromCharCodes(bytes);
-
-      // Step 2: find the fresh download.php?key=… link.
-      final doc = parse(body);
-      final variantUri = Uri.tryParse(assetUrl);
-      String? dlUrl;
-      for (final a in doc.querySelectorAll('a[href]')) {
-        final href = a.attributes['href'] ?? '';
-        if (href.contains('download.php') && href.contains('key=')) {
-          dlUrl = variantUri != null
-              ? variantUri.resolve(href).toString()
-              : (href.startsWith('http')
-                  ? href
-                  : 'https://www.apkmirror.com$href');
-          break;
-        }
-      }
-      if (dlUrl == null) return assetUrl;
-
-      // Step 3: follow download.php (with accumulated cookies) to the CDN URL.
-      var cdnUri = Uri.parse(dlUrl);
-      for (int i = 0; i < 8; i++) {
-        final req = await client.openUrl('GET', cdnUri);
-        req.headers.set(HttpHeaders.userAgentHeader, ua);
-        req.headers.set(HttpHeaders.refererHeader, assetUrl);
-        for (final c in cookies) {
-          req.cookies.add(c);
-        }
-        req.followRedirects = false;
-        final res = await req.close();
-        cookies.addAll(res.cookies);
-        if (res.statusCode >= 300 && res.statusCode < 400) {
-          final loc = res.headers.value(HttpHeaders.locationHeader);
-          await res.drain<void>();
-          if (loc == null) break;
-          cdnUri = cdnUri.resolve(loc);
-          continue;
-        }
-        await res.drain<void>();
-        break;
-      }
-
-      return cdnUri.toString();
-    } catch (_) {
-      return assetUrl;
-    } finally {
-      client.close();
-    }
   }
 
   @override
@@ -523,28 +319,9 @@ class APKMirror extends AppSource {
         // Icon is optional – ignore errors.
       }
 
-      // When direct download is enabled, collect the stable variant page URLs
-      // from the release page.  The actual CDN download URL is resolved fresh
-      // at download time by assetUrlPrefetchModifier (which carries cookies
-      // through the full chain: variant page → download.php → CDN).
-      List<MapEntry<String, String>> apkUrls = [];
-      if (additionalSettings['enableDirectDownload'] == true &&
-          releasePageUrl != null) {
-        try {
-          final releaseRes =
-              await sourceRequest(releasePageUrl, additionalSettings);
-          if (releaseRes.statusCode == 200) {
-            apkUrls =
-                _parseApkMirrorVariants(releaseRes.body, releasePageUrl);
-          }
-        } catch (_) {
-          // Fall back to track-only behaviour (empty apkUrls).
-        }
-      }
-
       return APKDetails(
         version,
-        apkUrls,
+        [],
         getAppNames(standardUrl),
         releaseDate: releaseDate,
         changeLog: releasePageUrl,

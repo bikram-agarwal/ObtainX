@@ -180,6 +180,7 @@ class _SettingsPageState extends State<SettingsPage> {
       },
     );
 
+    Slider.year2023 = false;
     var intervalSlider = Slider(
       value: settingsProvider.updateIntervalSliderVal
           .roundToDouble()
