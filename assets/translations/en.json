@@ -486,6 +486,8 @@
     "scanningStore": "Scanning {}…",
     "importResults": "Import results",
     "found": "Found",
+    "added": "Added",
+    "failed": "Failed",
     "notFound": "Not found",
     "alreadyTracked": "Already tracked",
     "addFoundApps": "Add {} found apps",

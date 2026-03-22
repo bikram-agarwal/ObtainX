@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -77,9 +78,10 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   bool _addingApps = false;
   int _addedCount = 0;
   int _failedCount = 0;
-  int _skippedCount = 0;
   bool _addingDone = false;
   String _addingStatus = '';
+  List<_FoundApp> _addedApps = [];
+  List<_FoundApp> _failedApps = [];
 
   late AppsProvider _appsProvider;
 
@@ -281,7 +283,6 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                       icon: const Icon(Icons.clear_rounded),
                       onPressed: () {
                         _searchController.clear();
-                        FocusScope.of(context).unfocus();
                         setState(() => _searchQuery = '');
                       },
                     )
@@ -323,7 +324,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
           ),
         ),
         if (_loadingApps)
-          const Expanded(child: Center(child: CircularProgressIndicator()))
+          Expanded(child: Center(child: _m3LoadingIndicator()))
         else if (_installedApps.isEmpty)
           Expanded(child: Center(child: Text(tr('noAppsFound'))))
         else
@@ -515,16 +516,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Center(
-            child: SizedBox(
-              width: 80,
-              height: 80,
-              child: CircularProgressIndicator(
-                strokeWidth: 6,
-                strokeCap: StrokeCap.round,
-              ),
-            ),
-          ),
+          Center(child: _m3LoadingIndicator(size: 80)),
           const SizedBox(height: 32),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
@@ -638,49 +630,51 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
             color: Theme.of(context).colorScheme.secondaryContainer,
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _buildStat(
-                    Icons.check_circle_rounded,
-                    '${_foundApps.length}',
-                    tr('found'),
-                    Theme.of(context).colorScheme.primary,
-                  ),
-                  _buildStat(
-                    Icons.cancel_rounded,
-                    '${_notFoundApps.length}',
-                    tr('notFound'),
-                    Theme.of(context).colorScheme.error,
-                  ),
-                  if (alreadyFoundTracked.isNotEmpty)
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: _addingDone
+                ? [
                     _buildStat(
-                      Icons.bookmark_rounded,
-                      '${alreadyFoundTracked.length}',
-                      tr('alreadyTracked'),
-                      Theme.of(context).colorScheme.tertiary,
+                      Icons.check_circle_rounded,
+                      '$_addedCount',
+                      tr('added'),
+                      Theme.of(context).colorScheme.primary,
                     ),
-                ],
-              ),
-              if (_addingDone) ...[
-                const SizedBox(height: 12),
-                const Divider(),
-                const SizedBox(height: 8),
-                Text(
-                  tr('xAddedYFailed', namedArgs: {
-                    'added': '$_addedCount',
-                    'failed': '$_failedCount',
-                    'skipped': '$_skippedCount',
-                  }),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ],
+                    if (_failedCount > 0)
+                      _buildStat(
+                        Icons.error_rounded,
+                        '$_failedCount',
+                        tr('failed'),
+                        Theme.of(context).colorScheme.error,
+                      ),
+                    _buildStat(
+                      Icons.cancel_rounded,
+                      '${_notFoundApps.length}',
+                      tr('notFound'),
+                      Theme.of(context).colorScheme.outline,
+                    ),
+                  ]
+                : [
+                    _buildStat(
+                      Icons.check_circle_rounded,
+                      '${_foundApps.length}',
+                      tr('found'),
+                      Theme.of(context).colorScheme.primary,
+                    ),
+                    _buildStat(
+                      Icons.cancel_rounded,
+                      '${_notFoundApps.length}',
+                      tr('notFound'),
+                      Theme.of(context).colorScheme.error,
+                    ),
+                    if (alreadyFoundTracked.isNotEmpty)
+                      _buildStat(
+                        Icons.bookmark_rounded,
+                        '${alreadyFoundTracked.length}',
+                        tr('alreadyTracked'),
+                        Theme.of(context).colorScheme.tertiary,
+                      ),
+                  ],
           ),
         ),
 
@@ -690,46 +684,52 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
               ? Center(child: Text(tr('noAppsFound')))
               : ListView(
                   children: [
-                    if (newFound.isNotEmpty) ...[
-                      _buildSectionHeader(
-                        '${tr('found')} (${newFound.length})',
-                        Theme.of(context).colorScheme.primary,
-                      ),
-                      ...newFound.map((a) => _buildFoundAppTile(a)),
-                    ],
-                    if (alreadyFoundTracked.isNotEmpty) ...[
-                      _buildSectionHeader(
-                        '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
-                        Theme.of(context).colorScheme.tertiary,
-                      ),
-                      ...alreadyFoundTracked.map((a) => _buildFoundAppTile(a, tracked: true)),
-                    ],
-                    if (_notFoundApps.isNotEmpty) ...[
-                      _buildSectionHeader(
-                        '${tr('notFound')} (${_notFoundApps.length})',
-                        Theme.of(context).colorScheme.error,
-                      ),
-                      ..._notFoundApps.map(
-                        (a) => ListTile(
-                          leading: _buildAppIcon(a.packageName),
-                          title: Text(
-                            a.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            a.packageName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          trailing: Icon(
-                            Icons.cancel_rounded,
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                          dense: true,
+                    if (_addingDone) ...[
+                      // ── Post-add view ──────────────────────────────────
+                      if (_addedApps.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('added')} (${_addedApps.length})',
+                          Theme.of(context).colorScheme.primary,
                         ),
-                      ),
+                        ..._addedApps.map((a) => _buildFoundAppTile(a)),
+                      ],
+                      if (_failedApps.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('failed')} (${_failedApps.length})',
+                          Theme.of(context).colorScheme.error,
+                        ),
+                        ..._failedApps.map((a) => _buildFoundAppTile(a)),
+                      ],
+                      if (_notFoundApps.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('notFound')} (${_notFoundApps.length})',
+                          Theme.of(context).colorScheme.outline,
+                        ),
+                        ..._notFoundApps.map((a) => _buildNotFoundTile(a)),
+                      ],
+                    ] else ...[
+                      // ── Pre-add view ───────────────────────────────────
+                      if (newFound.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('found')} (${newFound.length})',
+                          Theme.of(context).colorScheme.primary,
+                        ),
+                        ...newFound.map((a) => _buildFoundAppTile(a)),
+                      ],
+                      if (alreadyFoundTracked.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
+                          Theme.of(context).colorScheme.tertiary,
+                        ),
+                        ...alreadyFoundTracked.map((a) => _buildFoundAppTile(a, tracked: true)),
+                      ],
+                      if (_notFoundApps.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('notFound')} (${_notFoundApps.length})',
+                          Theme.of(context).colorScheme.error,
+                        ),
+                        ..._notFoundApps.map((a) => _buildNotFoundTile(a)),
+                      ],
                     ],
                   ],
                 ),
@@ -813,6 +813,21 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     );
   }
 
+  Widget _buildNotFoundTile(InstalledAppInfo a) {
+    return ListTile(
+      leading: _buildAppIcon(a.packageName),
+      title: Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        a.packageName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      trailing: Icon(Icons.cancel_rounded, color: Theme.of(context).colorScheme.error),
+      dense: true,
+    );
+  }
+
   Widget _buildFoundAppTile(_FoundApp app, {bool tracked = false}) {
     return ListTile(
       leading: _buildAppIcon(app.info.packageName),
@@ -878,8 +893,9 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
       _addingApps = true;
       _addedCount = 0;
       _failedCount = 0;
-      _skippedCount = 0;
       _addingStatus = '';
+      _addedApps = [];
+      _failedApps = [];
     });
 
     final sourceProvider = SourceProvider();
@@ -902,15 +918,6 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     for (final app in apps) {
       if (!mounted) break;
 
-      // Skip if already tracked AT SCAN TIME (use snapshot, not live map)
-      if (_trackedAtScanTime.contains(app.info.packageName)) {
-        setState(() {
-          _skippedCount++;
-          _addingStatus = tr('skipping', args: [app.info.name]);
-        });
-        continue;
-      }
-
       setState(() => _addingStatus = tr('addingApp', args: [app.info.name]));
 
       final store = app.bestStore;
@@ -928,10 +935,14 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
           inferAppIdIfOptional: true,
         );
         await _appsProvider.saveApps([newApp], onlyIfExists: false);
-        setState(() => _addedCount++);
+        setState(() {
+          _addedCount++;
+          _addedApps = [..._addedApps, app];
+        });
       } catch (e) {
         setState(() {
           _failedCount++;
+          _failedApps = [..._failedApps, app];
           _addingStatus =
               '${tr('error')}: ${app.info.name} – ${e is ObtainiumError ? e.toString() : tr('unexpectedError')}';
         });
@@ -952,6 +963,14 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   // ─── Helpers ───────────────────────────────────────────────────────────
 
   /// Returns the store's actual logo.
+  /// M3 Expressive loading indicator – 5 dots with staggered wave scale.
+  Widget _m3LoadingIndicator({double size = 80}) {
+    return _M3LoadingIndicator(
+      size: size,
+      color: Theme.of(context).colorScheme.primary,
+    );
+  }
+
   Widget _storeLogo(String store, {double size = 24}) {
     switch (store) {
       case 'APKMirror':
@@ -1056,6 +1075,77 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
             },
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// M3 Expressive loading indicator: 5 dots with a staggered sine-wave scale.
+class _M3LoadingIndicator extends StatefulWidget {
+  final double size;
+  final Color color;
+
+  const _M3LoadingIndicator({required this.size, required this.color});
+
+  @override
+  State<_M3LoadingIndicator> createState() => _M3LoadingIndicatorState();
+}
+
+class _M3LoadingIndicatorState extends State<_M3LoadingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  static const _dotCount = 5;
+  // Fraction of the 1500 ms cycle that each dot is offset from the next.
+  static const _staggerFraction = 0.15;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dotSize = widget.size / _dotCount * 0.7;
+
+    return SizedBox(
+      width: widget.size,
+      height: widget.size * 0.45,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) {
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: List.generate(_dotCount, (i) {
+              final phase = (i * _staggerFraction);
+              final t = (_controller.value - phase) % 1.0;
+              // Sinusoidal scale: oscillates between 0.35 and 1.0
+              final scale = 0.35 + 0.65 * (0.5 - 0.5 * math.cos(t * 2 * math.pi));
+              return Transform.scale(
+                scale: scale,
+                child: Container(
+                  width: dotSize,
+                  height: dotSize,
+                  decoration: BoxDecoration(
+                    color: widget.color,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              );
+            }),
+          );
+        },
       ),
     );
   }
