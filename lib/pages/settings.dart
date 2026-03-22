@@ -1102,7 +1102,7 @@ class _VerticalBarThumbShape extends SliderComponentShape {
   const _VerticalBarThumbShape();
 
   static const double _width = 4;
-  static const double _height = 44;
+  static const double _height = 28;
   static const double _radius = 2;
 
   @override

@@ -145,10 +145,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                     }
                   });
                 },
-                avatar: Icon(
-                  _storeIcon(store),
-                  size: 16,
-                ),
+                avatar: _storeLogo(store, size: 18),
               );
             }).toList(),
           ),
@@ -193,6 +190,8 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         _selectedPackages.addAll(apps.map((a) => a.packageName));
         _loadingApps = false;
       });
+      // Start loading icons in batches after the list is displayed
+      _loadIconsBatched();
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingApps = false);
@@ -214,20 +213,25 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         .toList();
   }
 
-  void _loadIconIfNeeded(String packageName) {
-    if (_iconCache.containsKey(packageName)) return;
-    _iconCache[packageName] = null; // mark as loading
-    BulkImportService.getAppIcon(packageName).then((icon) {
-      if (mounted) {
-        setState(() {
-          _iconCache[packageName] = icon ?? false;
-        });
-      }
-    });
+  /// Loads all app icons in batches, calling setState once per batch.
+  /// This avoids per-icon rebuilds that cause visible stutter.
+  Future<void> _loadIconsBatched() async {
+    const batchSize = 20;
+    final packages = _installedApps.map((a) => a.packageName).toList();
+    for (int i = 0; i < packages.length; i += batchSize) {
+      if (!mounted) return;
+      final batch = packages.sublist(i, (i + batchSize).clamp(0, packages.length));
+      await Future.wait(batch.map((pkg) async {
+        if (_iconCache.containsKey(pkg)) return;
+        final icon = await BulkImportService.getAppIcon(pkg);
+        _iconCache[pkg] = icon ?? false;
+      }));
+      if (mounted) setState(() {});
+    }
   }
 
   Widget _buildAppIcon(String packageName, {double size = 40}) {
-    _loadIconIfNeeded(packageName);
+    // Icons are populated by _loadIconsBatched; no loading triggered here.
     final cached = _iconCache[packageName];
     if (cached is Uint8List) {
       return ClipRRect(
@@ -522,7 +526,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
       children: [
         Row(
           children: [
-            Icon(_storeIcon(store), size: 16),
+            _storeLogo(store, size: 18),
             const SizedBox(width: 8),
             Text(store, style: Theme.of(context).textTheme.bodyMedium),
             const Spacer(),
@@ -841,7 +845,12 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
       );
 
       try {
-        final newApp = await sourceProvider.getApp(source, url, settings);
+        final newApp = await sourceProvider.getApp(
+          source,
+          url,
+          settings,
+          inferAppIdIfOptional: true,
+        );
         await _appsProvider.saveApps([newApp], onlyIfExists: false);
         setState(() => _addedCount++);
       } catch (e) {
@@ -866,16 +875,51 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
 
   // ─── Helpers ───────────────────────────────────────────────────────────
 
-  IconData _storeIcon(String store) {
+  /// Returns the store's actual logo.
+  /// APKMirror and APKPure use PNGs from APKUpdater's assets;
+  /// F-Droid uses a styled container with its brand blue (#1976D2).
+  Widget _storeLogo(String store, {double size = 24}) {
     switch (store) {
       case 'APKMirror':
-        return Icons.system_update_rounded;
+        return Image.asset(
+          'assets/graphics/ic_apkmirror.png',
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.medium,
+        );
       case 'APKPure':
-        return Icons.get_app_rounded;
+        return Image.asset(
+          'assets/graphics/ic_apkpure.png',
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.medium,
+        );
       case 'F-Droid':
-        return Icons.lock_rounded;
+        return SizedBox(
+          width: size,
+          height: size,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFF1976D2),
+              borderRadius: BorderRadius.circular(size * 0.2),
+            ),
+            child: Center(
+              child: Text(
+                'F',
+                style: TextStyle(
+                  color: const Color(0xFFB2EB0B),
+                  fontSize: size * 0.65,
+                  fontWeight: FontWeight.bold,
+                  height: 1,
+                ),
+              ),
+            ),
+          ),
+        );
       default:
-        return Icons.store_rounded;
+        return Icon(Icons.store_rounded, size: size);
     }
   }
 

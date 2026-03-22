@@ -771,7 +771,10 @@ class AddAppPageState extends State<AddAppPage> {
                 children: [
                   getUrlInputRow(),
                   const SizedBox(height: 16),
+                  if (pickedSource != null) getHTMLSourceOverrideDropdown(),
+                  if (shouldShowSearchBar()) getSearchBarRow(),
                   if (pickedSource == null) ...[
+                    const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: () {
                         Navigator.push(
@@ -781,13 +784,10 @@ class AddAppPageState extends State<AddAppPage> {
                           ),
                         );
                       },
-                      icon: const Icon(Icons.download_for_offline_rounded),
+                      icon: const Icon(Icons.add_rounded),
                       label: Text(tr('bulkAddApps')),
                     ),
-                    const SizedBox(height: 8),
                   ],
-                  if (pickedSource != null) getHTMLSourceOverrideDropdown(),
-                  if (shouldShowSearchBar()) getSearchBarRow(),
                   if (pickedSource != null)
                     FutureBuilder(
                       builder: (ctx, val) {
