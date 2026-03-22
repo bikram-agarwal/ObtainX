@@ -222,53 +222,6 @@ List<MapEntry<String, String>> _parseApkMirrorVariants(
   return results;
 }
 
-/// Fetches an APKMirror variant detail page and returns the direct APK
-/// download URL (the `download.php?id=…&key=…` link).
-///
-/// Returns `null` if the page cannot be fetched or the link is not found.
-Future<String?> _getApkMirrorDownloadUrl(
-  String variantPageUrl,
-  Map<String, dynamic> additionalSettings,
-  Future<Response> Function(String, Map<String, dynamic>) sourceRequest,
-) async {
-  try {
-    final res = await sourceRequest(variantPageUrl, additionalSettings);
-    if (res.statusCode != 200) return null;
-
-    final doc = parse(res.body);
-    final baseUri = Uri.tryParse(variantPageUrl);
-
-    String resolveHref(String href) {
-      if (href.startsWith('http')) return href;
-      if (href.startsWith('?')) {
-        return '${variantPageUrl.split('?')[0]}$href';
-      }
-      if (baseUri != null) return baseUri.resolve(href).toString();
-      return 'https://www.apkmirror.com$href';
-    }
-
-    // Primary: APKMirror download.php link with key parameter
-    for (final a in doc.querySelectorAll('a[href]')) {
-      final href = a.attributes['href'] ?? '';
-      if (href.contains('download.php') && href.contains('key=')) {
-        return resolveHref(href);
-      }
-    }
-
-    // Fallback: any link with key= that looks like a download action
-    for (final a in doc.querySelectorAll('a[href*="key="]')) {
-      final href = a.attributes['href'] ?? '';
-      final text = a.text.toLowerCase();
-      final rel = a.attributes['rel'] ?? '';
-      if (text.contains('download') ||
-          rel.contains('nofollow') ||
-          a.classes.any((c) => c.toLowerCase().contains('download'))) {
-        return resolveHref(href);
-      }
-    }
-  } catch (_) {}
-  return null;
-}
 
 class APKMirror extends AppSource {
   APKMirror() {
@@ -317,6 +270,111 @@ class APKMirror extends AppSource {
       "User-Agent":
           "ObtainX/${(await getInstalledInfo(obtainiumId))?.versionName ?? '1.0.0'}",
     };
+  }
+
+  /// Resolves a stable APKMirror variant-page URL to the actual APK CDN URL.
+  ///
+  /// The stored [assetUrl] is a variant download page (e.g. `…-apk-download/`).
+  /// We fetch that page to obtain a fresh `download.php?key=…` link, then
+  /// follow its redirect chain — carrying any cookies accumulated along the
+  /// way — until we land on the real CDN URL.  This is done at download time
+  /// so the key is never stale and cookies flow through the full chain.
+  @override
+  Future<String> assetUrlPrefetchModifier(
+    String assetUrl,
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    if (!assetUrl.contains('apkmirror.com')) return assetUrl;
+
+    final client = createHttpClient(false);
+    final List<Cookie> cookies = [];
+    final ua =
+        "ObtainX/${(await getInstalledInfo(obtainiumId))?.versionName ?? '1.0.0'}";
+
+    Future<HttpClientResponse?> get(String url) async {
+      var uri = Uri.parse(url);
+      for (int i = 0; i < 8; i++) {
+        final req = await client.openUrl('GET', uri);
+        req.headers.set(HttpHeaders.userAgentHeader, ua);
+        req.headers.set(
+          HttpHeaders.acceptHeader,
+          'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        );
+        for (final c in cookies) {
+          req.cookies.add(c);
+        }
+        req.followRedirects = false;
+        final res = await req.close();
+        cookies.addAll(res.cookies);
+        if (res.statusCode >= 300 && res.statusCode < 400) {
+          final loc = res.headers.value(HttpHeaders.locationHeader);
+          await res.drain<void>();
+          if (loc == null) return null;
+          uri = uri.resolve(loc);
+          continue;
+        }
+        return res;
+      }
+      return null;
+    }
+
+    try {
+      // Step 1: fetch the variant page, read its body.
+      final varRes = await get(assetUrl);
+      if (varRes == null || varRes.statusCode != 200) return assetUrl;
+      final bytes = <int>[];
+      await for (final chunk in varRes) {
+        bytes.addAll(chunk);
+      }
+      final body = String.fromCharCodes(bytes);
+
+      // Step 2: find the fresh download.php?key=… link.
+      final doc = parse(body);
+      final variantUri = Uri.tryParse(assetUrl);
+      String? dlUrl;
+      for (final a in doc.querySelectorAll('a[href]')) {
+        final href = a.attributes['href'] ?? '';
+        if (href.contains('download.php') && href.contains('key=')) {
+          dlUrl = variantUri != null
+              ? variantUri.resolve(href).toString()
+              : (href.startsWith('http')
+                  ? href
+                  : 'https://www.apkmirror.com$href');
+          break;
+        }
+      }
+      if (dlUrl == null) return assetUrl;
+
+      // Step 3: follow download.php (with accumulated cookies) to the CDN URL.
+      var cdnUri = Uri.parse(dlUrl);
+      for (int i = 0; i < 8; i++) {
+        final req = await client.openUrl('GET', cdnUri);
+        req.headers.set(HttpHeaders.userAgentHeader, ua);
+        req.headers.set(HttpHeaders.refererHeader, assetUrl);
+        for (final c in cookies) {
+          req.cookies.add(c);
+        }
+        req.followRedirects = false;
+        final res = await req.close();
+        cookies.addAll(res.cookies);
+        if (res.statusCode >= 300 && res.statusCode < 400) {
+          final loc = res.headers.value(HttpHeaders.locationHeader);
+          await res.drain<void>();
+          if (loc == null) break;
+          cdnUri = cdnUri.resolve(loc);
+          continue;
+        }
+        await res.drain<void>();
+        break;
+      }
+
+      return cdnUri.toString();
+    } catch (_) {
+      return assetUrl;
+    } finally {
+      client.close();
+    }
   }
 
   @override
@@ -465,8 +523,10 @@ class APKMirror extends AppSource {
         // Icon is optional – ignore errors.
       }
 
-      // When direct download is enabled, scrape variant APK URLs from the
-      // release page so the user can download without leaving the app.
+      // When direct download is enabled, collect the stable variant page URLs
+      // from the release page.  The actual CDN download URL is resolved fresh
+      // at download time by assetUrlPrefetchModifier (which carries cookies
+      // through the full chain: variant page → download.php → CDN).
       List<MapEntry<String, String>> apkUrls = [];
       if (additionalSettings['enableDirectDownload'] == true &&
           releasePageUrl != null) {
@@ -474,21 +534,8 @@ class APKMirror extends AppSource {
           final releaseRes =
               await sourceRequest(releasePageUrl, additionalSettings);
           if (releaseRes.statusCode == 200) {
-            final variants =
+            apkUrls =
                 _parseApkMirrorVariants(releaseRes.body, releasePageUrl);
-            if (variants.isNotEmpty) {
-              // Resolve final download URLs for all variants in parallel.
-              final futures = variants.map((variant) async {
-                final url = await _getApkMirrorDownloadUrl(
-                  variant.value,
-                  additionalSettings,
-                  sourceRequest,
-                );
-                return url != null ? MapEntry(variant.key, url) : null;
-              }).toList();
-              final resolved = await Future.wait(futures);
-              apkUrls = resolved.nonNulls.toList();
-            }
           }
         } catch (_) {
           // Fall back to track-only behaviour (empty apkUrls).

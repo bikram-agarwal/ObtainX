@@ -1240,11 +1240,9 @@ class SourceProvider {
     );
     // If the source enforces track-only by default but managed to resolve direct
     // APK download URLs (e.g. APKMirror with enableDirectDownload), allow the
-    // download to proceed.  Also force a refresh before every download because
-    // the resolved URLs (e.g. APKMirror download.php?key=…) are time-limited.
+    // download to proceed.
     if (!trackOnlyOverride && source.enforceTrackOnly && apk.apkUrls.isNotEmpty) {
       additionalSettings['trackOnly'] = false;
-      additionalSettings['refreshBeforeDownload'] = true;
     }
     var trackOnly = additionalSettings['trackOnly'] == true;
 

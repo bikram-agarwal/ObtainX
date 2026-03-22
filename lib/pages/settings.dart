@@ -1,6 +1,5 @@
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:equations/equations.dart';
 import 'package:flex_color_picker/flex_color_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
@@ -43,7 +42,6 @@ class _SettingsPageState extends State<SettingsPage> {
     43200,
   ];
   int updateInterval = 0;
-  late SplineInterpolation updateIntervalInterpolator; // 🤓
   String updateIntervalLabel = tr('neverManualOnly');
 
   final Map<ColorSwatch<Object>, String> colorsNameMap =
@@ -51,49 +49,21 @@ class _SettingsPageState extends State<SettingsPage> {
         ColorTools.createPrimarySwatch(obtainiumThemeColor): 'Obtainium',
       };
 
-  void initUpdateIntervalInterpolator() {
-    List<InterpolationNode> nodes = [];
-    for (final (index, element) in updateIntervalNodes.indexed) {
-      nodes.add(
-        InterpolationNode(x: index.toDouble() + 1, y: element.toDouble()),
-      );
-    }
-    updateIntervalInterpolator = SplineInterpolation(nodes: nodes);
-  }
-
   void processIntervalSliderValue(double val) {
-    if (val < 0.5) {
+    final int index = val.round().clamp(0, updateIntervalNodes.length);
+    if (index == 0) {
       updateInterval = 0;
       updateIntervalLabel = tr('neverManualOnly');
       return;
     }
-    int valInterpolated = 0;
-    if (val < 1) {
-      valInterpolated = 15;
+    final int minutes = updateIntervalNodes[index - 1];
+    updateInterval = minutes;
+    if (minutes < 60) {
+      updateIntervalLabel = plural('minute', minutes);
+    } else if (minutes < 24 * 60) {
+      updateIntervalLabel = plural('hour', minutes ~/ 60);
     } else {
-      valInterpolated = updateIntervalInterpolator.compute(val).round();
-    }
-    if (valInterpolated < 60) {
-      updateInterval = valInterpolated;
-      updateIntervalLabel = plural('minute', valInterpolated);
-    } else if (valInterpolated < 8 * 60) {
-      int valRounded = (valInterpolated / 15).floor() * 15;
-      updateInterval = valRounded;
-      updateIntervalLabel = plural('hour', valRounded ~/ 60);
-      int mins = valRounded % 60;
-      if (mins != 0) updateIntervalLabel += " ${plural('minute', mins)}";
-    } else if (valInterpolated < 24 * 60) {
-      int valRounded = (valInterpolated / 30).floor() * 30;
-      updateInterval = valRounded;
-      updateIntervalLabel = plural('hour', valRounded / 60);
-    } else if (valInterpolated < 7 * 24 * 60) {
-      int valRounded = (valInterpolated / (12 * 60)).floor() * 12 * 60;
-      updateInterval = valRounded;
-      updateIntervalLabel = plural('day', valRounded / (24 * 60));
-    } else {
-      int valRounded = (valInterpolated / (24 * 60)).floor() * 24 * 60;
-      updateInterval = valRounded;
-      updateIntervalLabel = plural('day', valRounded ~/ (24 * 60));
+      updateIntervalLabel = plural('day', minutes ~/ (24 * 60));
     }
   }
 
@@ -102,7 +72,6 @@ class _SettingsPageState extends State<SettingsPage> {
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
     SourceProvider sourceProvider = SourceProvider();
     if (settingsProvider.prefs == null) settingsProvider.initializeSettings();
-    initUpdateIntervalInterpolator();
     processIntervalSliderValue(settingsProvider.updateIntervalSliderVal);
 
     Future<bool> colorPickerDialog() async {
@@ -212,9 +181,11 @@ class _SettingsPageState extends State<SettingsPage> {
     );
 
     var intervalSlider = Slider(
-      value: settingsProvider.updateIntervalSliderVal,
+      value: settingsProvider.updateIntervalSliderVal
+          .roundToDouble()
+          .clamp(0, updateIntervalNodes.length.toDouble()),
       max: updateIntervalNodes.length.toDouble(),
-      divisions: updateIntervalNodes.length * 20,
+      divisions: updateIntervalNodes.length,
       label: updateIntervalLabel,
       onChanged: (double value) {
         setState(() {
@@ -358,13 +329,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                           ],
                                         ),
                                       ),
-                                      SliderTheme(
-                                        data: SliderThemeData(
-                                          inactiveTrackColor:
-                                              cs.onSurface.withAlpha(60),
-                                        ),
-                                        child: intervalSlider,
-                                      ),
+                                      intervalSlider,
                                     ],
                                   ),
                                 ),
