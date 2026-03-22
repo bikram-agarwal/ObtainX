@@ -17,6 +17,7 @@ import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -129,27 +130,43 @@ class _SourceBadgeWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    Widget image = Image.network(
-      'https://icons.duckduckgo.com/ip3/$host.ico',
-      width: 13,
-      height: 13,
-      fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-      loadingBuilder: (_, child, loadingProgress) =>
-          loadingProgress == null ? child : const SizedBox.shrink(),
-    );
-    // GitHub's favicon is black — invert it in dark mode so it reads as white.
-    if (isDark && host == 'github.com') {
-      image = ColorFiltered(
-        colorFilter: const ColorFilter.matrix([
-          -1, 0, 0, 0, 255,
-           0,-1, 0, 0, 255,
-           0, 0,-1, 0, 255,
-           0, 0, 0, 1,   0,
-        ]),
-        child: image,
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final String? localAsset = storeSourceAssetPathForHost(host);
+    Widget image;
+    if (localAsset != null) {
+      image = StoreSourceIconImage(assetPath: localAsset, size: 13);
+      if (isDark && localAsset == StoreSourceIconPaths.github) {
+        image = ColorFiltered(
+          colorFilter: const ColorFilter.matrix([
+            -1, 0, 0, 0, 255,
+            0, -1, 0, 0, 255,
+            0, 0, -1, 0, 255,
+            0, 0, 0, 1, 0,
+          ]),
+          child: image,
+        );
+      }
+    } else {
+      image = Image.network(
+        'https://icons.duckduckgo.com/ip3/$host.ico',
+        width: 13,
+        height: 13,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+        loadingBuilder: (context, child, loadingProgress) =>
+            loadingProgress == null ? child : const SizedBox.shrink(),
       );
+      if (isDark && host == 'github.com') {
+        image = ColorFiltered(
+          colorFilter: const ColorFilter.matrix([
+            -1, 0, 0, 0, 255,
+            0, -1, 0, 0, 255,
+            0, 0, -1, 0, 255,
+            0, 0, 0, 1, 0,
+          ]),
+          child: image,
+        );
+      }
     }
     return Container(
       width: 16,
@@ -387,8 +404,8 @@ class _AppListItem extends StatelessWidget {
 }
 
 /// Opens the "Additional Options" modal for [appId] directly, mirroring the
-/// same dialog shown via the edit button on [AppPage].  Falls back to
-/// navigating to [AppPage] when the source has no per-app settings.
+/// App Options control (tune icon) on [AppPage]. Falls back to navigating to
+/// [AppPage] when the source has no per-app settings.
 Future<void> _openAdditionalOptionsModal(
   String appId,
   BuildContext context,
@@ -547,6 +564,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           widget.isPinned ? Icons.push_pin_outlined : Icons.push_pin,
           cs.primary,
         );
+      case SwipeAction.appOptions:
+        return (Icons.tune, cs.primary);
       case SwipeAction.edit:
         return (Icons.edit_outlined, Colors.blue);
       case SwipeAction.delete:
@@ -584,8 +603,20 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         if (app != null) {
           provider.saveApps([app..pinned = !widget.isPinned]);
         }
-      case SwipeAction.edit:
+      case SwipeAction.appOptions:
         await _openAdditionalOptionsModal(widget.appId, context);
+      case SwipeAction.edit:
+        if (context.mounted) {
+          await Navigator.push(
+            context,
+            _sharedAxisRoute(
+              (_) => AppPage(
+                appId: widget.appId,
+                openInEditMode: true,
+              ),
+            ),
+          );
+        }
       case SwipeAction.delete:
         if (app != null) {
           final snapshot = [app.deepCopy()];
@@ -599,7 +630,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
                 SnackBar(
                   content: Text(tr('xAppsRemoved', args: ['1'])),
                   duration: const Duration(seconds: 5),
-                  showCloseIcon: true,
+                  behavior: SnackBarBehavior.floating,
                   action: SnackBarAction(
                     label: tr('undo'),
                     onPressed: () =>
@@ -2867,7 +2898,7 @@ class AppsPageState extends State<AppsPage> {
                                   args: ['${snapshot.length}']),
                             ),
                             duration: const Duration(seconds: 5),
-                            showCloseIcon: true,
+                            behavior: SnackBarBehavior.floating,
                             action: SnackBarAction(
                               label: tr('undo'),
                               onPressed: () => appsProviderRef.saveApps(

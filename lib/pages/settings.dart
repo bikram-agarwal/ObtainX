@@ -646,7 +646,10 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ]),
                         // ── Gestures ──────────────────────────────────────────
-                        sectionHeader(tr('gestures'), Icons.swipe_rounded),
+                        sectionHeader(
+                          '${tr('gestures')} · ${SwipeAction.values.length}',
+                          Icons.swipe_rounded,
+                        ),
                         settingsCard([
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -659,7 +662,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     labelText: tr('rightSwipeAction'),
                                   ),
                                   initialValue: settingsProvider.rightSwipeAction,
-                                  items: SwipeAction.values
+                                  items: swipeActionsSortedByLocalizedLabel()
                                       .map(
                                         (action) => DropdownMenuItem(
                                           value: action,
@@ -682,7 +685,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     labelText: tr('leftSwipeAction'),
                                   ),
                                   initialValue: settingsProvider.leftSwipeAction,
-                                  items: SwipeAction.values
+                                  items: swipeActionsSortedByLocalizedLabel()
                                       .map(
                                         (action) => DropdownMenuItem(
                                           value: action,

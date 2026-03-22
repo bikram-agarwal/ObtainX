@@ -1,9 +1,12 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -13,6 +16,7 @@ import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/store_source_icons.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:provider/provider.dart';
@@ -53,6 +57,14 @@ bool _trackedUrlMatchesApkmirror(String? trackedUrl) {
   final uri = Uri.tryParse(trackedUrl);
   if (uri == null || uri.host.isEmpty) return false;
   return uri.host.toLowerCase().contains('apkmirror.com');
+}
+
+void _toastUrl(String url) {
+  Fluttertoast.showToast(
+    msg: url,
+    toastLength: Toast.LENGTH_LONG,
+    timeInSecForIosWeb: 5,
+  );
 }
 
 /// Surfaces from [ColorScheme.fromImageProvider] are often very dark in dark mode;
@@ -217,10 +229,13 @@ class AppPage extends StatefulWidget {
     super.key,
     required this.appId,
     this.showOppositeOfPreferredView = false,
+    this.openInEditMode = false,
   });
 
   final String appId;
   final bool showOppositeOfPreferredView;
+  /// When true (e.g. swipe-to-edit), enter inline edit mode once the app is loaded.
+  final bool openInEditMode;
 
   @override
   State<AppPage> createState() => _AppPageState();
@@ -250,10 +265,22 @@ class _AppPageState extends State<AppPage> {
 
   // ── Inline edit mode ────────────────────────────────────────────────────
   bool _editMode = false;
+  bool _scheduledOpenInEditMode = false;
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _packageController = TextEditingController();
   List<String> _editCategories = [];
+
+  String _editBaselineName = '';
+  String _editBaselineUrl = '';
+  String _editBaselinePackage = '';
+  List<String> _editBaselineCategories = [];
+  int _editBaselineIconFingerprint = 0;
+  bool _editBaselineHadUserOverride = false;
+
+  Uint8List? _editStagedIconBytes;
+  bool _editStagedClearOverride = false;
+  Uint8List? _editNonUserIconPreview;
 
   @override
   void didUpdateWidget(covariant AppPage oldWidget) {
@@ -269,6 +296,10 @@ class _AppPageState extends State<AppPage> {
       _scheduledDetailPageRefresh = false;
       _requestedMissingIconLoad = false;
       _lastWebViewSurfaceColorApplied = null;
+      _scheduledOpenInEditMode = false;
+      _clearEditIconStaging();
+    } else if (oldWidget.openInEditMode != widget.openInEditMode) {
+      _scheduledOpenInEditMode = false;
     }
   }
 
@@ -282,16 +313,142 @@ class _AppPageState extends State<AppPage> {
 
   // ── Edit mode helpers ───────────────────────────────────────────────────
 
-  void _startEdit(AppInMemory appData) {
-    _nameController.text =
-        appData.app.additionalSettings['appName']?.toString() ?? '';
+  int _iconFingerprintForEditBaseline(Uint8List? iconBytes) {
+    if (iconBytes == null || iconBytes.isEmpty) return 0;
+    return Object.hash(
+      iconBytes.length,
+      iconBytes[0],
+      iconBytes[iconBytes.length ~/ 2],
+    );
+  }
+
+  void _captureEditBaseline(AppInMemory appData) {
+    _editBaselineName = _nameController.text;
+    _editBaselineUrl = _urlController.text;
+    _editBaselinePackage = _packageController.text;
+    _editBaselineCategories = List<String>.from(_editCategories);
+    _editBaselineIconFingerprint = _iconFingerprintForEditBaseline(appData.icon);
+  }
+
+  void _clearEditIconStaging() {
+    _editStagedIconBytes = null;
+    _editStagedClearOverride = false;
+    _editNonUserIconPreview = null;
+  }
+
+  bool _editIconStagingIsDirty() {
+    if (_editStagedClearOverride && _editBaselineHadUserOverride) return true;
+    if (_editStagedIconBytes != null) {
+      return _iconFingerprintForEditBaseline(_editStagedIconBytes) !=
+          _editBaselineIconFingerprint;
+    }
+    return false;
+  }
+
+  Uint8List? _heroIconMemoryOverrideForEdit(AppInMemory? appInMemory) {
+    if (!_editMode) return null;
+    if (_editStagedIconBytes != null) return _editStagedIconBytes;
+    if (_editStagedClearOverride) return _editNonUserIconPreview;
+    return null;
+  }
+
+  bool _isEditDirty(AppInMemory? currentApp) {
+    if (!_editMode || currentApp == null) return false;
+    if (_nameController.text != _editBaselineName) return true;
+    if (_urlController.text != _editBaselineUrl) return true;
+    if (_packageController.text != _editBaselinePackage) return true;
+    if (!listEquals(_editCategories, _editBaselineCategories)) return true;
+    if (_editIconStagingIsDirty()) return true;
+    return false;
+  }
+
+  void _exitEditWithoutSaving() {
+    _clearEditIconStaging();
+    setState(() => _editMode = false);
+  }
+
+  Future<void> _onCancelEditPressed(
+    BuildContext actionContext,
+    AppInMemory? appData,
+  ) async {
+    if (!_isEditDirty(appData)) {
+      _exitEditWithoutSaving();
+      return;
+    }
+    final bool? discard = await showDialog<bool>(
+      context: actionContext,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Text(tr('appEditsUnsavedTitle')),
+          content: Text(tr('appEditsUnsavedBody')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(tr('keepEditing')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(tr('discard')),
+            ),
+          ],
+        );
+      },
+    );
+    if (discard == true && mounted) {
+      _exitEditWithoutSaving();
+    }
+  }
+
+  Future<bool> _confirmDiscardToLeaveAppPage(
+    BuildContext actionContext,
+    AppInMemory? appData,
+  ) async {
+    if (!_isEditDirty(appData)) return true;
+    final bool? discard = await showDialog<bool>(
+      context: actionContext,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Text(tr('appEditsUnsavedTitle')),
+          content: Text(tr('appEditsUnsavedBody')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(tr('keepEditing')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(tr('discard')),
+            ),
+          ],
+        );
+      },
+    );
+    return discard == true;
+  }
+
+  void _startEdit(AppInMemory appData, AppsProvider appsProvider) {
+    _clearEditIconStaging();
+    _nameController.text = appData.name;
     _urlController.text = appData.app.url;
     _packageController.text = appData.app.id;
     _editCategories = List<String>.from(appData.app.categories);
+    _editBaselineHadUserOverride =
+        appsProvider.hasUserAppIconOverride(widget.appId);
+    _captureEditBaseline(appData);
     setState(() => _editMode = true);
-  }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      void placeCaretAtEnd(TextEditingController controller) {
+        final String text = controller.text;
+        controller.selection =
+            TextSelection.collapsed(offset: text.length);
+      }
 
-  void _cancelEdit() => setState(() => _editMode = false);
+      placeCaretAtEnd(_nameController);
+      placeCaretAtEnd(_urlController);
+      placeCaretAtEnd(_packageController);
+    });
+  }
 
   Future<void> _saveEdit(AppInMemory appData, AppsProvider appsProvider) async {
     final updatedApp = appData.app.deepCopy();
@@ -309,26 +466,149 @@ class _AppPageState extends State<AppPage> {
       updatedApp.id = newId;
     }
     updatedApp.categories = _editCategories;
+
+    if (_editStagedClearOverride &&
+        appsProvider.hasUserAppIconOverride(widget.appId)) {
+      await appsProvider.resetAppIconToDefault(widget.appId);
+    }
+    if (_editStagedIconBytes != null) {
+      final String? iconErr = await appsProvider.applyUserAppIconPngBytes(
+        widget.appId,
+        _editStagedIconBytes!,
+      );
+      if (iconErr != null) {
+        if (mounted) showError(ObtainiumError(iconErr), context);
+        return;
+      }
+    }
+
     await appsProvider.saveApps([updatedApp], onlyIfExists: true);
-    if (mounted) setState(() => _editMode = false);
+    await appsProvider.updateAppIcon(updatedApp.id);
+    if (mounted) {
+      _clearEditIconStaging();
+      setState(() => _editMode = false);
+    }
   }
 
   Future<void> _pickEditIcon(AppsProvider appsProvider) async {
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['png'],
+      withData: true,
     );
     if (!mounted) return;
-    if (result != null &&
-        result.files.isNotEmpty &&
-        result.files.single.path != null) {
-      final String? err = await appsProvider.setUserAppIconFromPngPath(
-        widget.appId,
-        result.files.single.path!,
-      );
-      if (!mounted) return;
-      if (err != null) showError(ObtainiumError(err), context);
+    if (result == null || result.files.isEmpty) return;
+    final PlatformFile picked = result.files.single;
+    Uint8List? bytes = picked.bytes;
+    if (bytes == null && picked.path != null) {
+      bytes = await File(picked.path!).readAsBytes();
     }
+    if (bytes == null) return;
+    if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
+      if (mounted) {
+        showError(ObtainiumError(tr('changeAppIconInvalidPng')), context);
+      }
+      return;
+    }
+    setState(() {
+      _editStagedIconBytes = bytes;
+      _editStagedClearOverride = false;
+      _editNonUserIconPreview = null;
+    });
+  }
+
+  Future<void> _onResetEditIconPressed(AppsProvider appsProvider) async {
+    setState(() {
+      _editStagedIconBytes = null;
+    });
+    if (appsProvider.hasUserAppIconOverride(widget.appId)) {
+      setState(() {
+        _editStagedClearOverride = true;
+        _editNonUserIconPreview = null;
+      });
+      final Uint8List? preview =
+          await appsProvider.loadIconPreviewExcludingUserOverride(widget.appId);
+      if (!mounted) return;
+      setState(() {
+        _editNonUserIconPreview = preview;
+      });
+    } else {
+      setState(() {
+        _editStagedClearOverride = false;
+        _editNonUserIconPreview = null;
+      });
+    }
+  }
+
+  void _openIconWebSearch(AppInMemory appData) {
+    final String query = '${appData.name} square app icon transparent background';
+    launchUrlString(
+      'https://images.google.com/search?tbm=isch&q=${Uri.encodeComponent(query)}',
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+  Widget _materialAppPageSectionCard(
+    BuildContext ctx,
+    String sectionTitle,
+    List<Widget> children, {
+    Color? sectionBackgroundColor,
+    Color? sectionTitleColor,
+  }) {
+    final bool isDark = Theme.of(ctx).brightness == Brightness.dark;
+    final ColorScheme colorScheme = Theme.of(ctx).colorScheme;
+    final double sectionDeepen = isDark ? 0.055 : 0.045;
+    final Color defaultSectionFill = isDark
+        ? colorScheme.surfaceContainerHighest
+        : colorScheme.surfaceContainer;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: sectionBackgroundColor ??
+            (Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
+                defaultSectionFill),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: colorScheme.outlineVariant,
+          width: 1,
+        ),
+        boxShadow: [
+          if (isDark)
+            BoxShadow(
+              color: colorScheme.shadow.withAlpha(180),
+              blurRadius: 16,
+              spreadRadius: 0,
+              offset: const Offset(0, 4),
+            )
+          else
+            BoxShadow(
+              color: colorScheme.shadow.withAlpha(40),
+              blurRadius: 12,
+              offset: const Offset(0, 2),
+            ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              sectionTitle,
+              style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                    color: sectionTitleColor ??
+                        Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildEditMetadataSection(
@@ -337,86 +617,90 @@ class _AppPageState extends State<AppPage> {
     AppsProvider appsProvider,
     SettingsProvider settingsProvider,
   ) {
-    final cs = Theme.of(ctx).colorScheme;
-    final tt = Theme.of(ctx).textTheme;
-    final hasIconOverride = appsProvider.hasUserAppIconOverride(widget.appId);
+    final bool showResetIconButton =
+        appsProvider.hasUserAppIconOverride(widget.appId) ||
+            _editStagedIconBytes != null;
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── App name override ──────────────────────────────────────────
-          TextField(
-            controller: _nameController,
-            decoration: InputDecoration(
-              labelText: tr('appName'),
-              hintText: appData.name,
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-            textCapitalization: TextCapitalization.words,
-          ),
-          const SizedBox(height: 12),
-          // ── Package ID ────────────────────────────────────────────────
-          TextField(
-            controller: _packageController,
-            decoration: InputDecoration(
-              labelText: tr('package'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 12),
-          // ── Tracked source URL ────────────────────────────────────────
-          TextField(
-            controller: _urlController,
-            decoration: InputDecoration(
-              labelText: tr('trackedSource'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-            keyboardType: TextInputType.url,
-          ),
-          const SizedBox(height: 16),
-          // ── Icon ──────────────────────────────────────────────────────
-          Text(tr('appIconActionsTitle'),
-              style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              FilledButton.tonal(
-                onPressed: () => _pickEditIcon(appsProvider),
-                child: Text(tr('changeAppIcon')),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _materialAppPageSectionCard(
+          ctx,
+          tr('nameAndLinks').toUpperCase(),
+          [
+            TextField(
+              controller: _nameController,
+              decoration: InputDecoration(
+                labelText: tr('appName'),
+                border: const OutlineInputBorder(),
+                isDense: true,
               ),
-              if (hasIconOverride) ...[
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: () async {
-                    await appsProvider
-                        .resetAppIconToDefault(widget.appId);
-                    if (mounted) setState(() {});
-                  },
-                  child: Text(tr('resetAppIcon')),
+              textCapitalization: TextCapitalization.words,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _packageController,
+              decoration: InputDecoration(
+                labelText: tr('package'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _urlController,
+              decoration: InputDecoration(
+                labelText: tr('trackedSource'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.url,
+            ),
+          ],
+        ),
+        _materialAppPageSectionCard(
+          ctx,
+          tr('appIconActionsTitle').toUpperCase(),
+          [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                FilledButton.tonal(
+                  onPressed: () => _pickEditIcon(appsProvider),
+                  child: Text(tr('changeAppIcon')),
                 ),
+                OutlinedButton(
+                  onPressed: () => _openIconWebSearch(appData),
+                  child: Text(tr('searchWebForAppIcon')),
+                ),
+                if (showResetIconButton)
+                  OutlinedButton(
+                    onPressed: updating
+                        ? null
+                        : () => _onResetEditIconPressed(appsProvider),
+                    child: Text(tr('resetAppIcon')),
+                  ),
               ],
-            ],
-          ),
-          const SizedBox(height: 16),
-          // ── Categories ────────────────────────────────────────────────
-          Text(tr('categories'),
-              style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant)),
-          const SizedBox(height: 8),
-          CategoryEditorSelector(
-            key: ValueKey(_editCategories.join(',')),
-            preselected: _editCategories.toSet(),
-            alignment: WrapAlignment.start,
-            showLabelWhenNotEmpty: false,
-            onSelected: (cats) =>
-                setState(() => _editCategories = cats),
-          ),
-        ],
-      ),
+            ),
+          ],
+        ),
+        _materialAppPageSectionCard(
+          ctx,
+          tr('categories').toUpperCase(),
+          [
+            CategoryEditorSelector(
+              key: ValueKey(_editCategories.join(',')),
+              preselected: _editCategories.toSet(),
+              alignment: WrapAlignment.start,
+              showLabelWhenNotEmpty: false,
+              onSelected: (cats) =>
+                  setState(() => _editCategories = cats),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -431,15 +715,17 @@ class _AppPageState extends State<AppPage> {
     required Widget emptyPlaceholder,
     Object? heroTag,
     VoidCallback? onTap,
+    Uint8List? iconMemoryBytes,
   }) {
+    final Uint8List? bytesForImage = iconMemoryBytes ?? appInMemory?.icon;
     Widget iconChild;
-    if (appInMemory?.icon != null) {
+    if (bytesForImage != null) {
       iconChild = GestureDetector(
         onTap: onTap,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(borderRadius),
           child: Image.memory(
-            appInMemory!.icon!,
+            bytesForImage,
             height: size,
             width: size,
             fit: BoxFit.cover,
@@ -574,32 +860,75 @@ class _AppPageState extends State<AppPage> {
     });
   }
 
-  static const Color _alternateStorePlayGreen = Color(0xFF3DDC84);
-  static const Color _alternateStoreFdroidLightBlue = Color(0xFF81D4FA);
-  static const Color _alternateStoreApkmirrorOrange = Color(0xFFFF9800);
+  static const double _storeSourceIconSize = 40;
 
-  Widget _buildAlternateStoreChip({
-    required BuildContext chipContext,
-    required String label,
-    required Color backgroundColor,
-    required VoidCallback onPressed,
+  Widget _buildStoreSourceLaunchIcon({
+    required BuildContext iconContext,
+    required String url,
+    String? assetPath,
   }) {
-    return ActionChip(
-      label: Text(
-        label,
-        style: Theme.of(chipContext).textTheme.bodySmall?.copyWith(
-              color: _labelColorOnCategoryFill(backgroundColor),
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
+    final ColorScheme colorScheme = Theme.of(iconContext).colorScheme;
+    final Widget picture = assetPath != null
+        ? StoreSourceIconImage(
+            assetPath: assetPath,
+            size: _storeSourceIconSize,
+            errorBuilder: (context, error, stackTrace) => Icon(
+              Icons.link,
+              size: _storeSourceIconSize * 0.75,
+              color: colorScheme.primary,
             ),
+          )
+        : Icon(
+            Icons.link,
+            size: _storeSourceIconSize * 0.75,
+            color: colorScheme.primary,
+          );
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => launchUrlString(
+          url,
+          mode: LaunchMode.externalApplication,
+        ),
+        onLongPress: () => _toastUrl(url),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+          child: picture,
+        ),
       ),
-      backgroundColor: backgroundColor,
-      side: BorderSide.none,
-      onPressed: onPressed,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.compact,
-      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+    );
+  }
+
+  Widget _detailRowTrackedSource(BuildContext ctx, String label, String url) {
+    final String? assetPath = storeSourceAssetPathForUrl(url);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+            ),
+          ),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _buildStoreSourceLaunchIcon(
+                iconContext: ctx,
+                url: url,
+                assetPath: assetPath,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -634,6 +963,20 @@ class _AppPageState extends State<AppPage> {
         if (!mounted) return;
         Provider.of<AppsProvider>(context, listen: false)
             .updateAppIcon(widget.appId, ignoreCache: false);
+      });
+    }
+    if (widget.openInEditMode &&
+        !_scheduledOpenInEditMode &&
+        app != null &&
+        !_editMode) {
+      _scheduledOpenInEditMode = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final AppInMemory? freshApp =
+            Provider.of<AppsProvider>(context, listen: false).apps[widget.appId];
+        if (freshApp != null) {
+          _startEdit(freshApp, appsProvider);
+        }
       });
     }
     var source = app != null
@@ -736,69 +1079,6 @@ class _AppPageState extends State<AppPage> {
       });
     }
 
-    Widget _sectionCard(
-      BuildContext ctx,
-      String sectionTitle,
-      List<Widget> children, {
-      Color? sectionBackgroundColor,
-      Color? sectionTitleColor,
-    }) {
-      final isDark = Theme.of(ctx).brightness == Brightness.dark;
-      final colorScheme = Theme.of(ctx).colorScheme;
-      final double sectionDeepen = isDark ? 0.055 : 0.045;
-      final Color defaultSectionFill = isDark
-          ? colorScheme.surfaceContainerHighest
-          : colorScheme.surfaceContainer;
-      return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: sectionBackgroundColor ??
-              (Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
-                  defaultSectionFill),
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(
-            color: colorScheme.outlineVariant,
-            width: 1,
-          ),
-          boxShadow: [
-            if (isDark)
-              BoxShadow(
-                color: colorScheme.shadow.withAlpha(180),
-                blurRadius: 16,
-                spreadRadius: 0,
-                offset: const Offset(0, 4),
-              )
-            else
-              BoxShadow(
-                color: colorScheme.shadow.withAlpha(40),
-                blurRadius: 12,
-                offset: const Offset(0, 2),
-              ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                sectionTitle,
-                style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
-                      color: sectionTitleColor ??
-                          Theme.of(ctx).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 12),
-              ...children,
-            ],
-          ),
-        ),
-      );
-    }
-
     String _formatDateTimeToMinute(DateTime dateTime) {
       final local = dateTime.toLocal();
       final year = local.year.toString();
@@ -834,49 +1114,6 @@ class _AppPageState extends State<AppPage> {
               child: SelectableText(
                 value,
                 style: valueStyle ?? Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    Widget _detailRowWithLink(
-      BuildContext ctx,
-      String label,
-      String value,
-      VoidCallback? onTap, {
-      TextStyle? linkStyle,
-    }) {
-      final effectiveLinkStyle = linkStyle ??
-          Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                color: onTap != null
-                    ? Theme.of(ctx).colorScheme.primary
-                    : null,
-                decoration: onTap != null ? TextDecoration.underline : null,
-              );
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 100,
-              child: Text(
-                label,
-                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
-              ),
-            ),
-            Expanded(
-              child: GestureDetector(
-                onTap: onTap,
-                child: Text(
-                  value,
-                  style: effectiveLinkStyle,
-                ),
               ),
             ),
           ],
@@ -1385,7 +1622,7 @@ class _AppPageState extends State<AppPage> {
           );
         }
       }
-      final versionCard = _sectionCard(
+      final versionCard = _materialAppPageSectionCard(
         pageThemeContext,
         tr('version').toUpperCase(),
         versionCardChildren,
@@ -1395,7 +1632,7 @@ class _AppPageState extends State<AppPage> {
           app?.app.additionalSettings['trackOnlyTemporaryPackageId'] == true;
       final Widget? trackOnlyInstalledErrorCard =
           undeterminedTrackOnlyInstalled
-              ? _sectionCard(
+              ? _materialAppPageSectionCard(
                   pageThemeContext,
                   tr('error').toUpperCase(),
                   [
@@ -1444,10 +1681,6 @@ class _AppPageState extends State<AppPage> {
               );
       final detailsMonoValueStyle =
           detailsValueStyle.copyWith(fontFamily: 'monospace');
-      final detailsLinkStyle = detailsValueStyle.copyWith(
-        color: pageTheme.colorScheme.primary,
-        decoration: TextDecoration.underline,
-      );
 
       final String? alternateStoresPackageId = app?.app.id;
       final String? alternateStoresTrackedUrl = app?.app.url;
@@ -1476,15 +1709,10 @@ class _AppPageState extends State<AppPage> {
             valueStyle: detailsMonoValueStyle,
           ),
         if (app?.app.url != null && app!.app.url!.isNotEmpty)
-          _detailRowWithLink(
+          _detailRowTrackedSource(
             pageThemeContext,
             tr('trackedSource'),
             app!.app.url!,
-            () => launchUrlString(
-              app!.app.url!,
-              mode: LaunchMode.externalApplication,
-            ),
-            linkStyle: detailsLinkStyle,
           ),
         if (showAlternateSourcesRow && alternateStoresPackageId != null)
           Padding(
@@ -1509,34 +1737,25 @@ class _AppPageState extends State<AppPage> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       if (showPlayStoreIcon)
-                        _buildAlternateStoreChip(
-                          chipContext: pageThemeContext,
-                          label: tr('playStore'),
-                          backgroundColor: _alternateStorePlayGreen,
-                          onPressed: () => launchUrlString(
-                            'https://play.google.com/store/apps/details?id=$alternateStoresPackageId',
-                            mode: LaunchMode.externalApplication,
-                          ),
+                        _buildStoreSourceLaunchIcon(
+                          iconContext: pageThemeContext,
+                          url:
+                              'https://play.google.com/store/apps/details?id=$alternateStoresPackageId',
+                          assetPath: StoreSourceIconPaths.playStore,
                         ),
                       if (showApkmirrorIcon)
-                        _buildAlternateStoreChip(
-                          chipContext: pageThemeContext,
-                          label: tr('apkmirror'),
-                          backgroundColor: _alternateStoreApkmirrorOrange,
-                          onPressed: () => launchUrlString(
-                            'https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=${Uri.encodeComponent(alternateStoresPackageId)}',
-                            mode: LaunchMode.externalApplication,
-                          ),
+                        _buildStoreSourceLaunchIcon(
+                          iconContext: pageThemeContext,
+                          url:
+                              'https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=${Uri.encodeComponent(alternateStoresPackageId)}',
+                          assetPath: StoreSourceIconPaths.apkmirror,
                         ),
                       if (showFdroidIcon)
-                        _buildAlternateStoreChip(
-                          chipContext: pageThemeContext,
-                          label: tr('fdroidStore'),
-                          backgroundColor: _alternateStoreFdroidLightBlue,
-                          onPressed: () => launchUrlString(
-                            'https://f-droid.org/packages/$alternateStoresPackageId/',
-                            mode: LaunchMode.externalApplication,
-                          ),
+                        _buildStoreSourceLaunchIcon(
+                          iconContext: pageThemeContext,
+                          url:
+                              'https://f-droid.org/packages/$alternateStoresPackageId/',
+                          assetPath: StoreSourceIconPaths.fdroid,
                         ),
                     ],
                   ),
@@ -1561,7 +1780,7 @@ class _AppPageState extends State<AppPage> {
               ),
               Expanded(
                 child: (app?.app.categories ?? []).isEmpty
-                    ? Text('-', style: detailsValueStyle)
+                    ? Text(tr('none'), style: detailsValueStyle)
                     : Wrap(
                           spacing: 6,
                           runSpacing: 4,
@@ -1616,7 +1835,7 @@ class _AppPageState extends State<AppPage> {
           ),
         ),
       ];
-      final detailsCard = _sectionCard(
+      final detailsCard = _materialAppPageSectionCard(
         pageThemeContext,
         tr('details').toUpperCase(),
         detailsChildren,
@@ -1633,7 +1852,7 @@ class _AppPageState extends State<AppPage> {
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&
               app?.app.additionalSettings['about'].isNotEmpty)
-            _sectionCard(
+            _materialAppPageSectionCard(
               pageThemeContext,
               tr('about').toUpperCase(),
               [_buildAboutBlock(pageThemeContext)],
@@ -1654,7 +1873,12 @@ class _AppPageState extends State<AppPage> {
         size: scaledIconSize,
         borderRadius: 16,
         heroTag: 'app-icon-${widget.appId}',
-        onTap: _editMode ? () => _pickEditIcon(appsProvider) : null,
+        iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
+        onTap: _editMode
+            ? null
+            : (app?.installedInfo != null
+                ? () => pm.openApp(widget.appId)
+                : null),
         emptyPlaceholder: Container(
           height: scaledIconSize,
           width: scaledIconSize,
@@ -1687,21 +1911,30 @@ class _AppPageState extends State<AppPage> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (_editMode)
-                        TextField(
-                          controller: _nameController,
-                          style: titleStyle?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            fontSize: (titleStyle.fontSize ?? 22) *
-                                heroScale *
-                                1.06,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: app?.name ?? tr('app'),
-                            border: InputBorder.none,
-                            isDense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          maxLines: 2,
+                        ListenableBuilder(
+                          listenable: _nameController,
+                          builder: (BuildContext context, Widget? child) {
+                            final ColorScheme heroScheme =
+                                Theme.of(themeContext).colorScheme;
+                            final String previewText =
+                                _nameController.text.isEmpty
+                                    ? tr('app')
+                                    : _nameController.text;
+                            return Text(
+                              previewText,
+                              style: titleStyle?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: (titleStyle.fontSize ?? 22) *
+                                    heroScale *
+                                    1.06,
+                                color: _nameController.text.isEmpty
+                                    ? heroScheme.onSurfaceVariant
+                                    : null,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            );
+                          },
                         )
                       else
                         Text(
@@ -1749,6 +1982,7 @@ class _AppPageState extends State<AppPage> {
         appInMemory: app,
         size: dialogIconSize,
         borderRadius: dialogIconRadius,
+        iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
         emptyPlaceholder: small
             ? const SizedBox(height: 70, width: 70)
             : Container(
@@ -1904,9 +2138,12 @@ class _AppPageState extends State<AppPage> {
             return row;
           }).toList();
 
-          return GeneratedFormModal(
-            title: tr('additionalOptions'),
-            items: items,
+          return Theme(
+            data: pageThemeForPage,
+            child: GeneratedFormModal(
+              title: tr('additionalOptions'),
+              items: items,
+            ),
           );
         },
       );
@@ -1981,6 +2218,45 @@ class _AppPageState extends State<AppPage> {
             actionTheme.colorScheme.onSurface.withAlpha(97),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
+
+      if (_editMode) {
+        const double editActionsHeight = 52;
+        return SizedBox(
+          height: editActionsHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: expressiveMinimumSize,
+                    maximumSize: expressiveMaximumSize,
+                    padding: expressivePadding,
+                    shape: expressiveShape,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: updating
+                      ? null
+                      : () => _onCancelEditPressed(themeContext, app),
+                  child: Text(tr('cancel')),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  style: expressiveFilled,
+                  onPressed: app == null ||
+                          updating ||
+                          app.downloadProgress != null
+                      ? null
+                      : () => _saveEdit(app, appsProvider),
+                  child: Text(tr('save')),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
 
       final bool actionBlocked = updating || areDownloadsRunning;
       final installedVersion = app?.app.installedVersion;
@@ -2183,117 +2459,148 @@ class _AppPageState extends State<AppPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                if (app != null && app.installedInfo != null)
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: () {
-                      pm.openApp(app.app.id);
-                    },
-                    tooltip: tr('openApp'),
-                    icon: const Icon(Icons.open_in_new),
-                  ),
-                if (app != null && app.installedInfo != null)
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: () {
-                      appsProvider.openAppSettings(app.app.id);
-                    },
-                    icon: const Icon(Icons.settings),
-                    tooltip: tr('settings'),
-                  ),
-                if (source != null &&
-                    source.combinedAppSpecificSettingFormItems.isNotEmpty)
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: app?.downloadProgress != null || updating
-                        ? null
-                        : () async {
-                            var values = await showAdditionalOptionsDialog();
-                            handleAdditionalOptionChanges(values);
-                          },
-                    tooltip: tr('appOptions'),
-                    icon: const Icon(Icons.tune),
-                  ),
-                if (app != null && showAppWebpageFinal)
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: () {
-                      showDialog<void>(
-                        context: context,
-                        builder: (BuildContext dialogRouteContext) {
-                          return Theme(
-                            data: pageThemeForPage,
-                            child: Builder(
-                              builder: (BuildContext dialogThemedContext) {
-                                return AlertDialog(
-                                  scrollable: true,
-                                  content: getFullInfoColumn(
-                                    dialogThemedContext,
-                                    small: true,
-                                  ),
-                                  title: Text(app.name),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () {
-                                        Navigator.of(dialogRouteContext)
-                                            .pop();
-                                      },
-                                      child: Text(tr('continue')),
-                                    ),
-                                  ],
-                                );
+                    if (app != null && app.installedInfo != null)
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: () {
+                          appsProvider.openAppSettings(app.app.id);
+                        },
+                        icon: const Icon(Icons.info_outline),
+                        tooltip: tr('appPageAppInfo'),
+                      ),
+                    if (app != null &&
+                        !_editMode &&
+                        app.downloadProgress == null &&
+                        !updating)
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: () => _startEdit(app, appsProvider),
+                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: tr('editAppInfo'),
+                      ),
+                    if (source != null &&
+                        source.combinedAppSpecificSettingFormItems.isNotEmpty)
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: app?.downloadProgress != null || updating
+                            ? null
+                            : () async {
+                                var values =
+                                    await showAdditionalOptionsDialog();
+                                handleAdditionalOptionChanges(values);
                               },
-                            ),
+                        tooltip: tr('appOptions'),
+                        icon: const Icon(Icons.tune),
+                      ),
+                    if (app != null && showAppWebpageFinal)
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (BuildContext dialogRouteContext) {
+                              return Theme(
+                                data: pageThemeForPage,
+                                child: Builder(
+                                  builder:
+                                      (BuildContext dialogThemedContext) {
+                                    return AlertDialog(
+                                      scrollable: true,
+                                      content: getFullInfoColumn(
+                                        dialogThemedContext,
+                                        small: true,
+                                      ),
+                                      title: Text(app.name),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () {
+                                            Navigator.of(dialogRouteContext)
+                                                .pop();
+                                          },
+                                          child: Text(tr('continue')),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              );
+                            },
                           );
                         },
-                      );
-                    },
-                    icon: const Icon(Icons.more_horiz),
-                    tooltip: tr('more'),
-                  ),
-                if ((!isVersionDetectionStandard || trackOnly) &&
-                    app?.app.installedVersion != null &&
-                    (app?.app.installedVersion == app?.app.latestVersion ||
-                        versionsEffectivelyEqual(
-                            app!.app.installedVersion!, app.app.latestVersion) ||
-                        installedVersionIsNewerOrEqual(
-                            app!.app.installedVersion!, app.app.latestVersion)))
-                  IconButton(
-                    color: Theme.of(themeContext).colorScheme.primary,
-                    iconSize: 24,
-                    onPressed: app?.app == null || updating
-                        ? null
-                        : () {
-                            app!.app.installedVersion = null;
-                            appsProvider.saveApps([app.app]);
-                          },
-                    icon: const Icon(Icons.restore_rounded),
-                    tooltip: tr('resetInstallStatus'),
-                  ),
-                IconButton(
-                  color: Theme.of(themeContext).colorScheme.primary,
-                  iconSize: 24,
-                  onPressed: app?.downloadProgress != null || updating
-                      ? null
-                      : () {
-                          appsProvider
-                              .removeAppsWithModal(
+                        icon: const Icon(Icons.more_horiz),
+                        tooltip: tr('more'),
+                      ),
+                    if ((!isVersionDetectionStandard || trackOnly) &&
+                        app?.app.installedVersion != null &&
+                        (app?.app.installedVersion ==
+                                app?.app.latestVersion ||
+                            versionsEffectivelyEqual(
+                                app!.app.installedVersion!,
+                                app.app.latestVersion) ||
+                            installedVersionIsNewerOrEqual(
+                                app!.app.installedVersion!,
+                                app.app.latestVersion)))
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: app?.app == null || updating
+                            ? null
+                            : () {
+                                app!.app.installedVersion = null;
+                                appsProvider.saveApps([app.app]);
+                              },
+                        icon: const Icon(Icons.restore_rounded),
+                        tooltip: tr('resetInstallStatus'),
+                      ),
+                    IconButton(
+                      color: Theme.of(themeContext).colorScheme.primary,
+                      iconSize: 24,
+                      onPressed: app?.downloadProgress != null || updating
+                          ? null
+                          : () async {
+                              final ScaffoldMessengerState? messenger =
+                                  scaffoldMessengerKey.currentState;
+                              final AppInMemory? appRow = app;
+                              if (appRow == null) return;
+                              final List<App> removalSnapshot = [
+                                appRow.app.deepCopy(),
+                              ];
+                              final bool removed =
+                                  await appsProvider.removeAppsWithModal(
                                 context,
-                                app != null ? [app.app] : [],
-                              )
-                              .then((value) {
-                                if (value == true) {
-                                  Navigator.of(context).pop();
-                                }
-                              });
-                        },
-                  tooltip: tr('remove'),
-                  icon: const Icon(Icons.delete_outline),
-                ),
+                                [appRow.app],
+                              );
+                              if (removed && messenger != null) {
+                                messenger
+                                  ..clearSnackBars()
+                                  ..showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        tr('xAppsRemoved', args: ['1']),
+                                      ),
+                                      duration: const Duration(seconds: 5),
+                                      behavior: SnackBarBehavior.floating,
+                                      action: SnackBarAction(
+                                        label: tr('undo'),
+                                        onPressed: () => appsProvider.saveApps(
+                                          removalSnapshot,
+                                          onlyIfExists: false,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                              }
+                              if (removed && context.mounted) {
+                                Navigator.of(context).pop();
+                              }
+                            },
+                      tooltip: tr('remove'),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
                   ],
                 ),
                 if (app?.downloadProgress != null)
@@ -2316,7 +2623,24 @@ class _AppPageState extends State<AppPage> {
       data: pageThemeForPage,
       child: Builder(
         builder: (BuildContext themedPageContext) {
-          return Scaffold(
+          return PopScope(
+            canPop: !_editMode || !_isEditDirty(app),
+            onPopInvokedWithResult: (bool didPop, Object? result) async {
+              if (didPop) return;
+              if (!mounted || !_editMode) return;
+              final AppInMemory? freshApp = Provider.of<AppsProvider>(
+                    themedPageContext,
+                    listen: false,
+                  ).apps[widget.appId];
+              final bool leave = await _confirmDiscardToLeaveAppPage(
+                themedPageContext,
+                freshApp,
+              );
+              if (leave && themedPageContext.mounted) {
+                Navigator.of(themedPageContext).pop();
+              }
+            },
+            child: Scaffold(
             appBar: showAppWebpageFinal ? AppBar() : null,
             backgroundColor: appPageDeeperSurface(pageColorSchemeForPage.surface),
             body: RefreshIndicator(
@@ -2338,45 +2662,22 @@ class _AppPageState extends State<AppPage> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.center,
                                     children: [
-                                      if (_editMode)
-                                        TextButton(
-                                          onPressed: _cancelEdit,
-                                          child: Text(tr('cancel')),
-                                        )
-                                      else
-                                        IconButton(
-                                          icon: const Icon(Icons.arrow_back),
-                                          onPressed: () =>
-                                              Navigator.pop(context),
-                                          tooltip: MaterialLocalizations.of(
-                                                  context)
-                                              .backButtonTooltip,
-                                        ),
+                                      IconButton(
+                                        icon: const Icon(Icons.arrow_back),
+                                        onPressed: updating
+                                            ? null
+                                            : () => Navigator.of(
+                                                  themedPageContext,
+                                                ).maybePop(),
+                                        tooltip: MaterialLocalizations.of(
+                                                themedPageContext)
+                                            .backButtonTooltip,
+                                      ),
                                       Expanded(
                                         child: _buildDetailHeroContent(
                                           themedPageContext,
                                         ),
                                       ),
-                                      if (_editMode)
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                              right: 8),
-                                          child: FilledButton.tonal(
-                                            onPressed: app != null
-                                                ? () => _saveEdit(
-                                                    app, appsProvider)
-                                                : null,
-                                            child: Text(tr('save')),
-                                          ),
-                                        )
-                                      else if (app != null &&
-                                          app.downloadProgress == null &&
-                                          !updating)
-                                        IconButton(
-                                          icon: const Icon(Icons.edit),
-                                          onPressed: () => _startEdit(app),
-                                          tooltip: tr('editAppInfo'),
-                                        ),
                                     ],
                                   ),
                                   if (_editMode && app != null)
@@ -2417,12 +2718,14 @@ class _AppPageState extends State<AppPage> {
                       ],
                     ),
               onRefresh: () async {
+                if (_editMode) return;
                 if (app != null) {
                   await _runCheckUpdate(app.app.id);
                 }
               },
             ),
             bottomSheet: getBottomSheetMenu(themedPageContext),
+          ),
           );
         },
       ),

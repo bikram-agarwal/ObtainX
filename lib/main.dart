@@ -148,14 +148,19 @@ void main() async {
     );
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
+  final SettingsProvider settingsProvider = SettingsProvider();
+  await settingsProvider.initializeSettings();
   final np = NotificationsProvider();
   await np.initialize();
   FlutterForegroundTask.initCommunicationPort();
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (context) => AppsProvider()),
-        ChangeNotifierProvider(create: (context) => SettingsProvider()),
+        ChangeNotifierProvider(
+          create: (context) =>
+              AppsProvider(sharedSettings: settingsProvider),
+        ),
+        ChangeNotifierProvider.value(value: settingsProvider),
         Provider(create: (context) => np),
         Provider(create: (context) => LogsProvider()),
       ],

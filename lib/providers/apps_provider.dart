@@ -629,11 +629,12 @@ class AppsProvider with ChangeNotifier {
   /// User-chosen PNG overrides; under app storage, not [iconsCacheDir], so they
   /// survive Android "clear cache".
   late Directory userAppIconsDir;
-  late SettingsProvider settingsProvider = SettingsProvider();
+  late SettingsProvider settingsProvider;
 
   Iterable<AppInMemory> getAppValues() => apps.values.map((a) => a.deepCopy());
 
-  AppsProvider({isBg = false}) {
+  AppsProvider({bool isBg = false, SettingsProvider? sharedSettings}) {
+    settingsProvider = sharedSettings ?? SettingsProvider();
     // Subscribe to changes in the app foreground status
     foregroundStream = FGBGEvents.instance.stream.asBroadcastStream();
     foregroundSubscription = foregroundStream?.listen((event) async {
@@ -2079,21 +2080,41 @@ class AppsProvider with ChangeNotifier {
   bool hasUserAppIconOverride(String appId) =>
       _userAppIconPngFile(appId).existsSync();
 
-  /// Copies a user-selected PNG into app storage ([userAppIconsDir]) and updates memory.
+  bool validateUserAppIconPngBytes(Uint8List bytes) => _bytesLookLikePng(bytes);
+
+  /// Icon bytes as shown when the per-app user PNG override is ignored (cache,
+  /// installed app, or [App.iconUrl]). Does not read [userAppIconsDir] or mutate state.
+  Future<Uint8List?> loadIconPreviewExcludingUserOverride(String appId) async {
+    if (apps[appId] == null) return null;
+    final File cachedIcon = File('${iconsCacheDir.path}/$appId.png');
+    if (cachedIcon.existsSync()) {
+      try {
+        return await cachedIcon.readAsBytes();
+      } catch (e) {
+        logs.add('loadIconPreviewExcludingUserOverride cache: $e');
+      }
+    }
+    Uint8List? icon =
+        await apps[appId]!.installedInfo?.applicationInfo?.getAppIcon();
+    if (icon == null) {
+      final String? url = apps[appId]!.app.iconUrl;
+      if (url != null && url.isNotEmpty) {
+        icon = await _fetchIconFromUrl(url);
+      }
+    }
+    return icon;
+  }
+
+  /// Writes validated PNG bytes to [userAppIconsDir] and updates in-memory icon.
   /// Returns null on success, or a translated error string.
-  Future<String?> setUserAppIconFromPngPath(String appId, String filePath) async {
+  Future<String?> applyUserAppIconPngBytes(String appId, Uint8List bytes) async {
     if (apps[appId] == null) {
       return tr('unexpectedError');
     }
+    if (!_bytesLookLikePng(bytes)) {
+      return tr('changeAppIconInvalidPng');
+    }
     try {
-      final File sourceFile = File(filePath);
-      if (!sourceFile.existsSync()) {
-        return tr('unexpectedError');
-      }
-      final Uint8List bytes = await sourceFile.readAsBytes();
-      if (!_bytesLookLikePng(bytes)) {
-        return tr('changeAppIconInvalidPng');
-      }
       final File dest = _userAppIconPngFile(appId);
       await dest.writeAsBytes(bytes);
       apps.update(
@@ -2107,6 +2128,22 @@ class AppsProvider with ChangeNotifier {
       );
       notifyListeners();
       return null;
+    } catch (e) {
+      logs.add('applyUserAppIconPngBytes: $e');
+      return tr('unexpectedError');
+    }
+  }
+
+  /// Copies a user-selected PNG into app storage ([userAppIconsDir]) and updates memory.
+  /// Returns null on success, or a translated error string.
+  Future<String?> setUserAppIconFromPngPath(String appId, String filePath) async {
+    try {
+      final File sourceFile = File(filePath);
+      if (!sourceFile.existsSync()) {
+        return tr('unexpectedError');
+      }
+      final Uint8List bytes = await sourceFile.readAsBytes();
+      return applyUserAppIconPngBytes(appId, bytes);
     } catch (e) {
       logs.add('setUserAppIconFromPngPath: $e');
       return tr('unexpectedError');

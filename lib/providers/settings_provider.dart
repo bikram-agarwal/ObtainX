@@ -32,7 +32,30 @@ enum SortOrderSettings { ascending, descending }
 
 enum AppsListGroupBy { none, category, source }
 
-enum SwipeAction { update, pin, edit, delete, open, appInfo, none }
+enum SwipeAction {
+  update,
+  pin,
+  appOptions,
+  delete,
+  open,
+  appInfo,
+  edit,
+  none,
+}
+
+/// Order for settings dropdowns: alphabetical by localized action label,
+/// with [SwipeAction.none] ("None") always last.
+List<SwipeAction> swipeActionsSortedByLocalizedLabel() {
+  final List<SwipeAction> actions = List<SwipeAction>.from(SwipeAction.values);
+  actions.sort((SwipeAction first, SwipeAction second) {
+    if (first == SwipeAction.none) return 1;
+    if (second == SwipeAction.none) return -1;
+    final String labelFirst = tr('swipeAction_${first.name}').toLowerCase();
+    final String labelSecond = tr('swipeAction_${second.name}').toLowerCase();
+    return labelFirst.compareTo(labelSecond);
+  });
+  return actions;
+}
 
 class SettingsProvider with ChangeNotifier {
   SharedPreferences? prefs;
@@ -46,7 +69,66 @@ class SettingsProvider with ChangeNotifier {
     prefs = await SharedPreferences.getInstance();
     defaultAppDir = (await getAppStorageDir()).path;
     _migrateShizukuSetting();
+    _migrateSwipeActionPrefs();
+    _syncSwipeActionNameStringsIfMissing();
     notifyListeners();
+  }
+
+  static const String _rightSwipeNameKey = 'rightSwipeActionName';
+  static const String _leftSwipeNameKey = 'leftSwipeActionName';
+
+  /// v1: [SwipeAction.none] was index 6 on the 7-value enum. v2 remaps that to index 7.
+  /// v3 clears stored swipe name prefs once so they are rebuilt from ints (fixes stale
+  /// [rightSwipeActionName] / [leftSwipeActionName] from older ObtainX builds).
+  void _migrateSwipeActionPrefs() {
+    if (prefs == null) return;
+    int schemaVersion = prefs!.getInt('swipeActionEnumVersion') ?? 0;
+
+    if (schemaVersion < 2) {
+      for (final String prefKey in ['rightSwipeAction', 'leftSwipeAction']) {
+        if (prefs!.containsKey(prefKey) && prefs!.getInt(prefKey) == 6) {
+          prefs!.setInt(prefKey, SwipeAction.none.index);
+        }
+      }
+      prefs!.setInt('swipeActionEnumVersion', 2);
+      schemaVersion = 2;
+    }
+
+    if (schemaVersion < 3) {
+      prefs!.remove(_rightSwipeNameKey);
+      prefs!.remove(_leftSwipeNameKey);
+      prefs!.setInt('swipeActionEnumVersion', 3);
+    }
+  }
+
+  /// Prefer stable enum [SwipeAction.name] in prefs so reordering does not break gestures.
+  void _syncSwipeActionNameStringsIfMissing() {
+    if (prefs == null) return;
+    void syncOne(String intKey, String nameKey, int defaultIndex) {
+      if (prefs!.containsKey(nameKey)) return;
+      final int raw = prefs!.getInt(intKey) ?? defaultIndex;
+      final SwipeAction action =
+          SwipeAction.values[raw.clamp(0, SwipeAction.values.length - 1)];
+      prefs!.setString(nameKey, action.name);
+    }
+
+    syncOne('rightSwipeAction', _rightSwipeNameKey, SwipeAction.update.index);
+    syncOne('leftSwipeAction', _leftSwipeNameKey, SwipeAction.pin.index);
+  }
+
+  SwipeAction _swipeActionFromPrefs(
+    String intKey,
+    String nameKey,
+    int defaultIndex,
+  ) {
+    final String? storedName = prefs?.getString(nameKey);
+    if (storedName != null && storedName.isNotEmpty) {
+      for (final SwipeAction candidate in SwipeAction.values) {
+        if (candidate.name == storedName) return candidate;
+      }
+    }
+    final int index = prefs?.getInt(intKey) ?? defaultIndex;
+    return SwipeAction.values[index.clamp(0, SwipeAction.values.length - 1)];
   }
 
   void _migrateShizukuSetting() {
@@ -633,22 +715,30 @@ class SettingsProvider with ChangeNotifier {
   }
 
   SwipeAction get rightSwipeAction {
-    final index = prefs?.getInt('rightSwipeAction') ?? SwipeAction.update.index;
-    return SwipeAction.values[index.clamp(0, SwipeAction.values.length - 1)];
+    return _swipeActionFromPrefs(
+      'rightSwipeAction',
+      _rightSwipeNameKey,
+      SwipeAction.update.index,
+    );
   }
 
   set rightSwipeAction(SwipeAction action) {
     prefs?.setInt('rightSwipeAction', action.index);
+    prefs?.setString(_rightSwipeNameKey, action.name);
     notifyListeners();
   }
 
   SwipeAction get leftSwipeAction {
-    final index = prefs?.getInt('leftSwipeAction') ?? SwipeAction.pin.index;
-    return SwipeAction.values[index.clamp(0, SwipeAction.values.length - 1)];
+    return _swipeActionFromPrefs(
+      'leftSwipeAction',
+      _leftSwipeNameKey,
+      SwipeAction.pin.index,
+    );
   }
 
   set leftSwipeAction(SwipeAction action) {
     prefs?.setInt('leftSwipeAction', action.index);
+    prefs?.setString(_leftSwipeNameKey, action.name);
     notifyListeners();
   }
 }
