@@ -2215,7 +2215,7 @@ class _AppPageState extends State<AppPage> {
                             handleAdditionalOptionChanges(values);
                           },
                     tooltip: tr('appOptions'),
-                    icon: const Icon(Icons.settings_rounded),
+                    icon: const Icon(Icons.tune),
                   ),
                 if (app != null && showAppWebpageFinal)
                   IconButton(
@@ -2373,8 +2373,7 @@ class _AppPageState extends State<AppPage> {
                                           app.downloadProgress == null &&
                                           !updating)
                                         IconButton(
-                                          icon: const Icon(
-                                              Icons.edit_outlined),
+                                          icon: const Icon(Icons.edit),
                                           onPressed: () => _startEdit(app),
                                           tooltip: tr('editAppInfo'),
                                         ),
