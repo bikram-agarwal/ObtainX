@@ -59,6 +59,7 @@ const localeDir = 'assets/translations';
 var fdroid = false;
 
 final globalNavigatorKey = GlobalKey<NavigatorState>();
+final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
 Future<void> loadTranslations() async {
   // See easy_localization/issues/210
@@ -410,6 +411,7 @@ class _ObtainiumState extends State<Obtainium> {
             supportedLocales: context.supportedLocales,
             locale: context.locale,
             navigatorKey: globalNavigatorKey,
+            scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
             theme: ThemeData(
               useMaterial3: true,

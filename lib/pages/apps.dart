@@ -589,15 +589,11 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       case SwipeAction.delete:
         if (app != null) {
           final snapshot = [app.deepCopy()];
-          final messenger = ScaffoldMessenger.of(context);
           final removed = await provider.removeAppsWithModal(context, [app]);
           if (removed) {
-            // Wait for the list-rebuild triggered by deletion to settle before
-            // showing the snackbar; otherwise the animation may never complete
-            // and the auto-dismiss timer never fires.
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              messenger.clearSnackBars();
-              messenger.showSnackBar(
+            scaffoldMessengerKey.currentState
+              ?..clearSnackBars()
+              ..showSnackBar(
                 SnackBar(
                   content: Text(tr('xAppsRemoved', args: ['1'])),
                   duration: const Duration(seconds: 5),
@@ -608,7 +604,6 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
                   ),
                 ),
               );
-            });
           }
         }
       case SwipeAction.open:
@@ -2853,15 +2848,14 @@ class AppsPageState extends State<AppsPage> {
                         .map((a) => a.deepCopy())
                         .toList();
                     final appsProviderRef = appsProvider;
-                    final messenger = ScaffoldMessenger.of(context);
                     final removed = await appsProviderRef.removeAppsWithModal(
                       context,
                       selectedApps.toList(),
                     );
                     if (removed) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        messenger.clearSnackBars();
-                        messenger.showSnackBar(
+                      scaffoldMessengerKey.currentState
+                        ?..clearSnackBars()
+                        ..showSnackBar(
                           SnackBar(
                             content: Text(
                               tr('xAppsRemoved',
@@ -2877,7 +2871,6 @@ class AppsPageState extends State<AppsPage> {
                             ),
                           ),
                         );
-                      });
                     }
                   },
                   tooltip: tr('removeSelectedApps'),
@@ -3041,6 +3034,9 @@ class AppsPageState extends State<AppsPage> {
                     slivers: <Widget>[
                       CustomAppBar(
                         title: tr('appsString'),
+                        titleStyle: _searchExpanded
+                            ? Theme.of(context).textTheme.titleSmall
+                            : null,
                         actions: [
                           if (!_searchExpanded)
                             IconButton(

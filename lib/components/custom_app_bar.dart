@@ -7,6 +7,7 @@ class CustomAppBar extends StatefulWidget {
     this.actions,
     this.bottom,
     this.searchWidget,
+    this.titleStyle,
   });
 
   final String title;
@@ -21,6 +22,10 @@ class CustomAppBar extends StatefulWidget {
   /// This puts the search bar on the same line as the title, eliminating any
   /// visual overlap between the "Apps" heading and the search field.
   final Widget? searchWidget;
+
+  /// Optional style override for the compact layout title.
+  /// When null the title inherits the app bar theme's default style.
+  final TextStyle? titleStyle;
 
   @override
   State<CustomAppBar> createState() => _CustomAppBarState();
@@ -41,13 +46,12 @@ class _CustomAppBarState extends State<CustomAppBar> {
           padding: const EdgeInsets.only(left: 20, right: 4),
           child: Row(
             children: [
-              Text(
-                widget.title,
-                style: TextStyle(
-                  color: Theme.of(context).textTheme.bodyMedium?.color,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 18,
-                ),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                style: widget.titleStyle ??
+                    (Theme.of(context).appBarTheme.titleTextStyle ??
+                        Theme.of(context).textTheme.titleLarge!),
+                child: Text(widget.title),
               ),
               const SizedBox(width: 10),
               Expanded(child: widget.searchWidget!),
