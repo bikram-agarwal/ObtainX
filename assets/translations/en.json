@@ -493,5 +493,6 @@
     "addingApp": "Adding {}…",
     "skipping": "Skipping {}…",
     "xAddedYFailed": "{added} added, {failed} failed, {skipped} skipped",
+    "pending": "Pending",
     "done": "Done"
 }

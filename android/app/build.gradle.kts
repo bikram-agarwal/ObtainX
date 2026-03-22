@@ -68,10 +68,10 @@ android {
 
     signingConfigs {
         create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String?
-            keyPassword = keystoreProperties["keyPassword"] as String?
+            keyAlias = System.getenv("OBTAINX_KEY_ALIAS") ?: (keystoreProperties["keyAlias"] as String?)
+            keyPassword = System.getenv("OBTAINX_KEY_PASSWORD") ?: (keystoreProperties["keyPassword"] as String?)
+            storePassword = System.getenv("OBTAINX_STORE_PASSWORD") ?: (keystoreProperties["storePassword"] as String?)
             storeFile = keystoreProperties["storeFile"]?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String?
         }
     }
 

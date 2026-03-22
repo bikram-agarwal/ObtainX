@@ -589,14 +589,17 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       case SwipeAction.delete:
         if (app != null) {
           final snapshot = [app.deepCopy()];
+          // Capture messenger before the await – the widget may be disposed after removal
+          final messenger = scaffoldMessengerKey.currentState;
           final removed = await provider.removeAppsWithModal(context, [app]);
           if (removed) {
-            scaffoldMessengerKey.currentState
+            messenger
               ?..clearSnackBars()
               ..showSnackBar(
                 SnackBar(
                   content: Text(tr('xAppsRemoved', args: ['1'])),
                   duration: const Duration(seconds: 5),
+                  showCloseIcon: true,
                   action: SnackBarAction(
                     label: tr('undo'),
                     onPressed: () =>
@@ -2848,12 +2851,14 @@ class AppsPageState extends State<AppsPage> {
                         .map((a) => a.deepCopy())
                         .toList();
                     final appsProviderRef = appsProvider;
+                    // Capture messenger before the await
+                    final messenger = scaffoldMessengerKey.currentState;
                     final removed = await appsProviderRef.removeAppsWithModal(
                       context,
                       selectedApps.toList(),
                     );
                     if (removed) {
-                      scaffoldMessengerKey.currentState
+                      messenger
                         ?..clearSnackBars()
                         ..showSnackBar(
                           SnackBar(
@@ -2862,6 +2867,7 @@ class AppsPageState extends State<AppsPage> {
                                   args: ['${snapshot.length}']),
                             ),
                             duration: const Duration(seconds: 5),
+                            showCloseIcon: true,
                             action: SnackBarAction(
                               label: tr('undo'),
                               onPressed: () => appsProviderRef.saveApps(

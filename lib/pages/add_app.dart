@@ -774,7 +774,7 @@ class AddAppPageState extends State<AddAppPage> {
                   if (pickedSource != null) getHTMLSourceOverrideDropdown(),
                   if (shouldShowSearchBar()) getSearchBarRow(),
                   if (pickedSource == null) ...[
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 24),
                     OutlinedButton.icon(
                       onPressed: () {
                         Navigator.push(

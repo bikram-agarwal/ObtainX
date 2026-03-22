@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:http/http.dart' as http;
+import 'package:synchronized/synchronized.dart';
 
 const int _flagSystem = 1; // ApplicationInfo.FLAG_SYSTEM = 0x1
 const int _flagUpdatedSystemApp = 128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP = 0x80
@@ -289,6 +290,7 @@ class BulkImportService {
   }) async {
     final result = <String, String?>{};
     final semaphore = _Semaphore(8); // max 8 concurrent requests
+    final progressLock = Lock();
     int done = 0;
 
     await Future.wait(
@@ -309,8 +311,10 @@ class BulkImportService {
         } catch (_) {
           result[pkg] = null;
         } finally {
-          done++;
-          onProgress?.call(done, packageNames.length);
+          await progressLock.synchronized(() {
+            done++;
+            onProgress?.call(done, packageNames.length);
+          });
           semaphore.release();
         }
       }),

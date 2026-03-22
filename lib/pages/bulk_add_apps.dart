@@ -59,6 +59,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   bool _loadingApps = false;
   final Set<String> _selectedPackages = {};
   String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
   // Icon cache: packageName -> icon bytes (null while loading, Uint8List or false when done)
   final Map<String, Object?> _iconCache = {}; // Object? = Uint8List | false | null
 
@@ -71,6 +72,8 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   // --- Results step ---
   List<_FoundApp> _foundApps = [];
   List<InstalledAppInfo> _notFoundApps = [];
+  // Snapshot of tracked apps at scan time – prevents just-added apps showing as "already tracked"
+  Set<String> _trackedAtScanTime = {};
   bool _addingApps = false;
   int _addedCount = 0;
   int _failedCount = 0;
@@ -84,6 +87,12 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _appsProvider = context.read<AppsProvider>();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   // ─── Config Step ─────────────────────────────────────────────────────────
@@ -263,13 +272,18 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: TextField(
+            controller: _searchController,
             decoration: InputDecoration(
               hintText: tr('search'),
               prefixIcon: const Icon(Icons.search_rounded),
               suffixIcon: _searchQuery.isNotEmpty
                   ? IconButton(
                       icon: const Icon(Icons.clear_rounded),
-                      onPressed: () => setState(() => _searchQuery = ''),
+                      onPressed: () {
+                        _searchController.clear();
+                        FocusScope.of(context).unfocus();
+                        setState(() => _searchQuery = '');
+                      },
                     )
                   : null,
               border: const OutlineInputBorder(),
@@ -396,6 +410,10 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   // ─── Scanning Step ─────────────────────────────────────────────────────
 
   Future<void> _startScanning() async {
+    // Capture which apps are already tracked BEFORE we start, so results
+    // display and add-loop can use this stable snapshot.
+    _trackedAtScanTime = _appsProvider.apps.keys.toSet();
+
     setState(() {
       _step = _Step.scanning;
       _scanStatus = '';
@@ -491,65 +509,123 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   }
 
   Widget _buildScanningStep() {
-    return Padding(
-      padding: const EdgeInsets.all(24),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 24),
-          Text(
-            _scanStatus,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium,
+          Center(
+            child: SizedBox(
+              width: 80,
+              height: 80,
+              child: CircularProgressIndicator(
+                strokeWidth: 6,
+                strokeCap: StrokeCap.round,
+              ),
+            ),
           ),
           const SizedBox(height: 32),
-          if (_selectedStores.contains('APKMirror')) ...[
-            _buildStoreProgress('APKMirror', _apkMirrorProgress),
-            const SizedBox(height: 12),
-          ],
-          if (_selectedStores.contains('APKPure')) ...[
-            _buildStoreProgress('APKPure', _apkPureProgress),
-            const SizedBox(height: 12),
-          ],
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Text(
+              _scanStatus,
+              key: ValueKey(_scanStatus),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+          const SizedBox(height: 40),
+          if (_selectedStores.contains('APKMirror'))
+            _buildStoreCard('APKMirror', _apkMirrorProgress),
+          if (_selectedStores.contains('APKPure'))
+            _buildStoreCard('APKPure', _apkPureProgress),
           if (_selectedStores.contains('F-Droid'))
-            _buildStoreProgress('F-Droid', _fdroidProgress),
+            _buildStoreCard('F-Droid', _fdroidProgress),
         ],
       ),
     );
   }
 
-  Widget _buildStoreProgress(String store, double progress) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+  Widget _buildStoreCard(String store, double progress) {
+    final done = progress >= 1.0;
+    final started = progress > 0;
+    final cs = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: done ? cs.primaryContainer : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
           children: [
-            _storeLogo(store, size: 18),
-            const SizedBox(width: 8),
-            Text(store, style: Theme.of(context).textTheme.bodyMedium),
-            const Spacer(),
-            Text(
-              progress >= 1.0 ? tr('done') : '${(progress * 100).round()}%',
-              style: Theme.of(context).textTheme.bodySmall,
+            _storeLogo(store, size: 32),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        store,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: done ? cs.onPrimaryContainer : cs.onSurface,
+                        ),
+                      ),
+                      const Spacer(),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        child: done
+                            ? Icon(
+                                Icons.check_circle_rounded,
+                                color: cs.primary,
+                                size: 20,
+                                key: const ValueKey('done'),
+                              )
+                            : Text(
+                                started
+                                    ? '${(progress * 100).round()}%'
+                                    : tr('pending'),
+                                key: ValueKey(started ? 'progress' : 'pending'),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                      ),
+                    ],
+                  ),
+                  if (!done) ...[
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: started ? progress : null,
+                        minHeight: 4,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 4),
-        LinearProgressIndicator(value: progress),
-      ],
+      ),
     );
   }
 
   // ─── Results Step ──────────────────────────────────────────────────────
 
   Widget _buildResultsStep() {
-    final alreadyTracked = _appsProvider.apps.keys.toSet();
+    // Use the snapshot taken at scan time, so just-added apps don't appear
+    // as "already tracked" after _addFoundApps runs.
     final newFound =
-        _foundApps.where((a) => !alreadyTracked.contains(a.info.packageName)).toList();
+        _foundApps.where((a) => !_trackedAtScanTime.contains(a.info.packageName)).toList();
     final alreadyFoundTracked =
-        _foundApps.where((a) => alreadyTracked.contains(a.info.packageName)).toList();
+        _foundApps.where((a) => _trackedAtScanTime.contains(a.info.packageName)).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -826,8 +902,8 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     for (final app in apps) {
       if (!mounted) break;
 
-      // Skip if already tracked
-      if (_appsProvider.apps.containsKey(app.info.packageName)) {
+      // Skip if already tracked AT SCAN TIME (use snapshot, not live map)
+      if (_trackedAtScanTime.contains(app.info.packageName)) {
         setState(() {
           _skippedCount++;
           _addingStatus = tr('skipping', args: [app.info.name]);
@@ -876,8 +952,6 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   // ─── Helpers ───────────────────────────────────────────────────────────
 
   /// Returns the store's actual logo.
-  /// APKMirror and APKPure use PNGs from APKUpdater's assets;
-  /// F-Droid uses a styled container with its brand blue (#1976D2).
   Widget _storeLogo(String store, {double size = 24}) {
     switch (store) {
       case 'APKMirror':
@@ -897,26 +971,12 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
           filterQuality: FilterQuality.medium,
         );
       case 'F-Droid':
-        return SizedBox(
+        return Image.asset(
+          'assets/graphics/ic_fdroid.png',
           width: size,
           height: size,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1976D2),
-              borderRadius: BorderRadius.circular(size * 0.2),
-            ),
-            child: Center(
-              child: Text(
-                'F',
-                style: TextStyle(
-                  color: const Color(0xFFB2EB0B),
-                  fontSize: size * 0.65,
-                  fontWeight: FontWeight.bold,
-                  height: 1,
-                ),
-              ),
-            ),
-          ),
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.medium,
         );
       default:
         return Icon(Icons.store_rounded, size: size);
