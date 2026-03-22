@@ -139,7 +139,8 @@ class _SourceBadgeWidget extends StatelessWidget {
       loadingBuilder: (_, child, loadingProgress) =>
           loadingProgress == null ? child : const SizedBox.shrink(),
     );
-    if (isDark) {
+    // GitHub's favicon is black — invert it in dark mode so it reads as white.
+    if (isDark && host == 'github.com') {
       image = ColorFiltered(
         colorFilter: const ColorFilter.matrix([
           -1, 0, 0, 0, 255,
@@ -591,17 +592,23 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           final messenger = ScaffoldMessenger.of(context);
           final removed = await provider.removeAppsWithModal(context, [app]);
           if (removed) {
-            messenger.showSnackBar(
-              SnackBar(
-                content: Text(tr('xAppsRemoved', args: ['1'])),
-                duration: const Duration(seconds: 4),
-                action: SnackBarAction(
-                  label: tr('undo'),
-                  onPressed: () =>
-                      provider.saveApps(snapshot, onlyIfExists: false),
+            // Wait for the list-rebuild triggered by deletion to settle before
+            // showing the snackbar; otherwise the animation may never complete
+            // and the auto-dismiss timer never fires.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              messenger.clearSnackBars();
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text(tr('xAppsRemoved', args: ['1'])),
+                  duration: const Duration(seconds: 5),
+                  action: SnackBarAction(
+                    label: tr('undo'),
+                    onPressed: () =>
+                        provider.saveApps(snapshot, onlyIfExists: false),
+                  ),
                 ),
-              ),
-            );
+              );
+            });
           }
         }
       case SwipeAction.open:
@@ -1397,10 +1404,21 @@ class AppsPageState extends State<AppsPage> {
   /// not the default) the chip uses a primary-container colour as a visual cue.
   Widget _buildSearchBar({
     required ColorScheme colorScheme,
+    required VoidCallback showFilterSheet,
     required AppsFilter neutralFilter,
     required SettingsProvider settingsProvider,
     required FocusNode focusNode,
   }) {
+    final bool anyFilterActive =
+        !filter.isIdenticalTo(neutralFilter, settingsProvider) ||
+        _searchField != 'appName';
+
+    final String fieldLabel = switch (_searchField) {
+      'author' => tr('author'),
+      'appId' => tr('appId'),
+      _ => tr('appName'),
+    };
+
     return TextField(
       controller: _searchController,
       focusNode: focusNode,
@@ -1413,8 +1431,11 @@ class AppsPageState extends State<AppsPage> {
           borderRadius: BorderRadius.circular(30),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        suffix: _searchController.text.isNotEmpty
-            ? GestureDetector(
+        suffix: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_searchController.text.isNotEmpty)
+              GestureDetector(
                 onTap: _searchController.clear,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 4),
@@ -1424,8 +1445,46 @@ class AppsPageState extends State<AppsPage> {
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
-              )
-            : null,
+              ),
+            GestureDetector(
+              onTap: showFilterSheet,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: anyFilterActive
+                      ? colorScheme.primaryContainer
+                      : colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      fieldLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: anyFilterActive
+                            ? colorScheme.onPrimaryContainer
+                            : colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      size: 14,
+                      color: anyFilterActive
+                          ? colorScheme.onPrimaryContainer
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2800,22 +2859,25 @@ class AppsPageState extends State<AppsPage> {
                       selectedApps.toList(),
                     );
                     if (removed) {
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            tr('xAppsRemoved',
-                                args: ['${snapshot.length}']),
-                          ),
-                          duration: const Duration(seconds: 4),
-                          action: SnackBarAction(
-                            label: tr('undo'),
-                            onPressed: () => appsProviderRef.saveApps(
-                              snapshot,
-                              onlyIfExists: false,
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        messenger.clearSnackBars();
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              tr('xAppsRemoved',
+                                  args: ['${snapshot.length}']),
+                            ),
+                            duration: const Duration(seconds: 5),
+                            action: SnackBarAction(
+                              label: tr('undo'),
+                              onPressed: () => appsProviderRef.saveApps(
+                                snapshot,
+                                onlyIfExists: false,
+                              ),
                             ),
                           ),
-                        ),
-                      );
+                        );
+                      });
                     }
                   },
                   tooltip: tr('removeSelectedApps'),
@@ -2980,20 +3042,15 @@ class AppsPageState extends State<AppsPage> {
                       CustomAppBar(
                         title: tr('appsString'),
                         actions: [
-                          if (!_searchExpanded) ...[
-                            IconButton(
-                              icon: const Icon(Icons.tune_rounded),
-                              onPressed: showFilterSheet,
-                              tooltip: tr('filter'),
-                            ),
+                          if (!_searchExpanded)
                             IconButton(
                               icon: const Icon(Icons.search),
                               onPressed: () {
                                 setState(() => _searchExpanded = true);
                                 _searchFocusNode.requestFocus();
                               },
-                            ),
-                          ] else
+                            )
+                          else
                             IconButton(
                               icon: const Icon(Icons.close),
                               onPressed: () => setState(() {
@@ -3003,14 +3060,17 @@ class AppsPageState extends State<AppsPage> {
                               }),
                             ),
                         ],
+                        // Always use the compact layout so the action icon
+                        // and "Apps" title are always on the same toolbar row.
                         searchWidget: _searchExpanded
                             ? _buildSearchBar(
                                 colorScheme: Theme.of(context).colorScheme,
+                                showFilterSheet: showFilterSheet,
                                 neutralFilter: neutralFilter,
                                 settingsProvider: settingsProvider,
                                 focusNode: _searchFocusNode,
                               )
-                            : null,
+                            : const SizedBox.shrink(),
                         bottom: _buildFilterChipsRow(),
                       ),
                       ...getLoadingWidgets(),

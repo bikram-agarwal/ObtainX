@@ -1421,7 +1421,9 @@ class AppsProvider with ChangeNotifier {
         }
         id = downloadedFile?.appId ?? downloadedDir!.appId;
         willBeSilent = await canInstallSilently(apps[id]!.app);
-        if (!settingsProvider.useShizuku) {
+        if (settingsProvider.installerMode == 'legacy') {
+          // Legacy installer bypasses the standard permission check.
+        } else if (!settingsProvider.useShizuku) {
           if (!(await settingsProvider.getInstallPermission(enforce: false))) {
             throw ObtainiumError(tr('cancelled'));
           }
