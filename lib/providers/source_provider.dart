@@ -1233,12 +1233,20 @@ class SourceProvider {
     if (trackOnlyOverride || source.enforceTrackOnly) {
       additionalSettings['trackOnly'] = true;
     }
-    var trackOnly = additionalSettings['trackOnly'] == true;
     String standardUrl = source.standardizeUrl(url);
     APKDetails apk = await source.getLatestAPKDetails(
       standardUrl,
       additionalSettings,
     );
+    // If the source enforces track-only by default but managed to resolve direct
+    // APK download URLs (e.g. APKMirror with enableDirectDownload), allow the
+    // download to proceed.  Also force a refresh before every download because
+    // the resolved URLs (e.g. APKMirror download.php?key=…) are time-limited.
+    if (!trackOnlyOverride && source.enforceTrackOnly && apk.apkUrls.isNotEmpty) {
+      additionalSettings['trackOnly'] = false;
+      additionalSettings['refreshBeforeDownload'] = true;
+    }
+    var trackOnly = additionalSettings['trackOnly'] == true;
 
     if (source.runtimeType !=
             HTML().runtimeType && // Some sources do it separately

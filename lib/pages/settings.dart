@@ -45,7 +45,7 @@ class _SettingsPageState extends State<SettingsPage> {
   int updateInterval = 0;
   late SplineInterpolation updateIntervalInterpolator; // 🤓
   String updateIntervalLabel = tr('neverManualOnly');
-  bool showIntervalLabel = true;
+
   final Map<ColorSwatch<Object>, String> colorsNameMap =
       <ColorSwatch<Object>, String>{
         ColorTools.createPrimarySwatch(obtainiumThemeColor): 'Obtainium',
@@ -222,14 +222,8 @@ class _SettingsPageState extends State<SettingsPage> {
           processIntervalSliderValue(value);
         });
       },
-      onChangeStart: (double value) {
-        setState(() {
-          showIntervalLabel = false;
-        });
-      },
       onChangeEnd: (double value) {
         setState(() {
-          showIntervalLabel = true;
           settingsProvider.updateInterval = updateInterval;
         });
       },
@@ -335,24 +329,44 @@ class _SettingsPageState extends State<SettingsPage> {
                         sectionHeader(tr('updates'), Icons.update_rounded),
                         settingsCard([
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                if (showIntervalLabel)
-                                  SizedBox(
-                                    child: Text(
-                                      "${tr('bgUpdateCheckInterval')}: $updateIntervalLabel",
-                                    ),
-                                  )
-                                else
-                                  const SizedBox(height: 16),
-                                SliderTheme(
-                                  data: SliderThemeData(
-                                    inactiveTrackColor:
-                                        cs.onSurface.withAlpha(60),
+                                Icon(
+                                  Icons.update_rounded,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                tr('bgUpdateCheckInterval'),
+                                              ),
+                                            ),
+                                            Text(updateIntervalLabel),
+                                          ],
+                                        ),
+                                      ),
+                                      SliderTheme(
+                                        data: SliderThemeData(
+                                          inactiveTrackColor:
+                                              cs.onSurface.withAlpha(60),
+                                        ),
+                                        child: intervalSlider,
+                                      ),
+                                    ],
                                   ),
-                                  child: intervalSlider,
                                 ),
                               ],
                             ),
