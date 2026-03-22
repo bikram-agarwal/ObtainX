@@ -21,9 +21,12 @@ ObtainX is a fork of Obtainium. These are the extra features you get in this for
 - **Smarter version handling** - Fewer false "update available" / "up to date" states when your installed build and the source label differ in harmless ways (including dev vs release labels).
 
 ## Screenshots
-| <img src="./assets/screenshots/1.apps.png" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.png" alt="Themes and View Options" /> | <img src="./assets/screenshots/6.installer_choice.png" alt="Choose your own installer" /> | 
+| <img src="./assets/screenshots/1.apps.webp" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.webp" alt="Themes and View Options" /> | <img src="./assets/screenshots/3.filters.webp" alt="Live Filters" /> | 
 | ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | 
-| <img src="./assets/screenshots/4.app.png" alt="Individual App Page" /> | <img src="./assets/screenshots/5.categories.png" alt="Editing Categories" /> |  | 
+| <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.categories.webp" alt="Editing Categories" /> | <img src="./assets/screenshots/6.custom_icon.webp" alt="Add/Set Custom Icon" /> | 
+| <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> |  | 
+
+## Screenrecords
 
 
 ## Original Obtainium
