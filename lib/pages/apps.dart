@@ -129,6 +129,27 @@ class _SourceBadgeWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    Widget image = Image.network(
+      'https://icons.duckduckgo.com/ip3/$host.ico',
+      width: 13,
+      height: 13,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      loadingBuilder: (_, child, loadingProgress) =>
+          loadingProgress == null ? child : const SizedBox.shrink(),
+    );
+    if (isDark) {
+      image = ColorFiltered(
+        colorFilter: const ColorFilter.matrix([
+          -1, 0, 0, 0, 255,
+           0,-1, 0, 0, 255,
+           0, 0,-1, 0, 255,
+           0, 0, 0, 1,   0,
+        ]),
+        child: image,
+      );
+    }
     return Container(
       width: 16,
       height: 16,
@@ -137,15 +158,7 @@ class _SourceBadgeWidget extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       padding: const EdgeInsets.all(1.5),
-      child: Image.network(
-        'https://icons.duckduckgo.com/ip3/$host.ico',
-        width: 13,
-        height: 13,
-        fit: BoxFit.contain,
-        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-        loadingBuilder: (_, child, loadingProgress) =>
-            loadingProgress == null ? child : const SizedBox.shrink(),
-      ),
+      child: image,
     );
   }
 }
@@ -512,7 +525,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
   bool _canExecute(SwipeAction action) {
     switch (action) {
       case SwipeAction.update:
-        return widget.hasUpdate && !widget.areDownloadsRunning;
+        return (widget.hasUpdate || !widget.isInstalled) &&
+            !widget.areDownloadsRunning;
       case SwipeAction.open:
         return widget.isInstalled;
       case SwipeAction.none:
@@ -550,13 +564,21 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     final app = provider.apps[widget.appId]?.app;
     switch (action) {
       case SwipeAction.update:
-        provider
-            .downloadAndInstallLatestApps(
-                [widget.appId], globalNavigatorKey.currentContext)
-            .catchError((e) {
-          showError(e, globalNavigatorKey.currentContext!);
-          return <String>[];
-        });
+        final isTrackOnly = app?.additionalSettings['trackOnly'] == true;
+        if (isTrackOnly && app != null) {
+          launchUrlString(
+            trackOnlyDownloadPageUrl(app),
+            mode: LaunchMode.externalApplication,
+          );
+        } else {
+          provider
+              .downloadAndInstallLatestApps(
+                  [widget.appId], globalNavigatorKey.currentContext)
+              .catchError((e) {
+            showError(e, globalNavigatorKey.currentContext!);
+            return <String>[];
+          });
+        }
       case SwipeAction.pin:
         if (app != null) {
           provider.saveApps([app..pinned = !widget.isPinned]);
@@ -566,22 +588,20 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       case SwipeAction.delete:
         if (app != null) {
           final snapshot = [app.deepCopy()];
+          final messenger = ScaffoldMessenger.of(context);
           final removed = await provider.removeAppsWithModal(context, [app]);
           if (removed) {
-            final navContext = globalNavigatorKey.currentContext;
-            if (navContext != null) {
-              ScaffoldMessenger.of(navContext).showSnackBar(
-                SnackBar(
-                  content: Text(tr('xAppsRemoved', args: ['1'])),
-                  duration: const Duration(seconds: 4),
-                  action: SnackBarAction(
-                    label: tr('undo'),
-                    onPressed: () =>
-                        provider.saveApps(snapshot, onlyIfExists: false),
-                  ),
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(tr('xAppsRemoved', args: ['1'])),
+                duration: const Duration(seconds: 4),
+                action: SnackBarAction(
+                  label: tr('undo'),
+                  onPressed: () =>
+                      provider.saveApps(snapshot, onlyIfExists: false),
                 ),
-              );
-            }
+              ),
+            );
           }
         }
       case SwipeAction.open:
@@ -1311,6 +1331,10 @@ class AppsPageState extends State<AppsPage> {
   /// the controller text during a field switch.
   bool _changingSearchField = false;
 
+  /// Whether the search bar is currently expanded.
+  bool _searchExpanded = false;
+  final FocusNode _searchFocusNode = FocusNode();
+
   String _searchFieldValue(String field) => switch (field) {
         'author' => filter.authorFilter,
         'appId' => filter.idFilter,
@@ -1362,6 +1386,7 @@ class AppsPageState extends State<AppsPage> {
   void dispose() {
     scrollController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -1372,22 +1397,14 @@ class AppsPageState extends State<AppsPage> {
   /// not the default) the chip uses a primary-container colour as a visual cue.
   Widget _buildSearchBar({
     required ColorScheme colorScheme,
-    required VoidCallback showFilterSheet,
     required AppsFilter neutralFilter,
     required SettingsProvider settingsProvider,
+    required FocusNode focusNode,
   }) {
-    final bool anyFilterActive =
-        !filter.isIdenticalTo(neutralFilter, settingsProvider) ||
-        _searchField != 'appName';
-
-    final String fieldLabel = switch (_searchField) {
-      'author' => tr('author'),
-      'appId' => tr('appId'),
-      _ => tr('appName'),
-    };
-
     return TextField(
       controller: _searchController,
+      focusNode: focusNode,
+      autofocus: true,
       decoration: InputDecoration(
         hintText: tr('search'),
         prefixIcon: const Icon(Icons.search, size: 18),
@@ -1396,12 +1413,8 @@ class AppsPageState extends State<AppsPage> {
           borderRadius: BorderRadius.circular(30),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        suffix: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Clear button — only when there is text in the field.
-            if (_searchController.text.isNotEmpty)
-              GestureDetector(
+        suffix: _searchController.text.isNotEmpty
+            ? GestureDetector(
                 onTap: _searchController.clear,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 4),
@@ -1411,47 +1424,8 @@ class AppsPageState extends State<AppsPage> {
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
-              ),
-            // Field-selector chip.
-            GestureDetector(
-              onTap: showFilterSheet,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: anyFilterActive
-                      ? colorScheme.primaryContainer
-                      : colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      fieldLabel,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: anyFilterActive
-                            ? colorScheme.onPrimaryContainer
-                            : colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(
-                      Icons.arrow_drop_down,
-                      size: 14,
-                      color: anyFilterActive
-                          ? colorScheme.onPrimaryContainer
-                          : colorScheme.onSurfaceVariant,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
+              )
+            : null,
       ),
     );
   }
@@ -2733,7 +2707,12 @@ class AppsPageState extends State<AppsPage> {
 
                       // ── Category selector ─────────────────────────────────
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                        padding: EdgeInsets.fromLTRB(
+                          20,
+                          16,
+                          20,
+                          20 + MediaQuery.of(context).viewPadding.bottom,
+                        ),
                         child: CategoryEditorSelector(
                           preselected: filter.categoryFilter,
                           onSelected: (categories) {
@@ -2815,30 +2794,28 @@ class AppsPageState extends State<AppsPage> {
                         .map((a) => a.deepCopy())
                         .toList();
                     final appsProviderRef = appsProvider;
+                    final messenger = ScaffoldMessenger.of(context);
                     final removed = await appsProviderRef.removeAppsWithModal(
                       context,
                       selectedApps.toList(),
                     );
                     if (removed) {
-                      final navContext = globalNavigatorKey.currentContext;
-                      if (navContext != null) {
-                        ScaffoldMessenger.of(navContext).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              tr('xAppsRemoved',
-                                  args: ['${snapshot.length}']),
-                            ),
-                            duration: const Duration(seconds: 4),
-                            action: SnackBarAction(
-                              label: tr('undo'),
-                              onPressed: () => appsProviderRef.saveApps(
-                                snapshot,
-                                onlyIfExists: false,
-                              ),
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            tr('xAppsRemoved',
+                                args: ['${snapshot.length}']),
+                          ),
+                          duration: const Duration(seconds: 4),
+                          action: SnackBarAction(
+                            label: tr('undo'),
+                            onPressed: () => appsProviderRef.saveApps(
+                              snapshot,
+                              onlyIfExists: false,
                             ),
                           ),
-                        );
-                      }
+                        ),
+                      );
                     }
                   },
                   tooltip: tr('removeSelectedApps'),
@@ -3002,12 +2979,38 @@ class AppsPageState extends State<AppsPage> {
                     slivers: <Widget>[
                       CustomAppBar(
                         title: tr('appsString'),
-                        searchWidget: _buildSearchBar(
-                          colorScheme: Theme.of(context).colorScheme,
-                          showFilterSheet: showFilterSheet,
-                          neutralFilter: neutralFilter,
-                          settingsProvider: settingsProvider,
-                        ),
+                        actions: [
+                          if (!_searchExpanded) ...[
+                            IconButton(
+                              icon: const Icon(Icons.tune_rounded),
+                              onPressed: showFilterSheet,
+                              tooltip: tr('filter'),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.search),
+                              onPressed: () {
+                                setState(() => _searchExpanded = true);
+                                _searchFocusNode.requestFocus();
+                              },
+                            ),
+                          ] else
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () => setState(() {
+                                _searchExpanded = false;
+                                _searchController.clear();
+                                _searchFocusNode.unfocus();
+                              }),
+                            ),
+                        ],
+                        searchWidget: _searchExpanded
+                            ? _buildSearchBar(
+                                colorScheme: Theme.of(context).colorScheme,
+                                neutralFilter: neutralFilter,
+                                settingsProvider: settingsProvider,
+                                focusNode: _searchFocusNode,
+                              )
+                            : null,
                         bottom: _buildFilterChipsRow(),
                       ),
                       ...getLoadingWidgets(),

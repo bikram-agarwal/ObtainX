@@ -19,6 +19,16 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+(IconData, String) _swipeActionMeta(SwipeAction action) => switch (action) {
+  SwipeAction.update  => (Icons.system_update_outlined, 'swipeAction_update'),
+  SwipeAction.pin     => (Icons.push_pin_outlined,       'swipeAction_pin'),
+  SwipeAction.edit    => (Icons.edit_outlined,           'swipeAction_edit'),
+  SwipeAction.delete  => (Icons.delete_outline,          'swipeAction_delete'),
+  SwipeAction.open    => (Icons.open_in_new,             'swipeAction_open'),
+  SwipeAction.appInfo => (Icons.info_outline,            'swipeAction_appInfo'),
+  SwipeAction.none    => (Icons.do_not_disturb_outlined, 'swipeAction_none'),
+};
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -267,8 +277,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
     const height8 = SizedBox(height: 8);
 
-    const height16 = SizedBox(height: 16);
-
     final cs = Theme.of(context).colorScheme;
 
     Widget sectionHeader(String title, IconData icon) => Padding(
@@ -348,7 +356,13 @@ class _SettingsPageState extends State<SettingsPage> {
                                   )
                                 else
                                   const SizedBox(height: 16),
-                                intervalSlider,
+                                SliderTheme(
+                                  data: SliderThemeData(
+                                    inactiveTrackColor:
+                                        cs.onSurface.withAlpha(60),
+                                  ),
+                                  child: intervalSlider,
+                                ),
                               ],
                             ),
                           ),
@@ -656,47 +670,60 @@ class _SettingsPageState extends State<SettingsPage> {
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                DropdownButtonFormField<SwipeAction>(
-                                  key: ValueKey(settingsProvider.rightSwipeAction),
-                                  decoration: InputDecoration(
-                                    labelText: tr('rightSwipeAction'),
-                                  ),
-                                  initialValue: settingsProvider.rightSwipeAction,
-                                  items: SwipeAction.values
-                                      .map(
-                                        (action) => DropdownMenuItem(
-                                          value: action,
-                                          child: Text(tr('swipeAction_${action.name}')),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) {
-                                    if (value != null) {
-                                      settingsProvider.rightSwipeAction = value;
-                                    }
-                                  },
+                                Text(
+                                  tr('rightSwipeAction'),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelMedium
+                                      ?.copyWith(color: cs.onSurfaceVariant),
                                 ),
-                                height16,
-                                DropdownButtonFormField<SwipeAction>(
-                                  key: ValueKey(settingsProvider.leftSwipeAction),
-                                  decoration: InputDecoration(
-                                    labelText: tr('leftSwipeAction'),
-                                  ),
-                                  initialValue: settingsProvider.leftSwipeAction,
-                                  items: SwipeAction.values
-                                      .map(
-                                        (action) => DropdownMenuItem(
-                                          value: action,
-                                          child: Text(tr('swipeAction_${action.name}')),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) {
-                                    if (value != null) {
-                                      settingsProvider.leftSwipeAction = value;
-                                    }
-                                  },
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: SwipeAction.values.map((action) {
+                                    final (icon, labelKey) =
+                                        _swipeActionMeta(action);
+                                    return ChoiceChip(
+                                      avatar: Icon(icon, size: 16),
+                                      label: Text(tr(labelKey)),
+                                      selected:
+                                          settingsProvider.rightSwipeAction ==
+                                              action,
+                                      onSelected: (_) =>
+                                          settingsProvider.rightSwipeAction =
+                                              action,
+                                    );
+                                  }).toList(),
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  tr('leftSwipeAction'),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelMedium
+                                      ?.copyWith(color: cs.onSurfaceVariant),
+                                ),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: SwipeAction.values.map((action) {
+                                    final (icon, labelKey) =
+                                        _swipeActionMeta(action);
+                                    return ChoiceChip(
+                                      avatar: Icon(icon, size: 16),
+                                      label: Text(tr(labelKey)),
+                                      selected:
+                                          settingsProvider.leftSwipeAction ==
+                                              action,
+                                      onSelected: (_) =>
+                                          settingsProvider.leftSwipeAction =
+                                              action,
+                                    );
+                                  }).toList(),
                                 ),
                               ],
                             ),
