@@ -248,6 +248,13 @@ class _AppPageState extends State<AppPage> {
   ThemeData? _cachedPageTheme;
   String? _cachedPageThemeKey;
 
+  // ── Inline edit mode ────────────────────────────────────────────────────
+  bool _editMode = false;
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _packageController = TextEditingController();
+  List<String> _editCategories = [];
+
   @override
   void didUpdateWidget(covariant AppPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -265,6 +272,154 @@ class _AppPageState extends State<AppPage> {
     }
   }
 
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _urlController.dispose();
+    _packageController.dispose();
+    super.dispose();
+  }
+
+  // ── Edit mode helpers ───────────────────────────────────────────────────
+
+  void _startEdit(AppInMemory appData) {
+    _nameController.text =
+        appData.app.additionalSettings['appName']?.toString() ?? '';
+    _urlController.text = appData.app.url;
+    _packageController.text = appData.app.id;
+    _editCategories = List<String>.from(appData.app.categories);
+    setState(() => _editMode = true);
+  }
+
+  void _cancelEdit() => setState(() => _editMode = false);
+
+  Future<void> _saveEdit(AppInMemory appData, AppsProvider appsProvider) async {
+    final updatedApp = appData.app.deepCopy();
+    final newName = _nameController.text.trim();
+    if (newName.isEmpty) {
+      updatedApp.additionalSettings.remove('appName');
+    } else {
+      updatedApp.additionalSettings['appName'] = newName;
+    }
+    final newUrl = _urlController.text.trim();
+    if (newUrl.isNotEmpty) updatedApp.url = newUrl;
+    final newId = _packageController.text.trim();
+    if (newId.isNotEmpty && newId != updatedApp.id) {
+      updatedApp.allowIdChange = true;
+      updatedApp.id = newId;
+    }
+    updatedApp.categories = _editCategories;
+    await appsProvider.saveApps([updatedApp], onlyIfExists: true);
+    if (mounted) setState(() => _editMode = false);
+  }
+
+  Future<void> _pickEditIcon(AppsProvider appsProvider) async {
+    final FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['png'],
+    );
+    if (!mounted) return;
+    if (result != null &&
+        result.files.isNotEmpty &&
+        result.files.single.path != null) {
+      final String? err = await appsProvider.setUserAppIconFromPngPath(
+        widget.appId,
+        result.files.single.path!,
+      );
+      if (!mounted) return;
+      if (err != null) showError(ObtainiumError(err), context);
+    }
+  }
+
+  Widget _buildEditMetadataSection(
+    BuildContext ctx,
+    AppInMemory appData,
+    AppsProvider appsProvider,
+    SettingsProvider settingsProvider,
+  ) {
+    final cs = Theme.of(ctx).colorScheme;
+    final tt = Theme.of(ctx).textTheme;
+    final hasIconOverride = appsProvider.hasUserAppIconOverride(widget.appId);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── App name override ──────────────────────────────────────────
+          TextField(
+            controller: _nameController,
+            decoration: InputDecoration(
+              labelText: tr('appName'),
+              hintText: appData.name,
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          // ── Package ID ────────────────────────────────────────────────
+          TextField(
+            controller: _packageController,
+            decoration: InputDecoration(
+              labelText: tr('package'),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 12),
+          // ── Tracked source URL ────────────────────────────────────────
+          TextField(
+            controller: _urlController,
+            decoration: InputDecoration(
+              labelText: tr('trackedSource'),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            keyboardType: TextInputType.url,
+          ),
+          const SizedBox(height: 16),
+          // ── Icon ──────────────────────────────────────────────────────
+          Text(tr('appIconActionsTitle'),
+              style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              FilledButton.tonal(
+                onPressed: () => _pickEditIcon(appsProvider),
+                child: Text(tr('changeAppIcon')),
+              ),
+              if (hasIconOverride) ...[
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () async {
+                    await appsProvider
+                        .resetAppIconToDefault(widget.appId);
+                    if (mounted) setState(() {});
+                  },
+                  child: Text(tr('resetAppIcon')),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 16),
+          // ── Categories ────────────────────────────────────────────────
+          Text(tr('categories'),
+              style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant)),
+          const SizedBox(height: 8),
+          CategoryEditorSelector(
+            key: ValueKey(_editCategories.join(',')),
+            preselected: _editCategories.toSet(),
+            alignment: WrapAlignment.start,
+            showLabelWhenNotEmpty: false,
+            onSelected: (cats) =>
+                setState(() => _editCategories = cats),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Hero / dialog icons must not use [FutureBuilder] + [updateAppIcon] in build:
   /// a new [Future] every rebuild restarts the work, and [ignoreCache] forces
   /// expensive installed-app icon reloads and [notifyListeners] in a loop.
@@ -275,11 +430,12 @@ class _AppPageState extends State<AppPage> {
     required double borderRadius,
     required Widget emptyPlaceholder,
     Object? heroTag,
+    VoidCallback? onTap,
   }) {
     Widget iconChild;
     if (appInMemory?.icon != null) {
       iconChild = GestureDetector(
-        onTap: appInMemory == null ? null : _showAppIconSheet,
+        onTap: onTap,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(borderRadius),
           child: Image.memory(
@@ -293,7 +449,7 @@ class _AppPageState extends State<AppPage> {
       );
     } else {
       iconChild = GestureDetector(
-        onTap: appInMemory == null ? null : _showAppIconSheet,
+        onTap: onTap,
         child: emptyPlaceholder,
       );
     }
@@ -301,114 +457,6 @@ class _AppPageState extends State<AppPage> {
       return Hero(tag: heroTag, child: iconChild);
     }
     return iconChild;
-  }
-
-  Future<void> _showAppIconSheet() async {
-    if (!mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      showDragHandle: true,
-      builder: (BuildContext sheetContext) {
-        final AppsProvider appsProviderRead =
-            Provider.of<AppsProvider>(sheetContext, listen: false);
-        final bool canReset =
-            appsProviderRead.hasUserAppIconOverride(widget.appId);
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
-                  child: Text(
-                    tr('appIconActionsTitle'),
-                    style: Theme.of(sheetContext).textTheme.titleMedium,
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.image_outlined),
-                  title: Text(tr('changeAppIcon')),
-                  onTap: () async {
-                    Navigator.pop(sheetContext);
-                    final FilePickerResult? result =
-                        await FilePicker.platform.pickFiles(
-                      type: FileType.custom,
-                      allowedExtensions: const ['png'],
-                    );
-                    if (!mounted) return;
-                    if (result != null &&
-                        result.files.isNotEmpty &&
-                        result.files.single.path != null) {
-                      final AppsProvider appsProvider =
-                          Provider.of<AppsProvider>(context, listen: false);
-                      final String? err =
-                          await appsProvider.setUserAppIconFromPngPath(
-                        widget.appId,
-                        result.files.single.path!,
-                      );
-                      if (!mounted) return;
-                      if (err != null) {
-                        showError(ObtainiumError(err), context);
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(tr('changeAppIconSuccess')),
-                          ),
-                        );
-                      }
-                    }
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.image_search_outlined),
-                  title: Text(tr('searchWebForAppIcon')),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    final AppInMemory? appInMem =
-                        appsProviderRead.apps[widget.appId];
-                    final String appLabel =
-                        appInMem?.name ?? widget.appId;
-                    final String imageSearchQuery =
-                        '$appLabel square logo transparent background png';
-                    final Uri googleImageSearchUri = Uri.https(
-                      'www.google.com',
-                      '/search',
-                      <String, String>{
-                        'q': imageSearchQuery,
-                        'tbm': 'isch',
-                      },
-                    );
-                    launchUrlString(
-                      googleImageSearchUri.toString(),
-                      mode: LaunchMode.externalApplication,
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.restore),
-                  title: Text(tr('resetAppIcon')),
-                  enabled: canReset,
-                  onTap: !canReset
-                      ? null
-                      : () async {
-                          Navigator.pop(sheetContext);
-                          final AppsProvider appsProvider =
-                              Provider.of<AppsProvider>(context, listen: false);
-                          await appsProvider.resetAppIconToDefault(
-                            widget.appId,
-                          );
-                          if (mounted) setState(() {});
-                        },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
@@ -1419,38 +1467,6 @@ class _AppPageState extends State<AppPage> {
           showApkmirrorIcon ||
           showFdroidIcon;
 
-      void openAppCategoryEditor() {
-        showModalBottomSheet<void>(
-          context: context,
-          builder: (sheetContext) => Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CategoryEditorSelector(
-                  alignment: WrapAlignment.center,
-                  preselected: app?.app.categories != null
-                      ? app!.app.categories.toSet()
-                      : {},
-                  showLabelWhenNotEmpty: false,
-                  onSelected: (categories) {
-                    if (app != null) {
-                      app!.app.categories = categories;
-                      appsProvider.saveApps([app!.app]);
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: () => Navigator.pop(sheetContext),
-                  child: Text(tr('continue')),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-
       final detailsChildren = <Widget>[
         if (app?.app.id != null && app!.app.id!.isNotEmpty)
           _detailRow(
@@ -1545,22 +1561,8 @@ class _AppPageState extends State<AppPage> {
               ),
               Expanded(
                 child: (app?.app.categories ?? []).isEmpty
-                    ? Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          onPressed: openAppCategoryEditor,
-                          style: TextButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child: Text(tr('add')),
-                        ),
-                      )
-                    : GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: openAppCategoryEditor,
-                        child: Wrap(
+                    ? Text('-', style: detailsValueStyle)
+                    : Wrap(
                           spacing: 6,
                           runSpacing: 4,
                           alignment: WrapAlignment.start,
@@ -1609,7 +1611,6 @@ class _AppPageState extends State<AppPage> {
                             ),
                           ],
                         ),
-                      ),
               ),
             ],
           ),
@@ -1653,6 +1654,7 @@ class _AppPageState extends State<AppPage> {
         size: scaledIconSize,
         borderRadius: 16,
         heroTag: 'app-icon-${widget.appId}',
+        onTap: _editMode ? () => _pickEditIcon(appsProvider) : null,
         emptyPlaceholder: Container(
           height: scaledIconSize,
           width: scaledIconSize,
@@ -1684,17 +1686,35 @@ class _AppPageState extends State<AppPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        app?.name ?? tr('app'),
-                        style: titleStyle?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              fontSize: (titleStyle?.fontSize ?? 22) *
-                                  heroScale *
-                                  1.06,
-                            ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      if (_editMode)
+                        TextField(
+                          controller: _nameController,
+                          style: titleStyle?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            fontSize: (titleStyle.fontSize ?? 22) *
+                                heroScale *
+                                1.06,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: app?.name ?? tr('app'),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          maxLines: 2,
+                        )
+                      else
+                        Text(
+                          app?.name ?? tr('app'),
+                          style: titleStyle?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: (titleStyle.fontSize ?? 22) *
+                                    heroScale *
+                                    1.06,
+                              ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       SizedBox(height: 2 * heroScale),
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
@@ -2194,8 +2214,8 @@ class _AppPageState extends State<AppPage> {
                             var values = await showAdditionalOptionsDialog();
                             handleAdditionalOptionChanges(values);
                           },
-                    tooltip: tr('additionalOptions'),
-                    icon: const Icon(Icons.edit),
+                    tooltip: tr('appOptions'),
+                    icon: const Icon(Icons.settings_rounded),
                   ),
                 if (app != null && showAppWebpageFinal)
                   IconButton(
@@ -2318,25 +2338,60 @@ class _AppPageState extends State<AppPage> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.center,
                                     children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.arrow_back),
-                                        onPressed: () =>
-                                            Navigator.pop(context),
-                                        tooltip:
-                                            MaterialLocalizations.of(context)
-                                                .backButtonTooltip,
-                                      ),
+                                      if (_editMode)
+                                        TextButton(
+                                          onPressed: _cancelEdit,
+                                          child: Text(tr('cancel')),
+                                        )
+                                      else
+                                        IconButton(
+                                          icon: const Icon(Icons.arrow_back),
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          tooltip: MaterialLocalizations.of(
+                                                  context)
+                                              .backButtonTooltip,
+                                        ),
                                       Expanded(
                                         child: _buildDetailHeroContent(
                                           themedPageContext,
                                         ),
                                       ),
+                                      if (_editMode)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              right: 8),
+                                          child: FilledButton.tonal(
+                                            onPressed: app != null
+                                                ? () => _saveEdit(
+                                                    app, appsProvider)
+                                                : null,
+                                            child: Text(tr('save')),
+                                          ),
+                                        )
+                                      else if (app != null &&
+                                          app.downloadProgress == null &&
+                                          !updating)
+                                        IconButton(
+                                          icon: const Icon(
+                                              Icons.edit_outlined),
+                                          onPressed: () => _startEdit(app),
+                                          tooltip: tr('editAppInfo'),
+                                        ),
                                     ],
                                   ),
-                                  getInfoColumn(
-                                    themedPageContext,
-                                    small: false,
-                                  ),
+                                  if (_editMode && app != null)
+                                    _buildEditMetadataSection(
+                                      themedPageContext,
+                                      app,
+                                      appsProvider,
+                                      settingsProvider,
+                                    )
+                                  else
+                                    getInfoColumn(
+                                      themedPageContext,
+                                      small: false,
+                                    ),
                                   Padding(
                                     padding: const EdgeInsets.fromLTRB(
                                         16, 0, 16, 16),

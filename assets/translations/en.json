@@ -465,7 +465,7 @@
     "leftSwipeAction": "Left swipe action",
     "swipeAction_update": "Update / Install",
     "swipeAction_pin": "Pin / Unpin",
-    "swipeAction_edit": "Edit App",
+    "swipeAction_edit": "App Options",
     "swipeAction_delete": "Delete App",
     "swipeAction_open": "Open App",
     "swipeAction_appInfo": "App Info (System Settings)",
@@ -486,8 +486,6 @@
     "scanningStore": "Scanning {}…",
     "importResults": "Import results",
     "found": "Found",
-    "added": "Added",
-    "failed": "Failed",
     "notFound": "Not found",
     "alreadyTracked": "Already tracked",
     "addFoundApps": "Add {} found apps",
@@ -496,5 +494,10 @@
     "skipping": "Skipping {}…",
     "xAddedYFailed": "{added} added, {failed} failed, {skipped} skipped",
     "pending": "Pending",
-    "done": "Done"
+    "done": "Done",
+    "added": "Added",
+    "failed": "Failed",
+    "appOptions": "App Options",
+    "save": "Save",
+    "editAppInfo": "Edit app info"
 }

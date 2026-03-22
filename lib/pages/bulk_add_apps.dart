@@ -634,46 +634,25 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: _addingDone
                 ? [
-                    _buildStat(
-                      Icons.check_circle_rounded,
-                      '$_addedCount',
-                      tr('added'),
-                      Theme.of(context).colorScheme.primary,
-                    ),
+                    _buildStat(Icons.check_circle_rounded, '$_addedCount',
+                        tr('added'), Theme.of(context).colorScheme.primary),
                     if (_failedCount > 0)
-                      _buildStat(
-                        Icons.error_rounded,
-                        '$_failedCount',
-                        tr('failed'),
-                        Theme.of(context).colorScheme.error,
-                      ),
-                    _buildStat(
-                      Icons.cancel_rounded,
-                      '${_notFoundApps.length}',
-                      tr('notFound'),
-                      Theme.of(context).colorScheme.outline,
-                    ),
+                      _buildStat(Icons.error_rounded, '$_failedCount',
+                          tr('failed'), Theme.of(context).colorScheme.error),
+                    _buildStat(Icons.cancel_rounded, '${_notFoundApps.length}',
+                        tr('notFound'), Theme.of(context).colorScheme.outline),
                   ]
                 : [
-                    _buildStat(
-                      Icons.check_circle_rounded,
-                      '${_foundApps.length}',
-                      tr('found'),
-                      Theme.of(context).colorScheme.primary,
-                    ),
-                    _buildStat(
-                      Icons.cancel_rounded,
-                      '${_notFoundApps.length}',
-                      tr('notFound'),
-                      Theme.of(context).colorScheme.error,
-                    ),
+                    _buildStat(Icons.check_circle_rounded,
+                        '${_foundApps.length}', tr('found'),
+                        Theme.of(context).colorScheme.primary),
+                    _buildStat(Icons.cancel_rounded,
+                        '${_notFoundApps.length}', tr('notFound'),
+                        Theme.of(context).colorScheme.error),
                     if (alreadyFoundTracked.isNotEmpty)
-                      _buildStat(
-                        Icons.bookmark_rounded,
-                        '${alreadyFoundTracked.length}',
-                        tr('alreadyTracked'),
-                        Theme.of(context).colorScheme.tertiary,
-                      ),
+                      _buildStat(Icons.bookmark_rounded,
+                          '${alreadyFoundTracked.length}', tr('alreadyTracked'),
+                          Theme.of(context).colorScheme.tertiary),
                   ],
           ),
         ),
@@ -687,47 +666,36 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                     if (_addingDone) ...[
                       // ── Post-add view ──────────────────────────────────
                       if (_addedApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('added')} (${_addedApps.length})',
-                          Theme.of(context).colorScheme.primary,
-                        ),
+                        _buildSectionHeader('${tr('added')} (${_addedApps.length})',
+                            Theme.of(context).colorScheme.primary),
                         ..._addedApps.map((a) => _buildFoundAppTile(a)),
                       ],
                       if (_failedApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('failed')} (${_failedApps.length})',
-                          Theme.of(context).colorScheme.error,
-                        ),
+                        _buildSectionHeader('${tr('failed')} (${_failedApps.length})',
+                            Theme.of(context).colorScheme.error),
                         ..._failedApps.map((a) => _buildFoundAppTile(a)),
                       ],
                       if (_notFoundApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('notFound')} (${_notFoundApps.length})',
-                          Theme.of(context).colorScheme.outline,
-                        ),
+                        _buildSectionHeader('${tr('notFound')} (${_notFoundApps.length})',
+                            Theme.of(context).colorScheme.outline),
                         ..._notFoundApps.map((a) => _buildNotFoundTile(a)),
                       ],
                     ] else ...[
                       // ── Pre-add view ───────────────────────────────────
                       if (newFound.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('found')} (${newFound.length})',
-                          Theme.of(context).colorScheme.primary,
-                        ),
+                        _buildSectionHeader('${tr('found')} (${newFound.length})',
+                            Theme.of(context).colorScheme.primary),
                         ...newFound.map((a) => _buildFoundAppTile(a)),
                       ],
                       if (alreadyFoundTracked.isNotEmpty) ...[
                         _buildSectionHeader(
-                          '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
-                          Theme.of(context).colorScheme.tertiary,
-                        ),
+                            '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
+                            Theme.of(context).colorScheme.tertiary),
                         ...alreadyFoundTracked.map((a) => _buildFoundAppTile(a, tracked: true)),
                       ],
                       if (_notFoundApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('notFound')} (${_notFoundApps.length})',
-                          Theme.of(context).colorScheme.error,
-                        ),
+                        _buildSectionHeader('${tr('notFound')} (${_notFoundApps.length})',
+                            Theme.of(context).colorScheme.error),
                         ..._notFoundApps.map((a) => _buildNotFoundTile(a)),
                       ],
                     ],
@@ -926,6 +894,9 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
       final settings = getDefaultValuesFromFormItems(
         source.combinedAppSpecificSettingFormItems,
       );
+      // Force the known package name so store inference can't substitute a
+      // wrong ID (e.g. APKMirror scraping the wrong package from page HTML).
+      settings['appId'] = app.info.packageName;
 
       try {
         final newApp = await sourceProvider.getApp(
@@ -962,15 +933,12 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
 
   // ─── Helpers ───────────────────────────────────────────────────────────
 
-  /// Returns the store's actual logo.
-  /// M3 Expressive loading indicator – 5 dots with staggered wave scale.
-  Widget _m3LoadingIndicator({double size = 80}) {
-    return _M3LoadingIndicator(
-      size: size,
-      color: Theme.of(context).colorScheme.primary,
-    );
-  }
+  Widget _m3LoadingIndicator({double size = 64}) => _M3LoadingIndicator(
+        size: size,
+        color: Theme.of(context).colorScheme.primary,
+      );
 
+  /// Returns the store's actual logo.
   Widget _storeLogo(String store, {double size = 24}) {
     switch (store) {
       case 'APKMirror':
@@ -1096,7 +1064,6 @@ class _M3LoadingIndicatorState extends State<_M3LoadingIndicator>
   late final AnimationController _controller;
 
   static const _dotCount = 5;
-  // Fraction of the 1500 ms cycle that each dot is offset from the next.
   static const _staggerFraction = 0.15;
 
   @override
@@ -1117,7 +1084,6 @@ class _M3LoadingIndicatorState extends State<_M3LoadingIndicator>
   @override
   Widget build(BuildContext context) {
     final dotSize = widget.size / _dotCount * 0.7;
-
     return SizedBox(
       width: widget.size,
       height: widget.size * 0.45,
@@ -1128,9 +1094,7 @@ class _M3LoadingIndicatorState extends State<_M3LoadingIndicator>
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: List.generate(_dotCount, (i) {
-              final phase = (i * _staggerFraction);
-              final t = (_controller.value - phase) % 1.0;
-              // Sinusoidal scale: oscillates between 0.35 and 1.0
+              final t = (_controller.value - i * _staggerFraction) % 1.0;
               final scale = 0.35 + 0.65 * (0.5 - 0.5 * math.cos(t * 2 * math.pi));
               return Transform.scale(
                 scale: scale,
