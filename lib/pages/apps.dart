@@ -122,6 +122,34 @@ PageRouteBuilder<T> _sharedAxisRoute<T>(WidgetBuilder builder) =>
       reverseTransitionDuration: const Duration(milliseconds: 300),
     );
 
+/// Small source favicon badge overlaid on the app icon.
+class _SourceBadgeWidget extends StatelessWidget {
+  const _SourceBadgeWidget({required this.host});
+  final String host;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 16,
+      height: 16,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      padding: const EdgeInsets.all(1.5),
+      child: Image.network(
+        'https://icons.duckduckgo.com/ip3/$host.ico',
+        width: 13,
+        height: 13,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+        loadingBuilder: (_, child, loadingProgress) =>
+            loadingProgress == null ? child : const SizedBox.shrink(),
+      ),
+    );
+  }
+}
+
 /// Subscribes directly to [AppsProvider] for [AppInMemory.downloadProgress]
 /// so download-progress ticks only rebuild the one row that is downloading,
 /// not the entire page.  All other per-row data is received from the parent
@@ -344,6 +372,100 @@ class _AppListItem extends StatelessWidget {
   }
 }
 
+/// Opens the "Additional Options" modal for [appId] directly, mirroring the
+/// same dialog shown via the edit button on [AppPage].  Falls back to
+/// navigating to [AppPage] when the source has no per-app settings.
+Future<void> _openAdditionalOptionsModal(
+  String appId,
+  BuildContext context,
+) async {
+  final appsProvider = context.read<AppsProvider>();
+  final appInMem = appsProvider.apps[appId];
+  if (appInMem == null) return;
+  final app = appInMem.app;
+  final source = SourceProvider().getSource(
+    app.url,
+    overrideSource: app.overrideSource,
+  );
+  final formItems = source.combinedAppSpecificSettingFormItems;
+
+  if (formItems.isEmpty) {
+    // No per-app settings — open the full app page as fallback.
+    if (context.mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AppPage(
+            appId: appId,
+            showOppositeOfPreferredView:
+                context.read<SettingsProvider>().showAppWebpage,
+          ),
+        ),
+      );
+    }
+    return;
+  }
+
+  if (!context.mounted) return;
+  final values = await showDialog<Map<String, dynamic>?>(
+    context: context,
+    builder: (BuildContext ctx) {
+      final items = formItems.map((row) {
+        return row.map((e) {
+          if (app.additionalSettings[e.key] != null) {
+            e.defaultValue = app.additionalSettings[e.key];
+          }
+          return e;
+        }).toList();
+      }).toList();
+      return GeneratedFormModal(
+        title: tr('additionalOptions'),
+        items: items,
+      );
+    },
+  );
+
+  if (values == null) return;
+
+  final Map<String, dynamic> originalSettings =
+      Map.from(app.additionalSettings);
+  app.additionalSettings = values;
+
+  if (source.enforceTrackOnly) {
+    app.additionalSettings['trackOnly'] = true;
+  }
+
+  final versionDetectionEnabled =
+      app.additionalSettings['versionDetection'] == true &&
+      originalSettings['versionDetection'] != true;
+  final releaseDateVersionEnabled =
+      app.additionalSettings['releaseDateAsVersion'] == true &&
+      originalSettings['releaseDateAsVersion'] != true;
+  final releaseDateVersionDisabled =
+      app.additionalSettings['releaseDateAsVersion'] != true &&
+      originalSettings['releaseDateAsVersion'] == true;
+
+  if (releaseDateVersionEnabled && app.releaseDate != null) {
+    final bool isUpdated = app.installedVersion == app.latestVersion ||
+        (app.installedVersion != null &&
+            versionsEffectivelyEqual(
+                app.installedVersion!, app.latestVersion));
+    app.latestVersion =
+        app.releaseDate!.microsecondsSinceEpoch.toString();
+    if (isUpdated) app.installedVersion = app.latestVersion;
+  } else if (releaseDateVersionDisabled) {
+    app.installedVersion =
+        appInMem.installedInfo?.versionName ?? app.installedVersion;
+  }
+
+  if (versionDetectionEnabled) {
+    app.additionalSettings['versionDetection'] = true;
+    app.additionalSettings['releaseDateAsVersion'] = false;
+  }
+
+  appsProvider.saveApps([app]);
+}
+
 /// Wraps a list row with horizontal-swipe action hints.
 /// The left/right actions are configurable via [SettingsProvider].
 class _SwipeableListItem extends StatefulWidget {
@@ -440,35 +562,26 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           provider.saveApps([app..pinned = !widget.isPinned]);
         }
       case SwipeAction.edit:
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AppPage(
-              appId: widget.appId,
-              // showOppositeOfPreferredView flips the view; to always land on
-              // the info/edit page we need to flip only when the user prefers
-              // the web view (so the "opposite" is the info view).
-              showOppositeOfPreferredView:
-                  context.read<SettingsProvider>().showAppWebpage,
-            ),
-          ),
-        );
+        await _openAdditionalOptionsModal(widget.appId, context);
       case SwipeAction.delete:
         if (app != null) {
           final snapshot = [app.deepCopy()];
           final removed = await provider.removeAppsWithModal(context, [app]);
-          if (removed && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(tr('xAppsRemoved', args: ['1'])),
-                action: SnackBarAction(
-                  label: tr('undo'),
-                  onPressed: () => context
-                      .read<AppsProvider>()
-                      .saveApps(snapshot, onlyIfExists: false),
+          if (removed) {
+            final navContext = globalNavigatorKey.currentContext;
+            if (navContext != null) {
+              ScaffoldMessenger.of(navContext).showSnackBar(
+                SnackBar(
+                  content: Text(tr('xAppsRemoved', args: ['1'])),
+                  duration: const Duration(seconds: 4),
+                  action: SnackBarAction(
+                    label: tr('undo'),
+                    onPressed: () =>
+                        provider.saveApps(snapshot, onlyIfExists: false),
+                  ),
                 ),
-              ),
-            );
+              );
+            }
           }
         }
       case SwipeAction.open:
@@ -1822,6 +1935,23 @@ class AppsPageState extends State<AppsPage> {
           !versionsEffectivelyEqual(installed, latest) &&
           !installedVersionIsNewerOrEqual(installed, latest);
       final downloadsRunning = appsProvider.areDownloadsRunning();
+      final sourceHost = sourceProvider
+          .getSource(app.app.url, overrideSource: app.app.overrideSource)
+          .hosts
+          .firstOrNull;
+      final iconWithBadge = sourceHost != null
+          ? Stack(
+              clipBehavior: Clip.none,
+              children: [
+                getAppIcon(index),
+                Positioned(
+                  right: -3,
+                  bottom: -3,
+                  child: _SourceBadgeWidget(host: sourceHost),
+                ),
+              ],
+            )
+          : getAppIcon(index);
       return _SwipeableListItem(
         key: ValueKey(appId),
         appId: appId,
@@ -1836,7 +1966,7 @@ class AppsPageState extends State<AppsPage> {
           appId: appId,
           isSelected: selectedAppIds.contains(appId),
           areDownloadsRunning: downloadsRunning,
-          iconWidget: getAppIcon(index),
+          iconWidget: iconWithBadge,
           onTap: selectedAppIds.isNotEmpty
               ? () => toggleAppSelected(app.app)
               : () {
@@ -2684,28 +2814,31 @@ class AppsPageState extends State<AppsPage> {
                     final snapshot = selectedApps
                         .map((a) => a.deepCopy())
                         .toList();
-                    final removed = await appsProvider.removeAppsWithModal(
+                    final appsProviderRef = appsProvider;
+                    final removed = await appsProviderRef.removeAppsWithModal(
                       context,
                       selectedApps.toList(),
                     );
-                    if (removed && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            tr('xAppsRemoved',
-                                args: ['${snapshot.length}']),
+                    if (removed) {
+                      final navContext = globalNavigatorKey.currentContext;
+                      if (navContext != null) {
+                        ScaffoldMessenger.of(navContext).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              tr('xAppsRemoved',
+                                  args: ['${snapshot.length}']),
+                            ),
+                            duration: const Duration(seconds: 4),
+                            action: SnackBarAction(
+                              label: tr('undo'),
+                              onPressed: () => appsProviderRef.saveApps(
+                                snapshot,
+                                onlyIfExists: false,
+                              ),
+                            ),
                           ),
-                          action: SnackBarAction(
-                            label: tr('undo'),
-                            onPressed: () => context
-                                .read<AppsProvider>()
-                                .saveApps(
-                                  snapshot,
-                                  onlyIfExists: false,
-                                ),
-                          ),
-                        ),
-                      );
+                        );
+                      }
                     }
                   },
                   tooltip: tr('removeSelectedApps'),

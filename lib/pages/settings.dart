@@ -289,16 +289,35 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
 
-    Widget settingsCard(List<Widget> children) => Card(
-      color: cs.surfaceContainerLow,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(20)),
-      ),
-      margin: EdgeInsets.zero,
-      elevation: 0,
-      clipBehavior: Clip.antiAlias,
-      child: Column(children: children),
-    );
+    Widget settingsCard(List<Widget> children) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final double deepen = isDark ? 0.055 : 0.045;
+      final Color fill = isDark ? cs.surfaceContainerHighest : cs.surfaceContainer;
+      return Container(
+        decoration: BoxDecoration(
+          color: Color.lerp(fill, Colors.black, deepen) ?? fill,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: cs.outlineVariant, width: 1),
+          boxShadow: [
+            if (isDark)
+              BoxShadow(
+                color: cs.shadow.withAlpha(180),
+                blurRadius: 16,
+                spreadRadius: 0,
+                offset: const Offset(0, 4),
+              )
+            else
+              BoxShadow(
+                color: cs.shadow.withAlpha(40),
+                blurRadius: 12,
+                offset: const Offset(0, 2),
+              ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: children),
+      );
+    }
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -342,7 +361,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         SwitchListTile(
-                                          dense: true,
                                           title: Text(tr('foregroundServiceExplanation')),
                                           value: settingsProvider.useFGService,
                                           onChanged: (value) {
@@ -350,7 +368,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                           },
                                         ),
                                         SwitchListTile(
-                                          dense: true,
                                           title: Text(tr('enableBackgroundUpdates')),
                                           value: settingsProvider.enableBackgroundUpdates,
                                           onChanged: (value) {
@@ -375,7 +392,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                         ),
                                         if (settingsProvider.enableBackgroundUpdates) ...[
                                           SwitchListTile(
-                                            dense: true,
                                             title: Text(tr('bgUpdatesOnWiFiOnly')),
                                             value: settingsProvider.bgUpdatesOnWiFiOnly,
                                             onChanged: (value) {
@@ -383,7 +399,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                             },
                                           ),
                                           SwitchListTile(
-                                            dense: true,
                                             title: Text(tr('bgUpdatesWhileChargingOnly')),
                                             value: settingsProvider.bgUpdatesWhileChargingOnly,
                                             onChanged: (value) {
@@ -398,7 +413,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             future: DeviceInfoPlugin().androidInfo,
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('checkOnStart')),
                             value: settingsProvider.checkOnStart,
                             onChanged: (value) {
@@ -406,7 +420,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('checkUpdateOnDetailPage')),
                             value: settingsProvider.checkUpdateOnDetailPage,
                             onChanged: (value) {
@@ -414,7 +427,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
                             value: settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
                             onChanged: (value) {
@@ -422,7 +434,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('removeOnExternalUninstall')),
                             value: settingsProvider.removeOnExternalUninstall,
                             onChanged: (value) {
@@ -430,7 +441,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('parallelDownloads')),
                             value: settingsProvider.parallelDownloads,
                             onChanged: (value) {
@@ -438,7 +448,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           ListTile(
-                            dense: true,
                             title: Text(tr('beforeNewInstallsShareToAppVerifier')),
                             subtitle: GestureDetector(
                               onTap: () {
@@ -535,7 +544,6 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           if (settingsProvider.installerMode == 'shizuku')
                             SwitchListTile(
-                              dense: true,
                               title: Text(tr('shizukuPretendToBeGooglePlay')),
                               value: settingsProvider.shizukuPretendToBeGooglePlay,
                               onChanged: (value) {
@@ -581,7 +589,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             builder: (ctx, val) {
                               return (val.data?.version.sdkInt ?? 0) >= 29
                                   ? SwitchListTile(
-                                      dense: true,
                                       title: Text(tr('useSystemFont')),
                                       value: settingsProvider.useSystemFont,
                                       onChanged: (useSystemFont) {
@@ -599,7 +606,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             future: DeviceInfoPlugin().androidInfo,
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('showWebInAppView')),
                             value: settingsProvider.showAppWebpage,
                             onChanged: (value) {
@@ -607,7 +613,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('dontShowTrackOnlyWarnings')),
                             value: settingsProvider.hideTrackOnlyWarning,
                             onChanged: (value) {
@@ -615,7 +620,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('dontShowAPKOriginWarnings')),
                             value: settingsProvider.hideAPKOriginWarning,
                             onChanged: (value) {
@@ -623,7 +627,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('disablePageTransitions')),
                             value: settingsProvider.disablePageTransitions,
                             onChanged: (value) {
@@ -631,7 +634,6 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('reversePageTransitions')),
                             value: settingsProvider.reversePageTransitions,
                             onChanged: settingsProvider.disablePageTransitions
@@ -641,7 +643,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                   },
                           ),
                           SwitchListTile(
-                            dense: true,
                             title: Text(tr('highlightTouchTargets')),
                             value: settingsProvider.highlightTouchTargets,
                             onChanged: (value) {
