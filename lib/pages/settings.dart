@@ -180,25 +180,34 @@ class _SettingsPageState extends State<SettingsPage> {
       },
     );
 
-    Slider.year2023 = false;
-    var intervalSlider = Slider(
-      value: settingsProvider.updateIntervalSliderVal
-          .roundToDouble()
-          .clamp(0, updateIntervalNodes.length.toDouble()),
-      max: updateIntervalNodes.length.toDouble(),
-      divisions: updateIntervalNodes.length,
-      label: updateIntervalLabel,
-      onChanged: (double value) {
-        setState(() {
-          settingsProvider.updateIntervalSliderVal = value;
-          processIntervalSliderValue(value);
-        });
-      },
-      onChangeEnd: (double value) {
-        setState(() {
-          settingsProvider.updateInterval = updateInterval;
-        });
-      },
+    var intervalSlider = SliderTheme(
+      data: SliderTheme.of(context).copyWith(
+        trackHeight: 16,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+        tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
+        activeTickMarkColor: cs.onPrimary,
+        inactiveTickMarkColor: cs.primary,
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+      ),
+      child: Slider(
+        value: settingsProvider.updateIntervalSliderVal
+            .roundToDouble()
+            .clamp(0, updateIntervalNodes.length.toDouble()),
+        max: updateIntervalNodes.length.toDouble(),
+        divisions: updateIntervalNodes.length,
+        label: updateIntervalLabel,
+        onChanged: (double value) {
+          setState(() {
+            settingsProvider.updateIntervalSliderVal = value;
+            processIntervalSliderValue(value);
+          });
+        },
+        onChangeEnd: (double value) {
+          setState(() {
+            settingsProvider.updateInterval = updateInterval;
+          });
+        },
+      ),
     );
 
     var sourceSpecificFields = sourceProvider.sources.map((e) {
