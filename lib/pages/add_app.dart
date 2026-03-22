@@ -7,6 +7,7 @@ import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/app.dart';
+import 'package:obtainium/pages/bulk_add_apps.dart';
 import 'package:obtainium/pages/import_export.dart';
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -770,6 +771,21 @@ class AddAppPageState extends State<AddAppPage> {
                 children: [
                   getUrlInputRow(),
                   const SizedBox(height: 16),
+                  if (pickedSource == null) ...[
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const BulkAddAppsPage(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.download_for_offline_rounded),
+                      label: Text(tr('bulkAddApps')),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   if (pickedSource != null) getHTMLSourceOverrideDropdown(),
                   if (shouldShowSearchBar()) getSearchBarRow(),
                   if (pickedSource != null)

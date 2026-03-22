@@ -183,7 +183,8 @@ class _SettingsPageState extends State<SettingsPage> {
     var intervalSlider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: 16,
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+        trackShape: const _GappedTrackShape(),
+        thumbShape: const _VerticalBarThumbShape(),
         tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
         activeTickMarkColor: Theme.of(context).colorScheme.onPrimary,
         inactiveTickMarkColor: Theme.of(context).colorScheme.primary,
@@ -1093,6 +1094,102 @@ class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _VerticalBarThumbShape extends SliderComponentShape {
+  const _VerticalBarThumbShape();
+
+  static const double _width = 4;
+  static const double _height = 44;
+  static const double _radius = 2;
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
+      const Size(_width, _height);
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset center, {
+    required Animation<double> activationAnimation,
+    required Animation<double> enableAnimation,
+    required bool isDiscrete,
+    required TextPainter labelPainter,
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required TextDirection textDirection,
+    required double value,
+    required double textScaleFactor,
+    required Size sizeWithOverflow,
+  }) {
+    final canvas = context.canvas;
+    final paint = Paint()
+      ..color = sliderTheme.thumbColor ?? Colors.white
+      ..style = PaintingStyle.fill;
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: center, width: _width, height: _height),
+      const Radius.circular(_radius),
+    );
+    canvas.drawRRect(rrect, paint);
+  }
+}
+
+class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
+  const _GappedTrackShape();
+
+  static const double _gap = 4;
+  static const double _radius = 8;
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 0,
+  }) {
+    final canvas = context.canvas;
+    final trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+
+    final activePaint = Paint()
+      ..color = (sliderTheme.activeTrackColor ?? Colors.blue);
+    final inactivePaint = Paint()
+      ..color = (sliderTheme.inactiveTrackColor ?? Colors.grey);
+
+    // Active (left) track — up to thumb minus gap
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        Rect.fromLTRB(
+            trackRect.left, trackRect.top, thumbCenter.dx - _gap, trackRect.bottom),
+        topLeft: const Radius.circular(_radius),
+        bottomLeft: const Radius.circular(_radius),
+      ),
+      activePaint,
+    );
+
+    // Inactive (right) track — from thumb plus gap
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        Rect.fromLTRB(
+            thumbCenter.dx + _gap, trackRect.top, trackRect.right, trackRect.bottom),
+        topRight: const Radius.circular(_radius),
+        bottomRight: const Radius.circular(_radius),
+      ),
+      inactivePaint,
     );
   }
 }
