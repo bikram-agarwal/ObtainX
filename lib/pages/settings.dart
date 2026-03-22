@@ -185,8 +185,8 @@ class _SettingsPageState extends State<SettingsPage> {
         trackHeight: 16,
         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
         tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
-        activeTickMarkColor: cs.onPrimary,
-        inactiveTickMarkColor: cs.primary,
+        activeTickMarkColor: Theme.of(context).colorScheme.onPrimary,
+        inactiveTickMarkColor: Theme.of(context).colorScheme.primary,
         overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
       ),
       child: Slider(
