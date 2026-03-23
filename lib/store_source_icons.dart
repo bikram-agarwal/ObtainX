@@ -7,6 +7,7 @@ class StoreSourceIconPaths {
   static const String playStore = 'assets/graphics/ic_playstore.png';
   static const String fdroid = 'assets/graphics/ic_fdroid.png';
   static const String apkmirror = 'assets/graphics/ic_apkmirror.png';
+  static const String apkpure = 'assets/graphics/ic_apkpure.png';
   static const String github = 'assets/graphics/ic_github.png';
 }
 
@@ -21,6 +22,9 @@ String? storeSourceAssetPathForHost(String host) {
   }
   if (normalized.contains('apkmirror.com')) {
     return StoreSourceIconPaths.apkmirror;
+  }
+  if (normalized.contains('apkpure.')) {
+    return StoreSourceIconPaths.apkpure;
   }
   if (normalized.contains('github.com')) {
     return StoreSourceIconPaths.github;
@@ -81,6 +85,68 @@ class StoreSourceIconImage extends StatelessWidget {
               },
         ),
       ),
+    );
+  }
+}
+
+/// Small source favicon badge overlaid on the app icon (Apps list, bulk import results).
+/// Matches host-based assets and DuckDuckGo favicon fallback used on the Apps tab.
+class StoreSourceListBadge extends StatelessWidget {
+  const StoreSourceListBadge({super.key, required this.host});
+
+  final String host;
+
+  @override
+  Widget build(BuildContext context) {
+    if (host.isEmpty) return const SizedBox.shrink();
+
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final String? localAsset = storeSourceAssetPathForHost(host);
+    Widget image;
+    if (localAsset != null) {
+      image = StoreSourceIconImage(assetPath: localAsset, size: 13);
+      if (isDark && localAsset == StoreSourceIconPaths.github) {
+        image = ColorFiltered(
+          colorFilter: const ColorFilter.matrix([
+            -1, 0, 0, 0, 255,
+            0, -1, 0, 0, 255,
+            0, 0, -1, 0, 255,
+            0, 0, 0, 1, 0,
+          ]),
+          child: image,
+        );
+      }
+    } else {
+      image = Image.network(
+        'https://icons.duckduckgo.com/ip3/$host.ico',
+        width: 13,
+        height: 13,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+        loadingBuilder: (context, child, loadingProgress) =>
+            loadingProgress == null ? child : const SizedBox.shrink(),
+      );
+      if (isDark && host == 'github.com') {
+        image = ColorFiltered(
+          colorFilter: const ColorFilter.matrix([
+            -1, 0, 0, 0, 255,
+            0, -1, 0, 0, 255,
+            0, 0, -1, 0, 255,
+            0, 0, 0, 1, 0,
+          ]),
+          child: image,
+        );
+      }
+    }
+    return Container(
+      width: 16,
+      height: 16,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      padding: const EdgeInsets.all(1.5),
+      child: image,
     );
   }
 }

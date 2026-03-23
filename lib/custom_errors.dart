@@ -119,7 +119,10 @@ void showMessage(dynamic e, BuildContext context, {bool isError = false}) {
   if (e is String || (e is ObtainiumError && !e.unexpected)) {
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text(e.toString())));
+    ).showSnackBar(SnackBar(
+      content: Text(e.toString()),
+      duration: const Duration(seconds: 4),
+    ));
   } else {
     showDialog(
       context: context,
@@ -136,7 +139,10 @@ void showMessage(dynamic e, BuildContext context, {bool isError = false}) {
               Clipboard.setData(ClipboardData(text: e.toString()));
               ScaffoldMessenger.of(
                 context,
-              ).showSnackBar(SnackBar(content: Text(tr('copiedToClipboard'))));
+              ).showSnackBar(SnackBar(
+                content: Text(tr('copiedToClipboard')),
+                duration: const Duration(seconds: 4),
+              ));
             },
             child: Text(e.toString()),
           ),

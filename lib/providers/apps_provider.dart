@@ -644,7 +644,9 @@ class AppsProvider with ChangeNotifier {
       }
     });
     () async {
-      await settingsProvider.initializeSettings();
+      if (sharedSettings == null) {
+        await settingsProvider.initializeSettings();
+      }
       var cacheDirs = await getExternalCacheDirectories();
       final Directory appStorageRoot = await getAppStorageDir();
       userAppIconsDir = Directory('${appStorageRoot.path}/user_icons');

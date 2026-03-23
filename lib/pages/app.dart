@@ -224,6 +224,8 @@ ColorScheme _darkenIconPageSchemeInDarkMode(ColorScheme scheme) {
   );
 }
 
+enum _UnsavedAction { keepEditing, discard, saveAndExit }
+
 class AppPage extends StatefulWidget {
   const AppPage({
     super.key,
@@ -367,6 +369,36 @@ class _AppPageState extends State<AppPage> {
     setState(() => _editMode = false);
   }
 
+  // --- Unsaved changes dialog ---
+  Future<_UnsavedAction?> _showUnsavedChangesDialog(BuildContext context) {
+    return showDialog<_UnsavedAction>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Text(tr('appEditsUnsavedTitle')),
+          content: Text(tr('appEditsUnsavedBody')),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, _UnsavedAction.discard),
+              child: Text(tr('discard')),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, _UnsavedAction.keepEditing),
+              child: Text(tr('keepEditing')),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, _UnsavedAction.saveAndExit),
+              child: Text(tr('saveAndExit')),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _onCancelEditPressed(
     BuildContext actionContext,
     AppInMemory? appData,
@@ -375,55 +407,24 @@ class _AppPageState extends State<AppPage> {
       _exitEditWithoutSaving();
       return;
     }
-    final bool? discard = await showDialog<bool>(
-      context: actionContext,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: Text(tr('appEditsUnsavedTitle')),
-          content: Text(tr('appEditsUnsavedBody')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: Text(tr('keepEditing')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: Text(tr('discard')),
-            ),
-          ],
-        );
-      },
-    );
-    if (discard == true && mounted) {
-      _exitEditWithoutSaving();
-    }
-  }
+    final _UnsavedAction? action =
+        await _showUnsavedChangesDialog(actionContext);
 
-  Future<bool> _confirmDiscardToLeaveAppPage(
-    BuildContext actionContext,
-    AppInMemory? appData,
-  ) async {
-    if (!_isEditDirty(appData)) return true;
-    final bool? discard = await showDialog<bool>(
-      context: actionContext,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: Text(tr('appEditsUnsavedTitle')),
-          content: Text(tr('appEditsUnsavedBody')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: Text(tr('keepEditing')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: Text(tr('discard')),
-            ),
-          ],
-        );
-      },
-    );
-    return discard == true;
+    if (!mounted || appData == null) return;
+
+    switch (action) {
+      case _UnsavedAction.discard:
+        _exitEditWithoutSaving();
+        break;
+      case _UnsavedAction.saveAndExit:
+        final appsProvider =
+            Provider.of<AppsProvider>(actionContext, listen: false);
+        await _saveEdit(appData, appsProvider);
+        break;
+      case _UnsavedAction.keepEditing:
+      default:
+        break;
+    }
   }
 
   void _startEdit(AppInMemory appData, AppsProvider appsProvider) {
@@ -518,26 +519,26 @@ class _AppPageState extends State<AppPage> {
   }
 
   Future<void> _onResetEditIconPressed(AppsProvider appsProvider) async {
+    Uint8List? preview;
+    bool shouldClearOverride = false;
+
+    // If there is a user-set icon override, we load the non-override icon
+    // so we can show it live. We also set a flag to clear the override on save.
+    // If there is no override but the user has picked a new icon in this edit
+    // session, all we need to do is null out the staged icon bytes.
+    if (appsProvider.hasUserAppIconOverride(widget.appId)) {
+      shouldClearOverride = true;
+      preview =
+          await appsProvider.loadIconPreviewExcludingUserOverride(widget.appId);
+    }
+
+    if (!mounted) return;
+
     setState(() {
       _editStagedIconBytes = null;
+      _editStagedClearOverride = shouldClearOverride;
+      _editNonUserIconPreview = preview;
     });
-    if (appsProvider.hasUserAppIconOverride(widget.appId)) {
-      setState(() {
-        _editStagedClearOverride = true;
-        _editNonUserIconPreview = null;
-      });
-      final Uint8List? preview =
-          await appsProvider.loadIconPreviewExcludingUserOverride(widget.appId);
-      if (!mounted) return;
-      setState(() {
-        _editNonUserIconPreview = preview;
-      });
-    } else {
-      setState(() {
-        _editStagedClearOverride = false;
-        _editNonUserIconPreview = null;
-      });
-    }
   }
 
   void _openIconWebSearch(AppInMemory appData) {
@@ -716,8 +717,11 @@ class _AppPageState extends State<AppPage> {
     Object? heroTag,
     VoidCallback? onTap,
     Uint8List? iconMemoryBytes,
+    bool exclusiveIconMemoryBytes = false,
   }) {
-    final Uint8List? bytesForImage = iconMemoryBytes ?? appInMemory?.icon;
+    final Uint8List? bytesForImage = exclusiveIconMemoryBytes
+        ? iconMemoryBytes
+        : (iconMemoryBytes ?? appInMemory?.icon);
     Widget iconChild;
     if (bytesForImage != null) {
       iconChild = GestureDetector(
@@ -1283,8 +1287,10 @@ class _AppPageState extends State<AppPage> {
           return GestureDetector(
             onLongPress: () {
               Clipboard.setData(ClipboardData(text: hash));
-              ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(tr('copiedToClipboard'))));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(tr('copiedToClipboard')),
+                duration: const Duration(seconds: 4),
+              ));
             },
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4),
@@ -1305,10 +1311,11 @@ class _AppPageState extends State<AppPage> {
       return GestureDetector(
         onLongPress: () {
           Clipboard.setData(
-              ClipboardData(
-                  text: app?.app.additionalSettings['about'] ?? ''));
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(tr('copiedToClipboard'))));
+              ClipboardData(text: app?.app.additionalSettings['about'] ?? ''));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('copiedToClipboard')),
+            duration: const Duration(seconds: 4),
+          ));
         },
         child: Markdown(
           physics: const NeverScrollableScrollPhysics(),
@@ -1874,6 +1881,7 @@ class _AppPageState extends State<AppPage> {
         borderRadius: 16,
         heroTag: 'app-icon-${widget.appId}',
         iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
+        exclusiveIconMemoryBytes: _editStagedClearOverride,
         onTap: _editMode
             ? null
             : (app?.installedInfo != null
@@ -1983,6 +1991,7 @@ class _AppPageState extends State<AppPage> {
         size: dialogIconSize,
         borderRadius: dialogIconRadius,
         iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
+        exclusiveIconMemoryBytes: _editStagedClearOverride,
         emptyPlaceholder: small
             ? const SizedBox(height: 70, width: 70)
             : Container(
@@ -2571,7 +2580,7 @@ class _AppPageState extends State<AppPage> {
                               ];
                               final bool removed =
                                   await appsProvider.removeAppsWithModal(
-                                context,
+                                themeContext,
                                 [appRow.app],
                               );
                               if (removed && messenger != null) {
@@ -2582,6 +2591,7 @@ class _AppPageState extends State<AppPage> {
                                       content: Text(
                                         tr('xAppsRemoved', args: ['1']),
                                       ),
+                                      persist: false,
                                       duration: const Duration(seconds: 5),
                                       behavior: SnackBarBehavior.floating,
                                       action: SnackBarAction(
@@ -2594,8 +2604,8 @@ class _AppPageState extends State<AppPage> {
                                     ),
                                   );
                               }
-                              if (removed && context.mounted) {
-                                Navigator.of(context).pop();
+                              if (removed && themeContext.mounted) {
+                                Navigator.of(themeContext).pop();
                               }
                             },
                       tooltip: tr('remove'),
@@ -2624,19 +2634,57 @@ class _AppPageState extends State<AppPage> {
       child: Builder(
         builder: (BuildContext themedPageContext) {
           return PopScope(
-            canPop: !_editMode || !_isEditDirty(app),
-            onPopInvokedWithResult: (bool didPop, Object? result) async {
+            canPop: !_editMode,
+            onPopInvoked: (bool didPop) async {
               if (didPop) return;
-              if (!mounted || !_editMode) return;
+              // If canPop was false, we're in edit mode.
+              // Handle unsaved changes before allowing a pop.
               final AppInMemory? freshApp = Provider.of<AppsProvider>(
-                    themedPageContext,
-                    listen: false,
-                  ).apps[widget.appId];
-              final bool leave = await _confirmDiscardToLeaveAppPage(
                 themedPageContext,
-                freshApp,
-              );
-              if (leave && themedPageContext.mounted) {
+                listen: false,
+              ).apps[widget.appId];
+
+              // If not dirty, just exit/pop without a dialog.
+              if (!_isEditDirty(freshApp)) {
+                if (widget.openInEditMode && mounted) {
+                  Navigator.of(themedPageContext).pop();
+                } else {
+                  _exitEditWithoutSaving();
+                }
+                return;
+              }
+
+              // If dirty, show the dialog
+              final _UnsavedAction? action =
+                  await _showUnsavedChangesDialog(themedPageContext);
+
+              if (!mounted || freshApp == null) return;
+
+              bool shouldPopPage = false;
+
+              switch (action) {
+                case _UnsavedAction.discard:
+                  _exitEditWithoutSaving();
+                  if (widget.openInEditMode) {
+                    shouldPopPage = true;
+                  }
+                  break;
+                case _UnsavedAction.saveAndExit:
+                  final appsProvider = Provider.of<AppsProvider>(
+                      themedPageContext,
+                      listen: false);
+                  await _saveEdit(freshApp, appsProvider);
+                  if (widget.openInEditMode) {
+                    shouldPopPage = true;
+                  }
+                  break;
+                case _UnsavedAction.keepEditing:
+                default:
+                  // Do nothing, stay on the page in edit mode.
+                  break;
+              }
+
+              if (shouldPopPage && mounted) {
                 Navigator.of(themedPageContext).pop();
               }
             },

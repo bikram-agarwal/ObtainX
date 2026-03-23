@@ -1,11 +1,10 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:http/http.dart' as http;
-import 'package:synchronized/synchronized.dart';
+import 'package:obtainium/app_sources/github.dart';
 
 const int _flagSystem = 1; // ApplicationInfo.FLAG_SYSTEM = 0x1
 const int _flagUpdatedSystemApp = 128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP = 0x80
@@ -22,32 +21,6 @@ class InstalledAppInfo {
     this.icon,
     required this.isSystemApp,
   });
-}
-
-class _Semaphore {
-  final int maxCount;
-  int _count = 0;
-  final List<Completer<void>> _waiters = [];
-
-  _Semaphore(this.maxCount);
-
-  Future<void> acquire() async {
-    if (_count < maxCount) {
-      _count++;
-      return;
-    }
-    final completer = Completer<void>();
-    _waiters.add(completer);
-    await completer.future;
-  }
-
-  void release() {
-    if (_waiters.isNotEmpty) {
-      _waiters.removeAt(0).complete();
-    } else {
-      _count--;
-    }
-  }
 }
 
 class BulkImportService {
@@ -117,16 +90,44 @@ class BulkImportService {
   static Future<Map<String, String?>> checkApkMirror(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
+    Map<String, String?>? alreadyKnown,
+    bool Function()? shouldAbort,
   }) async {
     final result = <String, String?>{};
+    if (alreadyKnown != null) {
+      for (final String packageName in packageNames) {
+        if (alreadyKnown.containsKey(packageName)) {
+          result[packageName] = alreadyKnown[packageName];
+        }
+      }
+    }
+    void reportProgress() {
+      int resolved = 0;
+      for (final String packageName in packageNames) {
+        if (result.containsKey(packageName)) resolved++;
+      }
+      onProgress?.call(resolved, packageNames.length);
+    }
+
+    reportProgress();
+    final List<String> toQuery = packageNames
+        .where((String packageName) => !result.containsKey(packageName))
+        .toList();
+    if (toQuery.isEmpty) {
+      return result;
+    }
+
     const batchSize = 100;
     // Authorization header uses APKUpdater credentials to access the API endpoint
     const auth = 'Basic YXBpLWFwa3VwZGF0ZXI6cm01cmNmcnVVakt5MDRzTXB5TVBKWFc4';
 
-    for (int i = 0; i < packageNames.length; i += batchSize) {
-      final batch = packageNames.sublist(
+    for (int i = 0; i < toQuery.length; i += batchSize) {
+      if (shouldAbort?.call() == true) {
+        return result;
+      }
+      final batch = toQuery.sublist(
         i,
-        min(i + batchSize, packageNames.length),
+        min(i + batchSize, toQuery.length),
       );
       try {
         final response = await http
@@ -174,9 +175,12 @@ class BulkImportService {
           result[pkg] = null;
         }
       }
-      onProgress?.call(min(i + batchSize, packageNames.length), packageNames.length);
+      reportProgress();
+      if (shouldAbort?.call() == true) {
+        return result;
+      }
       // Small delay between batches to respect rate limits
-      if (i + batchSize < packageNames.length) {
+      if (i + batchSize < toQuery.length) {
         await Future.delayed(const Duration(milliseconds: 500));
       }
     }
@@ -188,15 +192,43 @@ class BulkImportService {
   static Future<Map<String, String?>> checkApkPure(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
+    Map<String, String?>? alreadyKnown,
+    bool Function()? shouldAbort,
   }) async {
     final result = <String, String?>{};
+    if (alreadyKnown != null) {
+      for (final String packageName in packageNames) {
+        if (alreadyKnown.containsKey(packageName)) {
+          result[packageName] = alreadyKnown[packageName];
+        }
+      }
+    }
+    void reportProgress() {
+      int resolved = 0;
+      for (final String packageName in packageNames) {
+        if (result.containsKey(packageName)) resolved++;
+      }
+      onProgress?.call(resolved, packageNames.length);
+    }
+
+    reportProgress();
+    final List<String> toQuery = packageNames
+        .where((String packageName) => !result.containsKey(packageName))
+        .toList();
+    if (toQuery.isEmpty) {
+      return result;
+    }
+
     const batchSize = 50;
     final rng = Random();
 
-    for (int i = 0; i < packageNames.length; i += batchSize) {
-      final batch = packageNames.sublist(
+    for (int i = 0; i < toQuery.length; i += batchSize) {
+      if (shouldAbort?.call() == true) {
+        return result;
+      }
+      final batch = toQuery.sublist(
         i,
-        min(i + batchSize, packageNames.length),
+        min(i + batchSize, toQuery.length),
       );
       try {
         // Random device ID to avoid rate limiting (mirrors APKUpdater approach)
@@ -274,8 +306,11 @@ class BulkImportService {
           result[pkg] = null;
         }
       }
-      onProgress?.call(min(i + batchSize, packageNames.length), packageNames.length);
-      if (i + batchSize < packageNames.length) {
+      reportProgress();
+      if (shouldAbort?.call() == true) {
+        return result;
+      }
+      if (i + batchSize < toQuery.length) {
         await Future.delayed(const Duration(milliseconds: 300));
       }
     }
@@ -287,38 +322,164 @@ class BulkImportService {
   static Future<Map<String, String?>> checkFDroid(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
+    Map<String, String?>? alreadyKnown,
+    bool Function()? shouldAbort,
   }) async {
     final result = <String, String?>{};
-    final semaphore = _Semaphore(8); // max 8 concurrent requests
-    final progressLock = Lock();
-    int done = 0;
+    if (alreadyKnown != null) {
+      for (final String packageName in packageNames) {
+        if (alreadyKnown.containsKey(packageName)) {
+          result[packageName] = alreadyKnown[packageName];
+        }
+      }
+    }
+    void reportProgress() {
+      int resolved = 0;
+      for (final String packageName in packageNames) {
+        if (result.containsKey(packageName)) resolved++;
+      }
+      onProgress?.call(resolved, packageNames.length);
+    }
 
-    await Future.wait(
-      packageNames.map((pkg) async {
-        await semaphore.acquire();
-        try {
-          final response = await http
-              .get(
-                Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
-                headers: {'User-Agent': 'ObtainX/1.4.0'},
-              )
-              .timeout(const Duration(seconds: 10));
-          if (response.statusCode == 200) {
-            result[pkg] = 'https://f-droid.org/packages/$pkg/';
+    reportProgress();
+    final List<String> toQuery = packageNames
+        .where((String packageName) => !result.containsKey(packageName))
+        .toList();
+    if (toQuery.isEmpty) {
+      return result;
+    }
+
+    for (final String pkg in toQuery) {
+      if (shouldAbort?.call() == true) {
+        return result;
+      }
+      try {
+        final response = await http
+            .get(
+              Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
+              headers: {'User-Agent': 'ObtainX/1.4.0'},
+            )
+            .timeout(const Duration(seconds: 10));
+        if (response.statusCode == 200) {
+          result[pkg] = 'https://f-droid.org/packages/$pkg/';
+        } else {
+          result[pkg] = null;
+        }
+      } catch (_) {
+        result[pkg] = null;
+      }
+      reportProgress();
+    }
+    return result;
+  }
+
+  /// GitHub code search by package id. Results are best-effort: many repos match
+  /// generic strings, and the API is rate-limited without a PAT (set under GitHub
+  /// source settings). Uses the same search approach as common tooling: quoted
+  /// package id in file contents, then prefers AndroidManifest / Gradle paths.
+  static Future<Map<String, String?>> checkGitHub(
+    List<String> packageNames, {
+    void Function(int done, int total)? onProgress,
+    Map<String, String?>? alreadyKnown,
+    bool Function()? shouldAbort,
+  }) async {
+    final Map<String, String?> result = <String, String?>{};
+    if (alreadyKnown != null) {
+      for (final String packageName in packageNames) {
+        if (alreadyKnown.containsKey(packageName)) {
+          result[packageName] = alreadyKnown[packageName];
+        }
+      }
+    }
+    void reportProgress() {
+      int resolved = 0;
+      for (final String packageName in packageNames) {
+        if (result.containsKey(packageName)) resolved++;
+      }
+      onProgress?.call(resolved, packageNames.length);
+    }
+
+    reportProgress();
+    final List<String> toQuery = packageNames
+        .where((String packageName) => !result.containsKey(packageName))
+        .toList();
+    if (toQuery.isEmpty) {
+      return result;
+    }
+
+    final GitHub githubSource = GitHub();
+    final Map<String, String> headers = <String, String>{
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'ObtainX-BulkImport',
+    };
+    final Map<String, String>? authHeaders = await githubSource.getRequestHeaders(
+      <String, dynamic>{},
+      'https://api.github.com/search/code',
+    );
+    if (authHeaders != null) {
+      headers.addAll(authHeaders);
+    }
+    final bool hasAuthToken =
+        headers.containsKey('Authorization') || headers.containsKey('authorization');
+
+    for (final String pkg in toQuery) {
+      if (shouldAbort?.call() == true) {
+        return result;
+      }
+      try {
+        // Quoted id reduces unrelated matches; "in:file" scopes to file contents.
+        final Uri uri = Uri(
+          scheme: 'https',
+          host: 'api.github.com',
+          path: '/search/code',
+          queryParameters: <String, String>{
+            'q': '"$pkg" in:file',
+            'per_page': '15',
+          },
+        );
+        final http.Response response =
+            await http.get(uri, headers: headers).timeout(
+                  const Duration(seconds: 25),
+                );
+        if (response.statusCode == 200) {
+          final Object? decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            final List<dynamic> items =
+                decoded['items'] as List<dynamic>? ?? <dynamic>[];
+            String? chosenUrl;
+            for (final dynamic raw in items) {
+              if (raw is! Map<String, dynamic>) continue;
+              final String path =
+                  (raw['path'] as String? ?? '').toLowerCase();
+              final Object? repo = raw['repository'];
+              if (repo is! Map<String, dynamic>) continue;
+              final String? htmlUrl = repo['html_url'] as String?;
+              if (htmlUrl == null || !htmlUrl.contains('github.com')) continue;
+              if (path.contains('androidmanifest') ||
+                  path.endsWith('build.gradle') ||
+                  path.endsWith('build.gradle.kts')) {
+                chosenUrl = htmlUrl;
+                break;
+              }
+              chosenUrl ??= htmlUrl;
+            }
+            result[pkg] = chosenUrl;
           } else {
             result[pkg] = null;
           }
-        } catch (_) {
+        } else {
           result[pkg] = null;
-        } finally {
-          await progressLock.synchronized(() {
-            done++;
-            onProgress?.call(done, packageNames.length);
-          });
-          semaphore.release();
         }
-      }),
-    );
+      } catch (_) {
+        result[pkg] = null;
+      }
+      reportProgress();
+      if (!hasAuthToken) {
+        await Future.delayed(const Duration(milliseconds: 850));
+      } else {
+        await Future.delayed(const Duration(milliseconds: 120));
+      }
+    }
     return result;
   }
 

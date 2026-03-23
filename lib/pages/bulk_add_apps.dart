@@ -6,10 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
+import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 
 /// Which app types to include in the bulk scan list.
@@ -23,16 +26,16 @@ class _FoundApp {
 
   _FoundApp({required this.info, required this.sources});
 
-  /// Best URL to add: F-Droid > APKPure > APKMirror.
+  /// Best URL to add: F-Droid > APKPure > APKMirror > GitHub.
   String get bestUrl {
-    for (final store in ['F-Droid', 'APKPure', 'APKMirror']) {
+    for (final store in ['F-Droid', 'APKPure', 'APKMirror', 'GitHub']) {
       if (sources.containsKey(store)) return sources[store]!;
     }
     return sources.values.first;
   }
 
   String get bestStore {
-    for (final store in ['F-Droid', 'APKPure', 'APKMirror']) {
+    for (final store in ['F-Droid', 'APKPure', 'APKMirror', 'GitHub']) {
       if (sources.containsKey(store)) return store;
     }
     return sources.keys.first;
@@ -54,6 +57,8 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   // --- Config step ---
   _AppFilter _appFilter = _AppFilter.userOnly;
   final Set<String> _selectedStores = {'APKMirror', 'APKPure', 'F-Droid'};
+  bool _excludeAlreadyTracked = true;
+  bool _deleteScanHistoryBeforeScan = false;
 
   // --- App selection step ---
   List<InstalledAppInfo> _installedApps = [];
@@ -66,9 +71,14 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
 
   // --- Scanning step ---
   String _scanStatus = '';
-  double _apkMirrorProgress = 0;
-  double _apkPureProgress = 0;
-  double _fdroidProgress = 0;
+  int _apkMirrorDone = 0;
+  int _apkMirrorTotal = 0;
+  int _apkPureDone = 0;
+  int _apkPureTotal = 0;
+  int _fdroidDone = 0;
+  int _fdroidTotal = 0;
+  int _githubDone = 0;
+  int _githubTotal = 0;
 
   // --- Results step ---
   List<_FoundApp> _foundApps = [];
@@ -82,8 +92,29 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   String _addingStatus = '';
   List<_FoundApp> _addedApps = [];
   List<_FoundApp> _failedApps = [];
+  final Set<String> _selectedNewFoundPackages = {};
+  List<InstalledAppInfo> _cancelledApps = [];
+  bool _scanCancelRequested = false;
 
   late AppsProvider _appsProvider;
+
+  static const Color _summaryFoundGreen = Color(0xFF2E7D32);
+  static const Color _summaryNotFoundRed = Color(0xFFC62828);
+  static const Color _summaryAlreadyTrackedBlue = Color(0xFF1565C0);
+  static const Color _summaryCancelledGrey = Color(0xFF757575);
+  static const List<String> _storeIconPriority = [
+    'F-Droid',
+    'APKPure',
+    'APKMirror',
+    'GitHub',
+  ];
+
+  static const List<String> _configurableBulkStores = <String>[
+    'APKMirror',
+    'APKPure',
+    'F-Droid',
+    'GitHub',
+  ];
 
   @override
   void didChangeDependencies() {
@@ -134,31 +165,59 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
               visualDensity: VisualDensity.compact,
             ),
           ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr('excludeAlreadyTrackedApps')),
+            value: _excludeAlreadyTracked,
+            onChanged: (bool value) =>
+                setState(() => _excludeAlreadyTracked = value),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr('deleteBulkScanHistory')),
+            subtitle: Text(
+              tr('deleteBulkScanHistorySubtitle'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: _deleteScanHistoryBeforeScan,
+            onChanged: (bool value) =>
+                setState(() => _deleteScanHistoryBeforeScan = value),
+          ),
           const SizedBox(height: 24),
           Text(
             tr('storesToSearch'),
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            children: ['APKMirror', 'APKPure', 'F-Droid'].map((store) {
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _configurableBulkStores.map((String store) {
               final selected = _selectedStores.contains(store);
-              return FilterChip(
-                label: Text(store),
-                selected: selected,
-                onSelected: (v) {
+              return SwitchListTile(
+                title: Text(store),
+                value: selected,
+                onChanged: (bool value) {
                   setState(() {
-                    if (v) {
+                    if (value) {
                       _selectedStores.add(store);
                     } else {
                       _selectedStores.remove(store);
                     }
                   });
                 },
-                avatar: _storeLogo(store, size: 18),
+                secondary: _storeLogo(store, size: 36),
               );
             }).toList(),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              tr('bulkScanCacheNote'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
           ),
           if (_selectedStores.isEmpty)
             Padding(
@@ -177,9 +236,274 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
             icon: const Icon(Icons.arrow_forward_rounded),
             label: Text(tr('next')),
           ),
+          const SizedBox(height: 16),
+          Text(
+            tr('bulkAddNextScreenSelectAppsNote'),
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
         ],
       ),
     );
+  }
+
+  String _appFilterChipLabel() {
+    return switch (_appFilter) {
+      _AppFilter.userOnly => tr('bulkAddChipUserApps'),
+      _AppFilter.systemOnly => tr('bulkAddChipSystemApps'),
+      _AppFilter.both => tr('bulkAddChipAllApps'),
+    };
+  }
+
+  List<String> _orderedStoreKeysForBadge(Set<String> keys) {
+    final List<String> out = [];
+    for (final String name in _storeIconPriority) {
+      if (keys.contains(name)) out.add(name);
+    }
+    for (final String key in keys) {
+      if (!out.contains(key)) out.add(key);
+    }
+    return out;
+  }
+
+  /// Host string for [StoreSourceListBadge], same resolution path as the Apps tab.
+  String _hostForBulkSourceBadge(String storeKey, String url) {
+    final String trimmed = url.trim();
+    if (trimmed.isNotEmpty) {
+      final Uri? uri = Uri.tryParse(trimmed);
+      if (uri != null && uri.host.isNotEmpty) {
+        return uri.host;
+      }
+    }
+    return switch (storeKey) {
+      'APKMirror' => 'www.apkmirror.com',
+      'APKPure' => 'apkpure.net',
+      'F-Droid' => 'f-droid.org',
+      'GitHub' => 'github.com',
+      _ => '',
+    };
+  }
+
+  /// Fixed-width column of store badges (no overlap); keeps title/checkbox layout balanced.
+  static const double _bulkAddResultBadgeColumnWidth = 22;
+  static const double _bulkAddResultIconSlotWidth = 48;
+
+  Widget _buildBulkResultStoreBadgeColumn(Map<String, String>? sourcesByStore) {
+    if (sourcesByStore == null || sourcesByStore.isEmpty) {
+      return const SizedBox(
+        width: _bulkAddResultBadgeColumnWidth,
+        height: 40,
+      );
+    }
+    final List<String> ordered =
+        _orderedStoreKeysForBadge(sourcesByStore.keys.toSet());
+    final List<String> keys =
+        ordered.length > 5 ? ordered.sublist(0, 5) : ordered;
+    final List<Widget> badgeWidgets = <Widget>[];
+    for (final String storeKey in keys) {
+      final String? url = sourcesByStore[storeKey];
+      if (url == null) continue;
+      final String host = _hostForBulkSourceBadge(storeKey, url);
+      if (host.isEmpty) continue;
+      badgeWidgets.add(StoreSourceListBadge(host: host));
+    }
+    if (badgeWidgets.isEmpty) {
+      return const SizedBox(
+        width: _bulkAddResultBadgeColumnWidth,
+        height: 40,
+      );
+    }
+    return SizedBox(
+      width: _bulkAddResultBadgeColumnWidth,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          for (int index = 0; index < badgeWidgets.length; index++) ...<Widget>[
+            if (index > 0) const SizedBox(height: 5),
+            badgeWidgets[index],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _bulkAddAppListRow({
+    required Widget leadingIcon,
+    required String appName,
+    required String packageName,
+    required bool checkboxValue,
+    ValueChanged<bool?>? onCheckboxChanged,
+    Widget? titleSuffix,
+  }) {
+    return CheckboxListTile(
+      checkboxShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(4),
+      ),
+      controlAffinity: ListTileControlAffinity.trailing,
+      secondary: leadingIcon,
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              appName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          ?titleSuffix,
+        ],
+      ),
+      subtitle: Text(
+        packageName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      value: checkboxValue,
+      onChanged: onCheckboxChanged,
+      dense: true,
+    );
+  }
+
+  /// Same horizontal rhythm as [CheckboxListTile] on the select-apps step: trailing
+  /// icon padding, [ListTileTheme.horizontalTitleGap], then title.
+  double get _bulkAddListTileTitleGap =>
+      Theme.of(context).listTileTheme.horizontalTitleGap ?? 16;
+
+  /// Result / found rows: [icon] [store badges column] [titles] [checkbox].
+  Widget _bulkAddResultAppRow({
+    required Widget leadingIcon,
+    required Widget storeBadgesColumn,
+    required String appName,
+    required String packageName,
+    required bool checkboxValue,
+    ValueChanged<bool?>? onCheckboxChanged,
+    Widget? titleSuffix,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: SizedBox(
+              width: _bulkAddResultIconSlotWidth,
+              height: 48,
+              child: Center(child: leadingIcon),
+            ),
+          ),
+          const SizedBox(width: 8),
+          storeBadgesColumn,
+          SizedBox(width: _bulkAddListTileTitleGap),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        appName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                    ),
+                    ?titleSuffix,
+                  ],
+                ),
+                Text(
+                  packageName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          Checkbox(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(4),
+            ),
+            value: checkboxValue,
+            onChanged: onCheckboxChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bulkAddNotFoundResultRow(InstalledAppInfo app) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: SizedBox(
+              width: _bulkAddResultIconSlotWidth,
+              height: 48,
+              child: Center(child: _buildAppIcon(app.packageName)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _buildBulkResultStoreBadgeColumn(null),
+          SizedBox(width: _bulkAddListTileTitleGap),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  app.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyLarge,
+                ),
+                Text(
+                  app.packageName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 48,
+            child: Center(
+              child: Icon(
+                Icons.close_rounded,
+                color: Theme.of(context).colorScheme.error,
+                size: 24,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Map<String, String?> _persistedStoreColumn(
+    Map<String, Map<String, String>> persisted,
+    List<String> packageNames,
+    String storeName,
+  ) {
+    final Map<String, String?> out = {};
+    for (final String packageName in packageNames) {
+      final Map<String, String>? row = persisted[packageName];
+      if (row == null || !row.containsKey(storeName)) continue;
+      final String url = row[storeName]!;
+      out[packageName] = url.isEmpty ? null : url;
+    }
+    return out;
   }
 
   Future<void> _proceedToAppList() async {
@@ -191,14 +515,19 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
       _iconCache.clear();
     });
     try {
-      final apps = await BulkImportService.getInstalledApps(
+      List<InstalledAppInfo> apps = await BulkImportService.getInstalledApps(
         includeSystem: _appFilter != _AppFilter.userOnly,
         includeUser: _appFilter != _AppFilter.systemOnly,
       );
+      if (_excludeAlreadyTracked) {
+        final Set<String> tracked = _appsProvider.apps.keys.toSet();
+        apps = apps
+            .where((InstalledAppInfo a) => !tracked.contains(a.packageName))
+            .toList();
+      }
       if (!mounted) return;
       setState(() {
         _installedApps = apps;
-        _selectedPackages.addAll(apps.map((a) => a.packageName));
         _loadingApps = false;
       });
       // Start loading icons in batches after the list is displayed
@@ -269,28 +598,71 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     final filtered = _filteredApps;
     final alreadyTracked = _appsProvider.apps.keys.toSet();
 
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: tr('search'),
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _searchQuery.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear_rounded),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() => _searchQuery = '');
-                      },
-                    )
-                  : null,
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-            onChanged: (v) => setState(() => _searchQuery = v),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: tr('search'),
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    suffixIcon: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Align(
+                        widthFactor: 1,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            _appFilterChipLabel(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  onChanged: (String value) =>
+                      setState(() => _searchQuery = value),
+                ),
+              ),
+              if (_searchQuery.isNotEmpty)
+                IconButton(
+                  icon: Icon(
+                    Icons.close,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _searchQuery = '');
+                  },
+                ),
+            ],
           ),
         ),
         Padding(
@@ -335,29 +707,25 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                 final app = filtered[index];
                 final selected = _selectedPackages.contains(app.packageName);
                 final tracked = alreadyTracked.contains(app.packageName);
-                return CheckboxListTile(
-                  value: selected,
-                  onChanged: (v) {
+                return _bulkAddAppListRow(
+                  leadingIcon: Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: _buildAppIcon(app.packageName),
+                  ),
+                  appName: app.name,
+                  packageName: app.packageName,
+                  checkboxValue: selected,
+                  onCheckboxChanged: (bool? value) {
                     setState(() {
-                      if (v == true) {
+                      if (value == true) {
                         _selectedPackages.add(app.packageName);
                       } else {
                         _selectedPackages.remove(app.packageName);
                       }
                     });
                   },
-                  secondary: _buildAppIcon(app.packageName),
-                  title: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          app.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (tracked)
-                        Container(
+                  titleSuffix: tracked
+                      ? Container(
                           margin: const EdgeInsets.only(left: 6),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -378,16 +746,8 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                                   .onSecondaryContainer,
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                  subtitle: Text(
-                    app.packageName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  dense: true,
+                        )
+                      : null,
                 );
               },
             ),
@@ -399,7 +759,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
               onPressed: _selectedPackages.isEmpty ? null : _startScanning,
               icon: const Icon(Icons.search_rounded),
               label: Text(
-                tr('scanApps', args: ['${_selectedPackages.length}']),
+                tr('findApps', args: ['${_selectedPackages.length}']),
               ),
             ),
           ),
@@ -415,84 +775,251 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     // display and add-loop can use this stable snapshot.
     _trackedAtScanTime = _appsProvider.apps.keys.toSet();
 
+    if (_deleteScanHistoryBeforeScan) {
+      await BulkScanCache.clear();
+      if (mounted) {
+        setState(() => _deleteScanHistoryBeforeScan = false);
+      }
+    }
+    Map<String, Map<String, String>> persistedScanCache =
+        await BulkScanCache.load();
+
+    _scanCancelRequested = false;
+
     setState(() {
       _step = _Step.scanning;
       _scanStatus = '';
-      _apkMirrorProgress = 0;
-      _apkPureProgress = 0;
-      _fdroidProgress = 0;
+      _apkMirrorDone = 0;
+      _apkMirrorTotal = 0;
+      _apkPureDone = 0;
+      _apkPureTotal = 0;
+      _fdroidDone = 0;
+      _fdroidTotal = 0;
+      _githubDone = 0;
+      _githubTotal = 0;
       _foundApps = [];
       _notFoundApps = [];
+      _cancelledApps = [];
     });
 
-    final pkgList = _selectedPackages.toList();
-    // packageName -> { storeName: url }
-    final combined = <String, Map<String, String>>{};
+    final List<String> pkgList = _selectedPackages.toList();
+    final Map<String, Map<String, String>> combined = <String, Map<String, String>>{};
+    final Map<String, Set<String>> packageStoresDone = <String, Set<String>>{};
 
-    // Scan each selected store
-    if (_selectedStores.contains('APKMirror')) {
-      if (mounted) setState(() => _scanStatus = tr('scanningStore', args: ['APKMirror']));
-      final r = await BulkImportService.checkApkMirror(
-        pkgList,
-        onProgress: (done, total) {
-          if (mounted) {
-            setState(() => _apkMirrorProgress = done / total);
-          }
-        },
-      );
-      if (mounted) setState(() => _apkMirrorProgress = 1.0);
-      r.forEach((pkg, url) {
-        if (url != null) {
-          combined.putIfAbsent(pkg, () => {})['APKMirror'] = url;
-        }
-      });
+    void recordStoreCoverage(String storeLabel, Map<String, String?> results) {
+      for (final String packageName in results.keys) {
+        packageStoresDone
+            .putIfAbsent(packageName, () => <String>{})
+            .add(storeLabel);
+      }
     }
 
-    if (_selectedStores.contains('APKPure')) {
-      if (mounted) setState(() => _scanStatus = tr('scanningStore', args: ['APKPure']));
-      final r = await BulkImportService.checkApkPure(
-        pkgList,
-        onProgress: (done, total) {
+    bool shouldAbortScan() => _scanCancelRequested;
+
+    final List<String> storeOrder = _configurableBulkStores
+        .where((String storeName) => _selectedStores.contains(storeName))
+        .toList();
+
+    for (final String storeName in storeOrder) {
+      if (!mounted) return;
+      if (_scanCancelRequested) break;
+
+      switch (storeName) {
+        case 'APKMirror':
           if (mounted) {
-            setState(() => _apkPureProgress = done / total);
+            setState(() {
+              _scanStatus = tr('scanningStore', args: ['APKMirror']);
+              _apkMirrorTotal = pkgList.length;
+              _apkMirrorDone = 0;
+            });
           }
-        },
-      );
-      if (mounted) setState(() => _apkPureProgress = 1.0);
-      r.forEach((pkg, url) {
-        if (url != null) {
-          combined.putIfAbsent(pkg, () => {})['APKPure'] = url;
-        }
-      });
+          final Map<String, String?> mirrorKnown = _persistedStoreColumn(
+            persistedScanCache,
+            pkgList,
+            'APKMirror',
+          );
+          final Map<String, String?> mirrorResults =
+              await BulkImportService.checkApkMirror(
+            pkgList,
+            alreadyKnown: mirrorKnown.isEmpty ? null : mirrorKnown,
+            shouldAbort: shouldAbortScan,
+            onProgress: (int done, int total) {
+              if (mounted) {
+                setState(() {
+                  _apkMirrorDone = done;
+                  _apkMirrorTotal = total;
+                });
+              }
+            },
+          );
+          recordStoreCoverage('APKMirror', mirrorResults);
+          await BulkScanCache.mergeStoreAndSave(
+            persistedScanCache,
+            'APKMirror',
+            mirrorResults,
+          );
+          if (mounted) {
+            setState(() => _apkMirrorDone = _apkMirrorTotal);
+          }
+          mirrorResults.forEach((String pkg, String? url) {
+            if (url != null) {
+              combined.putIfAbsent(pkg, () => <String, String>{})['APKMirror'] =
+                  url;
+            }
+          });
+        case 'APKPure':
+          if (!mounted || _scanCancelRequested) break;
+          if (mounted) {
+            setState(() {
+              _scanStatus = tr('scanningStore', args: ['APKPure']);
+              _apkPureTotal = pkgList.length;
+              _apkPureDone = 0;
+            });
+          }
+          final Map<String, String?> pureKnown = _persistedStoreColumn(
+            persistedScanCache,
+            pkgList,
+            'APKPure',
+          );
+          final Map<String, String?> pureResults =
+              await BulkImportService.checkApkPure(
+            pkgList,
+            alreadyKnown: pureKnown.isEmpty ? null : pureKnown,
+            shouldAbort: shouldAbortScan,
+            onProgress: (int done, int total) {
+              if (mounted) {
+                setState(() {
+                  _apkPureDone = done;
+                  _apkPureTotal = total;
+                });
+              }
+            },
+          );
+          recordStoreCoverage('APKPure', pureResults);
+          await BulkScanCache.mergeStoreAndSave(
+            persistedScanCache,
+            'APKPure',
+            pureResults,
+          );
+          if (mounted) {
+            setState(() => _apkPureDone = _apkPureTotal);
+          }
+          pureResults.forEach((String pkg, String? url) {
+            if (url != null) {
+              combined.putIfAbsent(pkg, () => <String, String>{})['APKPure'] =
+                  url;
+            }
+          });
+        case 'F-Droid':
+          if (!mounted || _scanCancelRequested) break;
+          if (mounted) {
+            setState(() {
+              _scanStatus = tr('scanningStore', args: ['F-Droid']);
+              _fdroidTotal = pkgList.length;
+              _fdroidDone = 0;
+            });
+          }
+          final Map<String, String?> fdroidKnown = _persistedStoreColumn(
+            persistedScanCache,
+            pkgList,
+            'F-Droid',
+          );
+          final Map<String, String?> fdroidResults =
+              await BulkImportService.checkFDroid(
+            pkgList,
+            alreadyKnown: fdroidKnown.isEmpty ? null : fdroidKnown,
+            shouldAbort: shouldAbortScan,
+            onProgress: (int done, int total) {
+              if (mounted) {
+                setState(() {
+                  _fdroidDone = done;
+                  _fdroidTotal = total;
+                });
+              }
+            },
+          );
+          recordStoreCoverage('F-Droid', fdroidResults);
+          await BulkScanCache.mergeStoreAndSave(
+            persistedScanCache,
+            'F-Droid',
+            fdroidResults,
+          );
+          if (mounted) {
+            setState(() => _fdroidDone = _fdroidTotal);
+          }
+          fdroidResults.forEach((String pkg, String? url) {
+            if (url != null) {
+              combined.putIfAbsent(pkg, () => <String, String>{})['F-Droid'] =
+                  url;
+            }
+          });
+        case 'GitHub':
+          if (!mounted || _scanCancelRequested) break;
+          if (mounted) {
+            setState(() {
+              _scanStatus = tr('scanningStore', args: ['GitHub']);
+              _githubTotal = pkgList.length;
+              _githubDone = 0;
+            });
+          }
+          final Map<String, String?> githubKnown = _persistedStoreColumn(
+            persistedScanCache,
+            pkgList,
+            'GitHub',
+          );
+          final Map<String, String?> githubResults =
+              await BulkImportService.checkGitHub(
+            pkgList,
+            alreadyKnown: githubKnown.isEmpty ? null : githubKnown,
+            shouldAbort: shouldAbortScan,
+            onProgress: (int done, int total) {
+              if (mounted) {
+                setState(() {
+                  _githubDone = done;
+                  _githubTotal = total;
+                });
+              }
+            },
+          );
+          recordStoreCoverage('GitHub', githubResults);
+          await BulkScanCache.mergeStoreAndSave(
+            persistedScanCache,
+            'GitHub',
+            githubResults,
+          );
+          if (mounted) {
+            setState(() => _githubDone = _githubTotal);
+          }
+          githubResults.forEach((String pkg, String? url) {
+            if (url != null) {
+              combined.putIfAbsent(pkg, () => <String, String>{})['GitHub'] =
+                  url;
+            }
+          });
+        default:
+          break;
+      }
     }
 
-    if (_selectedStores.contains('F-Droid')) {
-      if (mounted) setState(() => _scanStatus = tr('scanningStore', args: ['F-Droid']));
-      final r = await BulkImportService.checkFDroid(
-        pkgList,
-        onProgress: (done, total) {
-          if (mounted) {
-            setState(() => _fdroidProgress = done / total);
-          }
-        },
-      );
-      if (mounted) setState(() => _fdroidProgress = 1.0);
-      r.forEach((pkg, url) {
-        if (url != null) {
-          combined.putIfAbsent(pkg, () => {})['F-Droid'] = url;
-        }
-      });
-    }
+    final Map<String, InstalledAppInfo> appInfoMap = {
+      for (final InstalledAppInfo a in _installedApps) a.packageName: a,
+    };
+    final List<_FoundApp> found = <_FoundApp>[];
+    final List<InstalledAppInfo> notFound = <InstalledAppInfo>[];
+    final List<InstalledAppInfo> cancelledApps = <InstalledAppInfo>[];
 
-    // Build results
-    final appInfoMap = {for (final a in _installedApps) a.packageName: a};
-    final found = <_FoundApp>[];
-    final notFound = <InstalledAppInfo>[];
-
-    for (final pkg in pkgList) {
-      final sources = combined[pkg];
-      final info = appInfoMap[pkg];
+    for (final String pkg in pkgList) {
+      final InstalledAppInfo? info = appInfoMap[pkg];
       if (info == null) continue;
+      final Set<String>? doneForPackage = packageStoresDone[pkg];
+      final bool coveredAllSelectedStores = _selectedStores.every(
+        (String storeLabel) => doneForPackage?.contains(storeLabel) ?? false,
+      );
+      if (!coveredAllSelectedStores) {
+        cancelledApps.add(info);
+        continue;
+      }
+      final Map<String, String>? sources = combined[pkg];
       if (sources != null && sources.isNotEmpty) {
         found.add(_FoundApp(info: info, sources: sources));
       } else {
@@ -500,10 +1027,19 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
       }
     }
 
+    final Set<String> newFoundIds = {
+      for (final _FoundApp a in found)
+        if (!_trackedAtScanTime.contains(a.info.packageName)) a.info.packageName,
+    };
+
     if (mounted) {
       setState(() {
         _foundApps = found;
         _notFoundApps = notFound;
+        _cancelledApps = cancelledApps;
+        _selectedNewFoundPackages
+          ..clear()
+          ..addAll(newFoundIds);
         _step = _Step.results;
       });
     }
@@ -516,33 +1052,45 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Center(child: _m3LoadingIndicator(size: 80)),
+          Center(
+            child: _m3LoadingIndicator(size: 80),
+          ),
           const SizedBox(height: 32),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: Text(
               _scanStatus,
-              key: ValueKey(_scanStatus),
+              key: ValueKey<String>(_scanStatus),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium,
             ),
           ),
           const SizedBox(height: 40),
           if (_selectedStores.contains('APKMirror'))
-            _buildStoreCard('APKMirror', _apkMirrorProgress),
+            _buildStoreCard('APKMirror', _apkMirrorDone, _apkMirrorTotal),
           if (_selectedStores.contains('APKPure'))
-            _buildStoreCard('APKPure', _apkPureProgress),
+            _buildStoreCard('APKPure', _apkPureDone, _apkPureTotal),
           if (_selectedStores.contains('F-Droid'))
-            _buildStoreCard('F-Droid', _fdroidProgress),
+            _buildStoreCard('F-Droid', _fdroidDone, _fdroidTotal),
+          if (_selectedStores.contains('GitHub'))
+            _buildStoreCard('GitHub', _githubDone, _githubTotal),
+          const SizedBox(height: 24),
+          OutlinedButton.icon(
+            onPressed: () => setState(() => _scanCancelRequested = true),
+            icon: const Icon(Icons.stop_circle_outlined),
+            label: Text(tr('cancelBulkScan')),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildStoreCard(String store, double progress) {
-    final done = progress >= 1.0;
-    final started = progress > 0;
-    final cs = Theme.of(context).colorScheme;
+  Widget _buildStoreCard(String store, int done, int total) {
+    final bool storeComplete = total > 0 && done >= total;
+    final bool started = total > 0 && done > 0;
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final double? progressValue =
+        total > 0 ? (done / total).clamp(0.0, 1.0) : null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -551,7 +1099,9 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         curve: Curves.easeInOut,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: done ? cs.primaryContainer : cs.surfaceContainerHighest,
+          color: storeComplete
+              ? colorScheme.primaryContainer
+              : colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
@@ -567,35 +1117,40 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                       Text(
                         store,
                         style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: done ? cs.onPrimaryContainer : cs.onSurface,
-                        ),
+                              color: storeComplete
+                                  ? colorScheme.onPrimaryContainer
+                                  : colorScheme.onSurface,
+                            ),
                       ),
                       const Spacer(),
                       AnimatedSwitcher(
                         duration: const Duration(milliseconds: 300),
-                        child: done
+                        child: storeComplete
                             ? Icon(
                                 Icons.check_circle_rounded,
-                                color: cs.primary,
+                                color: colorScheme.primary,
                                 size: 20,
-                                key: const ValueKey('done'),
+                                key: const ValueKey<String>('done'),
                               )
                             : Text(
-                                started
-                                    ? '${(progress * 100).round()}%'
+                                total > 0
+                                    ? tr('bulkScanProgressXY',
+                                        args: ['$done', '$total'])
                                     : tr('pending'),
-                                key: ValueKey(started ? 'progress' : 'pending'),
+                                key: ValueKey<String>(
+                                  total > 0 ? 'n-$done-$total' : 'pending',
+                                ),
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                       ),
                     ],
                   ),
-                  if (!done) ...[
+                  if (!storeComplete) ...[
                     const SizedBox(height: 8),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
-                        value: started ? progress : null,
+                        value: started ? progressValue : null,
                         minHeight: 4,
                       ),
                     ),
@@ -614,15 +1169,29 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   Widget _buildResultsStep() {
     // Use the snapshot taken at scan time, so just-added apps don't appear
     // as "already tracked" after _addFoundApps runs.
-    final newFound =
-        _foundApps.where((a) => !_trackedAtScanTime.contains(a.info.packageName)).toList();
-    final alreadyFoundTracked =
-        _foundApps.where((a) => _trackedAtScanTime.contains(a.info.packageName)).toList();
+    final List<_FoundApp> newFound = _foundApps
+        .where(
+          (_FoundApp a) =>
+              !_trackedAtScanTime.contains(a.info.packageName),
+        )
+        .toList();
+    final List<_FoundApp> alreadyFoundTracked = _foundApps
+        .where(
+          (_FoundApp a) => _trackedAtScanTime.contains(a.info.packageName),
+        )
+        .toList();
+    final int selectedNewFoundCount = newFound
+        .where(
+          (_FoundApp a) =>
+              _selectedNewFoundPackages.contains(a.info.packageName),
+        )
+        .length;
+    final int cancelledCount = _cancelledApps.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Summary banner
+        // Summary banner (equal-width columns per metric)
         Container(
           margin: const EdgeInsets.all(16),
           padding: const EdgeInsets.all(16),
@@ -631,61 +1200,120 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: _addingDone
                 ? [
-                    _buildStat(Icons.check_circle_rounded, '$_addedCount',
-                        tr('added'), Theme.of(context).colorScheme.primary),
+                    Expanded(
+                      child: _buildSummaryMetricColumn(
+                        Icons.check_circle_rounded,
+                        '$_addedCount',
+                        tr('added'),
+                        _summaryFoundGreen,
+                      ),
+                    ),
                     if (_failedCount > 0)
-                      _buildStat(Icons.error_rounded, '$_failedCount',
-                          tr('failed'), Theme.of(context).colorScheme.error),
-                    _buildStat(Icons.cancel_rounded, '${_notFoundApps.length}',
-                        tr('notFound'), Theme.of(context).colorScheme.outline),
+                      Expanded(
+                        child: _buildSummaryMetricColumn(
+                          Icons.error_rounded,
+                          '$_failedCount',
+                          tr('failed'),
+                          _summaryNotFoundRed,
+                        ),
+                      ),
+                    Expanded(
+                      child: _buildSummaryMetricColumn(
+                        Icons.cancel_rounded,
+                        '${_notFoundApps.length}',
+                        tr('notFound'),
+                        _summaryNotFoundRed,
+                      ),
+                    ),
                   ]
                 : [
-                    _buildStat(Icons.check_circle_rounded,
-                        '${_foundApps.length}', tr('found'),
-                        Theme.of(context).colorScheme.primary),
-                    _buildStat(Icons.cancel_rounded,
-                        '${_notFoundApps.length}', tr('notFound'),
-                        Theme.of(context).colorScheme.error),
+                    Expanded(
+                      child: _buildSummaryMetricColumn(
+                        Icons.check_circle_rounded,
+                        '${_foundApps.length}',
+                        tr('found'),
+                        _summaryFoundGreen,
+                        labelColor: _summaryFoundGreen,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildSummaryMetricColumn(
+                        Icons.cancel_rounded,
+                        '${_notFoundApps.length}',
+                        tr('notFound'),
+                        _summaryNotFoundRed,
+                        labelColor: _summaryNotFoundRed,
+                      ),
+                    ),
+                    if (cancelledCount > 0)
+                      Expanded(
+                        child: _buildSummaryMetricColumn(
+                          Icons.hourglass_disabled_rounded,
+                          '$cancelledCount',
+                          tr('bulkScanCancelled'),
+                          _summaryCancelledGrey,
+                          labelColor: _summaryCancelledGrey,
+                        ),
+                      ),
                     if (alreadyFoundTracked.isNotEmpty)
-                      _buildStat(Icons.bookmark_rounded,
-                          '${alreadyFoundTracked.length}', tr('alreadyTracked'),
-                          Theme.of(context).colorScheme.tertiary),
+                      Expanded(
+                        child: _buildSummaryMetricColumn(
+                          Icons.bookmark_rounded,
+                          '${alreadyFoundTracked.length}',
+                          tr('alreadyTracked'),
+                          _summaryAlreadyTrackedBlue,
+                        ),
+                      ),
                   ],
           ),
         ),
 
         // App list
         Expanded(
-          child: _foundApps.isEmpty && _notFoundApps.isEmpty
+          child: _foundApps.isEmpty &&
+                  _notFoundApps.isEmpty &&
+                  _cancelledApps.isEmpty
               ? Center(child: Text(tr('noAppsFound')))
               : ListView(
+                  clipBehavior: Clip.none,
                   children: [
                     if (_addingDone) ...[
                       // ── Post-add view ──────────────────────────────────
                       if (_addedApps.isNotEmpty) ...[
                         _buildSectionHeader('${tr('added')} (${_addedApps.length})',
                             Theme.of(context).colorScheme.primary),
-                        ..._addedApps.map((a) => _buildFoundAppTile(a)),
+                        ..._addedApps.map(
+                          (a) => _buildFoundAppTile(a, addedResult: true),
+                        ),
                       ],
                       if (_failedApps.isNotEmpty) ...[
                         _buildSectionHeader('${tr('failed')} (${_failedApps.length})',
                             Theme.of(context).colorScheme.error),
-                        ..._failedApps.map((a) => _buildFoundAppTile(a)),
+                        ..._failedApps.map(
+                          (a) => _buildFoundAppTile(a, failedResult: true),
+                        ),
                       ],
                       if (_notFoundApps.isNotEmpty) ...[
-                        _buildSectionHeader('${tr('notFound')} (${_notFoundApps.length})',
-                            Theme.of(context).colorScheme.outline),
-                        ..._notFoundApps.map((a) => _buildNotFoundTile(a)),
+                        _buildSectionHeader(
+                          '${tr('notFound')} (${_notFoundApps.length})',
+                          _summaryNotFoundRed,
+                        ),
+                        ..._notFoundApps.map(_buildNotFoundTile),
                       ],
                     ] else ...[
                       // ── Pre-add view ───────────────────────────────────
                       if (newFound.isNotEmpty) ...[
                         _buildSectionHeader('${tr('found')} (${newFound.length})',
-                            Theme.of(context).colorScheme.primary),
-                        ...newFound.map((a) => _buildFoundAppTile(a)),
+                            _summaryFoundGreen),
+                        ...newFound.map(
+                          (a) => _buildFoundAppTile(
+                            a,
+                            selectable: true,
+                          ),
+                        ),
                       ],
                       if (alreadyFoundTracked.isNotEmpty) ...[
                         _buildSectionHeader(
@@ -694,9 +1322,18 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                         ...alreadyFoundTracked.map((a) => _buildFoundAppTile(a, tracked: true)),
                       ],
                       if (_notFoundApps.isNotEmpty) ...[
-                        _buildSectionHeader('${tr('notFound')} (${_notFoundApps.length})',
-                            Theme.of(context).colorScheme.error),
-                        ..._notFoundApps.map((a) => _buildNotFoundTile(a)),
+                        _buildSectionHeader(
+                          '${tr('notFound')} (${_notFoundApps.length})',
+                          _summaryNotFoundRed,
+                        ),
+                        ..._notFoundApps.map(_buildNotFoundTile),
+                      ],
+                      if (_cancelledApps.isNotEmpty) ...[
+                        _buildSectionHeader(
+                          '${tr('bulkScanCancelled')} (${_cancelledApps.length})',
+                          _summaryCancelledGrey,
+                        ),
+                        ..._cancelledApps.map(_bulkAddCancelledResultRow),
                       ],
                     ],
                   ],
@@ -723,18 +1360,31 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
                   ),
                 if (!_addingDone && newFound.isNotEmpty)
                   FilledButton.icon(
-                    onPressed: _addingApps ? null : () => _addFoundApps(newFound),
+                    onPressed: _addingApps || selectedNewFoundCount == 0
+                        ? null
+                        : () {
+                            final List<_FoundApp> selectedToAdd = newFound
+                                .where(
+                                  (_FoundApp a) => _selectedNewFoundPackages
+                                      .contains(a.info.packageName),
+                                )
+                                .toList();
+                            _addFoundApps(selectedToAdd);
+                          },
                     icon: _addingApps
                         ? const SizedBox(
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.download_rounded),
+                        : const Icon(Icons.save_rounded),
                     label: Text(
                       _addingApps
                           ? tr('addingApps')
-                          : tr('addFoundApps', args: ['${newFound.length}']),
+                          : tr(
+                              'addFoundApps',
+                              args: ['$selectedNewFoundCount'],
+                            ),
                     ),
                   ),
                 if (_addingDone || newFound.isEmpty)
@@ -764,93 +1414,175 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     );
   }
 
-  Widget _buildStat(IconData icon, String value, String label, Color color) {
+  Widget _buildSummaryMetricColumn(
+    IconData icon,
+    String value,
+    String label,
+    Color accentColor, {
+    Color? labelColor,
+  }) {
+    final Color resolvedLabelColor =
+        labelColor ?? Theme.of(context).colorScheme.onSurfaceVariant;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, color: color, size: 28),
+        Icon(icon, color: accentColor, size: 28),
         const SizedBox(height: 4),
         Text(
           value,
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: color,
-            fontWeight: FontWeight.bold,
-          ),
+                color: accentColor,
+                fontWeight: FontWeight.bold,
+              ),
         ),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: resolvedLabelColor,
+              ),
+        ),
       ],
     );
   }
 
-  Widget _buildNotFoundTile(InstalledAppInfo a) {
-    return ListTile(
-      leading: _buildAppIcon(a.packageName),
-      title: Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        a.packageName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodySmall,
-      ),
-      trailing: Icon(Icons.cancel_rounded, color: Theme.of(context).colorScheme.error),
-      dense: true,
-    );
+  Widget _buildNotFoundTile(InstalledAppInfo app) {
+    return _bulkAddNotFoundResultRow(app);
   }
 
-  Widget _buildFoundAppTile(_FoundApp app, {bool tracked = false}) {
-    return ListTile(
-      leading: _buildAppIcon(app.info.packageName),
-      title: Text(
-        app.info.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _bulkAddCancelledResultRow(InstalledAppInfo app) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(
-            app.info.packageName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: SizedBox(
+              width: _bulkAddResultIconSlotWidth,
+              height: 48,
+              child: Center(child: _buildAppIcon(app.packageName)),
+            ),
           ),
-          const SizedBox(height: 2),
-          Wrap(
-            spacing: 4,
-            children: app.sources.keys
-                .map(
-                  (store) => Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 1,
-                    ),
-                    decoration: BoxDecoration(
-                      color: tracked
-                          ? Theme.of(context).colorScheme.tertiaryContainer
-                          : Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      store,
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: tracked
-                            ? Theme.of(context).colorScheme.onTertiaryContainer
-                            : Theme.of(context).colorScheme.onPrimaryContainer,
-                      ),
-                    ),
-                  ),
-                )
-                .toList(),
+          const SizedBox(width: 8),
+          _buildBulkResultStoreBadgeColumn(null),
+          SizedBox(width: _bulkAddListTileTitleGap),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  app.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyLarge,
+                ),
+                Text(
+                  app.packageName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 48,
+            child: Center(
+              child: Icon(
+                Icons.pending_rounded,
+                color: _summaryCancelledGrey,
+                size: 24,
+              ),
+            ),
           ),
         ],
       ),
-      trailing: tracked
-          ? Icon(Icons.bookmark_rounded,
-              color: Theme.of(context).colorScheme.tertiary)
-          : Icon(Icons.check_circle_rounded,
-              color: Theme.of(context).colorScheme.primary),
-      dense: true,
-      isThreeLine: true,
+    );
+  }
+
+  Widget _buildFoundAppTile(
+    _FoundApp app, {
+    bool tracked = false,
+    bool selectable = false,
+    bool addedResult = false,
+    bool failedResult = false,
+  }) {
+    final Widget leadingIcon = _buildAppIcon(app.info.packageName);
+    final Widget storeBadgesColumn =
+        _buildBulkResultStoreBadgeColumn(app.sources);
+
+    if (selectable && !tracked) {
+      final bool isSelected =
+          _selectedNewFoundPackages.contains(app.info.packageName);
+      return _bulkAddResultAppRow(
+        leadingIcon: leadingIcon,
+        storeBadgesColumn: storeBadgesColumn,
+        appName: app.info.name,
+        packageName: app.info.packageName,
+        checkboxValue: isSelected,
+        onCheckboxChanged: (bool? value) {
+          setState(() {
+            if (value == true) {
+              _selectedNewFoundPackages.add(app.info.packageName);
+            } else {
+              _selectedNewFoundPackages.remove(app.info.packageName);
+            }
+          });
+        },
+      );
+    }
+
+    if (addedResult) {
+      return _bulkAddResultAppRow(
+        leadingIcon: leadingIcon,
+        storeBadgesColumn: storeBadgesColumn,
+        appName: app.info.name,
+        packageName: app.info.packageName,
+        checkboxValue: true,
+        onCheckboxChanged: null,
+      );
+    }
+
+    if (failedResult) {
+      return _bulkAddResultAppRow(
+        leadingIcon: leadingIcon,
+        storeBadgesColumn: storeBadgesColumn,
+        appName: app.info.name,
+        packageName: app.info.packageName,
+        checkboxValue: false,
+        onCheckboxChanged: null,
+        titleSuffix: Icon(
+          Icons.error_outline_rounded,
+          size: 20,
+          color: Theme.of(context).colorScheme.error,
+        ),
+      );
+    }
+
+    return _bulkAddResultAppRow(
+      leadingIcon: leadingIcon,
+      storeBadgesColumn: storeBadgesColumn,
+      appName: app.info.name,
+      packageName: app.info.packageName,
+      checkboxValue: false,
+      onCheckboxChanged: null,
+      titleSuffix: tracked
+          ? Icon(
+              Icons.bookmark_rounded,
+              size: 20,
+              color: Theme.of(context).colorScheme.tertiary,
+            )
+          : Icon(
+              Icons.check_circle_rounded,
+              size: 20,
+              color: Theme.of(context).colorScheme.primary,
+            ),
     );
   }
 
@@ -870,6 +1602,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     final apkMirrorSource = APKMirror();
     final apkPureSource = APKPure();
     final fdroidSource = FDroid();
+    final githubSource = GitHub();
 
     AppSource sourceFor(String storeName) {
       switch (storeName) {
@@ -878,6 +1611,9 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
         case 'APKPure':
           return apkPureSource;
         case 'F-Droid':
+          return fdroidSource;
+        case 'GitHub':
+          return githubSource;
         default:
           return fdroidSource;
       }
@@ -965,6 +1701,14 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
           fit: BoxFit.contain,
           filterQuality: FilterQuality.medium,
         );
+      case 'GitHub':
+        return Image.asset(
+          'assets/graphics/ic_github.png',
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.medium,
+        );
       default:
         return Icon(Icons.store_rounded, size: size);
     }
@@ -1000,8 +1744,10 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
     switch (_step) {
       case _Step.selectApps:
         setState(() => _step = _Step.config);
+        break;
       case _Step.results:
         setState(() => _step = _Step.selectApps);
+        break;
       default:
         break;
     }
@@ -1048,7 +1794,7 @@ class _BulkAddAppsPageState extends State<BulkAddAppsPage> {
   }
 }
 
-/// M3 Expressive loading indicator: 5 dots with a staggered sine-wave scale.
+/// Staggered-dot loading indicator used while bulk lists load or stores scan.
 class _M3LoadingIndicator extends StatefulWidget {
   final double size;
   final Color color;
@@ -1063,8 +1809,8 @@ class _M3LoadingIndicatorState extends State<_M3LoadingIndicator>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
-  static const _dotCount = 5;
-  static const _staggerFraction = 0.15;
+  static const int _dotCount = 5;
+  static const double _staggerFraction = 0.15;
 
   @override
   void initState() {
@@ -1083,19 +1829,23 @@ class _M3LoadingIndicatorState extends State<_M3LoadingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final dotSize = widget.size / _dotCount * 0.7;
+    final double dotSize = widget.size / _dotCount * 0.7;
     return SizedBox(
       width: widget.size,
       height: widget.size * 0.45,
       child: AnimatedBuilder(
         animation: _controller,
-        builder: (context, _) {
+        builder: (BuildContext context, Widget? child) {
           return Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             crossAxisAlignment: CrossAxisAlignment.center,
-            children: List.generate(_dotCount, (i) {
-              final t = (_controller.value - i * _staggerFraction) % 1.0;
-              final scale = 0.35 + 0.65 * (0.5 - 0.5 * math.cos(t * 2 * math.pi));
+            children: List<Widget>.generate(_dotCount, (int dotIndex) {
+              final double wavePhase =
+                  (_controller.value - dotIndex * _staggerFraction) % 1.0;
+              final double scale = 0.35 +
+                  0.65 *
+                      (0.5 -
+                          0.5 * math.cos(wavePhase * 2 * math.pi));
               return Transform.scale(
                 scale: scale,
                 child: Container(

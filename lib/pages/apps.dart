@@ -123,64 +123,6 @@ PageRouteBuilder<T> _sharedAxisRoute<T>(WidgetBuilder builder) =>
       reverseTransitionDuration: const Duration(milliseconds: 300),
     );
 
-/// Small source favicon badge overlaid on the app icon.
-class _SourceBadgeWidget extends StatelessWidget {
-  const _SourceBadgeWidget({required this.host});
-  final String host;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final String? localAsset = storeSourceAssetPathForHost(host);
-    Widget image;
-    if (localAsset != null) {
-      image = StoreSourceIconImage(assetPath: localAsset, size: 13);
-      if (isDark && localAsset == StoreSourceIconPaths.github) {
-        image = ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            -1, 0, 0, 0, 255,
-            0, -1, 0, 0, 255,
-            0, 0, -1, 0, 255,
-            0, 0, 0, 1, 0,
-          ]),
-          child: image,
-        );
-      }
-    } else {
-      image = Image.network(
-        'https://icons.duckduckgo.com/ip3/$host.ico',
-        width: 13,
-        height: 13,
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
-        loadingBuilder: (context, child, loadingProgress) =>
-            loadingProgress == null ? child : const SizedBox.shrink(),
-      );
-      if (isDark && host == 'github.com') {
-        image = ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            -1, 0, 0, 0, 255,
-            0, -1, 0, 0, 255,
-            0, 0, -1, 0, 255,
-            0, 0, 0, 1, 0,
-          ]),
-          child: image,
-        );
-      }
-    }
-    return Container(
-      width: 16,
-      height: 16,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      padding: const EdgeInsets.all(1.5),
-      child: image,
-    );
-  }
-}
-
 /// Subscribes directly to [AppsProvider] for [AppInMemory.downloadProgress]
 /// so download-progress ticks only rebuild the one row that is downloading,
 /// not the entire page.  All other per-row data is received from the parent
@@ -629,6 +571,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
               ..showSnackBar(
                 SnackBar(
                   content: Text(tr('xAppsRemoved', args: ['1'])),
+                  persist: false,
                   duration: const Duration(seconds: 5),
                   behavior: SnackBarBehavior.floating,
                   action: SnackBarAction(
@@ -2009,7 +1952,7 @@ class AppsPageState extends State<AppsPage> {
                 Positioned(
                   right: -3,
                   bottom: -3,
-                  child: _SourceBadgeWidget(host: sourceHost),
+                  child: StoreSourceListBadge(host: sourceHost),
                 ),
               ],
             )
@@ -2897,6 +2840,7 @@ class AppsPageState extends State<AppsPage> {
                               tr('xAppsRemoved',
                                   args: ['${snapshot.length}']),
                             ),
+                            persist: false,
                             duration: const Duration(seconds: 5),
                             behavior: SnackBarBehavior.floating,
                             action: SnackBarAction(
