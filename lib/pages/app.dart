@@ -8,7 +8,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/components/app_page_section_title.dart';
+import 'package:obtainium/pages/additional_options_page.dart';
+import 'package:obtainium/pages/page_route_slide_up.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
+import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/apps.dart';
@@ -67,42 +71,6 @@ void _toastUrl(String url) {
   );
 }
 
-/// Surfaces from [ColorScheme.fromImageProvider] are often very dark in dark mode;
-/// blend them toward [ColorScheme.primary] so the hue reads clearly on the app page.
-ColorScheme _appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
-  final double surfaceTint = scheme.brightness == Brightness.dark ? 0.12 : 0.18;
-  final double outlineTint = scheme.brightness == Brightness.dark ? 0.18 : 0.28;
-  Color tintTowardPrimary(Color base) =>
-      Color.lerp(base, scheme.primary, surfaceTint) ?? base;
-  Color tintOutline(Color base) =>
-      Color.lerp(base, scheme.primary, outlineTint) ?? base;
-
-  if (scheme.brightness == Brightness.dark) {
-    return scheme.copyWith(
-      surface: tintTowardPrimary(scheme.surface),
-      surfaceDim: tintTowardPrimary(scheme.surfaceDim),
-      surfaceBright: tintTowardPrimary(scheme.surfaceBright),
-      surfaceContainerLowest:
-          tintTowardPrimary(scheme.surfaceContainerLowest),
-      surfaceContainerLow: tintTowardPrimary(scheme.surfaceContainerLow),
-      surfaceContainer: tintTowardPrimary(scheme.surfaceContainer),
-      surfaceContainerHigh: tintTowardPrimary(scheme.surfaceContainerHigh),
-      surfaceContainerHighest:
-          tintTowardPrimary(scheme.surfaceContainerHighest),
-      outline: tintOutline(scheme.outline),
-      outlineVariant: tintOutline(scheme.outlineVariant),
-    );
-  }
-  return scheme.copyWith(
-    surfaceContainer: tintTowardPrimary(scheme.surfaceContainer),
-    surfaceContainerHigh: tintTowardPrimary(scheme.surfaceContainerHigh),
-    surfaceContainerHighest:
-        tintTowardPrimary(scheme.surfaceContainerHighest),
-    outlineVariant: tintOutline(scheme.outlineVariant),
-  );
-}
-
-/// Pulls icon-derived dark schemes a few steps toward black so UI feels less neon.
 int _additionalSettingsRebuildToken(Map<String, dynamic> map) {
   if (map.isEmpty) return 0;
   final List<String> keys = map.keys.map((k) => k.toString()).toList()..sort();
@@ -172,58 +140,6 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
   );
 }
 
-ColorScheme _darkenIconPageSchemeInDarkMode(ColorScheme scheme) {
-  if (scheme.brightness != Brightness.dark) return scheme;
-  const Color black = Color(0xFF000000);
-  Color darken(Color color, double mix) =>
-      Color.lerp(color, black, mix) ?? color;
-
-  return scheme.copyWith(
-    primary: darken(scheme.primary, 0.08),
-    onPrimary: scheme.onPrimary,
-    primaryContainer: darken(scheme.primaryContainer, 0.12),
-    onPrimaryContainer: scheme.onPrimaryContainer,
-    primaryFixed: darken(scheme.primaryFixed, 0.1),
-    primaryFixedDim: darken(scheme.primaryFixedDim, 0.1),
-    onPrimaryFixed: scheme.onPrimaryFixed,
-    onPrimaryFixedVariant: scheme.onPrimaryFixedVariant,
-    secondary: darken(scheme.secondary, 0.08),
-    onSecondary: scheme.onSecondary,
-    secondaryContainer: darken(scheme.secondaryContainer, 0.12),
-    onSecondaryContainer: scheme.onSecondaryContainer,
-    secondaryFixed: darken(scheme.secondaryFixed, 0.1),
-    secondaryFixedDim: darken(scheme.secondaryFixedDim, 0.1),
-    onSecondaryFixed: scheme.onSecondaryFixed,
-    onSecondaryFixedVariant: scheme.onSecondaryFixedVariant,
-    tertiary: darken(scheme.tertiary, 0.08),
-    onTertiary: scheme.onTertiary,
-    tertiaryContainer: darken(scheme.tertiaryContainer, 0.12),
-    onTertiaryContainer: scheme.onTertiaryContainer,
-    tertiaryFixed: darken(scheme.tertiaryFixed, 0.1),
-    tertiaryFixedDim: darken(scheme.tertiaryFixedDim, 0.1),
-    onTertiaryFixed: scheme.onTertiaryFixed,
-    onTertiaryFixedVariant: scheme.onTertiaryFixedVariant,
-    surface: darken(scheme.surface, 0.14),
-    onSurface: scheme.onSurface,
-    surfaceDim: darken(scheme.surfaceDim, 0.14),
-    surfaceBright: darken(scheme.surfaceBright, 0.12),
-    surfaceContainerLowest: darken(scheme.surfaceContainerLowest, 0.14),
-    surfaceContainerLow: darken(scheme.surfaceContainerLow, 0.14),
-    surfaceContainer: darken(scheme.surfaceContainer, 0.14),
-    surfaceContainerHigh: darken(scheme.surfaceContainerHigh, 0.14),
-    surfaceContainerHighest: darken(scheme.surfaceContainerHighest, 0.14),
-    onSurfaceVariant: scheme.onSurfaceVariant,
-    outline: darken(scheme.outline, 0.07),
-    outlineVariant: darken(scheme.outlineVariant, 0.09),
-    shadow: scheme.shadow,
-    scrim: scheme.scrim,
-    inverseSurface: scheme.inverseSurface,
-    onInverseSurface: scheme.onInverseSurface,
-    inversePrimary: scheme.inversePrimary,
-    surfaceTint: darken(scheme.surfaceTint, 0.06),
-  );
-}
-
 enum _UnsavedAction { keepEditing, discard, saveAndExit }
 
 class AppPage extends StatefulWidget {
@@ -269,11 +185,15 @@ class _AppPageState extends State<AppPage> {
   bool _editMode = false;
   bool _scheduledOpenInEditMode = false;
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _authorController = TextEditingController();
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _packageController = TextEditingController();
+  final TextEditingController _notesController = TextEditingController();
   List<String> _editCategories = [];
 
   String _editBaselineName = '';
+  String _editBaselineAuthor = '';
+  String _editBaselineNotes = '';
   String _editBaselineUrl = '';
   String _editBaselinePackage = '';
   List<String> _editBaselineCategories = [];
@@ -308,8 +228,10 @@ class _AppPageState extends State<AppPage> {
   @override
   void dispose() {
     _nameController.dispose();
+    _authorController.dispose();
     _urlController.dispose();
     _packageController.dispose();
+    _notesController.dispose();
     super.dispose();
   }
 
@@ -326,8 +248,10 @@ class _AppPageState extends State<AppPage> {
 
   void _captureEditBaseline(AppInMemory appData) {
     _editBaselineName = _nameController.text;
+    _editBaselineAuthor = _authorController.text;
     _editBaselineUrl = _urlController.text;
     _editBaselinePackage = _packageController.text;
+    _editBaselineNotes = _notesController.text;
     _editBaselineCategories = List<String>.from(_editCategories);
     _editBaselineIconFingerprint = _iconFingerprintForEditBaseline(appData.icon);
   }
@@ -357,8 +281,10 @@ class _AppPageState extends State<AppPage> {
   bool _isEditDirty(AppInMemory? currentApp) {
     if (!_editMode || currentApp == null) return false;
     if (_nameController.text != _editBaselineName) return true;
+    if (_authorController.text != _editBaselineAuthor) return true;
     if (_urlController.text != _editBaselineUrl) return true;
     if (_packageController.text != _editBaselinePackage) return true;
+    if (_notesController.text != _editBaselineNotes) return true;
     if (!listEquals(_editCategories, _editBaselineCategories)) return true;
     if (_editIconStagingIsDirty()) return true;
     return false;
@@ -430,6 +356,10 @@ class _AppPageState extends State<AppPage> {
   void _startEdit(AppInMemory appData, AppsProvider appsProvider) {
     _clearEditIconStaging();
     _nameController.text = appData.name;
+    _authorController.text = appData.author;
+    final dynamic aboutRaw = appData.app.additionalSettings['about'];
+    _notesController.text =
+        aboutRaw is String ? aboutRaw : (aboutRaw?.toString() ?? '');
     _urlController.text = appData.app.url;
     _packageController.text = appData.app.id;
     _editCategories = List<String>.from(appData.app.categories);
@@ -446,6 +376,8 @@ class _AppPageState extends State<AppPage> {
       }
 
       placeCaretAtEnd(_nameController);
+      placeCaretAtEnd(_authorController);
+      placeCaretAtEnd(_notesController);
       placeCaretAtEnd(_urlController);
       placeCaretAtEnd(_packageController);
     });
@@ -459,14 +391,27 @@ class _AppPageState extends State<AppPage> {
     } else {
       updatedApp.additionalSettings['appName'] = newName;
     }
+    final String newAuthor = _authorController.text.trim();
+    if (newAuthor.isEmpty) {
+      updatedApp.additionalSettings.remove('appAuthor');
+    } else {
+      updatedApp.additionalSettings['appAuthor'] = newAuthor;
+    }
     final newUrl = _urlController.text.trim();
-    if (newUrl.isNotEmpty) updatedApp.url = newUrl;
+    updatedApp.url = newUrl;
     final newId = _packageController.text.trim();
     if (newId.isNotEmpty && newId != updatedApp.id) {
       updatedApp.allowIdChange = true;
       updatedApp.id = newId;
     }
     updatedApp.categories = _editCategories;
+
+    final String notesText = _notesController.text.trim();
+    if (notesText.isEmpty) {
+      updatedApp.additionalSettings.remove('about');
+    } else {
+      updatedApp.additionalSettings['about'] = notesText;
+    }
 
     if (_editStagedClearOverride &&
         appsProvider.hasUserAppIconOverride(widget.appId)) {
@@ -556,53 +501,22 @@ class _AppPageState extends State<AppPage> {
     Color? sectionBackgroundColor,
     Color? sectionTitleColor,
   }) {
-    final bool isDark = Theme.of(ctx).brightness == Brightness.dark;
-    final ColorScheme colorScheme = Theme.of(ctx).colorScheme;
-    final double sectionDeepen = isDark ? 0.055 : 0.045;
-    final Color defaultSectionFill = isDark
-        ? colorScheme.surfaceContainerHighest
-        : colorScheme.surfaceContainer;
+    final BoxDecoration baseDecoration = appPageSectionCardDecoration(ctx);
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: sectionBackgroundColor ??
-            (Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
-                defaultSectionFill),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: colorScheme.outlineVariant,
-          width: 1,
-        ),
-        boxShadow: [
-          if (isDark)
-            BoxShadow(
-              color: colorScheme.shadow.withAlpha(180),
-              blurRadius: 16,
-              spreadRadius: 0,
-              offset: const Offset(0, 4),
-            )
-          else
-            BoxShadow(
-              color: colorScheme.shadow.withAlpha(40),
-              blurRadius: 12,
-              offset: const Offset(0, 2),
-            ),
-        ],
-      ),
+      decoration: sectionBackgroundColor != null
+          ? baseDecoration.copyWith(color: sectionBackgroundColor)
+          : baseDecoration,
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
+            appPageCardSectionHeaderLabel(
+              ctx,
               sectionTitle,
-              style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                    color: sectionTitleColor ??
-                        Theme.of(ctx).colorScheme.onSurfaceVariant,
-                  ),
+              color: sectionTitleColor,
             ),
             const SizedBox(height: 12),
             ...children,
@@ -627,13 +541,23 @@ class _AppPageState extends State<AppPage> {
       children: [
         _materialAppPageSectionCard(
           ctx,
-          tr('nameAndLinks').toUpperCase(),
+          tr('nameAndLinks'),
           [
             TextField(
               controller: _nameController,
-              decoration: InputDecoration(
+              decoration: appPageOutlinedInputDecoration(
+                ctx,
                 labelText: tr('appName'),
-                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              textCapitalization: TextCapitalization.words,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _authorController,
+              decoration: appPageOutlinedInputDecoration(
+                ctx,
+                labelText: tr('author'),
                 isDense: true,
               ),
               textCapitalization: TextCapitalization.words,
@@ -641,18 +565,18 @@ class _AppPageState extends State<AppPage> {
             const SizedBox(height: 12),
             TextField(
               controller: _packageController,
-              decoration: InputDecoration(
+              decoration: appPageOutlinedInputDecoration(
+                ctx,
                 labelText: tr('package'),
-                border: const OutlineInputBorder(),
                 isDense: true,
               ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _urlController,
-              decoration: InputDecoration(
+              decoration: appPageOutlinedInputDecoration(
+                ctx,
                 labelText: tr('trackedSource'),
-                border: const OutlineInputBorder(),
                 isDense: true,
               ),
               keyboardType: TextInputType.url,
@@ -661,7 +585,7 @@ class _AppPageState extends State<AppPage> {
         ),
         _materialAppPageSectionCard(
           ctx,
-          tr('appIconActionsTitle').toUpperCase(),
+          tr('appIconActionsTitle'),
           [
             Wrap(
               spacing: 8,
@@ -689,7 +613,7 @@ class _AppPageState extends State<AppPage> {
         ),
         _materialAppPageSectionCard(
           ctx,
-          tr('categories').toUpperCase(),
+          tr('categories'),
           [
             CategoryEditorSelector(
               key: ValueKey(_editCategories.join(',')),
@@ -698,6 +622,25 @@ class _AppPageState extends State<AppPage> {
               showLabelWhenNotEmpty: false,
               onSelected: (cats) =>
                   setState(() => _editCategories = cats),
+            ),
+          ],
+        ),
+        _materialAppPageSectionCard(
+          ctx,
+          tr('notes'),
+          [
+            TextField(
+              controller: _notesController,
+              decoration: appPageOutlinedInputDecoration(
+                ctx,
+                labelText: null,
+                hintText: tr('notes'),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.multiline,
+              minLines: 3,
+              maxLines: 8,
+              textCapitalization: TextCapitalization.sentences,
             ),
           ],
         ),
@@ -761,24 +704,20 @@ class _AppPageState extends State<AppPage> {
     Uint8List iconBytes,
     String cacheKey,
   ) async {
-    try {
-      if (!mounted) return;
-      final brightness = Theme.of(context).brightness;
-      // Use fidelity, not expressive: expressive deliberately shifts primary hue
-      // away from the seed for variety, which makes icon-based theming wrong
-      // (e.g. blue icon producing green accents).
-      final ColorScheme scheme = await ColorScheme.fromImageProvider(
-        provider: MemoryImage(iconBytes),
-        brightness: brightness,
-        dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
-      );
-      if (!context.mounted) return;
-      final AppsProvider apps =
-          Provider.of<AppsProvider>(context, listen: false);
-      if (!identical(apps.apps[widget.appId]?.icon, iconBytes)) return;
-      final SettingsProvider settings =
-          Provider.of<SettingsProvider>(context, listen: false);
-      if (!settings.matchAppPageToIconColors) return;
+    if (!mounted) return;
+    final Brightness brightness = Theme.of(context).brightness;
+    final ColorScheme? scheme = await loadColorSchemeFromAppIcon(
+      iconBytes: iconBytes,
+      brightness: brightness,
+    );
+    if (!context.mounted) return;
+    final AppsProvider apps =
+        Provider.of<AppsProvider>(context, listen: false);
+    if (!identical(apps.apps[widget.appId]?.icon, iconBytes)) return;
+    final SettingsProvider settings =
+        Provider.of<SettingsProvider>(context, listen: false);
+    if (!settings.matchAppPageToIconColors) return;
+    if (scheme != null) {
       setState(() {
         if (_iconSchemeLoadingForKey == cacheKey) {
           _iconDerivedColorScheme = scheme;
@@ -787,8 +726,7 @@ class _AppPageState extends State<AppPage> {
           _iconSchemeFailedCacheKey = null;
         }
       });
-    } catch (_) {
-      if (!context.mounted) return;
+    } else {
       setState(() {
         if (_iconSchemeLoadingForKey == cacheKey) {
           _iconSchemeLoadingForKey = null;
@@ -1024,26 +962,19 @@ class _AppPageState extends State<AppPage> {
         useIconPageColors && _iconDerivedColorScheme != null;
     final ColorScheme pageColorSchemeForPage = !applyIconDerivedPageTheming
         ? parentThemeForPage.colorScheme
-        : _darkenIconPageSchemeInDarkMode(
-            _appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
+        : darkenIconPageSchemeInDarkMode(
+            appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
           );
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
-    final double appPageSurfaceDeepen =
-        pageBrightness == Brightness.dark ? 0.055 : 0.045;
-    Color appPageDeeperSurface(Color base) =>
-        Color.lerp(base, Colors.black, appPageSurfaceDeepen) ?? base;
     // ThemeData.copyWith() is expensive — cache it and recompute only when the
     // icon scheme or parent brightness actually changes.
     final String pageThemeKey =
         '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
-      _cachedPageTheme = parentThemeForPage.copyWith(
-        colorScheme: pageColorSchemeForPage,
-        primaryColor: pageColorSchemeForPage.primary,
-        cardColor: appPageDeeperSurface(
-          pageColorSchemeForPage.surfaceContainerHighest,
-        ),
+      _cachedPageTheme = buildAppPageThemedData(
+        parentThemeForPage,
+        pageColorSchemeForPage,
       );
     }
     final ThemeData pageThemeForPage = _cachedPageTheme!;
@@ -1051,6 +982,7 @@ class _AppPageState extends State<AppPage> {
     if (!_scheduledDetailPageRefresh &&
         app != null &&
         settingsProvider.checkUpdateOnDetailPage &&
+        app.app.additionalSettings['onDemandOnly'] != true &&
         !areDownloadsRunning) {
       _scheduledDetailPageRefresh = true;
       final String refreshAppId = app.app.id;
@@ -1459,8 +1391,8 @@ class _AppPageState extends State<AppPage> {
           await appsProvider.checkUpdate(submittedPackageId);
           if (!context.mounted) return;
           Navigator.of(context).pushReplacement(
-            MaterialPageRoute<void>(
-              builder: (ctx) => AppPage(appId: submittedPackageId),
+            slideUpPageRoute<void>(
+              (ctx) => AppPage(appId: submittedPackageId),
             ),
           );
         } catch (err) {
@@ -1631,7 +1563,7 @@ class _AppPageState extends State<AppPage> {
       }
       final versionCard = _materialAppPageSectionCard(
         pageThemeContext,
-        tr('version').toUpperCase(),
+        tr('version'),
         versionCardChildren,
       );
 
@@ -1641,7 +1573,7 @@ class _AppPageState extends State<AppPage> {
           undeterminedTrackOnlyInstalled
               ? _materialAppPageSectionCard(
                   pageThemeContext,
-                  tr('error').toUpperCase(),
+                  tr('error'),
                   [
                     SelectableText(
                       trackOnlyUsesTemporaryPackageId
@@ -1844,7 +1776,7 @@ class _AppPageState extends State<AppPage> {
       ];
       final detailsCard = _materialAppPageSectionCard(
         pageThemeContext,
-        tr('details').toUpperCase(),
+        tr('details'),
         detailsChildren,
       );
 
@@ -1861,7 +1793,7 @@ class _AppPageState extends State<AppPage> {
               app?.app.additionalSettings['about'].isNotEmpty)
             _materialAppPageSectionCard(
               pageThemeContext,
-              tr('about').toUpperCase(),
+              tr('notes'),
               [_buildAboutBlock(pageThemeContext)],
             ),
         ],
@@ -2129,77 +2061,6 @@ class _AppPageState extends State<AppPage> {
           );
         },
       );
-    }
-
-    showAdditionalOptionsDialog() async {
-      return await showDialog<Map<String, dynamic>?>(
-        context: context,
-        builder: (BuildContext ctx) {
-          var items = (source?.combinedAppSpecificSettingFormItems ?? []).map((
-            row,
-          ) {
-            row = row.map((e) {
-              if (app?.app.additionalSettings[e.key] != null) {
-                e.defaultValue = app?.app.additionalSettings[e.key];
-              }
-              return e;
-            }).toList();
-            return row;
-          }).toList();
-
-          return Theme(
-            data: pageThemeForPage,
-            child: GeneratedFormModal(
-              title: tr('additionalOptions'),
-              items: items,
-            ),
-          );
-        },
-      );
-    }
-
-    handleAdditionalOptionChanges(Map<String, dynamic>? values) {
-      if (app != null && values != null) {
-        Map<String, dynamic> originalSettings = app.app.additionalSettings;
-        app.app.additionalSettings = values;
-        if (source?.enforceTrackOnly == true) {
-          app.app.additionalSettings['trackOnly'] = true;
-          // ignore: use_build_context_synchronously
-          showMessage(tr('appsFromSourceAreTrackOnly'), context);
-        }
-        var versionDetectionEnabled =
-            app.app.additionalSettings['versionDetection'] == true &&
-            originalSettings['versionDetection'] != true;
-        var releaseDateVersionEnabled =
-            app.app.additionalSettings['releaseDateAsVersion'] == true &&
-            originalSettings['releaseDateAsVersion'] != true;
-        var releaseDateVersionDisabled =
-            app.app.additionalSettings['releaseDateAsVersion'] != true &&
-            originalSettings['releaseDateAsVersion'] == true;
-        if (releaseDateVersionEnabled) {
-          if (app.app.releaseDate != null) {
-            bool isUpdated = app.app.installedVersion == app.app.latestVersion ||
-                (app.app.installedVersion != null &&
-                    versionsEffectivelyEqual(
-                        app.app.installedVersion!, app.app.latestVersion));
-            app.app.latestVersion = app.app.releaseDate!.microsecondsSinceEpoch
-                .toString();
-            if (isUpdated) {
-              app.app.installedVersion = app.app.latestVersion;
-            }
-          }
-        } else if (releaseDateVersionDisabled) {
-          app.app.installedVersion =
-              app.installedInfo?.versionName ?? app.app.installedVersion;
-        }
-        if (versionDetectionEnabled) {
-          app.app.additionalSettings['versionDetection'] = true;
-          app.app.additionalSettings['releaseDateAsVersion'] = false;
-        }
-        appsProvider.saveApps([app.app]).then((value) {
-          _runCheckUpdate(app.app.id, resetVersion: versionDetectionEnabled);
-        });
-      }
     }
 
     getBottomCenterActions(BuildContext themeContext) {
@@ -2489,17 +2350,30 @@ class _AppPageState extends State<AppPage> {
                         icon: const Icon(Icons.edit_outlined),
                         tooltip: tr('editAppInfo'),
                       ),
-                    if (source != null &&
-                        source.combinedAppSpecificSettingFormItems.isNotEmpty)
+                    if (source != null)
                       IconButton(
                         color: Theme.of(themeContext).colorScheme.primary,
                         iconSize: 24,
                         onPressed: app?.downloadProgress != null || updating
                             ? null
                             : () async {
-                                var values =
-                                    await showAdditionalOptionsDialog();
-                                handleAdditionalOptionChanges(values);
+                                await Navigator.push<void>(
+                                  context,
+                                  slideUpPageRoute(
+                                    (_) => AdditionalOptionsPage(
+                                      appId: widget.appId,
+                                      onAfterSave:
+                                          (String savedAppId,
+                                              bool versionDetectionJustEnabled) async {
+                                        await _runCheckUpdate(
+                                          savedAppId,
+                                          resetVersion:
+                                              versionDetectionJustEnabled,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                );
                               },
                         tooltip: tr('appOptions'),
                         icon: const Icon(Icons.tune),
@@ -2690,7 +2564,10 @@ class _AppPageState extends State<AppPage> {
             },
             child: Scaffold(
             appBar: showAppWebpageFinal ? AppBar() : null,
-            backgroundColor: appPageDeeperSurface(pageColorSchemeForPage.surface),
+            backgroundColor: appPageDeeperSurfaceColor(
+              pageColorSchemeForPage.surface,
+              pageBrightness,
+            ),
             body: RefreshIndicator(
               child: showAppWebpageFinal
                   ? getAppWebView(themedPageContext)

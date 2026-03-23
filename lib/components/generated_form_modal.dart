@@ -44,19 +44,20 @@ class _GeneratedFormModalState extends State<GeneratedFormModal> {
       title: Text(widget.title),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
           if (widget.message.isNotEmpty) Text(widget.message),
           if (widget.message.isNotEmpty) const SizedBox(height: 16),
           GeneratedForm(
             items: widget.items,
-            onValueChanges: (values, valid, isBuilding) {
+            onValueChanges: (nextValues, nextValid, isBuilding) {
               if (isBuilding) {
-                this.values = values;
-                this.valid = valid;
+                values = nextValues;
+                valid = nextValid;
               } else {
                 setState(() {
-                  this.values = values;
-                  this.valid = valid;
+                  values = nextValues;
+                  valid = nextValid;
                 });
               }
             },

@@ -7,6 +7,7 @@ import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/app.dart';
+import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/bulk_add_apps.dart';
 import 'package:obtainium/pages/import_export.dart';
 import 'package:obtainium/pages/settings.dart';
@@ -85,11 +86,15 @@ class AddAppPageState extends State<AddAppPage> {
             (prevHost != null && prevHost != source?.hosts[0])) {
           pickedSource = source;
           pickedSource?.runOnAddAppInputChange(userInput);
+          final dynamic preservedOnDemandOnly = additionalSettings['onDemandOnly'];
           additionalSettings = source != null
               ? getDefaultValuesFromFormItems(
                   source.combinedAppSpecificSettingFormItems,
                 )
               : {};
+          if (preservedOnDemandOnly == true) {
+            additionalSettings['onDemandOnly'] = true;
+          }
           additionalSettingsValid = source != null
               ? !sourceProvider.ifRequiredAppSpecificSettingsExist(source)
               : true;
@@ -250,7 +255,7 @@ class AddAppPageState extends State<AddAppPage> {
         if (app != null) {
           Navigator.push(
             globalNavigatorKey.currentContext ?? context,
-            MaterialPageRoute(builder: (context) => AppPage(appId: app!.id)),
+            slideUpPageRoute((_) => AppPage(appId: app!.id)),
           );
         }
       } catch (e) {

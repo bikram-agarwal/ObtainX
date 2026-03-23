@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:animations/animations.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +11,8 @@ import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
+import 'package:obtainium/pages/additional_options_page.dart';
+import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -43,6 +44,7 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
         a.app.pinned,
         a.app.categories.length,
         Object.hashAll(a.app.categories),
+        a.app.additionalSettings['onDemandOnly'] == true,
         // Icon fields deliberately excluded: each row watches its own icon
         // via _AppIconWidget.context.select, so icon loads only rebuild that
         // one row widget instead of the entire apps list.
@@ -107,21 +109,8 @@ class _AppIconWidget extends StatelessWidget {
 
 /// A single row in the apps list.
 ///
-/// A [PageRouteBuilder] with a horizontal [SharedAxisTransition] so that
-/// pushing [AppPage] matches the feel of the bottom-tab page-switcher.
-PageRouteBuilder<T> _sharedAxisRoute<T>(WidgetBuilder builder) =>
-    PageRouteBuilder<T>(
-      pageBuilder: (context, _, _) => builder(context),
-      transitionsBuilder: (_, animation, secondaryAnimation, child) =>
-          SharedAxisTransition(
-            animation: animation,
-            secondaryAnimation: secondaryAnimation,
-            transitionType: SharedAxisTransitionType.horizontal,
-            child: child,
-          ),
-      transitionDuration: const Duration(milliseconds: 300),
-      reverseTransitionDuration: const Duration(milliseconds: 300),
-    );
+/// Pushes [AppPage] with a bottom sheet style slide-up so it reads as opening
+/// from the bottom bar / actions.
 
 /// Subscribes directly to [AppsProvider] for [AppInMemory.downloadProgress]
 /// so download-progress ticks only rebuild the one row that is downloading,
@@ -345,98 +334,20 @@ class _AppListItem extends StatelessWidget {
   }
 }
 
-/// Opens the "Additional Options" modal for [appId] directly, mirroring the
-/// App Options control (tune icon) on [AppPage]. Falls back to navigating to
-/// [AppPage] when the source has no per-app settings.
+/// Opens the full-screen Additional Options page (same transition as [AppPage]).
 Future<void> _openAdditionalOptionsModal(
   String appId,
   BuildContext context,
 ) async {
   final appsProvider = context.read<AppsProvider>();
-  final appInMem = appsProvider.apps[appId];
-  if (appInMem == null) return;
-  final app = appInMem.app;
-  final source = SourceProvider().getSource(
-    app.url,
-    overrideSource: app.overrideSource,
-  );
-  final formItems = source.combinedAppSpecificSettingFormItems;
-
-  if (formItems.isEmpty) {
-    // No per-app settings — open the full app page as fallback.
-    if (context.mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => AppPage(
-            appId: appId,
-            showOppositeOfPreferredView:
-                context.read<SettingsProvider>().showAppWebpage,
-          ),
-        ),
-      );
-    }
-    return;
-  }
-
+  if (appsProvider.apps[appId] == null) return;
   if (!context.mounted) return;
-  final values = await showDialog<Map<String, dynamic>?>(
-    context: context,
-    builder: (BuildContext ctx) {
-      final items = formItems.map((row) {
-        return row.map((e) {
-          if (app.additionalSettings[e.key] != null) {
-            e.defaultValue = app.additionalSettings[e.key];
-          }
-          return e;
-        }).toList();
-      }).toList();
-      return GeneratedFormModal(
-        title: tr('additionalOptions'),
-        items: items,
-      );
-    },
+  await Navigator.push<void>(
+    context,
+    slideUpPageRoute(
+      (_) => AdditionalOptionsPage(appId: appId),
+    ),
   );
-
-  if (values == null) return;
-
-  final Map<String, dynamic> originalSettings =
-      Map.from(app.additionalSettings);
-  app.additionalSettings = values;
-
-  if (source.enforceTrackOnly) {
-    app.additionalSettings['trackOnly'] = true;
-  }
-
-  final versionDetectionEnabled =
-      app.additionalSettings['versionDetection'] == true &&
-      originalSettings['versionDetection'] != true;
-  final releaseDateVersionEnabled =
-      app.additionalSettings['releaseDateAsVersion'] == true &&
-      originalSettings['releaseDateAsVersion'] != true;
-  final releaseDateVersionDisabled =
-      app.additionalSettings['releaseDateAsVersion'] != true &&
-      originalSettings['releaseDateAsVersion'] == true;
-
-  if (releaseDateVersionEnabled && app.releaseDate != null) {
-    final bool isUpdated = app.installedVersion == app.latestVersion ||
-        (app.installedVersion != null &&
-            versionsEffectivelyEqual(
-                app.installedVersion!, app.latestVersion));
-    app.latestVersion =
-        app.releaseDate!.microsecondsSinceEpoch.toString();
-    if (isUpdated) app.installedVersion = app.latestVersion;
-  } else if (releaseDateVersionDisabled) {
-    app.installedVersion =
-        appInMem.installedInfo?.versionName ?? app.installedVersion;
-  }
-
-  if (versionDetectionEnabled) {
-    app.additionalSettings['versionDetection'] = true;
-    app.additionalSettings['releaseDateAsVersion'] = false;
-  }
-
-  appsProvider.saveApps([app]);
 }
 
 /// Wraps a list row with horizontal-swipe action hints.
@@ -551,7 +462,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         if (context.mounted) {
           await Navigator.push(
             context,
-            _sharedAxisRoute(
+            slideUpPageRoute(
               (_) => AppPage(
                 appId: widget.appId,
                 openInEditMode: true,
@@ -669,7 +580,11 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
 }
 
 class AppsPage extends StatefulWidget {
-  const AppsPage({super.key});
+  const AppsPage({super.key, this.onDemandOnlyList = false});
+
+  /// When true, only apps with [App.additionalSettings] `onDemandOnly` are listed
+  /// and pull-to-refresh checks only those IDs.
+  final bool onDemandOnlyList;
 
   @override
   State<AppsPage> createState() => AppsPageState();
@@ -1551,8 +1466,17 @@ class AppsPageState extends State<AppsPage> {
         refreshingSince = DateTime.now();
         _appListIconWarmFutures.clear();
       });
-      return appsProvider
-          .checkUpdates()
+      final Future<List<App>> refreshFuture = widget.onDemandOnlyList
+          ? appsProvider.checkUpdates(
+              specificIds: appsProvider.apps.values
+                  .where(
+                    (a) => a.app.additionalSettings['onDemandOnly'] == true,
+                  )
+                  .map((a) => a.app.id)
+                  .toList(),
+            )
+          : appsProvider.checkUpdates();
+      return refreshFuture
           .catchError((e) {
             showError(e is Map ? e['errors'] : e, context);
             return <App>[];
@@ -1564,7 +1488,8 @@ class AppsPageState extends State<AppsPage> {
           });
     }
 
-    if (!appsProvider.loadingApps &&
+    if (!widget.onDemandOnlyList &&
+        !appsProvider.loadingApps &&
         appsProvider.apps.isNotEmpty &&
         settingsProvider.checkJustStarted() &&
         settingsProvider.checkOnStart) {
@@ -1592,6 +1517,7 @@ class AppsPageState extends State<AppsPage> {
     // toggling the refresh indicator doesn't need a new sort.
     final int listBuildToken = Object.hashAll([
       appsToken,
+      widget.onDemandOnlyList,
       filter.nameFilter,
       filter.authorFilter,
       filter.idFilter,
@@ -1608,6 +1534,22 @@ class AppsPageState extends State<AppsPage> {
     if (listBuildToken != _lastListBuildToken) {
       _lastListBuildToken = listBuildToken;
       var workingList = appsProvider.apps.values.toList();
+
+      if (widget.onDemandOnlyList) {
+        workingList = workingList
+            .where(
+              (appInMem) =>
+                  appInMem.app.additionalSettings['onDemandOnly'] == true,
+            )
+            .toList();
+      } else {
+        workingList = workingList
+            .where(
+              (appInMem) =>
+                  appInMem.app.additionalSettings['onDemandOnly'] != true,
+            )
+            .toList();
+      }
 
       workingList = workingList.where((app) {
         final upToDate = app.app.installedVersion == app.app.latestVersion ||
@@ -1769,6 +1711,9 @@ class AppsPageState extends State<AppsPage> {
     final listedApps = _listedAppsCache;
     final existingUpdates = _existingUpdatesCache;
     final newInstalls = _newInstallsCache;
+    final int onDemandOnlyAppCount = appsProvider.apps.values
+        .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
+        .length;
 
     var existingUpdateIdsAllOrSelected = existingUpdates
         .where(
@@ -1859,6 +1804,9 @@ class AppsPageState extends State<AppsPage> {
         .toSet();
 
     getLoadingWidgets() {
+      final int progressDenominator = widget.onDemandOnlyList
+          ? (onDemandOnlyAppCount > 0 ? onDemandOnlyAppCount : 1)
+          : (appsProvider.apps.isNotEmpty ? appsProvider.apps.length : 1);
       return [
         if (listedApps.isEmpty)
           SliverFillRemaining(
@@ -1868,6 +1816,8 @@ class AppsPageState extends State<AppsPage> {
                     ? appsProvider.loadingApps
                           ? tr('pleaseWait')
                           : tr('noApps')
+                    : widget.onDemandOnlyList && onDemandOnlyAppCount == 0
+                    ? tr('onDemandOnlyEmpty')
                     : tr('noAppsForFilter'),
                 style: Theme.of(context).textTheme.headlineMedium,
                 textAlign: TextAlign.center,
@@ -1887,10 +1837,14 @@ class AppsPageState extends State<AppsPage> {
                                       ) ??
                                       true),
                             )
+                            .where(
+                              (element) =>
+                                  !widget.onDemandOnlyList ||
+                                  element.app.additionalSettings['onDemandOnly'] ==
+                                      true,
+                            )
                             .length /
-                        (appsProvider.apps.isNotEmpty
-                            ? appsProvider.apps.length
-                            : 1),
+                        progressDenominator,
             ),
           ),
       ];
@@ -1919,7 +1873,7 @@ class AppsPageState extends State<AppsPage> {
         onLongPress: () {
           Navigator.push(
             context,
-            _sharedAxisRoute(
+            slideUpPageRoute(
               (_) => AppPage(
                 appId: rowAppId,
                 showOppositeOfPreferredView: true,
@@ -1978,7 +1932,7 @@ class AppsPageState extends State<AppsPage> {
                   setState(() => _heroKeepaliveAppId = appId);
                   Navigator.push(
                     context,
-                    _sharedAxisRoute((_) => AppPage(appId: appId)),
+                    slideUpPageRoute((_) => AppPage(appId: appId)),
                   ).then((_) {
                     if (mounted) setState(() => _heroKeepaliveAppId = null);
                   });
@@ -3014,7 +2968,9 @@ class AppsPageState extends State<AppsPage> {
                     cacheExtent: 500,
                     slivers: <Widget>[
                       CustomAppBar(
-                        title: tr('appsString'),
+                        title: widget.onDemandOnlyList
+                            ? tr('onDemandOnlyAppsTitle')
+                            : tr('appsString'),
                         titleStyle: _searchExpanded
                             ? Theme.of(context).textTheme.titleSmall
                             : null,
@@ -3057,6 +3013,56 @@ class AppsPageState extends State<AppsPage> {
                 ),
               ),
             ),
+            if (!widget.onDemandOnlyList && onDemandOnlyAppCount > 0)
+              Material(
+                color: Theme.of(context).colorScheme.surfaceContainerLow,
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      slideUpPageRoute(
+                        (_) => const AppsPage(onDemandOnlyList: true),
+                      ),
+                    );
+                  },
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.folder_special_outlined,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              tr('onDemandOnly'),
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                          ),
+                          Text(
+                            onDemandOnlyAppCount.toString(),
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Icon(
+                            Icons.chevron_right,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (appsProvider.apps.isNotEmpty)
               _ScrollLinkedAppFooter(
                 scrollController: scrollController,
@@ -3094,7 +3100,7 @@ class AppsPageState extends State<AppsPage> {
 
     Navigator.push(
       context,
-      _sharedAxisRoute((_) => AppPage(appId: app.app.id)),
+      slideUpPageRoute((_) => AppPage(appId: app.app.id)),
     );
   }
 }

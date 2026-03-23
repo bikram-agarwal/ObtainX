@@ -2386,6 +2386,9 @@ class AppsProvider with ChangeNotifier {
                 app.app.additionalSettings['trackOnly'] == true;
           }
         })
+        .where(
+          (app) => app.app.additionalSettings['onDemandOnly'] != true,
+        )
         .map((e) => e.app.id)
         .toList();
     appIds.sort(
@@ -2412,13 +2415,31 @@ class AppsProvider with ChangeNotifier {
     if (!gettingUpdates) {
       gettingUpdates = true;
       try {
-        List<String> appIds = getAppsSortedByUpdateCheckTime(
-          ignoreAppsCheckedAfter: ignoreAppsCheckedAfter,
-          onlyCheckInstalledOrTrackOnlyApps:
-              settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
-        );
+        late List<String> appIds;
         if (specificIds != null) {
-          appIds = appIds.where((aId) => specificIds.contains(aId)).toList();
+          appIds = specificIds.where((id) => apps.containsKey(id)).toList();
+          if (ignoreAppsCheckedAfter != null) {
+            final DateTime cutoff = ignoreAppsCheckedAfter;
+            appIds = appIds.where((id) {
+              final last = apps[id]!.app.lastUpdateCheck;
+              return last == null || last.isBefore(cutoff);
+            }).toList();
+          }
+          appIds.sort(
+            (a, b) =>
+                (apps[a]!.app.lastUpdateCheck ??
+                        DateTime.fromMicrosecondsSinceEpoch(0))
+                    .compareTo(
+                      apps[b]!.app.lastUpdateCheck ??
+                          DateTime.fromMicrosecondsSinceEpoch(0),
+                    ),
+          );
+        } else {
+          appIds = getAppsSortedByUpdateCheckTime(
+            ignoreAppsCheckedAfter: ignoreAppsCheckedAfter,
+            onlyCheckInstalledOrTrackOnlyApps:
+                settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
+          );
         }
         await Future.wait(
           appIds.map((appId) async {
@@ -2454,6 +2475,7 @@ class AppsProvider with ChangeNotifier {
   List<String> findExistingUpdates({
     bool installedOnly = false,
     bool nonInstalledOnly = false,
+    bool excludeOnDemandOnly = false,
   }) {
     if (installedOnly && nonInstalledOnly) {
       return [];
@@ -2461,6 +2483,9 @@ class AppsProvider with ChangeNotifier {
     final List<String> updateAppIds = [];
     for (final appInMemory in apps.values) {
       final app = appInMemory.app;
+      if (excludeOnDemandOnly && app.additionalSettings['onDemandOnly'] == true) {
+        continue;
+      }
       final installed = app.installedVersion;
       final latest = app.latestVersion;
 
@@ -3024,7 +3049,10 @@ Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
     // If you haven't explicitly been given updates to install, grab all available silent updates
     logs.add('BG install task: Started (${toInstall.length}).');
     if (toInstall.isEmpty && !networkRestricted && !chargingRestricted) {
-      var temp = appsProvider.findExistingUpdates(installedOnly: true);
+      var temp = appsProvider.findExistingUpdates(
+        installedOnly: true,
+        excludeOnDemandOnly: true,
+      );
       for (var i = 0; i < temp.length; i++) {
         if (await appsProvider.canInstallSilently(
           appsProvider.apps[temp[i]]!.app,

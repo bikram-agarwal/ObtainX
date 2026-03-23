@@ -8,7 +8,8 @@ import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:html/dom.dart';
+import 'package:flutter/material.dart';
+import 'package:html/dom.dart' as html_dom;
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
@@ -496,7 +497,7 @@ String preStandardizeUrl(String url) {
 String noAPKFound = tr('noAPKFound');
 
 List<String> getLinksFromParsedHTML(
-  Document dom,
+  html_dom.Document dom,
   RegExp hrefPattern,
   String prependToLinks,
 ) => dom
@@ -513,8 +514,9 @@ Map<String, dynamic> getDefaultValuesFromFormItems(
 ) {
   return Map.fromEntries(
     items
-        .map((row) => row.map((el) => MapEntry(el.key, el.defaultValue ?? '')))
-        .reduce((value, element) => [...value, ...element]),
+        .expand((row) => row)
+        .where((el) => el is! GeneratedFormSectionHeader)
+        .map((el) => MapEntry(el.key, el.defaultValue ?? '')),
   );
 }
 
@@ -753,7 +755,39 @@ abstract class AppSource {
   // Some additional data may be needed for Apps regardless of Source
   List<List<GeneratedFormItem>>
   additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly = [
+    [
+      GeneratedFormSectionHeader(
+        '__formSectionTracking',
+        label: tr('additionalOptionsSectionTracking'),
+      ),
+    ],
     [GeneratedFormSwitch('trackOnly', label: tr('trackOnly'))],
+    [
+      GeneratedFormSwitch(
+        'onDemandOnly',
+        label: tr('onDemandOnly'),
+        defaultValue: false,
+        labelTooltip: tr('onDemandOnlyDescription'),
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'exemptFromBackgroundUpdates',
+        label: tr('exemptFromBackgroundUpdates'),
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'skipUpdateNotifications',
+        label: tr('skipUpdateNotifications'),
+      ),
+    ],
+    [
+      GeneratedFormSectionHeader(
+        '__formSectionVersion',
+        label: tr('additionalOptionsSectionVersion'),
+      ),
+    ],
     [
       GeneratedFormTextField(
         'versionExtractionRegEx',
@@ -785,6 +819,12 @@ abstract class AppSource {
       ),
     ],
     [
+      GeneratedFormSectionHeader(
+        '__formSectionApk',
+        label: tr('additionalOptionsSectionApk'),
+      ),
+    ],
+    [
       GeneratedFormTextField(
         'apkFilterRegEx',
         label: tr('filterAPKsByRegEx'),
@@ -810,8 +850,12 @@ abstract class AppSource {
         defaultValue: true,
       ),
     ],
-    [GeneratedFormTextField('appName', label: tr('appName'), required: false)],
-    [GeneratedFormTextField('appAuthor', label: tr('author'), required: false)],
+    [
+      GeneratedFormSectionHeader(
+        '__formSectionAdvanced',
+        label: tr('additionalOptionsSectionAdvanced'),
+      ),
+    ],
     [
       GeneratedFormSwitch(
         'shizukuPretendToBeGooglePlay',
@@ -826,19 +870,6 @@ abstract class AppSource {
         defaultValue: false,
       ),
     ],
-    [
-      GeneratedFormSwitch(
-        'exemptFromBackgroundUpdates',
-        label: tr('exemptFromBackgroundUpdates'),
-      ),
-    ],
-    [
-      GeneratedFormSwitch(
-        'skipUpdateNotifications',
-        label: tr('skipUpdateNotifications'),
-      ),
-    ],
-    [GeneratedFormTextField('about', label: tr('about'), required: false)],
     [
       GeneratedFormSwitch(
         'refreshBeforeDownload',

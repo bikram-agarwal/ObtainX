@@ -327,7 +327,12 @@ class _HomePageState extends State<HomePage> {
       (p) => (
         p.apps.length,
         p.loadingApps,
-        p.findExistingUpdates(installedOnly: true).length,
+        p
+            .findExistingUpdates(
+              installedOnly: true,
+              excludeOnDemandOnly: true,
+            )
+            .length,
       ),
     );
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();

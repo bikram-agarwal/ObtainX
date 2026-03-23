@@ -407,5 +407,14 @@
     "certificateHash": {
         "one": "인증서 해시",
         "other": "인증서 해시"
-    }
+    },
+    "onDemandOnly": "On-Demand Only",
+    "onDemandOnlyDescription": "Hide from the main apps list. Update checks run only when you pull to refresh on the On-Demand Only screen or on this app detail page.",
+    "onDemandOnlyAppsTitle": "On-Demand Only",
+    "onDemandOnlyEmpty": "No on-demand apps. Enable On-Demand Only in Additional Options for an app.",
+    "additionalOptionsSectionTracking": "Tracking behavior",
+    "additionalOptionsSectionVersion": "Version & detection",
+    "additionalOptionsSectionApk": "APK selection",
+    "additionalOptionsSectionDisplay": "Names & details",
+    "additionalOptionsSectionAdvanced": "Network, background & automation"
 }

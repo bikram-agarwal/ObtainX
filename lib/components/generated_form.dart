@@ -3,7 +3,10 @@ import 'dart:math';
 import 'package:hsluv/hsluv.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
+import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 
@@ -106,6 +109,7 @@ class GeneratedFormDropdown extends GeneratedFormItem {
 
 class GeneratedFormSwitch extends GeneratedFormItem {
   bool disabled = false;
+  String? labelTooltip;
 
   GeneratedFormSwitch(
     super.key, {
@@ -113,6 +117,7 @@ class GeneratedFormSwitch extends GeneratedFormItem {
     super.belowWidgets,
     bool super.defaultValue = false,
     bool disabled = false,
+    this.labelTooltip,
     List<String? Function(bool value)> super.additionalValidators = const [],
   });
 
@@ -129,8 +134,25 @@ class GeneratedFormSwitch extends GeneratedFormItem {
       belowWidgets: belowWidgets,
       defaultValue: defaultValue,
       disabled: false,
+      labelTooltip: labelTooltip,
       additionalValidators: List.from(additionalValidators),
     );
+  }
+}
+
+/// Visual group title for long forms; not written to [values] or app settings.
+class GeneratedFormSectionHeader extends GeneratedFormItem {
+  GeneratedFormSectionHeader(
+    super.key, {
+    required super.label,
+  }) : super(defaultValue: null, belowWidgets: const []);
+
+  @override
+  dynamic ensureType(dynamic val) => null;
+
+  @override
+  GeneratedFormSectionHeader clone() {
+    return GeneratedFormSectionHeader(key, label: label);
   }
 }
 
@@ -180,18 +202,104 @@ class GeneratedFormTagInput extends GeneratedFormItem {
 typedef OnValueChanges =
     void Function(Map<String, dynamic> values, bool valid, bool isBuilding);
 
+/// Row indices of [items] grouped by [GeneratedFormSectionHeader] starts.
+List<List<int>> generatedFormSectionRowIndices(
+  List<List<GeneratedFormItem>> items,
+) {
+  final List<List<int>> sections = <List<int>>[];
+  List<int> current = <int>[];
+  for (int rowIndex = 0; rowIndex < items.length; rowIndex++) {
+    final List<GeneratedFormItem> row = items[rowIndex];
+    final bool headerRow =
+        row.length == 1 && row.first is GeneratedFormSectionHeader;
+    if (headerRow) {
+      if (current.isNotEmpty) {
+        sections.add(current);
+      }
+      current = <int>[rowIndex];
+    } else {
+      if (current.isEmpty) {
+        current = <int>[rowIndex];
+      } else {
+        current.add(rowIndex);
+      }
+    }
+  }
+  if (current.isNotEmpty) {
+    sections.add(current);
+  }
+  return sections;
+}
+
 class GeneratedForm extends StatefulWidget {
   const GeneratedForm({
     super.key,
     required this.items,
     required this.onValueChanges,
+    this.outlinedInputFields = false,
+    this.prominentSectionHeaders = false,
+    this.outlinedFieldsExternalLabels = false,
+    this.wrapFormSectionsInCards = false,
   });
 
   final List<List<GeneratedFormItem>> items;
   final OnValueChanges onValueChanges;
 
+  /// Rounded filled outline around text fields and dropdowns (e.g. full-screen editors).
+  final bool outlinedInputFields;
+
+  /// Stronger section titles and a bar marker instead of a thin full-width divider.
+  final bool prominentSectionHeaders;
+
+  /// When [outlinedInputFields] is true, keep labels above the field instead of inside it.
+  final bool outlinedFieldsExternalLabels;
+
+  /// Group each [GeneratedFormSectionHeader] block in an app-page style card.
+  final bool wrapFormSectionsInCards;
+
   @override
   State<GeneratedForm> createState() => _GeneratedFormState();
+}
+
+InputDecoration _generatedFormTextFieldDecoration({
+  required BuildContext context,
+  required GeneratedFormTextField formItem,
+  required bool outlined,
+  required bool externalLabels,
+}) {
+  if (!outlined) {
+    return InputDecoration(
+      helperText: formItem.label + (formItem.required ? ' *' : ''),
+      hintText: formItem.hint,
+    );
+  }
+  if (externalLabels) {
+    return appPageOutlinedInputDecoration(
+      context,
+      labelText: null,
+      hintText: formItem.hint,
+    );
+  }
+  return appPageOutlinedInputDecoration(
+    context,
+    labelText: formItem.label + (formItem.required ? ' *' : ''),
+    hintText: formItem.hint,
+  );
+}
+
+InputDecoration _generatedFormDropdownDecoration({
+  required BuildContext context,
+  required String labelText,
+  required bool outlined,
+  required bool externalLabels,
+}) {
+  if (!outlined) {
+    return InputDecoration(labelText: labelText);
+  }
+  if (externalLabels) {
+    return appPageOutlinedInputDecoration(context, labelText: null);
+  }
+  return appPageOutlinedInputDecoration(context, labelText: labelText);
 }
 
 List<List<GeneratedFormItem>> cloneFormItems(
@@ -299,6 +407,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
     values.clear();
     for (var row in widget.items) {
       for (var e in row) {
+        if (e is GeneratedFormSectionHeader) continue;
         values[e.key] = e.defaultValue;
       }
     }
@@ -307,10 +416,14 @@ class _GeneratedFormState extends State<GeneratedForm> {
     formInputs = widget.items.asMap().entries.map((row) {
       return row.value.asMap().entries.map((e) {
         var formItem = e.value;
-        if (formItem is GeneratedFormTextField) {
+        if (formItem is GeneratedFormSectionHeader) {
+          return const SizedBox.shrink();
+        } else if (formItem is GeneratedFormTextField) {
           final formFieldKey = GlobalKey<FormFieldState>();
           var ctrl = TextEditingController(text: values[formItem.key]);
-          return TypeAheadField<String>(
+          final bool showExternalFieldLabels = widget.outlinedInputFields &&
+              widget.outlinedFieldsExternalLabels;
+          final Widget typeAhead = TypeAheadField<String>(
             controller: ctrl,
             builder: (context, controller, focusNode) {
               return TextFormField(
@@ -328,9 +441,11 @@ class _GeneratedFormState extends State<GeneratedForm> {
                     someValueChanged();
                   });
                 },
-                decoration: InputDecoration(
-                  helperText: formItem.label + (formItem.required ? ' *' : ''),
-                  hintText: formItem.hint,
+                decoration: _generatedFormTextFieldDecoration(
+                  context: context,
+                  formItem: formItem,
+                  outlined: widget.outlinedInputFields,
+                  externalLabels: showExternalFieldLabels,
                 ),
                 minLines: formItem.max <= 1 ? null : formItem.max,
                 maxLines: formItem.max <= 1 ? 1 : formItem.max,
@@ -366,12 +481,39 @@ class _GeneratedFormState extends State<GeneratedForm> {
             },
             hideOnEmpty: true,
           );
+          if (showExternalFieldLabels) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 2, bottom: 6),
+                  child: Text(
+                    formItem.label + (formItem.required ? ' *' : ''),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+                typeAhead,
+              ],
+            );
+          }
+          return typeAhead;
         } else if (formItem is GeneratedFormDropdown) {
           if (formItem.opts!.isEmpty) {
             return Text(tr('dropdownNoOptsError'));
           }
-          return DropdownButtonFormField(
-            decoration: InputDecoration(labelText: formItem.label),
+          final bool showExternalFieldLabels = widget.outlinedInputFields &&
+              widget.outlinedFieldsExternalLabels;
+          final Widget dropdown = DropdownButtonFormField(
+            decoration: _generatedFormDropdownDecoration(
+              context: context,
+              labelText: formItem.label,
+              outlined: widget.outlinedInputFields,
+              externalLabels: showExternalFieldLabels,
+            ),
             value: values[formItem.key],
             items: formItem.opts!.map((e2) {
               var enabled = formItem.disabledOptKeys?.contains(e2.key) != true;
@@ -391,6 +533,26 @@ class _GeneratedFormState extends State<GeneratedForm> {
               });
             },
           );
+          if (showExternalFieldLabels) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 2, bottom: 6),
+                  child: Text(
+                    formItem.label,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+                dropdown,
+              ],
+            );
+          }
+          return dropdown;
         } else if (formItem is GeneratedFormSubForm) {
           values[formItem.key] = [];
           for (Map<String, dynamic> v
@@ -424,15 +586,79 @@ class _GeneratedFormState extends State<GeneratedForm> {
     for (var r = 0; r < formInputs.length; r++) {
       for (var e = 0; e < formInputs[r].length; e++) {
         String fieldKey = widget.items[r][e].key;
+        if (widget.items[r][e] is GeneratedFormSectionHeader) {
+          final GeneratedFormSectionHeader header =
+              widget.items[r][e] as GeneratedFormSectionHeader;
+          final bool showDivider = r > 0;
+          final ThemeData theme = Theme.of(context);
+          final ColorScheme scheme = theme.colorScheme;
+          final bool prominent = widget.prominentSectionHeaders;
+          final bool inSectionCard =
+              prominent && widget.wrapFormSectionsInCards;
+          formInputs[r][e] = Padding(
+            padding: EdgeInsets.only(
+              top: showDivider
+                  ? (prominent
+                      ? (inSectionCard ? 2 : 20)
+                      : 16)
+                  : (prominent ? (inSectionCard ? 0 : 8) : 4),
+              bottom: prominent ? (inSectionCard ? 6 : 10) : 6,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showDivider && !prominent) ...[
+                  Divider(
+                    height: 1,
+                    color: scheme.outlineVariant.withValues(alpha: 0.55),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (showDivider && prominent && !inSectionCard)
+                  const SizedBox(height: 4),
+                if (prominent)
+                  appPageCardSectionHeaderLabel(context, header.label)
+                else
+                  Text(
+                    header.label,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: scheme.primary,
+                    ),
+                  ),
+              ],
+            ),
+          );
+          continue;
+        }
         if (widget.items[r][e] is GeneratedFormSwitch) {
+          final GeneratedFormSwitch switchItem =
+              widget.items[r][e] as GeneratedFormSwitch;
           formInputs[r][e] = Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Flexible(child: Text(widget.items[r][e].label)),
-              const SizedBox(width: 8),
+              Expanded(
+                child: Text(switchItem.label),
+              ),
+              if (switchItem.labelTooltip != null &&
+                  switchItem.labelTooltip!.isNotEmpty) ...[
+                Tooltip(
+                  message: switchItem.labelTooltip!,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4, right: 4),
+                    child: Icon(
+                      Icons.help_outline,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(width: 4),
               Switch(
                 value: values[fieldKey],
-                onChanged: (widget.items[r][e] as GeneratedFormSwitch).disabled
+                onChanged: switchItem.disabled
                     ? null
                     : (value) {
                         setState(() {
@@ -716,6 +942,11 @@ class _GeneratedFormState extends State<GeneratedForm> {
                     ),
                   GeneratedForm(
                     key: internalFormKey,
+                    outlinedInputFields: widget.outlinedInputFields,
+                    prominentSectionHeaders: widget.prominentSectionHeaders,
+                    outlinedFieldsExternalLabels:
+                        widget.outlinedFieldsExternalLabels,
+                    wrapFormSectionsInCards: widget.wrapFormSectionsInCards,
                     items:
                         cloneFormItems(
                               (widget.items[r][e] as GeneratedFormSubForm)
@@ -832,19 +1063,59 @@ class _GeneratedFormState extends State<GeneratedForm> {
       rows.add(rowItems);
     });
 
-    return Form(
-      key: _formKey,
-      child: Column(
-        children: [
-          ...rows.map(
-            (row) => Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [...row.map((e) => e)],
+    final List<Widget> rowBars = rows
+        .map(
+          (row) => Row(
+            mainAxisAlignment: MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [...row.map((e) => e)],
+          ),
+        )
+        .toList();
+
+    Widget formBody;
+    if (widget.wrapFormSectionsInCards) {
+      final List<List<int>> sections =
+          generatedFormSectionRowIndices(widget.items);
+      final List<Widget> sectionCards = <Widget>[];
+      for (final List<int> sectionRows in sections) {
+        final List<Widget> sectionChildren = <Widget>[];
+        for (int index = 0; index < sectionRows.length; index++) {
+          final int rowIndex = sectionRows[index];
+          if (rowIndex > 0) {
+            sectionChildren.add(rowBars[2 * rowIndex - 1]);
+          }
+          sectionChildren.add(rowBars[2 * rowIndex]);
+        }
+        sectionCards.add(
+          Container(
+            margin: const EdgeInsets.only(top: 8, bottom: 8),
+            decoration: appPageSectionCardDecoration(context),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: sectionChildren,
+              ),
             ),
           ),
-        ],
-      ),
+        );
+      }
+      formBody = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: sectionCards,
+      );
+    } else {
+      formBody = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: rowBars,
+      );
+    }
+
+    return Form(
+      key: _formKey,
+      child: formBody,
     );
   }
 }

@@ -66,6 +66,10 @@
     "appsString": "Apps",
     "noApps": "No apps",
     "noAppsForFilter": "No apps for filter",
+    "onDemandOnly": "On-Demand Only",
+    "onDemandOnlyDescription": "Hide from the main apps list. Update checks run only when you pull to refresh on the On-Demand Only screen or on this app's detail page.",
+    "onDemandOnlyAppsTitle": "On-Demand Only",
+    "onDemandOnlyEmpty": "No on-demand apps. Enable On-Demand Only in Additional Options for an app.",
     "byX": "By {}",
     "percentProgress": "Progress: {}%",
     "pleaseWait": "Please wait",
@@ -219,6 +223,12 @@
     "markUpdated": "Mark updated",
     "openDownloadPage": "Open download page",
     "additionalOptions": "Additional options",
+    "additionalOptionsSectionTracking": "Tracking behavior",
+    "notes": "Notes",
+    "additionalOptionsSectionVersion": "Version & detection",
+    "additionalOptionsSectionApk": "APK selection",
+    "additionalOptionsSectionDisplay": "Names & details",
+    "additionalOptionsSectionAdvanced": "Network, background & automation",
     "disableVersionDetection": "Disable version detection",
     "noVersionDetectionExplanation": "This option should only be used for apps where version detection does not work correctly.",
     "downloadingX": "Downloading {}",
@@ -460,8 +470,8 @@
         "other": "{} APKs"
     },
     "certificateHash": {
-      "one": "Certificate Hash",
-      "other": "Certificate Hashes"
+        "one": "Certificate Hash",
+        "other": "Certificate Hashes"
     },
     "undo": "Undo",
     "xAppsRemoved": "{} app(s) removed",
