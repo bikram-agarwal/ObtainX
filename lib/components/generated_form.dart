@@ -428,7 +428,7 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
       style: dropdownTextStyle,
       iconEnabledColor: scheme.onSurfaceVariant,
       iconDisabledColor: scheme.onSurface.withValues(alpha: 0.38),
-      value: value,
+      initialValue: value,
       items: formItem.opts!.map((MapEntry<String, String> option) {
         final bool enabled =
             formItem.disabledOptKeys?.contains(option.key) != true;

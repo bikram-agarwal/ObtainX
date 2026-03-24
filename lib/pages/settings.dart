@@ -163,7 +163,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
     var localeDropdown = DropdownButtonFormField(
       decoration: InputDecoration(labelText: tr('language')),
-      value: settingsProvider.forcedLocale,
+      initialValue: settingsProvider.forcedLocale,
       items: [
         DropdownMenuItem(value: null, child: Text(tr('followSystem'))),
         ...supportedLocales.map(
@@ -820,7 +820,7 @@ class _LogsDialogState extends State<LogsDialog> {
       content: Column(
         children: [
           DropdownButtonFormField(
-            value: days.first,
+            initialValue: days.first,
             items: days
                 .map(
                   (e) =>
@@ -1022,7 +1022,7 @@ class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
                                       width: 40,
                                       height: 40,
                                       fit: BoxFit.contain,
-                                      errorBuilder: (_, __, ___) =>
+                                      errorBuilder: (_, _, _) =>
                                           const Icon(Icons.android, size: 40),
                                     ),
                                   )
@@ -1083,7 +1083,7 @@ class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
                         width: 36,
                         height: 36,
                         fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) =>
+                        errorBuilder: (_, _, _) =>
                             const Icon(Icons.android, size: 36),
                       ),
                     )

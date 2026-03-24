@@ -1119,7 +1119,7 @@ class _AppPageState extends State<AppPage> {
       });
     }
 
-    String _formatDateTimeToMinute(DateTime dateTime) {
+    String formatDateTimeToMinute(DateTime dateTime) {
       final local = dateTime.toLocal();
       final year = local.year.toString();
       final month = local.month.toString().padLeft(2, '0');
@@ -1129,7 +1129,7 @@ class _AppPageState extends State<AppPage> {
       return '$year-$month-$day $hour:$minute';
     }
 
-    Widget _detailRow(
+    Widget detailRow(
       BuildContext ctx,
       String label,
       String value, {
@@ -1161,7 +1161,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _versionVerdictRow(BuildContext ctx, Widget chip) {
+    Widget versionVerdictRow(BuildContext ctx, Widget chip) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
@@ -1186,7 +1186,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _versionRow(BuildContext ctx, String label, String value) {
+    Widget versionRow(BuildContext ctx, String label, String value) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
@@ -1221,7 +1221,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _versionLatestRow(
+    Widget versionLatestRow(
       BuildContext ctx,
       String value, {
       required bool skipActive,
@@ -1285,7 +1285,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _versionRowWithLink(
+    Widget versionRowWithLink(
       BuildContext ctx,
       String label,
       String value,
@@ -1330,9 +1330,11 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _buildDownloadLink() {
+    Widget buildDownloadLink() {
       if (app?.app.apkUrls.isEmpty != false &&
-          app?.app.otherAssetUrls.isEmpty != false) return const SizedBox.shrink();
+          app?.app.otherAssetUrls.isEmpty != false) {
+        return const SizedBox.shrink();
+      }
       return GestureDetector(
         onTap: app?.app == null || updating
             ? null
@@ -1379,11 +1381,11 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _buildCertBlock() {
-      if (app == null || app!.certificateHashes.isEmpty) return const SizedBox.shrink();
+    Widget buildCertBlock() {
+      if (app == null || app.certificateHashes.isEmpty) return const SizedBox.shrink();
       return Column(
         mainAxisSize: MainAxisSize.min,
-        children: app!.certificateHashes.map((hash) {
+        children: app.certificateHashes.map((hash) {
           return GestureDetector(
             onLongPress: () {
               Clipboard.setData(ClipboardData(text: hash));
@@ -1404,10 +1406,11 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget _buildAboutBlock(BuildContext themeContext) {
+    Widget buildAboutBlock(BuildContext themeContext) {
       if (app?.app.additionalSettings['about'] is! String ||
-          (app?.app.additionalSettings['about'] as String).isEmpty)
+          (app?.app.additionalSettings['about'] as String).isEmpty) {
         return const SizedBox.shrink();
+      }
       final String aboutRaw = app?.app.additionalSettings['about'] as String;
       // GFM collapses single newlines; two spaces before newline = hard break so
       // multi-line notes match what was typed in the editor.
@@ -1487,7 +1490,7 @@ class _AppPageState extends State<AppPage> {
           tr('lastUpdateCheckX', args: [tr('never')]).split(':').first.trim();
       final lastUpdateCheckValue = app?.app.lastUpdateCheck == null
           ? tr('never')
-          : _formatDateTimeToMinute(app!.app.lastUpdateCheck!);
+          : formatDateTimeToMinute(app!.app.lastUpdateCheck!);
 
       Future<void> markTrackOnlyAsNotInstalledOnDevice() async {
         if (app == null) return;
@@ -1495,7 +1498,7 @@ class _AppPageState extends State<AppPage> {
           updating = true;
         });
         try {
-          final App appToSave = app!.app.deepCopy();
+          final App appToSave = app.app.deepCopy();
           appToSave.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
               false;
           await appsProvider.saveApps([appToSave]);
@@ -1514,7 +1517,7 @@ class _AppPageState extends State<AppPage> {
 
       Future<void> openFixTrackOnlyPackageIdDialog() async {
         if (app == null) return;
-        final packageIdController = TextEditingController(text: app!.app.id);
+        final packageIdController = TextEditingController(text: app.app.id);
         final submittedPackageId = await showDialog<String>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -1595,40 +1598,40 @@ class _AppPageState extends State<AppPage> {
       final versionCardChildren = <Widget>[];
       if (undeterminedTrackOnlyInstalled) {
         versionCardChildren.add(
-          _versionRow(pageThemeContext, tr('installed'), tr('unknown')),
+          versionRow(pageThemeContext, tr('installed'), tr('unknown')),
         );
         versionCardChildren.add(
-          _versionRow(pageThemeContext, tr('latest'), app?.app.latestVersion ?? '-'),
+          versionRow(pageThemeContext, tr('latest'), app?.app.latestVersion ?? '-'),
         );
         versionCardChildren.add(
-          _versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
+          versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
-            _versionRowWithLink(
+            versionRowWithLink(
               pageThemeContext,
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
-                  : _formatDateTimeToMinute(app!.app.releaseDate!),
+                  : formatDateTimeToMinute(app!.app.releaseDate!),
               changeLogFn,
             ),
           );
         }
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
-            _versionRowWithLink(
+            versionRowWithLink(
               pageThemeContext,
               tr('assets'),
               app!.app.apkUrls.length == 1
-                  ? app!.app.apkUrls[0].key
-                  : plural('apk', app!.app.apkUrls.length),
-              app?.app == null || updating
+                  ? app.app.apkUrls[0].key
+                  : plural('apk', app.app.apkUrls.length),
+              app.app == null || updating
                   ? null
                   : () async {
                       try {
                         await appsProvider.downloadAppAssets(
-                            [app!.app.id], context);
+                            [app.app.id], context);
                       } catch (e) {
                         showError(e, context);
                       }
@@ -1639,22 +1642,22 @@ class _AppPageState extends State<AppPage> {
       } else {
         if (installed) {
           versionCardChildren.add(
-            _versionRow(pageThemeContext, tr('installed'), app?.app.installedVersion ?? ''),
+            versionRow(pageThemeContext, tr('installed'), app?.app.installedVersion ?? ''),
           );
         } else {
           versionCardChildren.add(
-            _versionRow(pageThemeContext, tr('installed'), tr('notInstalled')),
+            versionRow(pageThemeContext, tr('installed'), tr('notInstalled')),
           );
         }
         versionCardChildren.add(
-          _versionLatestRow(
+          versionLatestRow(
             pageThemeContext,
             latestVerStr.isEmpty ? '-' : latestVerStr,
             skipActive: app != null && isSkipActiveForCurrentLatest(app.app),
           ),
         );
         if (effectivelyEqual) {
-          versionCardChildren.add(_versionVerdictRow(
+          versionCardChildren.add(versionVerdictRow(
             pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1672,7 +1675,7 @@ class _AppPageState extends State<AppPage> {
             ),
           ));
         } else if (installed && versionOrderUnclearState) {
-          versionCardChildren.add(_versionVerdictRow(
+          versionCardChildren.add(versionVerdictRow(
             pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1690,7 +1693,7 @@ class _AppPageState extends State<AppPage> {
             ),
           ));
         } else if (newerOnDeviceState) {
-          versionCardChildren.add(_versionVerdictRow(
+          versionCardChildren.add(versionVerdictRow(
             pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1709,7 +1712,7 @@ class _AppPageState extends State<AppPage> {
           ));
         } else if (sameVersionVerdict ||
             (installedVerStr != null && installedVerStr == latestVerStr)) {
-          versionCardChildren.add(_versionVerdictRow(
+          versionCardChildren.add(versionVerdictRow(
             pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1731,7 +1734,7 @@ class _AppPageState extends State<AppPage> {
             ),
           ));
         } else if (installed) {
-          versionCardChildren.add(_versionVerdictRow(
+          versionCardChildren.add(versionVerdictRow(
             pageThemeContext,
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1750,34 +1753,34 @@ class _AppPageState extends State<AppPage> {
           ));
         }
         versionCardChildren.add(
-          _versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
+          versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
-            _versionRowWithLink(
+            versionRowWithLink(
               pageThemeContext,
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
-                  : _formatDateTimeToMinute(app!.app.releaseDate!),
+                  : formatDateTimeToMinute(app!.app.releaseDate!),
               changeLogFn,
             ),
           );
         }
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
-            _versionRowWithLink(
+            versionRowWithLink(
               pageThemeContext,
               tr('assets'),
               app!.app.apkUrls.length == 1
-                  ? app!.app.apkUrls[0].key
-                  : plural('apk', app!.app.apkUrls.length),
-              app?.app == null || updating
+                  ? app.app.apkUrls[0].key
+                  : plural('apk', app.app.apkUrls.length),
+              app.app == null || updating
                   ? null
                   : () async {
                       try {
                         await appsProvider.downloadAppAssets(
-                            [app!.app.id], context);
+                            [app.app.id], context);
                       } catch (e) {
                         showError(e, context);
                       }
@@ -1865,20 +1868,20 @@ class _AppPageState extends State<AppPage> {
           showFdroidIcon;
 
       final detailsChildren = <Widget>[
-        if (app?.app.id != null && app!.app.id!.isNotEmpty)
-          _detailRow(
+        if (app?.app.id != null && app!.app.id.isNotEmpty)
+          detailRow(
             pageThemeContext,
             tr('package'),
-            app!.app.id!,
+            app.app.id,
             valueStyle: detailsMonoValueStyle,
           ),
-        if (app?.app.url != null && app!.app.url!.isNotEmpty)
+        if (app?.app.url != null && app!.app.url.isNotEmpty)
           _detailRowTrackedSource(
             pageThemeContext,
             tr('trackedSource'),
-            app!.app.url!,
+            app.app.url,
           ),
-        if (showAlternateSourcesRow && alternateStoresPackageId != null)
+        if (showAlternateSourcesRow)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Row(
@@ -2010,8 +2013,7 @@ class _AppPageState extends State<AppPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: 12),
-          if (trackOnlyInstalledErrorCard != null)
-            trackOnlyInstalledErrorCard,
+          ?trackOnlyInstalledErrorCard,
           versionCard,
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&
@@ -2019,13 +2021,13 @@ class _AppPageState extends State<AppPage> {
             _materialAppPageSectionCard(
               pageThemeContext,
               tr('notes'),
-              [_buildAboutBlock(pageThemeContext)],
+              [buildAboutBlock(pageThemeContext)],
             ),
         ],
       );
     }
 
-    Widget _buildDetailHeroContent(BuildContext themeContext) {
+    Widget buildDetailHeroContent(BuildContext themeContext) {
       const double heroScale = 1.2;
       const heroIconSize = 58.0;
       final scaledIconSize = heroIconSize * heroScale;
@@ -2120,7 +2122,7 @@ class _AppPageState extends State<AppPage> {
                               color: Theme.of(themeContext)
                                   .colorScheme
                                   .onSurfaceVariant,
-                              fontSize: (bylineStyle?.fontSize ?? 12) *
+                              fontSize: (bylineStyle.fontSize ?? 12) *
                                   heroScale *
                                   1.08,
                             ),
@@ -2344,7 +2346,7 @@ class _AppPageState extends State<AppPage> {
         }
         Future<void> toggleSkipVersion() async {
           if (app == null) return;
-          final App copy = app!.app.deepCopy();
+          final App copy = app.app.deepCopy();
           if (isSkipActiveForCurrentLatest(copy)) {
             copy.additionalSettings.remove('skippedLatestVersion');
           } else {
@@ -2459,7 +2461,7 @@ class _AppPageState extends State<AppPage> {
       if (nonStandardVersionBehind) {
         const double dualButtonBarHeight = 52;
         final bool markUpdatedActionBlocked =
-            updating || app?.downloadProgress != null;
+            updating || app.downloadProgress != null;
         return wrapPrimaryBarWithSkip(
           SizedBox(
             height: dualButtonBarHeight,
@@ -2683,10 +2685,10 @@ class _AppPageState extends State<AppPage> {
                           return IconButton(
                             color: Theme.of(themeContext).colorScheme.primary,
                             iconSize: 24,
-                            onPressed: app?.app == null || updating
+                            onPressed: app.app == null || updating
                                 ? null
                                 : () {
-                                    app!.app.installedVersion = null;
+                                    app.app.installedVersion = null;
                                     appsProvider.saveApps([app.app]);
                                   },
                             icon: const Icon(Icons.restore_rounded),
@@ -2869,7 +2871,7 @@ class _AppPageState extends State<AppPage> {
                                             .backButtonTooltip,
                                       ),
                                       Expanded(
-                                        child: _buildDetailHeroContent(
+                                        child: buildDetailHeroContent(
                                           themedPageContext,
                                         ),
                                       ),

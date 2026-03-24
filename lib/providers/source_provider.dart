@@ -903,7 +903,7 @@ abstract class AppSource {
     [
       GeneratedFormSwitch(
         'invertAPKFilter',
-        label: '${tr('invertRegEx')}',
+        label: tr('invertRegEx'),
         defaultValue: false,
       ),
     ],
