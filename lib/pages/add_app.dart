@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
+import 'package:obtainium/components/version_regex_assist_dialog.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
@@ -255,7 +256,7 @@ class AddAppPageState extends State<AddAppPage> {
         if (app != null) {
           Navigator.push(
             globalNavigatorKey.currentContext ?? context,
-            slideUpPageRoute((_) => AppPage(appId: app!.id)),
+            heroFriendlyAppPageRoute((_) => AppPage(appId: app!.id)),
           );
         }
       } catch (e) {
@@ -594,12 +595,17 @@ class AddAppPageState extends State<AddAppPage> {
           key: Key(
             '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}',
           ),
-          items: [
-            ...pickedSource!.combinedAppSpecificSettingFormItems,
-            ...(pickedSourceOverride != null
-                ? pickedSource!.sourceConfigSettingFormItems.map((e) => [e])
-                : []),
-          ],
+          items: attachRegexAssistToItems(
+            cloneFormItems([
+              ...pickedSource!.combinedAppSpecificSettingFormItems,
+              ...(pickedSourceOverride != null
+                  ? pickedSource!.sourceConfigSettingFormItems.map((e) => [e])
+                  : []),
+            ]),
+            rawLatestVersionFromSource: null,
+            rawApkNamesFromSource: null,
+            rawReleaseTitlesFromSource: null,
+          ),
           onValueChanges: (values, valid, isBuilding) {
             if (!isBuilding) {
               setState(() {

@@ -11,6 +11,7 @@ class Farsroid extends AppSource {
   Farsroid() {
     hosts = ['farsroid.com'];
     name = 'Farsroid';
+    showReleaseTitleAsVersionToggle = true;
 
     additionalSourceAppSpecificSettingFormItems = [
       [
@@ -18,13 +19,6 @@ class Farsroid extends AppSource {
           'useFirstApkOfVersion',
           label: tr('useFirstApkOfVersion'),
           defaultValue: true,
-        ),
-      ],
-      [
-        GeneratedFormSwitch(
-          'releaseTitleAsVersion',
-          label: tr('releaseTitleAsVersion'),
-          defaultValue: false,
         ),
       ],
     ];

@@ -1,9 +1,8 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/generated_form.dart';
+import 'package:obtainium/components/version_regex_assist_dialog.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -12,6 +11,8 @@ import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:provider/provider.dart';
 
 import 'page_route_slide_up.dart';
+
+enum _AdditionalOptionsUnsavedAction { keepEditing, discard, saveAndExit }
 
 /// Prefer [slideUpPageRoute]; kept for call sites that still use this name.
 PageRouteBuilder<T> additionalOptionsPageRoute<T>(WidgetBuilder builder) =>
@@ -99,6 +100,8 @@ class AdditionalOptionsPage extends StatefulWidget {
 class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
   late List<List<GeneratedFormItem>> _items;
   Map<String, dynamic> _values = {};
+  Map<String, dynamic> _baselineValues = {};
+  bool _baselineReady = false;
   bool _valid = false;
   bool _saving = false;
 
@@ -136,6 +139,15 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         }
       }
     }
+    _baselineValues =
+        Map<String, dynamic>.from(getDefaultValuesFromFormItems(_items));
+    _baselineReady = _items.isNotEmpty;
+    attachRegexAssistToItems(
+      _items,
+      rawLatestVersionFromSource: app.rawLatestVersionFromSource,
+      rawApkNamesFromSource: app.rawApkNamesFromSource,
+      rawReleaseTitlesFromSource: app.rawReleaseTitlesFromSource,
+    );
     _valid = _items.isEmpty;
   }
 
@@ -212,6 +224,97 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           _saving = false;
         });
       }
+    }
+  }
+
+  bool _formValuesEqual(
+    Map<String, dynamic> current,
+    Map<String, dynamic> baseline,
+  ) {
+    if (current.length != baseline.length) {
+      return false;
+    }
+    for (final MapEntry<String, dynamic> entry in current.entries) {
+      if (baseline[entry.key] != entry.value) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _isDirty() {
+    return _baselineReady && !_formValuesEqual(_values, _baselineValues);
+  }
+
+  Future<_AdditionalOptionsUnsavedAction?> _showUnsavedChangesDialog(
+    BuildContext dialogHostContext,
+    ThemeData dialogTheme,
+  ) {
+    return showDialog<_AdditionalOptionsUnsavedAction>(
+      context: dialogHostContext,
+      builder: (BuildContext dialogContext) {
+        return Theme(
+          data: dialogTheme,
+          child: AlertDialog(
+            title: Text(tr('appEditsUnsavedTitle')),
+            content: Text(tr('appEditsUnsavedBody')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  _AdditionalOptionsUnsavedAction.discard,
+                ),
+                child: Text(tr('discard')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  _AdditionalOptionsUnsavedAction.keepEditing,
+                ),
+                child: Text(tr('keepEditing')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  _AdditionalOptionsUnsavedAction.saveAndExit,
+                ),
+                child: Text(tr('saveAndExit')),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleLeaveRequest(
+    BuildContext actionContext,
+    ThemeData pageTheme,
+  ) async {
+    if (_saving) {
+      return;
+    }
+    if (!_isDirty()) {
+      if (mounted) {
+        Navigator.of(actionContext).pop();
+      }
+      return;
+    }
+    final _AdditionalOptionsUnsavedAction? action =
+        await _showUnsavedChangesDialog(actionContext, pageTheme);
+    if (!mounted) {
+      return;
+    }
+    switch (action) {
+      case _AdditionalOptionsUnsavedAction.discard:
+        Navigator.of(actionContext).pop();
+        break;
+      case _AdditionalOptionsUnsavedAction.saveAndExit:
+        await _onSave();
+        break;
+      case _AdditionalOptionsUnsavedAction.keepEditing:
+      default:
+        break;
     }
   }
 
@@ -312,97 +415,85 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       );
     }
 
+    final double fabBottomPadding =
+        MediaQuery.of(context).padding.bottom + 16;
+
     return Theme(
       data: pageThemeForPage,
-      child: Scaffold(
+      child: PopScope(
+        canPop: !_saving && !_isDirty(),
+        onPopInvoked: (bool didPop) async {
+          if (didPop) {
+            return;
+          }
+          if (_saving) {
+            return;
+          }
+          await _handleLeaveRequest(context, pageThemeForPage);
+        },
+        child: Scaffold(
         resizeToAvoidBottomInset: true,
         backgroundColor: scaffoldBackground,
         appBar: AppBar(
           title: Text(tr('additionalOptions')),
         ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                child: GeneratedForm(
-                  items: _items,
-                  outlinedInputFields: true,
-                  prominentSectionHeaders: true,
-                  wrapFormSectionsInCards: true,
-                  onValueChanges: (values, valid, isBuilding) {
-                    if (isBuilding) {
-                      _values = values;
-                      _valid = valid;
-                    } else {
-                      setState(() {
-                        _values = values;
-                        _valid = valid;
-                      });
-                    }
-                  },
-                ),
+        floatingActionButton: Padding(
+          padding: EdgeInsets.only(bottom: fabBottomPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              FloatingActionButton.small(
+                heroTag: 'additional_options_cancel',
+                tooltip: tr('cancel'),
+                onPressed: _saving
+                    ? null
+                    : () => _handleLeaveRequest(context, pageThemeForPage),
+                child: const Icon(Icons.close),
               ),
-            ),
-            ClipRect(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                child: Material(
-                  color: pageThemeForPage.colorScheme.surface
-                      .withValues(alpha: 0.58),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: pageThemeForPage.colorScheme.outlineVariant
-                            .withValues(alpha: 0.45),
-                      ),
-                      SafeArea(
-                        top: false,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              TextButton(
-                                onPressed: _saving
-                                    ? null
-                                    : () => Navigator.of(context).pop(),
-                                child: Text(tr('cancel')),
-                              ),
-                              const SizedBox(width: 8),
-                              FilledButton(
-                                onPressed:
-                                    (!_valid || _saving) ? null : _onSave,
-                                child: _saving
-                                    ? SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: pageThemeForPage
-                                              .colorScheme.onPrimary,
-                                        ),
-                                      )
-                                    : Text(tr('continue')),
-                              ),
-                            ],
-                          ),
+              const SizedBox(height: 12),
+              FloatingActionButton(
+                heroTag: 'additional_options_save',
+                tooltip: tr('continue'),
+                onPressed: (!_valid || _saving) ? null : _onSave,
+                child: _saving
+                    ? SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: pageThemeForPage.colorScheme.onPrimary,
                         ),
-                      ),
-                    ],
-                  ),
-                ),
+                      )
+                    : const Icon(Icons.check),
               ),
-            ),
-          ],
+            ],
+          ),
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 112),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          child: GeneratedForm(
+            items: _items,
+            outlinedInputFields: true,
+            prominentSectionHeaders: true,
+            wrapFormSectionsInCards: true,
+            onValueChanges: (values, valid, isBuilding) {
+              if (isBuilding) {
+                _values = values;
+                _valid = valid;
+              } else {
+                setState(() {
+                  _values = values;
+                  _valid = valid;
+                });
+              }
+            },
+          ),
         ),
       ),
+    ),
     );
   }
 }

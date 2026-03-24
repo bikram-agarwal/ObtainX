@@ -71,10 +71,13 @@ bool versionsEffectivelyEqual(String installed, String latest) {
               !_isDigit(installed.codeUnitAt(latestLen))))) {
     return true;
   }
-  // Same build when both contain the same commit-hash-like token (e.g. OS version "1.5.3-DEV (75094D8)" vs release "debug-75094d8")
-  final hexPattern = RegExp(r'[0-9a-fA-F]{6,}');
-  final installedHashes = hexPattern.allMatches(installed).map((m) => m.group(0)!.toLowerCase()).toSet();
-  final latestHashes = hexPattern.allMatches(latest).map((m) => m.group(0)!.toLowerCase()).toSet();
+  if (_oneVersionStringContainsOtherAsBoundedSubstring(installed, latest)) {
+    return true;
+  }
+  // Same build when both contain the same commit-hash-like token (e.g. OS version "1.5.3-DEV (75094D8)" vs release "debug-75094d8").
+  // Omit plausible YYYYMMDD date tokens so shared calendar segments (e.g. 20260205) are not treated as commit hashes.
+  final installedHashes = _commitHashLikeTokensFromVersion(installed);
+  final latestHashes = _commitHashLikeTokensFromVersion(latest);
   if (installedHashes.intersection(latestHashes).isNotEmpty) {
     return true;
   }
@@ -83,6 +86,146 @@ bool versionsEffectivelyEqual(String installed, String latest) {
 
 bool _isDigit(int codeUnit) =>
     codeUnit >= 0x30 && codeUnit <= 0x39; // '0'..'9'
+
+/// True when [needle] appears in [longer] as a contiguous substring with
+/// boundaries so we do not treat [2.0] as inside [12.0] or [.0] as inside [8.0].
+bool _boundedVersionSubstringInHaystack(String longer, String needle, int startIndex) {
+  final int needleLen = needle.length;
+  if (needleLen == 0 || startIndex < 0 || startIndex + needleLen > longer.length) {
+    return false;
+  }
+  if (longer.substring(startIndex, startIndex + needleLen) != needle) {
+    return false;
+  }
+  final int endIndex = startIndex + needleLen;
+  final int firstUnit = needle.codeUnitAt(0);
+  if (startIndex > 0) {
+    final int prevUnit = longer.codeUnitAt(startIndex - 1);
+    if (_isDigit(firstUnit) && _isDigit(prevUnit)) {
+      return false;
+    }
+    if (firstUnit == 0x2E && _isDigit(prevUnit)) {
+      // ".0" inside "8.0" must not match as a standalone version.
+      return false;
+    }
+  }
+  if (endIndex < longer.length) {
+    final int lastUnit = needle.codeUnitAt(needleLen - 1);
+    final int nextUnit = longer.codeUnitAt(endIndex);
+    if (_isDigit(lastUnit) && _isDigit(nextUnit)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// True when the shorter of [a]/[b] appears inside the longer as a bounded
+/// substring (covers [1.6.5-rc0] in [v1.6.5-rc0], build ids embedded in carrier
+/// strings, and titles like [1Password: ... 8.12.8-27.BETA]).
+bool _oneVersionStringContainsOtherAsBoundedSubstring(String a, String b) {
+  if (a.isEmpty || b.isEmpty || a == b) {
+    return false;
+  }
+  final String shorter = a.length <= b.length ? a : b;
+  final String longer = a.length <= b.length ? b : a;
+  if (shorter.length == longer.length) {
+    return false;
+  }
+  int searchFrom = 0;
+  while (true) {
+    final int foundAt = longer.indexOf(shorter, searchFrom);
+    if (foundAt < 0) {
+      return false;
+    }
+    if (_boundedVersionSubstringInHaystack(longer, shorter, foundAt)) {
+      return true;
+    }
+    searchFrom = foundAt + 1;
+  }
+}
+
+/// True for 8-digit all-decimal tokens that look like YYYYMMDD (excludes them
+/// from commit-hash intersection so shared build dates do not imply same build).
+bool isPlausibleVersionDateTokenYYYYMMDD(String token) {
+  if (token.length != 8) return false;
+  if (!RegExp(r'^\d{8}$').hasMatch(token)) return false;
+  final year = int.tryParse(token.substring(0, 4));
+  final month = int.tryParse(token.substring(4, 6));
+  final day = int.tryParse(token.substring(6, 8));
+  if (year == null || month == null || day == null) return false;
+  if (year < 1990 || year > 2100) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > 31) return false;
+  return true;
+}
+
+Set<String> _commitHashLikeTokensFromVersion(String version) {
+  final hexPattern = RegExp(r'[0-9a-fA-F]{6,}');
+  final result = <String>{};
+  for (final Match match in hexPattern.allMatches(version)) {
+    final String token = match.group(0)!.toLowerCase();
+    if (isPlausibleVersionDateTokenYYYYMMDD(token)) continue;
+    result.add(token);
+  }
+  return result;
+}
+
+/// True when numeric segment comparison ties but [installed] and [latest] differ
+/// and are not [versionsEffectivelyEqual] (user cannot tell order from strings).
+bool versionOrderIsUnclear(String installed, String latest) {
+  if (installed.isEmpty || latest.isEmpty) return false;
+  if (installed == latest) return false;
+  if (versionsEffectivelyEqual(installed, latest)) return false;
+  return compareVersionsByNumericSegments(installed, latest) == 0;
+}
+
+/// User skipped the current [App.latestVersion]; nagging and update badges are suppressed.
+bool isSkipActiveForCurrentLatest(App app) {
+  final dynamic skipped = app.additionalSettings['skippedLatestVersion'];
+  if (skipped is! String || skipped.isEmpty) return false;
+  return skipped == app.latestVersion;
+}
+
+/// Remove [skippedLatestVersion] when it no longer matches [App.latestVersion].
+void clearStaleSkippedLatestVersionInPlace(App app) {
+  final dynamic skipped = app.additionalSettings['skippedLatestVersion'];
+  if (skipped is! String || skipped.isEmpty) return;
+  if (skipped != app.latestVersion) {
+    app.additionalSettings.remove('skippedLatestVersion');
+  }
+}
+
+/// Clears skip when the device is clearly at or ahead of source (no misleading skip flag).
+/// Returns true if [app.additionalSettings] was changed.
+bool clearRedundantSkippedLatestForApp(App app) {
+  if (!isSkipActiveForCurrentLatest(app)) return false;
+  final String? installed = app.installedVersion;
+  final String latest = app.latestVersion;
+  if (installed == null || installed.isEmpty) return false;
+  if (installed == latest || versionsEffectivelyEqual(installed, latest)) {
+    app.additionalSettings.remove('skippedLatestVersion');
+    return true;
+  }
+  if (compareVersionsByNumericSegments(installed, latest) == 1) {
+    app.additionalSettings.remove('skippedLatestVersion');
+    return true;
+  }
+  return false;
+}
+
+/// Installed app should show update affordances and count in update lists (unless skipped).
+bool appHasActionableUpdate(App app) {
+  final String? installed = app.installedVersion;
+  final String latest = app.latestVersion;
+  if (installed == null || latest.isEmpty) return false;
+  if (isSkipActiveForCurrentLatest(app)) return false;
+  if (installed == latest) return false;
+  if (versionsEffectivelyEqual(installed, latest)) return false;
+  final int? cmp = compareVersionsByNumericSegments(installed, latest);
+  if (cmp == 1) return false;
+  if (cmp == 0) return true;
+  return true;
+}
 
 /// Compare version strings by numeric segments (e.g. 2.0.0 vs 1.9.9).
 /// Returns -1 if [installed] < [latest], 0 if equal, 1 if [installed] > [latest], null if not comparable.
@@ -1745,6 +1888,10 @@ class AppsProvider with ChangeNotifier {
       modded = true;
     }
 
+    if (clearRedundantSkippedLatestForApp(app)) {
+      modded = true;
+    }
+
     return modded ? app : null;
   }
 
@@ -2170,6 +2317,7 @@ class AppsProvider with ChangeNotifier {
     await Future.wait(
       apps.map((a) async {
         var app = a.deepCopy();
+        clearStaleSkippedLatestVersionInPlace(app);
         PackageInfo? info = await getInstalledInfo(app.id);
         var icon = await info?.applicationInfo?.getAppIcon();
         app.name = await (info?.applicationInfo?.getAppLabel()) ?? app.name;
@@ -2496,10 +2644,7 @@ class AppsProvider with ChangeNotifier {
         }
       } else {
         if (!(installedOnly || !nonInstalledOnly)) continue;
-        final hasEffectiveUpdate = installed != latest &&
-            !versionsEffectivelyEqual(installed, latest) &&
-            !installedVersionIsNewerOrEqual(installed, latest);
-        if (hasEffectiveUpdate) {
+        if (appHasActionableUpdate(app)) {
           updateAppIds.add(app.id);
         }
       }

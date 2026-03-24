@@ -236,11 +236,33 @@ class APKMirror extends AppSource {
         caseSensitive: false,
       ).allMatches(res.body).map((match) => match.group(1)!).toList();
 
+      final List<String> rawReleaseTitleCandidates = <String>[];
+      void collectReleaseTitleCandidate(String? title) {
+        if (title == null) {
+          return;
+        }
+        final String trimmed = title.trim();
+        if (trimmed.isEmpty) {
+          return;
+        }
+        if (rawReleaseTitleCandidates.length >= 40) {
+          return;
+        }
+        if (!rawReleaseTitleCandidates.contains(trimmed)) {
+          rawReleaseTitleCandidates.add(trimmed);
+        }
+      }
+
       String? titleString;
       String? releasePageUrl;
       DateTime? releaseDate;
 
       if (itemInnerBlocks.isNotEmpty) {
+        for (int scanIndex = 0; scanIndex < itemInnerBlocks.length; scanIndex++) {
+          collectReleaseTitleCandidate(
+            titleFromApkMirrorRssItemInner(itemInnerBlocks[scanIndex]),
+          );
+        }
         final RegExp? titleFilterPattern =
             regexFilter != null ? RegExp(regexFilter) : null;
         String? chosenBlock;
@@ -263,6 +285,11 @@ class APKMirror extends AppSource {
         }
       } else {
         final parsedItems = parse(res.body).querySelectorAll('item');
+        for (int scanIndex = 0; scanIndex < parsedItems.length; scanIndex++) {
+          collectReleaseTitleCandidate(
+            parsedItems[scanIndex].querySelector('title')?.innerHtml,
+          );
+        }
         dynamic targetRelease;
         int chosenParsedItemIndex = -1;
         for (int itemIndex = 0; itemIndex < parsedItems.length; itemIndex++) {
@@ -326,6 +353,7 @@ class APKMirror extends AppSource {
         releaseDate: releaseDate,
         changeLog: releasePageUrl,
         iconUrl: iconUrl,
+        rawReleaseTitleCandidates: rawReleaseTitleCandidates,
       );
     } else {
       throw getObtainiumHttpError(res);

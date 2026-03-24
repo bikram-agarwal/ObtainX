@@ -4,6 +4,7 @@ class CustomAppBar extends StatefulWidget {
   const CustomAppBar({
     super.key,
     required this.title,
+    this.leading,
     this.actions,
     this.bottom,
     this.searchWidget,
@@ -11,6 +12,9 @@ class CustomAppBar extends StatefulWidget {
   });
 
   final String title;
+
+  /// Toolbar leading widget (e.g. back). When null, no leading slot is shown.
+  final Widget? leading;
   final List<Widget>? actions;
 
   /// Optional widget pinned below the flexible title (e.g. a search field).
@@ -39,11 +43,15 @@ class _CustomAppBarState extends State<CustomAppBar> {
       return SliverAppBar(
         pinned: true,
         automaticallyImplyLeading: false,
+        leading: widget.leading,
         actions: widget.actions,
         titleSpacing: 0,
         bottom: widget.bottom,
         title: Padding(
-          padding: const EdgeInsets.only(left: 20, right: 4),
+          padding: EdgeInsets.only(
+            left: widget.leading != null ? 0 : 20,
+            right: 4,
+          ),
           child: Row(
             children: [
               AnimatedDefaultTextStyle(
@@ -65,6 +73,7 @@ class _CustomAppBarState extends State<CustomAppBar> {
     return SliverAppBar(
       pinned: true,
       automaticallyImplyLeading: false,
+      leading: widget.leading,
       actions: widget.actions,
       expandedHeight: 100,
       bottom: widget.bottom,

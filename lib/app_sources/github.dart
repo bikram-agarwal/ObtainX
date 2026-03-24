@@ -17,6 +17,7 @@ class GitHub extends AppSource {
     hosts = ['github.com'];
     appIdInferIsOptional = true;
     showReleaseDateAsVersionToggle = true;
+    showReleaseTitleAsVersionToggle = true;
     this.hostChanged = hostChanged;
     allowIncludeZips = true;
 
@@ -149,13 +150,6 @@ class GitHub extends AppSource {
         GeneratedFormSwitch(
           'useLatestAssetDateAsReleaseDate',
           label: tr('useLatestAssetDateAsReleaseDate'),
-          defaultValue: false,
-        ),
-      ],
-      [
-        GeneratedFormSwitch(
-          'releaseTitleAsVersion',
-          label: tr('releaseTitleAsVersion'),
           defaultValue: false,
         ),
       ],
@@ -518,6 +512,33 @@ class GitHub extends AppSource {
         }
       }
       releases = releases.reversed.toList();
+      final List<String> rawReleaseTitleCandidates = <String>[];
+      for (int titleIndex = 0;
+          titleIndex < releases.length &&
+              rawReleaseTitleCandidates.length < 40;
+          titleIndex++) {
+        if (releases[titleIndex]['draft'] == true) {
+          continue;
+        }
+        if (!includePrereleases &&
+            releases[titleIndex]['prerelease'] == true) {
+          continue;
+        }
+        var candidateTitle = releases[titleIndex]['name'] as String?;
+        if (candidateTitle == null || candidateTitle.trim().isEmpty) {
+          candidateTitle = releases[titleIndex]['tag_name'] as String?;
+        }
+        if (candidateTitle == null) {
+          continue;
+        }
+        final String trimmedTitle = candidateTitle.trim();
+        if (trimmedTitle.isEmpty) {
+          continue;
+        }
+        if (!rawReleaseTitleCandidates.contains(trimmedTitle)) {
+          rawReleaseTitleCandidates.add(trimmedTitle);
+        }
+      }
       dynamic targetRelease;
       var prerrelsSkipped = 0;
       for (int i = 0; i < releases.length; i++) {
@@ -632,6 +653,7 @@ class GitHub extends AppSource {
         changeLog: changeLog.isEmpty ? null : changeLog,
         allAssetUrls:
             targetRelease['allAssetUrls'] as List<MapEntry<String, String>>,
+        rawReleaseTitleCandidates: rawReleaseTitleCandidates,
       );
     } else {
       if (onHttpErrorCode != null) {

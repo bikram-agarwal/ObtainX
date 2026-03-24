@@ -599,38 +599,65 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<Uri?> getExportDir() async {
-    var uriString = prefs?.getString('exportDir');
-    if (uriString != null) {
-      Uri? uri = Uri.parse(uriString);
-      if (!(await saf.canRead(uri) ?? false) ||
-          !(await saf.canWrite(uri) ?? false)) {
-        uri = null;
-        prefs?.remove('exportDir');
-        notifyListeners();
-      }
-      return uri;
-    } else {
+    final String? uriString = prefs?.getString('exportDir');
+    if (uriString == null) {
       return null;
     }
+    final Uri uri = Uri.parse(uriString);
+    Future<bool> canAccessExportTree(Uri treeUri) async {
+      final bool readable = await saf.canRead(treeUri) ?? false;
+      final bool writable = await saf.canWrite(treeUri) ?? false;
+      return readable && writable;
+    }
+    if (!await canAccessExportTree(uri)) {
+      // Transient SAF failures should not wipe a still-valid grant.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!await canAccessExportTree(uri)) {
+        prefs?.remove('exportDir');
+        notifyListeners();
+        return null;
+      }
+    }
+    return uri;
   }
 
+  /// Lets the user pick a folder for exports. Cancelling the system picker
+  /// leaves the previous folder and persisted URI permission unchanged.
+  /// Only the replaced export URI is released when the user picks a new tree.
   Future<void> pickExportDir({bool remove = false}) async {
-    var existingSAFPerms = (await saf.persistedUriPermissions()) ?? [];
-    var currentOneWayDataSyncDir = await getExportDir();
-    Uri? newOneWayDataSyncDir;
-    if (!remove) {
-      newOneWayDataSyncDir = (await saf.openDocumentTree());
-    }
-    if (currentOneWayDataSyncDir?.path != newOneWayDataSyncDir?.path) {
-      if (newOneWayDataSyncDir == null) {
-        prefs?.remove('exportDir');
-      } else {
-        prefs?.setString('exportDir', newOneWayDataSyncDir.toString());
-      }
+    if (remove) {
+      final String? saved = prefs?.getString('exportDir');
+      prefs?.remove('exportDir');
       notifyListeners();
+      if (saved != null && saved.isNotEmpty) {
+        try {
+          await saf.releasePersistableUriPermission(Uri.parse(saved));
+        } catch (_) {}
+      }
+      return;
     }
-    for (var e in existingSAFPerms) {
-      await saf.releasePersistableUriPermission(e.uri);
+
+    final String? previousExportDirString = prefs?.getString('exportDir');
+    final Uri? newUri = await saf.openDocumentTree();
+
+    if (newUri == null) {
+      return;
+    }
+
+    final String newUriString = newUri.toString();
+    if (previousExportDirString == newUriString) {
+      return;
+    }
+
+    prefs?.setString('exportDir', newUriString);
+    notifyListeners();
+
+    if (previousExportDirString != null && previousExportDirString.isNotEmpty) {
+      try {
+        await saf.releasePersistableUriPermission(
+          Uri.parse(previousExportDirString),
+        );
+      } catch (_) {}
     }
   }
 

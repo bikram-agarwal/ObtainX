@@ -106,6 +106,9 @@ ThemeData buildAppPageThemedData(
       pageColorScheme.surfaceContainerHighest,
       pageColorScheme.brightness,
     ),
+    // Dropdown menus and other overlays sometimes fall back to canvasColor.
+    canvasColor: pageColorScheme.surfaceContainerHigh,
+    focusColor: pageColorScheme.primary.withValues(alpha: 0.12),
   );
 }
 

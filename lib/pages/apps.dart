@@ -45,6 +45,7 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
         a.app.categories.length,
         Object.hashAll(a.app.categories),
         a.app.additionalSettings['onDemandOnly'] == true,
+        a.app.additionalSettings['skippedLatestVersion'],
         // Icon fields deliberately excluded: each row watches its own icon
         // via _AppIconWidget.context.select, so icon loads only rebuild that
         // one row widget instead of the entire apps list.
@@ -150,11 +151,8 @@ class _AppListItem extends StatelessWidget {
 
     final showChangesFn = getChangeLogFn(context, app.app);
     final installed = app.app.installedVersion;
-    final latest = app.app.latestVersion;
-    final hasUpdate = installed != null &&
-        installed != latest &&
-        !versionsEffectivelyEqual(installed, latest) &&
-        !installedVersionIsNewerOrEqual(installed, latest);
+    final hasUpdate =
+        installed != null && appHasActionableUpdate(app.app);
 
     Widget buildUpdateButton() {
       final trackOnly = app.app.additionalSettings['trackOnly'] == true;
@@ -462,7 +460,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         if (context.mounted) {
           await Navigator.push(
             context,
-            slideUpPageRoute(
+            heroFriendlyAppPageRoute(
               (_) => AppPage(
                 appId: widget.appId,
                 openInEditMode: true,
@@ -1014,15 +1012,46 @@ void showAppsViewOptionsSheet(BuildContext context) {
                     if (settingsProvider.appsListGroupBy !=
                         AppsListGroupBy.none) ...[
                       const SizedBox(height: 8),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(tr('groupNonInstalledSeparately')),
-                        subtitle: Text(tr('groupNonInstalledSeparatelyDescription')),
-                        value: settingsProvider.groupNonInstalledSeparately,
-                        onChanged: (value) {
-                          settingsProvider.groupNonInstalledSeparately = value;
-                          setSheetState(() {});
-                        },
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Flexible(
+                                  child: Text(tr('groupNonInstalledSeparately')),
+                                ),
+                                Tooltip(
+                                  message: tr(
+                                    'groupNonInstalledSeparatelyDescription',
+                                  ),
+                                  triggerMode: TooltipTriggerMode.tap,
+                                  waitDuration: Duration.zero,
+                                  showDuration: const Duration(seconds: 5),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Icon(
+                                      Icons.help_outline,
+                                      size: 20,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Switch(
+                            value:
+                                settingsProvider.groupNonInstalledSeparately,
+                            onChanged: (value) {
+                              settingsProvider.groupNonInstalledSeparately =
+                                  value;
+                              setSheetState(() {});
+                            },
+                          ),
+                        ],
                       ),
                     ],
                     const SizedBox(height: 16),
@@ -1202,6 +1231,13 @@ class AppsPageState extends State<AppsPage> {
   List<AppInMemory> _listedAppsCache = const [];
   List<String> _existingUpdatesCache = const [];
   List<String> _newInstallsCache = const [];
+
+  /// Maps category key (`__null__` for uncategorized) → indices into [_listedAppsCache].
+  Map<String, List<int>> _categoryGroupListedIndices = const {};
+  /// Maps source runtime type string → indices into [_listedAppsCache].
+  Map<String, List<int>> _sourceGroupListedIndices = const {};
+  List<int> _nonInstalledListedIndices = const [];
+  int? _lastGroupIndexCacheToken;
 
   // ── Group expansion state ─────────────────────────────────────────────────
   // Groups start expanded. When the user collapses one its key goes here and
@@ -1552,12 +1588,15 @@ class AppsPageState extends State<AppsPage> {
       }
 
       workingList = workingList.where((app) {
-        final upToDate = app.app.installedVersion == app.app.latestVersion ||
-            (app.app.installedVersion != null &&
-                (versionsEffectivelyEqual(
-                    app.app.installedVersion!, app.app.latestVersion) ||
-                    installedVersionIsNewerOrEqual(
-                        app.app.installedVersion!, app.app.latestVersion)));
+        final installed = app.app.installedVersion;
+        final latest = app.app.latestVersion;
+        final upToDate = installed == null
+            ? false
+            : isSkipActiveForCurrentLatest(app.app) ||
+                installed == latest ||
+                versionsEffectivelyEqual(installed, latest) ||
+                (installedVersionIsNewerOrEqual(installed, latest) &&
+                    !versionOrderIsUnclear(installed, latest));
         if (upToDate && !(filter.includeUptodate)) {
           return false;
         }
@@ -1798,6 +1837,67 @@ class AppsPageState extends State<AppsPage> {
 
     var listedSources = getListedSourceKeys(appsListedForSourceKeys);
 
+    if (listBuildToken != _lastGroupIndexCacheToken) {
+      _lastGroupIndexCacheToken = listBuildToken;
+      final nextCategoryMap = <String, List<int>>{};
+      for (int categoryIndex = 0;
+          categoryIndex < listedCategories.length;
+          categoryIndex++) {
+        final String? categoryNullable = listedCategories[categoryIndex];
+        final String mapKey = categoryNullable ?? '__null__';
+        final indices = <int>[];
+        for (int listingIndex = 0;
+            listingIndex < listedApps.length;
+            listingIndex++) {
+          final AppInMemory row = listedApps[listingIndex];
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
+          if (row.app.categories.contains(categoryNullable) ||
+              (row.app.categories.isEmpty && categoryNullable == null)) {
+            indices.add(listingIndex);
+          }
+        }
+        nextCategoryMap[mapKey] = indices;
+      }
+      _categoryGroupListedIndices = nextCategoryMap;
+
+      final nextSourceMap = <String, List<int>>{};
+      for (int sourceIndex = 0;
+          sourceIndex < listedSources.length;
+          sourceIndex++) {
+        final String sourceKey = listedSources[sourceIndex];
+        final indices = <int>[];
+        for (int listingIndex = 0;
+            listingIndex < listedApps.length;
+            listingIndex++) {
+          final AppInMemory row = listedApps[listingIndex];
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
+          if (sourceProvider
+                  .getSource(row.app.url, overrideSource: row.app.overrideSource)
+                  .runtimeType
+                  .toString() ==
+              sourceKey) {
+            indices.add(listingIndex);
+          }
+        }
+        nextSourceMap[sourceKey] = indices;
+      }
+      _sourceGroupListedIndices = nextSourceMap;
+
+      final nonInstalled = <int>[];
+      for (int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++) {
+        if (listedApps[listingIndex].app.installedVersion == null) {
+          nonInstalled.add(listingIndex);
+        }
+      }
+      _nonInstalledListedIndices = nonInstalled;
+    }
+
     Set<App> selectedApps = listedApps
         .map((e) => e.app)
         .where((a) => selectedAppIds.contains(a.id))
@@ -1873,7 +1973,7 @@ class AppsPageState extends State<AppsPage> {
         onLongPress: () {
           Navigator.push(
             context,
-            slideUpPageRoute(
+            heroFriendlyAppPageRoute(
               (_) => AppPage(
                 appId: rowAppId,
                 showOppositeOfPreferredView: true,
@@ -1888,11 +1988,8 @@ class AppsPageState extends State<AppsPage> {
       final app = listedApps[index];
       final appId = app.app.id;
       final installed = app.app.installedVersion;
-      final latest = app.app.latestVersion;
-      final hasUpdate = installed != null &&
-          installed != latest &&
-          !versionsEffectivelyEqual(installed, latest) &&
-          !installedVersionIsNewerOrEqual(installed, latest);
+      final hasUpdate =
+          installed != null && appHasActionableUpdate(app.app);
       final downloadsRunning = appsProvider.areDownloadsRunning();
       final sourceHost = sourceProvider
           .getSource(app.app.url, overrideSource: app.app.overrideSource)
@@ -1932,7 +2029,7 @@ class AppsPageState extends State<AppsPage> {
                   setState(() => _heroKeepaliveAppId = appId);
                   Navigator.push(
                     context,
-                    slideUpPageRoute((_) => AppPage(appId: appId)),
+                    heroFriendlyAppPageRoute((_) => AppPage(appId: appId)),
                   ).then((_) {
                     if (mounted) setState(() => _heroKeepaliveAppId = null);
                   });
@@ -1948,59 +2045,57 @@ class AppsPageState extends State<AppsPage> {
       final catKey = 'cat:${listedCategories[index] ?? '__null__'}';
       final isExpanded = !_collapsedGroups.contains(catKey);
 
-      // Always compute matching entries so we can show the count badge even
-      // when collapsed; only build widgets when the group is expanded.
-      final matchingEntries = listedApps.asMap().entries.where((e) {
-        if (segregateNonInstalled && e.value.app.installedVersion == null) {
-          return false;
-        }
-        return e.value.app.categories.contains(listedCategories[index]) ||
-            e.value.app.categories.isEmpty && listedCategories[index] == null;
-      }).toList();
+      final String categoryMapKey = listedCategories[index] ?? '__null__';
+      final matchingIndices =
+          _categoryGroupListedIndices[categoryMapKey] ?? const <int>[];
       final tiles = isExpanded
-          ? matchingEntries.map((e) => getSingleAppHorizTile(e.key)).toList()
+          ? matchingIndices
+              .map((listingIndex) => getSingleAppHorizTile(listingIndex))
+              .toList()
           : const <Widget>[];
 
       capFirstChar(String str) => str[0].toUpperCase() + str.substring(1);
       final theme = Theme.of(context);
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-        child: Material(
-          elevation: 3,
-          shadowColor: theme.colorScheme.shadow.withAlpha(100),
-          surfaceTintColor: theme.colorScheme.surfaceTint,
-          borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-          color: theme.colorScheme.surfaceContainerLow,
-          clipBehavior: Clip.antiAlias,
-          child: Theme(
-            data: theme.copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              key: PageStorageKey(catKey),
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(
-                  Radius.circular(_appsListGroupCardRadius),
+      return RepaintBoundary(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          child: Material(
+            elevation: 3,
+            shadowColor: theme.colorScheme.shadow.withAlpha(100),
+            surfaceTintColor: theme.colorScheme.surfaceTint,
+            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            color: theme.colorScheme.surfaceContainerLow,
+            clipBehavior: Clip.antiAlias,
+            child: Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                key: PageStorageKey(catKey),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
                 ),
-              ),
-              collapsedShape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(
-                  Radius.circular(_appsListGroupCardRadius),
+                collapsedShape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
                 ),
+                initiallyExpanded: isExpanded,
+                onExpansionChanged: (expanded) => setState(() {
+                  if (expanded) {
+                    _collapsedGroups.remove(catKey);
+                  } else {
+                    _collapsedGroups.add(catKey);
+                  }
+                }),
+                title: Text(
+                  capFirstChar(listedCategories[index] ?? tr('noCategory')),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+                trailing: Text(matchingIndices.length.toString()),
+                children: tiles,
               ),
-              initiallyExpanded: isExpanded,
-              onExpansionChanged: (expanded) => setState(() {
-                if (expanded) {
-                  _collapsedGroups.remove(catKey);
-                } else {
-                  _collapsedGroups.add(catKey);
-                }
-              }),
-              title: Text(
-                capFirstChar(listedCategories[index] ?? tr('noCategory')),
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              controlAffinity: ListTileControlAffinity.leading,
-              trailing: Text(matchingEntries.length.toString()),
-              children: tiles,
             ),
           ),
         ),
@@ -2011,54 +2106,54 @@ class AppsPageState extends State<AppsPage> {
       const nonInstalledKey = '__nonInstalled__';
       final isExpanded = !_collapsedGroups.contains(nonInstalledKey);
 
-      final matchingEntries = listedApps
-          .asMap()
-          .entries
-          .where((e) => e.value.app.installedVersion == null)
-          .toList();
+      final matchingIndices = _nonInstalledListedIndices;
       final tiles = isExpanded
-          ? matchingEntries.map((e) => getSingleAppHorizTile(e.key)).toList()
+          ? matchingIndices
+              .map((listingIndex) => getSingleAppHorizTile(listingIndex))
+              .toList()
           : const <Widget>[];
 
       final theme = Theme.of(context);
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-        child: Material(
-          elevation: 3,
-          shadowColor: theme.colorScheme.shadow.withAlpha(100),
-          surfaceTintColor: theme.colorScheme.surfaceTint,
-          borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-          color: theme.colorScheme.surfaceContainerLow,
-          clipBehavior: Clip.antiAlias,
-          child: Theme(
-            data: theme.copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              key: const PageStorageKey(nonInstalledKey),
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(
-                  Radius.circular(_appsListGroupCardRadius),
+      return RepaintBoundary(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          child: Material(
+            elevation: 3,
+            shadowColor: theme.colorScheme.shadow.withAlpha(100),
+            surfaceTintColor: theme.colorScheme.surfaceTint,
+            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            color: theme.colorScheme.surfaceContainerLow,
+            clipBehavior: Clip.antiAlias,
+            child: Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                key: const PageStorageKey(nonInstalledKey),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
                 ),
-              ),
-              collapsedShape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(
-                  Radius.circular(_appsListGroupCardRadius),
+                collapsedShape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
                 ),
+                initiallyExpanded: isExpanded,
+                onExpansionChanged: (expanded) => setState(() {
+                  if (expanded) {
+                    _collapsedGroups.remove(nonInstalledKey);
+                  } else {
+                    _collapsedGroups.add(nonInstalledKey);
+                  }
+                }),
+                title: Text(
+                  tr('notInstalled'),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+                trailing: Text(matchingIndices.length.toString()),
+                children: tiles,
               ),
-              initiallyExpanded: isExpanded,
-              onExpansionChanged: (expanded) => setState(() {
-                if (expanded) {
-                  _collapsedGroups.remove(nonInstalledKey);
-                } else {
-                  _collapsedGroups.add(nonInstalledKey);
-                }
-              }),
-              title: Text(
-                tr('notInstalled'),
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              controlAffinity: ListTileControlAffinity.leading,
-              trailing: Text(matchingEntries.length.toString()),
-              children: tiles,
             ),
           ),
         ),
@@ -2070,34 +2165,27 @@ class AppsPageState extends State<AppsPage> {
       final groupKey = 'src:$sourceKey';
       final isExpanded = !_collapsedGroups.contains(groupKey);
 
-      final matchingEntries = listedApps.asMap().entries.where((entry) {
-        if (segregateNonInstalled && entry.value.app.installedVersion == null) {
-          return false;
-        }
-        return sourceProvider
-                .getSource(
-                  entry.value.app.url,
-                  overrideSource: entry.value.app.overrideSource,
-                )
-                .runtimeType
-                .toString() ==
-            sourceKey;
-      }).toList();
+      final matchingIndices =
+          _sourceGroupListedIndices[sourceKey] ?? const <int>[];
       final tiles = isExpanded
-          ? matchingEntries.map((e) => getSingleAppHorizTile(e.key)).toList()
+          ? matchingIndices
+              .map((listingIndex) => getSingleAppHorizTile(listingIndex))
+              .toList()
           : const <Widget>[];
 
-      final firstForTitle = listedApps.firstWhere(
-        (appInMem) =>
-            sourceProvider
-                .getSource(
-                  appInMem.app.url,
-                  overrideSource: appInMem.app.overrideSource,
-                )
-                .runtimeType
-                .toString() ==
-            sourceKey,
-      );
+      final AppInMemory firstForTitle = matchingIndices.isEmpty
+          ? listedApps.firstWhere(
+              (appInMem) =>
+                  sourceProvider
+                      .getSource(
+                        appInMem.app.url,
+                        overrideSource: appInMem.app.overrideSource,
+                      )
+                      .runtimeType
+                      .toString() ==
+                  sourceKey,
+            )
+          : listedApps[matchingIndices.first];
       final sourceTitle = sourceProvider
           .getSource(
             firstForTitle.app.url,
@@ -2106,44 +2194,46 @@ class AppsPageState extends State<AppsPage> {
           .name;
 
       final theme = Theme.of(context);
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-        child: Material(
-          elevation: 3,
-          shadowColor: theme.colorScheme.shadow.withAlpha(100),
-          surfaceTintColor: theme.colorScheme.surfaceTint,
-          borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-          color: theme.colorScheme.surfaceContainerLow,
-          clipBehavior: Clip.antiAlias,
-          child: Theme(
-            data: theme.copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              key: PageStorageKey(groupKey),
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(
-                  Radius.circular(_appsListGroupCardRadius),
+      return RepaintBoundary(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          child: Material(
+            elevation: 3,
+            shadowColor: theme.colorScheme.shadow.withAlpha(100),
+            surfaceTintColor: theme.colorScheme.surfaceTint,
+            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            color: theme.colorScheme.surfaceContainerLow,
+            clipBehavior: Clip.antiAlias,
+            child: Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                key: PageStorageKey(groupKey),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
                 ),
-              ),
-              collapsedShape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(
-                  Radius.circular(_appsListGroupCardRadius),
+                collapsedShape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
                 ),
+                initiallyExpanded: isExpanded,
+                onExpansionChanged: (expanded) => setState(() {
+                  if (expanded) {
+                    _collapsedGroups.remove(groupKey);
+                  } else {
+                    _collapsedGroups.add(groupKey);
+                  }
+                }),
+                title: Text(
+                  sourceTitle,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+                trailing: Text(matchingIndices.length.toString()),
+                children: tiles,
               ),
-              initiallyExpanded: isExpanded,
-              onExpansionChanged: (expanded) => setState(() {
-                if (expanded) {
-                  _collapsedGroups.remove(groupKey);
-                } else {
-                  _collapsedGroups.add(groupKey);
-                }
-              }),
-              title: Text(
-                sourceTitle,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              controlAffinity: ListTileControlAffinity.leading,
-              trailing: Text(matchingEntries.length.toString()),
-              children: tiles,
             ),
           ),
         ),
@@ -2965,9 +3055,18 @@ class AppsPageState extends State<AppsPage> {
                   child: CustomScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     controller: scrollController,
-                    cacheExtent: 500,
+                    cacheExtent: 900,
                     slivers: <Widget>[
                       CustomAppBar(
+                        leading: widget.onDemandOnlyList
+                            ? IconButton(
+                                icon: const Icon(Icons.arrow_back),
+                                onPressed: () =>
+                                    Navigator.of(context).maybePop(),
+                                tooltip: MaterialLocalizations.of(context)
+                                    .backButtonTooltip,
+                              )
+                            : null,
                         title: widget.onDemandOnlyList
                             ? tr('onDemandOnlyAppsTitle')
                             : tr('appsString'),
@@ -3008,61 +3107,39 @@ class AppsPageState extends State<AppsPage> {
                       ),
                       ...getLoadingWidgets(),
                       getDisplayedList(),
+                      if (!widget.onDemandOnlyList && onDemandOnlyAppCount > 0)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    slideUpPageRoute(
+                                      (_) => const AppsPage(
+                                        onDemandOnlyList: true,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(
+                                  Icons.folder_special_outlined,
+                                ),
+                                label: Text(
+                                  '${tr('onDemandOnly')} '
+                                  '($onDemandOnlyAppCount)',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
               ),
             ),
-            if (!widget.onDemandOnlyList && onDemandOnlyAppCount > 0)
-              Material(
-                color: Theme.of(context).colorScheme.surfaceContainerLow,
-                child: InkWell(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      slideUpPageRoute(
-                        (_) => const AppsPage(onDemandOnlyList: true),
-                      ),
-                    );
-                  },
-                  child: SafeArea(
-                    top: false,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.folder_special_outlined,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              tr('onDemandOnly'),
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                          ),
-                          Text(
-                            onDemandOnlyAppCount.toString(),
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Icon(
-                            Icons.chevron_right,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
             if (appsProvider.apps.isNotEmpty)
               _ScrollLinkedAppFooter(
                 scrollController: scrollController,
@@ -3100,7 +3177,7 @@ class AppsPageState extends State<AppsPage> {
 
     Navigator.push(
       context,
-      slideUpPageRoute((_) => AppPage(appId: app.app.id)),
+      heroFriendlyAppPageRoute((_) => AppPage(appId: app.app.id)),
     );
   }
 }
