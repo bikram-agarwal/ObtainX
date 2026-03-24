@@ -28,6 +28,32 @@ private const val INSTALL_TIMEOUT_MS = 120_000L
 
 class MainActivity : FlutterActivity() {
 
+    private class InstallWatcher(
+        val methodResult: MethodChannel.Result,
+        val handler: Handler,
+        val receiver: BroadcastReceiver,
+        var responded: Boolean = false,
+        var focusLost: Boolean = false
+    )
+
+    private var installWatcher: InstallWatcher? = null
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        val watcher = installWatcher ?: return
+        if (!hasFocus) {
+            watcher.focusLost = true
+            return
+        }
+        // We regained focus — installer was dismissed
+        if (!watcher.focusLost || watcher.responded) return
+        watcher.responded = true
+        installWatcher = null
+        watcher.handler.removeCallbacksAndMessages(null)
+        try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
+        watcher.methodResult.success(false)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
@@ -159,13 +185,14 @@ class MainActivity : FlutterActivity() {
         }
 
         val handler = Handler(Looper.getMainLooper())
-        var responded = false
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, broadcastIntent: Intent) {
                 val changedPkg = broadcastIntent.data?.schemeSpecificPart ?: return
-                if (changedPkg == expectedPkgName && !responded) {
-                    responded = true
+                val watcher = installWatcher ?: return
+                if (changedPkg == expectedPkgName && !watcher.responded) {
+                    watcher.responded = true
+                    installWatcher = null
                     handler.removeCallbacksAndMessages(null)
                     try { unregisterReceiver(this) } catch (_: Exception) { }
                     methodResult.success(true)
@@ -181,13 +208,16 @@ class MainActivity : FlutterActivity() {
         registerReceiver(receiver, filter)
 
         handler.postDelayed({
-            if (!responded) {
-                responded = true
+            val watcher = installWatcher
+            if (watcher != null && !watcher.responded) {
+                watcher.responded = true
+                installWatcher = null
                 try { unregisterReceiver(receiver) } catch (_: Exception) { }
                 methodResult.success(false)
             }
         }, INSTALL_TIMEOUT_MS)
 
+        installWatcher = InstallWatcher(methodResult, handler, receiver)
         startActivity(intent)
     }
 

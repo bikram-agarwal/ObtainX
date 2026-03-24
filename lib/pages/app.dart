@@ -1,11 +1,11 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -553,29 +553,58 @@ class _AppPageState extends State<AppPage> {
     List<Widget> children, {
     Color? sectionBackgroundColor,
     Color? sectionTitleColor,
+    Widget? headerStripe,
+    Widget? cardWatermark,
   }) {
     final BoxDecoration baseDecoration = appPageSectionCardDecoration(ctx);
+    final BoxDecoration decoration = sectionBackgroundColor != null
+        ? baseDecoration.copyWith(color: sectionBackgroundColor)
+        : baseDecoration;
+
+    final Widget bodyColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        appPageCardSectionHeaderLabel(
+          ctx,
+          sectionTitle,
+          color: sectionTitleColor,
+        ),
+        const SizedBox(height: 12),
+        ...children,
+      ],
+    );
+
+    final Widget body = Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+      child: cardWatermark != null
+          ? Stack(
+              clipBehavior: Clip.none,
+              children: [
+                bodyColumn,
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: cardWatermark,
+                ),
+              ],
+            )
+          : bodyColumn,
+    );
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: sectionBackgroundColor != null
-          ? baseDecoration.copyWith(color: sectionBackgroundColor)
-          : baseDecoration,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            appPageCardSectionHeaderLabel(
-              ctx,
-              sectionTitle,
-              color: sectionTitleColor,
-            ),
-            const SizedBox(height: 12),
-            ...children,
-          ],
-        ),
-      ),
+      decoration: decoration,
+      clipBehavior: (headerStripe != null || cardWatermark != null)
+          ? Clip.antiAlias
+          : Clip.none,
+      child: headerStripe != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [headerStripe, body],
+            )
+          : body,
     );
   }
 
@@ -1161,31 +1190,6 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget versionVerdictRow(BuildContext ctx, Widget chip) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: _versionRowLabelWidth,
-              child: Text(
-                tr('verdict'),
-                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
-                softWrap: false,
-                overflow: TextOverflow.visible,
-              ),
-            ),
-            const SizedBox(width: 8),
-            chip,
-          ],
-        ),
-      );
-    }
-
     Widget versionRow(BuildContext ctx, String label, String value) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
@@ -1595,6 +1599,96 @@ class _AppPageState extends State<AppPage> {
         }
       }
 
+      // #1 — verdict stripe (A: trailing icon, B: card watermark).
+      Widget? verdictStripe;
+      Widget? verdictWatermark;
+      if (!undeterminedTrackOnlyInstalled) {
+        Color? stripeColor;
+        Color? stripeTextColor;
+        String? stripeLabel;
+        IconData? verdictIcon;
+        if (effectivelyEqual) {
+          stripeColor = pageTheme.colorScheme.surfaceContainerHigh;
+          stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
+          stripeLabel = tr('effectivelyEqual');
+          verdictIcon = Symbols.balance;
+        } else if (installed && versionOrderUnclearState) {
+          stripeColor = pageTheme.colorScheme.surfaceContainerHighest;
+          stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
+          stripeLabel = tr('versionOrderUnclear');
+          verdictIcon = Icons.help_outline_rounded;
+        } else if (newerOnDeviceState) {
+          stripeColor = pageTheme.colorScheme.primaryContainer;
+          stripeTextColor = pageTheme.colorScheme.onPrimaryContainer;
+          stripeLabel = tr('newerOnDevice');
+          verdictIcon = Icons.phone_android_rounded;
+        } else if (sameVersionVerdict ||
+            (installedVerStr != null && installedVerStr == latestVerStr)) {
+          stripeColor = pageTheme.brightness == Brightness.dark
+              ? const Color(0xFF2E7D32).withAlpha(60)
+              : const Color(0xFFC8E6C9);
+          stripeTextColor = pageTheme.brightness == Brightness.dark
+              ? const Color(0xFFA5D6A7)
+              : const Color(0xFF1B5E20);
+          stripeLabel = tr('sameVersion');
+          verdictIcon = Icons.verified_rounded;
+        } else if (installed) {
+          stripeColor = pageTheme.colorScheme.secondaryContainer;
+          stripeTextColor = pageTheme.colorScheme.onSecondaryContainer;
+          stripeLabel = tr('updateAvailable');
+          verdictIcon = Symbols.release_alert;
+        }
+        if (stripeLabel != null && verdictIcon != null) {
+          // A — trailing icon in the stripe.
+          // Fix flush: use BoxDecoration with top-only borderRadius matching the
+          // card's 28px corners so the stripe fills the curved corner areas and
+          // no card-fill bleeds through at the top edges.
+          verdictStripe = Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: stripeColor,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    stripeLabel,
+                    style: pageTheme.textTheme.labelMedium?.copyWith(
+                      color: stripeTextColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(verdictIcon, size: 15, color: stripeTextColor),
+              ],
+            ),
+          );
+          // B — large faded watermark at bottom-right of the card body.
+          verdictWatermark = Icon(
+            verdictIcon,
+            size: 52,
+            color: stripeTextColor?.withAlpha(28),
+          );
+        }
+      }
+
+      // #4 — subtle "last checked" caption shown at the bottom of the version card.
+      final Widget lastCheckedCaption = Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(
+          '$lastUpdateCheckLabel: $lastUpdateCheckValue',
+          textAlign: TextAlign.right,
+          style: pageTheme.textTheme.labelSmall?.copyWith(
+            color: pageTheme.colorScheme.onSurfaceVariant.withAlpha(130),
+            fontSize: 11,
+          ),
+        ),
+      );
+
       final versionCardChildren = <Widget>[];
       if (undeterminedTrackOnlyInstalled) {
         versionCardChildren.add(
@@ -1602,9 +1696,6 @@ class _AppPageState extends State<AppPage> {
         );
         versionCardChildren.add(
           versionRow(pageThemeContext, tr('latest'), app?.app.latestVersion ?? '-'),
-        );
-        versionCardChildren.add(
-          versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
@@ -1626,7 +1717,7 @@ class _AppPageState extends State<AppPage> {
               app!.app.apkUrls.length == 1
                   ? app.app.apkUrls[0].key
                   : plural('apk', app.app.apkUrls.length),
-              app.app == null || updating
+              updating
                   ? null
                   : () async {
                       try {
@@ -1656,105 +1747,6 @@ class _AppPageState extends State<AppPage> {
             skipActive: app != null && isSkipActiveForCurrentLatest(app.app),
           ),
         );
-        if (effectivelyEqual) {
-          versionCardChildren.add(versionVerdictRow(
-            pageThemeContext,
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: pageTheme.colorScheme.tertiaryContainer,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                tr('effectivelyEqual'),
-                style: pageTheme.textTheme.labelSmall?.copyWith(
-                      color: pageTheme.colorScheme.onTertiaryContainer,
-                      fontWeight: FontWeight.w500,
-                    ),
-              ),
-            ),
-          ));
-        } else if (installed && versionOrderUnclearState) {
-          versionCardChildren.add(versionVerdictRow(
-            pageThemeContext,
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: pageTheme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                tr('versionOrderUnclear'),
-                style: pageTheme.textTheme.labelSmall?.copyWith(
-                      color: pageTheme.colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
-                    ),
-              ),
-            ),
-          ));
-        } else if (newerOnDeviceState) {
-          versionCardChildren.add(versionVerdictRow(
-            pageThemeContext,
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: pageTheme.colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                tr('newerOnDevice'),
-                style: pageTheme.textTheme.labelSmall?.copyWith(
-                      color: pageTheme.colorScheme.onPrimaryContainer,
-                      fontWeight: FontWeight.w500,
-                    ),
-              ),
-            ),
-          ));
-        } else if (sameVersionVerdict ||
-            (installedVerStr != null && installedVerStr == latestVerStr)) {
-          versionCardChildren.add(versionVerdictRow(
-            pageThemeContext,
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: pageTheme.brightness == Brightness.dark
-                    ? const Color(0xFF2E7D32).withAlpha(60)
-                    : const Color(0xFFC8E6C9),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                tr('sameVersion'),
-                style: pageTheme.textTheme.labelSmall?.copyWith(
-                      color: pageTheme.brightness == Brightness.dark
-                          ? const Color(0xFFA5D6A7)
-                          : const Color(0xFF1B5E20),
-                      fontWeight: FontWeight.w500,
-                    ),
-              ),
-            ),
-          ));
-        } else if (installed) {
-          versionCardChildren.add(versionVerdictRow(
-            pageThemeContext,
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: pageTheme.colorScheme.secondaryContainer,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                tr('updateAvailable'),
-                style: pageTheme.textTheme.labelSmall?.copyWith(
-                      color: pageTheme.colorScheme.onSecondaryContainer,
-                      fontWeight: FontWeight.w500,
-                    ),
-              ),
-            ),
-          ));
-        }
-        versionCardChildren.add(
-          versionRow(pageThemeContext, lastUpdateCheckLabel, lastUpdateCheckValue),
-        );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
             versionRowWithLink(
@@ -1775,7 +1767,7 @@ class _AppPageState extends State<AppPage> {
               app!.app.apkUrls.length == 1
                   ? app.app.apkUrls[0].key
                   : plural('apk', app.app.apkUrls.length),
-              app.app == null || updating
+              updating
                   ? null
                   : () async {
                       try {
@@ -1789,10 +1781,66 @@ class _AppPageState extends State<AppPage> {
           );
         }
       }
+
+      // #6 — inline download/install status inside the version card.
+      if (app?.downloadProgress != null) {
+        final double dp = app!.downloadProgress!;
+        final bool isInstalling = dp < 0;
+        versionCardChildren.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    if (isInstalling)
+                      SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: pageTheme.colorScheme.primary,
+                        ),
+                      )
+                    else
+                      Icon(
+                        Icons.download_rounded,
+                        size: 14,
+                        color: pageTheme.colorScheme.primary,
+                      ),
+                    const SizedBox(width: 7),
+                    Text(
+                      isInstalling
+                          ? '${tr('installing')}…'
+                          : tr('downloadingX', args: ['${dp.round()}%']),
+                      style: pageTheme.textTheme.bodySmall?.copyWith(
+                        color: pageTheme.colorScheme.primary,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                LinearProgressIndicator(
+                  value: isInstalling ? null : dp / 100,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      // #4 — last-checked caption at the bottom.
+      versionCardChildren.add(lastCheckedCaption);
+
       final versionCard = _materialAppPageSectionCard(
         pageThemeContext,
         tr('version'),
         versionCardChildren,
+        headerStripe: verdictStripe,
+        cardWatermark: verdictWatermark,
       );
 
       final bool trackOnlyUsesTemporaryPackageId =
@@ -2321,6 +2369,53 @@ class _AppPageState extends State<AppPage> {
         return const SizedBox.shrink();
       }
 
+      // #2 — inline progress button replaces the action button while downloading/installing.
+      if (app?.downloadProgress != null) {
+        final double dp = app!.downloadProgress!;
+        final bool isInstalling = dp < 0;
+        final String label = isInstalling
+            ? '${tr('installing')}…'
+            : 'Downloading ${dp.round()}%';
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(expressiveRadius),
+          child: SizedBox(
+            height: 52,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Container(
+                  color: actionTheme.colorScheme.onSurface.withAlpha(31),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: isInstalling ? 1.0 : dp / 100,
+                    child: Container(
+                      color: actionTheme.colorScheme.primary
+                          .withAlpha(isInstalling ? 55 : 220),
+                    ),
+                  ),
+                ),
+                if (isInstalling)
+                  LinearProgressIndicator(
+                    backgroundColor: Colors.transparent,
+                    color: actionTheme.colorScheme.primary.withAlpha(120),
+                  ),
+                Center(
+                  child: Text(
+                    label,
+                    style: actionTheme.textTheme.labelLarge?.copyWith(
+                      color: actionTheme.colorScheme.onSurface.withAlpha(200),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
       final bool actionBlocked = updating || areDownloadsRunning;
       final installedVersion = app?.app.installedVersion;
       final bool installedVersionIsNull = installedVersion == null;
@@ -2389,9 +2484,6 @@ class _AppPageState extends State<AppPage> {
           );
           if (res.isNotEmpty && !trackOnly && mounted) {
             showMessage(successMessage, context);
-          }
-          if (res.isNotEmpty && mounted) {
-            Navigator.of(context).pop();
           }
         } catch (e) {
           if (mounted) {
@@ -2744,15 +2836,6 @@ class _AppPageState extends State<AppPage> {
                     ),
                   ],
                 ),
-                if (app?.downloadProgress != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
-              child: LinearProgressIndicator(
-                value: app!.downloadProgress! >= 0
-                    ? app.downloadProgress! / 100
-                    : null,
-              ),
-            ),
               ],
             ),
           ),

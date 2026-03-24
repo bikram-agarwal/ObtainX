@@ -3,6 +3,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'package:obtainium/app_sources/app_package_formats.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
@@ -555,10 +556,9 @@ Future<File> downloadFile(
   if (ext.endsWith('"') || ext.endsWith("other")) {
     ext = ext.substring(0, ext.length - 1);
   }
-  if (((Uri.tryParse(url)?.path ?? url).toLowerCase().endsWith('.apk') ||
-          ext == 'attachment') &&
-      ext != 'apk') {
-    ext = 'apk';
+  if ((isApk(Uri.tryParse(url)?.path ?? url) || ext == 'attachment') &&
+      ext != kApkExt) {
+    ext = kApkExt;
   }
   fileName = fileNameHasExt
       ? fileName
@@ -939,8 +939,8 @@ class AppsProvider with ChangeNotifier {
         notificationsProvider?.notify(notif);
       }
       PackageInfo? newInfo;
-      var isAPK = downloadedFile.path.toLowerCase().endsWith('.apk');
-      var isXAPK = downloadedFile.path.toLowerCase().endsWith('.xapk');
+      var isAPK = isApk(downloadedFile.path);
+      var isXAPK = isXapk(downloadedFile.path);
       Directory? apkDir;
       if (isAPK) {
         newInfo = await pm.getPackageArchiveInfo(
@@ -953,7 +953,7 @@ class AppsProvider with ChangeNotifier {
         apkDir = Directory(apkDirPath);
         var apks = apkDir
             .listSync()
-            .where((e) => e.path.toLowerCase().endsWith('.apk'))
+            .where((e) => isApk(e.path))
             .toList();
 
         FileSystemEntity? temp;
@@ -1142,9 +1142,9 @@ class AppsProvider with ChangeNotifier {
           in dir.extracted
               .listSync(recursive: true, followLinks: false)
               .whereType<File>()) {
-        if (file.path.toLowerCase().endsWith('.apk')) {
+        if (isApk(file.path)) {
           APKFiles.add(file);
-        } else if (file.path.toLowerCase().endsWith('.obb')) {
+        } else if (isObb(file.path)) {
           await moveObbFile(file, dir.appId);
         }
       }
@@ -1299,7 +1299,7 @@ class AppsProvider with ChangeNotifier {
   }
 
   Future<void> moveObbFile(File file, String appId) async {
-    if (!file.path.toLowerCase().endsWith('.obb')) return;
+    if (!isObb(file.path)) return;
 
     // TODO: Does not support Android 11+
     if ((await DeviceInfoPlugin().androidInfo).version.sdkInt <= 29) {
@@ -1714,7 +1714,7 @@ class AppsProvider with ChangeNotifier {
               .getRequestHeaders(
                 app.additionalSettings,
                 fileUrl.value,
-                forAPKDownload: fileUrl.key.endsWith('.apk') ? true : false,
+                forAPKDownload: isApk(fileUrl.key),
               ),
           useExisting: false,
           allowInsecure: app.additionalSettings['allowInsecure'] == true,
@@ -2784,6 +2784,7 @@ class AppsProvider with ChangeNotifier {
 
   @override
   void dispose() {
+    _progressNotifyTimer?.cancel();
     foregroundSubscription?.cancel();
     super.dispose();
   }

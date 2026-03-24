@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:obtainium/favicon_cache.dart';
 
 /// Local PNG paths for store branding (list badges, app page source rows).
 class StoreSourceIconPaths {
@@ -90,18 +92,46 @@ class StoreSourceIconImage extends StatelessWidget {
 }
 
 /// Small source favicon badge overlaid on the app icon (Apps list, bulk import results).
-/// Matches host-based assets and DuckDuckGo favicon fallback used on the Apps tab.
-class StoreSourceListBadge extends StatelessWidget {
+/// Known hosts use bundled assets; unknown hosts use a persistent disk-cached
+/// DuckDuckGo favicon so the network is only hit once per host.
+class StoreSourceListBadge extends StatefulWidget {
   const StoreSourceListBadge({super.key, required this.host});
 
   final String host;
 
   @override
+  State<StoreSourceListBadge> createState() => _StoreSourceListBadgeState();
+}
+
+class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
+  Future<Uint8List?>? _iconFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.host.isNotEmpty &&
+        storeSourceAssetPathForHost(widget.host) == null) {
+      _iconFuture = FaviconCache.get(widget.host);
+    }
+  }
+
+  @override
+  void didUpdateWidget(StoreSourceListBadge oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.host != widget.host &&
+        widget.host.isNotEmpty &&
+        storeSourceAssetPathForHost(widget.host) == null) {
+      _iconFuture = FaviconCache.get(widget.host);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (host.isEmpty) return const SizedBox.shrink();
+    if (widget.host.isEmpty) return const SizedBox.shrink();
 
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final String? localAsset = storeSourceAssetPathForHost(host);
+    final String? localAsset = storeSourceAssetPathForHost(widget.host);
+
     Widget image;
     if (localAsset != null) {
       image = StoreSourceIconImage(assetPath: localAsset, size: 13);
@@ -117,27 +147,24 @@ class StoreSourceListBadge extends StatelessWidget {
         );
       }
     } else {
-      image = Image.network(
-        'https://icons.duckduckgo.com/ip3/$host.ico',
-        width: 13,
-        height: 13,
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
-        loadingBuilder: (context, child, loadingProgress) =>
-            loadingProgress == null ? child : const SizedBox.shrink(),
+      image = FutureBuilder<Uint8List?>(
+        future: _iconFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done ||
+              snapshot.data == null) {
+            return const SizedBox.shrink();
+          }
+          return Image.memory(
+            snapshot.data!,
+            width: 13,
+            height: 13,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+          );
+        },
       );
-      if (isDark && host == 'github.com') {
-        image = ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            -1, 0, 0, 0, 255,
-            0, -1, 0, 0, 255,
-            0, 0, -1, 0, 255,
-            0, 0, 0, 1, 0,
-          ]),
-          child: image,
-        );
-      }
     }
+
     return Container(
       width: 16,
       height: 16,

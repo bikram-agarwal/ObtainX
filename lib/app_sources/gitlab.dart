@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:obtainium/app_sources/app_package_formats.dart';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart';
@@ -196,29 +197,21 @@ class GitLab extends AppSource {
           .where(
             (s) =>
                 s.key.isNotEmpty &&
-                (s.key.toLowerCase().endsWith('.apk') ||
-                    s.key.toLowerCase().endsWith('.xapk') ||
-                    s.value.toLowerCase().endsWith('.apk') ||
-                    s.value.toLowerCase().endsWith(
-                      '.xapk',
-                    )), // TODO: Supported file types should be centralized somewhere and shared between sources
+                (isInstallable(s.key) || isInstallable(s.value)),
           )
           .toList();
       var uploadedAPKsFromDescription = ((e['description'] ?? '') as String)
           .split('](')
           .join('\n')
-          .split('.apk)')
-          .join('.apk\n')
-          .split('.xapk)')
-          .join('.xapk\n')
+          .split('.$kApkExt)')
+          .join('.$kApkExt\n')
+          .split('.$kXapkExt)')
+          .join('.$kXapkExt\n')
           .split('\n')
           .where(
             (s) =>
                 s.startsWith('/uploads/') &&
-                (s.endsWith('apk') ||
-                    s.endsWith(
-                      'xapk',
-                    )), // TODO: Supported file types should be centralized somewhere and shared between sources
+                isInstallable(s),
           )
           .map((s) => 'https://${hosts[0]}/-/project/$projectId$s')
           .map((l) => MapEntry(Uri.parse(l).pathSegments.last, l))
