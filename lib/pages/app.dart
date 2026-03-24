@@ -1260,14 +1260,22 @@ class _AppPageState extends State<AppPage> {
                         ),
                   ),
                   if (skipActive)
-                    Chip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text(
-                        tr('latestVersionSkipped'),
-                        style: Theme.of(ctx).textTheme.labelSmall,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
                       ),
-                      padding: EdgeInsets.zero,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      decoration: BoxDecoration(
+                        color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        tr('latestVersionSkipped'),
+                        style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+                              color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w500,
+                            ),
+                      ),
                     ),
                 ],
               ),
