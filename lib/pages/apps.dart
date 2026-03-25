@@ -96,8 +96,8 @@ class _AppIconWidget extends StatelessWidget {
             height: 28,
             fit: BoxFit.contain,
             color: Theme.of(context).brightness == Brightness.dark
-                ? Colors.white.withOpacity(0.4)
-                : Colors.white.withOpacity(0.3),
+                ? Colors.white.withValues(alpha: 0.4)
+                : Colors.white.withValues(alpha: 0.3),
             colorBlendMode: BlendMode.modulate,
             gaplessPlayback: true,
           ),
@@ -152,6 +152,28 @@ class _AppListItem extends StatelessWidget {
     final installed = app.app.installedVersion;
     final hasUpdate =
         installed != null && appHasActionableUpdate(app.app);
+    final hasUncertainUpdate =
+        installed != null && versionOrderUncertainUpdate(app.app);
+
+    void onUpdateOrOpenReleasePressed() {
+      final trackOnly = app.app.additionalSettings['trackOnly'] == true;
+      if (trackOnly) {
+        launchUrlString(
+          trackOnlyDownloadPageUrl(app.app),
+          mode: LaunchMode.externalApplication,
+        );
+      } else {
+        context
+            .read<AppsProvider>()
+            .downloadAndInstallLatestApps(
+                [app.app.id], globalNavigatorKey.currentContext)
+            .catchError((e) {
+          if (!context.mounted) return <String>[];
+          showError(e, context);
+          return <String>[];
+        });
+      }
+    }
 
     Widget buildUpdateButton() {
       final trackOnly = app.app.additionalSettings['trackOnly'] == true;
@@ -159,26 +181,20 @@ class _AppListItem extends StatelessWidget {
         visualDensity: VisualDensity.compact,
         color: Theme.of(context).colorScheme.primary,
         tooltip: trackOnly ? tr('openDownloadPage') : tr('update'),
-        onPressed: areDownloadsRunning
-            ? null
-            : () {
-                if (trackOnly) {
-                  launchUrlString(
-                    trackOnlyDownloadPageUrl(app.app),
-                    mode: LaunchMode.externalApplication,
-                  );
-                } else {
-                  context
-                      .read<AppsProvider>()
-                      .downloadAndInstallLatestApps(
-                          [app.app.id], globalNavigatorKey.currentContext)
-                      .catchError((e) {
-                    showError(e, context);
-                    return <String>[];
-                  });
-                }
-              },
+        onPressed:
+            areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
         icon: const Icon(Icons.install_mobile),
+      );
+    }
+
+    Widget buildUncertainUpdateButton() {
+      return IconButton(
+        visualDensity: VisualDensity.compact,
+        color: Theme.of(context).colorScheme.primary,
+        tooltip: tr('uncertainUpdateTooltip'),
+        onPressed:
+            areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
+        icon: const Icon(Icons.help_outline),
       );
     }
 
@@ -193,6 +209,10 @@ class _AppListItem extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (hasUpdate) ...[buildUpdateButton(), const SizedBox(width: 5)],
+        if (!hasUpdate && hasUncertainUpdate) ...[
+          buildUncertainUpdateButton(),
+          const SizedBox(width: 5),
+        ],
         GestureDetector(
           onTap: showChangesFn,
           child: Container(
@@ -256,7 +276,7 @@ class _AppListItem extends StatelessWidget {
     );
 
     final int transparent =
-        Theme.of(context).colorScheme.surface.withAlpha(0).value;
+        Theme.of(context).colorScheme.surface.withValues(alpha: 0).toARGB32();
     List<double> stops = [
       ...app.app.categories.asMap().entries.map(
         (e) =>
@@ -284,11 +304,11 @@ class _AppListItem extends StatelessWidget {
         ),
         child: ListTile(
           tileColor: app.app.pinned
-              ? Colors.grey.withOpacity(0.1)
+              ? Colors.grey.withValues(alpha: 0.1)
               : Colors.transparent,
           selectedTileColor:
-              Theme.of(context).colorScheme.primary.withOpacity(
-            app.app.pinned ? 0.2 : 0.1,
+              Theme.of(context).colorScheme.primary.withValues(
+            alpha: app.app.pinned ? 0.2 : 0.1,
           ),
           selected: isSelected,
           onLongPress: onLongPress,
@@ -469,11 +489,12 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         }
       case SwipeAction.delete:
         if (app != null) {
-          final snapshot = [app.deepCopy()];
           // Capture messenger before the await – the widget may be disposed after removal
           final messenger = scaffoldMessengerKey.currentState;
-          final removed = await provider.removeAppsWithModal(context, [app]);
-          if (removed) {
+          final RemoveAppsWithModalResult removeResult =
+              await provider.removeAppsWithModal(context, [app]);
+          if (removeResult.shouldShowSnackBar) {
+            final Set<String> undoAppIds = removeResult.deferredUndoAppIds;
             messenger
               ?..clearSnackBars()
               ..showSnackBar(
@@ -482,11 +503,13 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
                   persist: false,
                   duration: const Duration(seconds: 5),
                   behavior: SnackBarBehavior.floating,
-                  action: SnackBarAction(
-                    label: tr('undo'),
-                    onPressed: () =>
-                        provider.saveApps(snapshot, onlyIfExists: false),
-                  ),
+                  action: undoAppIds.isNotEmpty
+                      ? SnackBarAction(
+                          label: tr('undo'),
+                          onPressed: () => provider
+                              .undoDeferredObtainiumRemovals(undoAppIds),
+                        )
+                      : null,
                 ),
               );
           }
@@ -1513,6 +1536,7 @@ class AppsPageState extends State<AppsPage> {
           : appsProvider.checkUpdates();
       return refreshFuture
           .catchError((e) {
+            if (!context.mounted) return <App>[];
             showError(e is Map ? e['errors'] : e, context);
             return <App>[];
           })
@@ -1705,8 +1729,12 @@ class AppsPageState extends State<AppsPage> {
 
       // Cache existingUpdates together with the list: pinUpdates ordering
       // depends on it and it's a pure function of app state (in the token).
-      _existingUpdatesCache =
-          appsProvider.findExistingUpdates(installedOnly: true).toList();
+      _existingUpdatesCache = appsProvider
+          .findExistingUpdates(
+            installedOnly: true,
+            includeVersionOrderUncertain: true,
+          )
+          .toList();
       _newInstallsCache =
           appsProvider.findExistingUpdates(nonInstalledOnly: true).toList();
 
@@ -1989,6 +2017,8 @@ class AppsPageState extends State<AppsPage> {
       final installed = app.app.installedVersion;
       final hasUpdate =
           installed != null && appHasActionableUpdate(app.app);
+      final hasUncertainUpdate =
+          installed != null && versionOrderUncertainUpdate(app.app);
       final downloadsRunning = appsProvider.areDownloadsRunning();
       final sourceHost = sourceProvider
           .getSource(app.app.url, overrideSource: app.app.overrideSource)
@@ -2010,7 +2040,7 @@ class AppsPageState extends State<AppsPage> {
       return _SwipeableListItem(
         key: ValueKey(appId),
         appId: appId,
-        hasUpdate: hasUpdate,
+        hasUpdate: hasUpdate || hasUncertainUpdate,
         isPinned: app.app.pinned,
         isInstalled: installed != null,
         areDownloadsRunning: downloadsRunning,
@@ -2338,11 +2368,13 @@ class AppsPageState extends State<AppsPage> {
                         globalNavigatorKey.currentContext,
                       )
                       .catchError((e) {
+                        if (!context.mounted) return <String>[];
                         showError(e, context);
                         return <String>[];
                       })
                       .then((value) {
                         if (value.isNotEmpty && shouldInstallUpdates) {
+                          if (!context.mounted) return;
                           showMessage(tr('appsUpdated'), context);
                         }
                       });
@@ -2384,7 +2416,7 @@ class AppsPageState extends State<AppsPage> {
                 null;
           }
           if (cont) {
-            // ignore: use_build_context_synchronously
+            if (!context.mounted) return;
             await showDialog<Map<String, dynamic>?>(
               context: context,
               builder: (BuildContext ctx) {
@@ -2412,6 +2444,7 @@ class AppsPageState extends State<AppsPage> {
             );
           }
         } catch (err) {
+          if (!context.mounted) return;
           showError(err, context);
         }
       };
@@ -2465,6 +2498,7 @@ class AppsPageState extends State<AppsPage> {
           );
         },
       ).whenComplete(() {
+        if (!context.mounted) return;
         Navigator.of(context).pop();
       });
     }
@@ -2508,10 +2542,10 @@ class AppsPageState extends State<AppsPage> {
                         urls += '${a.url}\n';
                       }
                       urls = urls.substring(0, urls.length - 1);
-                      Share.share(
-                        urls,
+                      SharePlus.instance.share(ShareParams(
+                        text: urls,
                         subject: 'ObtainX - ${tr('appsString')}',
-                      );
+                      ));
                       Navigator.of(context).pop();
                     },
                     child: Text(
@@ -2529,10 +2563,10 @@ class AppsPageState extends State<AppsPage> {
                               urls +=
                                   'https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/${Uri.encodeComponent(jsonEncode({'id': a.id, 'url': a.url, 'author': a.author, 'name': a.name, 'preferredApkIndex': a.preferredApkIndex, 'additionalSettings': jsonEncode(a.additionalSettings), 'overrideSource': a.overrideSource}))}\n\n';
                             }
-                            Share.share(
-                              urls,
+                            SharePlus.instance.share(ShareParams(
+                              text: urls,
                               subject: 'ObtainX - ${tr('appsString')}',
-                            );
+                            ));
                           },
                     child: Text(
                       tr('shareAppConfigLinks'),
@@ -2558,10 +2592,10 @@ class AppsPageState extends State<AppsPage> {
                               mimeType: 'application/json',
                               name: fn,
                             );
-                            Share.shareXFiles(
-                              [f],
+                            SharePlus.instance.share(ShareParams(
+                              files: [f],
                               fileNameOverrides: ['$fn.json'],
-                            );
+                            ));
                           },
                     child: Text(
                       '${tr('share')} - ${tr('obtainiumExport')}',
@@ -2864,35 +2898,40 @@ class AppsPageState extends State<AppsPage> {
                   iconSize: 24,
                   color: colorScheme.primary,
                   onPressed: () async {
-                    final snapshot = selectedApps
-                        .map((a) => a.deepCopy())
-                        .toList();
                     final appsProviderRef = appsProvider;
                     // Capture messenger before the await
                     final messenger = scaffoldMessengerKey.currentState;
-                    final removed = await appsProviderRef.removeAppsWithModal(
+                    final RemoveAppsWithModalResult removeResult =
+                        await appsProviderRef.removeAppsWithModal(
                       context,
                       selectedApps.toList(),
                     );
-                    if (removed) {
+                    if (removeResult.shouldShowSnackBar) {
+                      final Set<String> undoAppIds =
+                          removeResult.deferredUndoAppIds;
+                      final int removedCount = removeResult
+                              .deferredUndoAppIds.isNotEmpty
+                          ? removeResult.deferredUndoAppIds.length
+                          : selectedApps.length;
                       messenger
                         ?..clearSnackBars()
                         ..showSnackBar(
                           SnackBar(
                             content: Text(
-                              tr('xAppsRemoved',
-                                  args: ['${snapshot.length}']),
+                              tr('xAppsRemoved', args: ['$removedCount']),
                             ),
                             persist: false,
                             duration: const Duration(seconds: 5),
                             behavior: SnackBarBehavior.floating,
-                            action: SnackBarAction(
-                              label: tr('undo'),
-                              onPressed: () => appsProviderRef.saveApps(
-                                snapshot,
-                                onlyIfExists: false,
-                              ),
-                            ),
+                            action: undoAppIds.isNotEmpty
+                                ? SnackBarAction(
+                                    label: tr('undo'),
+                                    onPressed: () => appsProviderRef
+                                        .undoDeferredObtainiumRemovals(
+                                      undoAppIds,
+                                    ),
+                                  )
+                                : null,
                           ),
                         );
                     }

@@ -508,25 +508,30 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
                 ),
               ),
               const SizedBox(height: 8),
-              ...widget.rawLineSuggestions.map((String line) {
-                return RadioListTile<String>(
-                  value: line,
-                  groupValue: _selectedRawLineSuggestion,
-                  title: Text(
-                    line,
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  onChanged: (_) {
-                    setState(() {
-                      _selectedRawLineSuggestion = line;
-                      _rawController.text = line;
-                      _rebuildCandidates();
-                    });
-                  },
-                );
-              }),
+              RadioGroup<String>(
+                groupValue: _selectedRawLineSuggestion,
+                onChanged: (String? newLine) {
+                  if (newLine == null) return;
+                  setState(() {
+                    _selectedRawLineSuggestion = newLine;
+                    _rawController.text = newLine;
+                    _rebuildCandidates();
+                  });
+                },
+                child: Column(
+                  children: widget.rawLineSuggestions
+                      .map((String line) => RadioListTile<String>(
+                            value: line,
+                            title: Text(
+                              line,
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ))
+                      .toList(),
+                ),
+              ),
               const SizedBox(height: 12),
             ],
             TextField(
@@ -548,27 +553,31 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
                 ),
               ),
               const SizedBox(height: 8),
-              ..._candidates.map((String candidate) {
-                return RadioListTile<String>(
-                  value: candidate,
-                  groupValue:
-                      _customController.text.trim().isNotEmpty
-                          ? null
-                          : _selectedCandidate,
-                  title: Text(
-                    candidate,
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  onChanged: (_) {
-                    setState(() {
-                      _selectedCandidate = candidate;
-                      _customController.clear();
-                    });
-                  },
-                );
-              }),
+              RadioGroup<String>(
+                groupValue: _customController.text.trim().isNotEmpty
+                    ? null
+                    : _selectedCandidate,
+                onChanged: (String? newCandidate) {
+                  if (newCandidate == null) return;
+                  setState(() {
+                    _selectedCandidate = newCandidate;
+                    _customController.clear();
+                  });
+                },
+                child: Column(
+                  children: _candidates
+                      .map((String candidate) => RadioListTile<String>(
+                            value: candidate,
+                            title: Text(
+                              candidate,
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ))
+                      .toList(),
+                ),
+              ),
             ],
             const SizedBox(height: 12),
             Text(

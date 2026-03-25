@@ -93,7 +93,7 @@ void backgroundFetchHeadlessTask(HeadlessTask task) async {
   String taskId = task.taskId;
   bool isTimeout = task.timeout;
   if (isTimeout) {
-    print('BG update task timed out.');
+    debugPrint('BG update task timed out.');
     BackgroundFetch.finish(taskId);
     return;
   }
@@ -111,7 +111,7 @@ class MyTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    print('onStart(starter: ${starter.name})');
+    debugPrint('onStart(starter: ${starter.name})');
     bgUpdateCheck('bg_check', null);
   }
 
@@ -122,7 +122,7 @@ class MyTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    print('Foreground service onDestroy(isTimeout: $isTimeout)');
+    debugPrint('Foreground service onDestroy(isTimeout: $isTimeout)');
   }
 
   @override
@@ -345,7 +345,7 @@ class _ObtainiumState extends State<Obtainium> {
                 }
               })
               .catchError((err) {
-                print(err);
+                debugPrint(err.toString());
               });
         }
       }

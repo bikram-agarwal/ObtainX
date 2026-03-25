@@ -36,7 +36,7 @@ ObtainX is a fork of Obtainium. These are the extra features you get in this for
 ## Screenshots
 | <img src="./assets/screenshots/1.apps.webp" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.webp" alt="Themes and View Options" /> | <img src="./assets/screenshots/3.filters.webp" alt="Live Filters" /> | 
 | ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | 
-| <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.categories.webp" alt="Editing Categories" /> | <img src="./assets/screenshots/6.custom_icon.webp" alt="Add/Set Custom Icon" /> | 
+| <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.edit.webp" alt="Editing App Details" /> | <img src="./assets/screenshots/6.options.webp" alt="Additional Options with RegEx Helper" /> | 
 | <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> |  | 
 
 ## Screenrecords

@@ -67,6 +67,7 @@ class _HomePageState extends State<HomePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       var sp = context.read<SettingsProvider>();
       if (!sp.welcomeShown) {
+        if (!context.mounted) return;
         await showDialog(
           context: context,
           builder: (BuildContext ctx) {
@@ -108,7 +109,9 @@ class _HomePageState extends State<HomePage> {
         );
       }
       if (!sp.googleVerificationWarningShown && DateTime.now().year == 2026) {
+        if (!context.mounted) return;
         await showDialog(
+          // ignore: use_build_context_synchronously
           context: context,
           builder: (BuildContext ctx) {
             return AlertDialog(
@@ -216,6 +219,7 @@ class _HomePageState extends State<HomePage> {
           }
         } else if (action == 'app' || action == 'apps') {
           var dataStr = Uri.decodeComponent(data);
+          if (!context.mounted) return;
           if (await showDialog(
                 context: context,
                 builder: (BuildContext ctx) {
@@ -250,19 +254,21 @@ class _HomePageState extends State<HomePage> {
                   ? '{ "apps": [$dataStr] }'
                   : '{ "apps": $dataStr }',
             );
-            // ignore: use_build_context_synchronously
+            if (!context.mounted) return;
             showMessage(
               tr(
                 'importedX',
                 args: [plural('apps', result.key.length).toLowerCase()],
               ),
-              context,
+              context, // ignore: use_build_context_synchronously
             );
           }
         } else {
           throw ObtainiumError(tr('unknown'));
         }
       } catch (e) {
+        if (!context.mounted) return;
+        // ignore: use_build_context_synchronously
         showError(e, context);
       }
     }
@@ -331,6 +337,7 @@ class _HomePageState extends State<HomePage> {
             .findExistingUpdates(
               installedOnly: true,
               excludeOnDemandOnly: true,
+              includeVersionOrderUncertain: true,
             )
             .length,
       ),
@@ -348,7 +355,31 @@ class _HomePageState extends State<HomePage> {
     prevAppCount = appsCount;
     prevIsLoading = isLoading;
 
-    return WillPopScope(
+    return PopScope(
+      canPop: isLinkActivity &&
+          selectedIndexHistory.length == 1 &&
+          selectedIndexHistory.last == 1,
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        if (didPop) return;
+        setIsReversing(
+          selectedIndexHistory.length >= 2
+              ? selectedIndexHistory.reversed.toList()[1]
+              : 0,
+        );
+        if (selectedIndexHistory.isNotEmpty) {
+          setState(() {
+            selectedIndexHistory.removeLast();
+          });
+          return;
+        }
+        final AppsPageState? appsPageState =
+            (pages[0].widget.key as GlobalKey<AppsPageState>).currentState;
+        if (appsPageState == null || !appsPageState.clearSelected()) {
+          // Root route: Navigator.pop would remove [HomePage] and leave an empty
+          // [MaterialApp] (black screen). Minimize/finish the activity instead.
+          SystemNavigator.pop();
+        }
+      },
       child: Scaffold(
         backgroundColor: Theme.of(context).colorScheme.surface,
         body: PageTransitionSwitcher(
@@ -402,26 +433,6 @@ class _HomePageState extends State<HomePage> {
               : selectedIndexHistory.last,
         ),
       ),
-      onWillPop: () async {
-        if (isLinkActivity &&
-            selectedIndexHistory.length == 1 &&
-            selectedIndexHistory.last == 1) {
-          return true;
-        }
-        setIsReversing(
-          selectedIndexHistory.length >= 2
-              ? selectedIndexHistory.reversed.toList()[1]
-              : 0,
-        );
-        if (selectedIndexHistory.isNotEmpty) {
-          setState(() {
-            selectedIndexHistory.removeLast();
-          });
-          return false;
-        }
-        return !(pages[0].widget.key as GlobalKey<AppsPageState>).currentState!
-            .clearSelected();
-      },
     );
   }
 

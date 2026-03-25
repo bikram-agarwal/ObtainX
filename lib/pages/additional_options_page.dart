@@ -163,7 +163,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     Uint8List iconBytes,
     String cacheKey,
   ) async {
-    if (!mounted) return;
+    if (!context.mounted) return;
     final Brightness brightness = Theme.of(context).brightness;
     final ColorScheme? scheme = await loadColorSchemeFromAppIcon(
       iconBytes: iconBytes,
@@ -171,9 +171,11 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     );
     if (!context.mounted) return;
     final AppsProvider apps =
+        // ignore: use_build_context_synchronously
         Provider.of<AppsProvider>(context, listen: false);
     if (!identical(apps.apps[widget.appId]?.icon, iconBytes)) return;
     final SettingsProvider settings =
+        // ignore: use_build_context_synchronously
         Provider.of<SettingsProvider>(context, listen: false);
     if (!settings.matchAppPageToIconColors) return;
     if (scheme != null) {
@@ -302,7 +304,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     }
     final _AdditionalOptionsUnsavedAction? action =
         await _showUnsavedChangesDialog(actionContext, pageTheme);
-    if (!mounted) {
+    if (!actionContext.mounted) {
       return;
     }
     switch (action) {
@@ -422,7 +424,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       data: pageThemeForPage,
       child: PopScope(
         canPop: !_saving && !_isDirty(),
-        onPopInvoked: (bool didPop) async {
+        onPopInvokedWithResult: (bool didPop, dynamic result) async {
           if (didPop) {
             return;
           }

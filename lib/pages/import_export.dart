@@ -86,6 +86,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
           appsProvider
               .addAppsByURL(urls)
               .then((errors) {
+                if (!context.mounted) return;
                 if (errors.isEmpty) {
                   showMessage(
                     tr(
@@ -107,6 +108,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                 }
               })
               .catchError((e) {
+                if (!context.mounted) return;
                 showError(e, context);
               })
               .whenComplete(() {
@@ -127,11 +129,13 @@ class _ImportExportPageState extends State<ImportExportPage> {
             sp: settingsProvider,
           )
           .then((String? result) {
+            if (!context.mounted) return;
             if (result != null) {
               showMessage(tr('exportedTo', args: [result]), context);
             }
           })
           .catchError((e) {
+            if (!context.mounted) return;
             showError(e, context);
           });
     }
@@ -152,11 +156,12 @@ class _ImportExportPageState extends State<ImportExportPage> {
                 throw ObtainiumError(tr('invalidInput'));
               }
               appsProvider.import(data).then((value) {
+                if (!context.mounted) return;
                 var cats = settingsProvider.categories;
                 appsProvider.apps.forEach((key, value) {
                   for (var c in value.app.categories) {
                     if (!cats.containsKey(c)) {
-                      cats[c] = generateRandomLightColor().value;
+                      cats[c] = generateRandomLightColor().toARGB32();
                     }
                   }
                 });
@@ -171,6 +176,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
             }
           })
           .catchError((e) {
+            if (!context.mounted) return;
             showError(e, context);
           })
           .whenComplete(() {
@@ -251,24 +257,23 @@ class _ImportExportPageState extends State<ImportExportPage> {
                 querySettings: values,
               );
               if (urlsWithDescriptions.isNotEmpty) {
-                var selectedUrls =
-                    // ignore: use_build_context_synchronously
-                    await showDialog<List<String>?>(
-                      context: context,
-                      builder: (BuildContext ctx) {
-                        return SelectionModal(
-                          entries: urlsWithDescriptions,
-                          selectedByDefault: false,
-                        );
-                      },
+                if (!context.mounted) return;
+                var selectedUrls = await showDialog<List<String>?>(
+                  context: context,
+                  builder: (BuildContext ctx) {
+                    return SelectionModal(
+                      entries: urlsWithDescriptions,
+                      selectedByDefault: false,
                     );
+                  },
+                );
                 if (selectedUrls != null && selectedUrls.isNotEmpty) {
                   var errors = await appsProvider.addAppsByURL(
                     selectedUrls,
                     sourceOverride: source,
                   );
+                  if (!context.mounted) return;
                   if (errors.isEmpty) {
-                    // ignore: use_build_context_synchronously
                     showMessage(
                       tr(
                         'importedX',
@@ -279,7 +284,6 @@ class _ImportExportPageState extends State<ImportExportPage> {
                       context,
                     );
                   } else {
-                    // ignore: use_build_context_synchronously
                     showDialog(
                       context: context,
                       builder: (BuildContext ctx) {
@@ -297,6 +301,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
             }
           }()
           .catchError((e) {
+            if (!context.mounted) return;
             showError(e, context);
           })
           .whenComplete(() {
@@ -326,18 +331,17 @@ class _ImportExportPageState extends State<ImportExportPage> {
               var urlsWithDescriptions = await source.getUrlsWithDescriptions(
                 values.values.map((e) => e.toString()).toList(),
               );
-              var selectedUrls =
-                  // ignore: use_build_context_synchronously
-                  await showDialog<List<String>?>(
-                    context: context,
-                    builder: (BuildContext ctx) {
-                      return SelectionModal(entries: urlsWithDescriptions);
-                    },
-                  );
+              if (!context.mounted) return;
+              var selectedUrls = await showDialog<List<String>?>(
+                context: context,
+                builder: (BuildContext ctx) {
+                  return SelectionModal(entries: urlsWithDescriptions);
+                },
+              );
               if (selectedUrls != null) {
                 var errors = await appsProvider.addAppsByURL(selectedUrls);
+                if (!context.mounted) return;
                 if (errors.isEmpty) {
-                  // ignore: use_build_context_synchronously
                   showMessage(
                     tr(
                       'importedX',
@@ -346,7 +350,6 @@ class _ImportExportPageState extends State<ImportExportPage> {
                     context,
                   );
                 } else {
-                  // ignore: use_build_context_synchronously
                   showDialog(
                     context: context,
                     builder: (BuildContext ctx) {
@@ -361,6 +364,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
             }
           }()
           .catchError((e) {
+            if (!context.mounted) return;
             showError(e, context);
           })
           .whenComplete(() {
@@ -673,6 +677,8 @@ class SelectionModal extends StatefulWidget {
     this.titlesAreLinks = true,
     this.title,
     this.deselectThese = const [],
+    this.presentAsBottomSheet = false,
+    this.showFilterField = true,
   });
 
   String? title;
@@ -681,6 +687,10 @@ class SelectionModal extends StatefulWidget {
   List<String> deselectThese;
   bool onlyOneSelectionAllowed;
   bool titlesAreLinks;
+  /// When true, [build] returns sheet content for [showModalBottomSheet] (drag handle, rounded top).
+  bool presentAsBottomSheet;
+  /// When false, the regex filter field is hidden (for short lists such as searchable sources).
+  bool showFilterField;
 
   @override
   State<SelectionModal> createState() => _SelectionModalState();
@@ -703,6 +713,17 @@ class _SelectionModalState extends State<SelectionModal> {
     }
     if (widget.selectedByDefault && widget.onlyOneSelectionAllowed) {
       selectOnlyOne(widget.entries.entries.first.key);
+    }
+    if (widget.presentAsBottomSheet) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        FocusManager.instance.primaryFocus?.unfocus();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            FocusManager.instance.primaryFocus?.unfocus();
+          }
+        });
+      });
     }
   }
 
@@ -765,12 +786,11 @@ class _SelectionModalState extends State<SelectionModal> {
             );
     }
 
-    return AlertDialog(
-      scrollable: true,
-      title: Text(widget.title ?? tr('pick')),
-      content: Column(
-        children: [
-          GeneratedForm(
+    final Widget? filterFormWidget = widget.showFilterField
+        ? GeneratedForm(
+            outlinedInputFields: true,
+            prominentSectionHeaders: true,
+            wrapFormSectionsInCards: true,
             items: [
               [
                 GeneratedFormTextField(
@@ -794,20 +814,23 @@ class _SelectionModalState extends State<SelectionModal> {
                 }
               }
             },
-          ),
-          ...filteredEntrySelections.keys.map((entry) {
-            selectThis(bool? value) {
-              setState(() {
-                value ??= false;
-                if (value! && widget.onlyOneSelectionAllowed) {
-                  selectOnlyOne(entry.key);
-                } else {
-                  entrySelections[entry] = value!;
-                }
-              });
-            }
+          )
+        : null;
 
-            var urlLink = GestureDetector(
+    final List<Widget> entryTileWidgets =
+        filteredEntrySelections.keys.map((entry) {
+        selectThis(bool? value) {
+          setState(() {
+            value ??= false;
+            if (value! && widget.onlyOneSelectionAllowed) {
+              selectOnlyOne(entry.key);
+            } else {
+              entrySelections[entry] = value!;
+            }
+          });
+        }
+
+        var urlLink = GestureDetector(
               onTap: !widget.titlesAreLinks
                   ? null
                   : () {
@@ -857,7 +880,41 @@ class _SelectionModalState extends State<SelectionModal> {
                 .where((e) => e.value)
                 .toList();
 
-            var singleSelectTile = ListTile(
+            var singleSelectTile = RadioGroup<String>(
+              groupValue: selectedEntries.isEmpty
+                  ? null
+                  : selectedEntries.first.key.key,
+              onChanged: (String? value) {
+                if (value != null) {
+                  setState(() {
+                    selectOnlyOne(value);
+                  });
+                }
+              },
+              child: ListTile(
+                title: GestureDetector(
+                  onTap: widget.titlesAreLinks
+                      ? null
+                      : () {
+                          selectThis(!(entrySelections[entry] ?? false));
+                        },
+                  child: urlLink,
+                ),
+                subtitle: entry.value.length <= 1
+                    ? null
+                    : GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            selectOnlyOne(entry.key);
+                          });
+                        },
+                        child: descriptionText,
+                      ),
+                leading: Radio<String>(value: entry.key),
+              ),
+            );
+
+            var multiSelectTile = SwitchListTile(
               title: GestureDetector(
                 onTap: widget.titlesAreLinks
                     ? null
@@ -870,100 +927,254 @@ class _SelectionModalState extends State<SelectionModal> {
                   ? null
                   : GestureDetector(
                       onTap: () {
-                        setState(() {
-                          selectOnlyOne(entry.key);
-                        });
+                        selectThis(!(entrySelections[entry] ?? false));
                       },
                       child: descriptionText,
                     ),
-              leading: Radio<String>(
-                value: entry.key,
-                groupValue: selectedEntries.isEmpty
-                    ? null
-                    : selectedEntries.first.key.key,
-                onChanged: (value) {
-                  setState(() {
-                    selectOnlyOne(entry.key);
-                  });
-                },
-              ),
+              value: entrySelections[entry] ?? false,
+              onChanged: (bool value) {
+                selectThis(value);
+              },
             );
 
-            var multiSelectTile = Row(
-              children: [
-                Checkbox(
-                  value: entrySelections[entry],
-                  onChanged: (value) {
-                    selectThis(value);
-                  },
+        return widget.onlyOneSelectionAllowed
+            ? singleSelectTile
+            : multiSelectTile;
+      }).toList();
+
+    final List<Widget> sheetColumnChildren = [
+      ?filterFormWidget,
+      ...entryTileWidgets,
+    ];
+
+    final List<Widget> selectionActions = [
+      getSelectAllButton(),
+      TextButton(
+        onPressed: () {
+          Navigator.of(context).pop();
+        },
+        child: Text(tr('cancel')),
+      ),
+      TextButton(
+        onPressed: entrySelections.values.where((b) => b).isEmpty
+            ? null
+            : () {
+                Navigator.of(context).pop(
+                  entrySelections.entries
+                      .where((entry) => entry.value)
+                      .map((e) => e.key.key)
+                      .toList(),
+                );
+              },
+        child: Text(
+          widget.onlyOneSelectionAllowed
+              ? tr('pick')
+              : tr(
+                  'selectX',
+                  args: [
+                    entrySelections.values.where((b) => b).length.toString(),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const SizedBox(height: 8),
-                      GestureDetector(
-                        onTap: widget.titlesAreLinks
-                            ? null
-                            : () {
-                                selectThis(!(entrySelections[entry] ?? false));
-                              },
-                        child: urlLink,
-                      ),
-                      entry.value.length <= 1
-                          ? const SizedBox.shrink()
-                          : GestureDetector(
-                              onTap: () {
-                                selectThis(!(entrySelections[entry] ?? false));
-                              },
-                              child: descriptionText,
-                            ),
-                      const SizedBox(height: 8),
-                    ],
+        ),
+      ),
+    ];
+
+    if (widget.presentAsBottomSheet) {
+      final ColorScheme colorScheme = Theme.of(context).colorScheme;
+      final double screenHeight = MediaQuery.sizeOf(context).height;
+      final EdgeInsets viewPadding = MediaQuery.paddingOf(context);
+      // Leave padding below the status bar; let the list scroll in the remaining space.
+      const double sheetChromeBelowListEstimate = 200;
+      final double areaBelowStatusBar =
+          screenHeight - viewPadding.top - 16;
+      final double maxListHeight = (areaBelowStatusBar -
+              sheetChromeBelowListEstimate)
+          .clamp(120.0, areaBelowStatusBar);
+      final Widget tileSection = ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxListHeight),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: entryTileWidgets,
+          ),
+        ),
+      );
+
+      void popWithSelectedKeys() {
+        Navigator.of(context).pop(
+          entrySelections.entries
+              .where((MapEntry<MapEntry<String, List<String>>, bool> e) =>
+                  e.value)
+              .map((MapEntry<MapEntry<String, List<String>>, bool> e) =>
+                  e.key.key)
+              .toList(),
+        );
+      }
+
+      final bool hasSelection =
+          entrySelections.values.any((bool selected) => selected);
+
+      final double sheetBottomInset =
+          MediaQuery.paddingOf(context).bottom + 20;
+
+      Widget sheetIconBar() {
+        Widget slot(Widget child) =>
+            Expanded(child: Center(child: child));
+        if (widget.onlyOneSelectionAllowed) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              12,
+              20,
+              sheetBottomInset,
+            ),
+            child: Row(
+              children: [
+                slot(
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 24,
+                    color: colorScheme.primary,
+                    tooltip: tr('cancel'),
+                    icon: const Icon(Icons.close),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                ),
+                slot(
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 24,
+                    color: colorScheme.primary,
+                    tooltip: tr('continue'),
+                    icon: const Icon(Icons.check),
+                    onPressed: hasSelection ? popWithSelectedKeys : null,
                   ),
                 ),
               ],
-            );
+            ),
+          );
+        }
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            12,
+            20,
+            sheetBottomInset,
+          ),
+          child: Row(
+            children: [
+              slot(
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 24,
+                  color: colorScheme.primary,
+                  tooltip: tr('selectAll'),
+                  icon: const Icon(Icons.select_all_outlined),
+                  onPressed: () {
+                    setState(() {
+                      selectAll();
+                    });
+                  },
+                ),
+              ),
+              slot(
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 24,
+                  color: colorScheme.primary,
+                  tooltip: tr('deselectAll'),
+                  icon: const Icon(Icons.deselect),
+                  onPressed: () {
+                    setState(() {
+                      selectAll(deselect: true);
+                    });
+                  },
+                ),
+              ),
+              slot(
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 24,
+                  color: colorScheme.primary,
+                  tooltip: tr('cancel'),
+                  icon: const Icon(Icons.close),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ),
+              slot(
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 24,
+                  color: colorScheme.primary,
+                  tooltip: tr('search'),
+                  icon: const Icon(Icons.search),
+                  onPressed: hasSelection ? popWithSelectedKeys : null,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
 
-            return widget.onlyOneSelectionAllowed
-                ? singleSelectTile
-                : multiSelectTile;
-          }),
-        ],
-      ),
-      actions: [
-        getSelectAllButton(),
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: Text(tr('cancel')),
+      return Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
-        TextButton(
-          onPressed: entrySelections.values.where((b) => b).isEmpty
-              ? null
-              : () {
-                  Navigator.of(context).pop(
-                    entrySelections.entries
-                        .where((entry) => entry.value)
-                        .map((e) => e.key.key)
-                        .toList(),
-                  );
-                },
-          child: Text(
-            widget.onlyOneSelectionAllowed
-                ? tr('pick')
-                : tr(
-                    'selectX',
-                    args: [
-                      entrySelections.values.where((b) => b).length.toString(),
-                    ],
+        child: SafeArea(
+          top: false,
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: colorScheme.outlineVariant,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    widget.title ?? tr('pick'),
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+                if (filterFormWidget != null) ...[
+                  filterFormWidget,
+                  const SizedBox(height: 8),
+                ],
+                tileSection,
+                const Divider(height: 1),
+                sheetIconBar(),
+              ],
+            ),
           ),
         ),
-      ],
+      );
+    }
+
+    return AlertDialog(
+      scrollable: true,
+      title: Text(widget.title ?? tr('pick')),
+      content: Column(
+        children: sheetColumnChildren,
+      ),
+      actions: selectionActions,
     );
   }
 }

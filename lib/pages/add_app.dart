@@ -16,6 +16,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -39,8 +40,10 @@ class AddAppPageState extends State<AddAppPage> {
   bool additionalSettingsValid = true;
   bool inferAppIdIfOptional = true;
   List<String> pickedCategories = [];
-  int urlInputKey = 0;
   SourceProvider sourceProvider = SourceProvider();
+  late final TextEditingController _urlFieldController;
+  late final TextEditingController _searchSomeSourcesController;
+  late final FocusNode _searchSomeSourcesFocusNode;
 
   void linkFn(String input) {
     try {
@@ -51,6 +54,36 @@ class AddAppPageState extends State<AddAppPage> {
       changeUserInput(input, true, false, updateUrlInput: true);
     } catch (e) {
       showError(e, context);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _urlFieldController = TextEditingController();
+    _searchSomeSourcesController = TextEditingController();
+    _searchSomeSourcesFocusNode = FocusNode();
+  }
+
+  @override
+  void dispose() {
+    _urlFieldController.dispose();
+    _searchSomeSourcesController.dispose();
+    _searchSomeSourcesFocusNode.dispose();
+    super.dispose();
+  }
+
+  bool _isUrlInputValid(String value) {
+    if (value.trim().isEmpty) {
+      return false;
+    }
+    try {
+      sourceProvider
+          .getSource(value, overrideSource: pickedSourceOverride)
+          .standardizeUrl(value);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -71,7 +104,7 @@ class AddAppPageState extends State<AddAppPage> {
             pickedSourceOverride != previousPickedSourceOverride;
         previousPickedSourceOverride = pickedSourceOverride;
         if (updateUrlInput) {
-          urlInputKey++;
+          _urlFieldController.text = input;
         }
         var prevHost = pickedSource?.hosts.isNotEmpty == true
             ? pickedSource?.hosts[0]
@@ -190,7 +223,7 @@ class AddAppPageState extends State<AddAppPage> {
           );
           // Only download the APK here if you need to for the package ID
           if (isTempId(app) && app.additionalSettings['trackOnly'] != true) {
-            // ignore: use_build_context_synchronously
+            if (!context.mounted) return;
             var apkUrl = await appsProvider.confirmAppFileUrl(
               app,
               context,
@@ -260,6 +293,7 @@ class AddAppPageState extends State<AddAppPage> {
           );
         }
       } catch (e) {
+        if (!context.mounted) return;
         showError(e, context);
       } finally {
         setState(() {
@@ -271,66 +305,83 @@ class AddAppPageState extends State<AddAppPage> {
       }
     }
 
-    Widget getUrlInputRow() => Row(
-      children: [
-        Expanded(
-          child: GeneratedForm(
-            key: Key(urlInputKey.toString()),
-            items: [
-              [
-                GeneratedFormTextField(
-                  'appSourceURL',
-                  label: tr('appSourceURL'),
-                  defaultValue: userInput,
-                  additionalValidators: [
-                    (value) {
-                      try {
-                        sourceProvider
-                            .getSource(
-                              value ?? '',
-                              overrideSource: pickedSourceOverride,
-                            )
-                            .standardizeUrl(value ?? '');
-                      } catch (e) {
-                        return e is String
-                            ? e
-                            : e is ObtainiumError
-                            ? e.toString()
-                            : tr('error');
-                      }
-                      return null;
-                    },
-                  ],
+    Widget getUrlInputRow() {
+      final ColorScheme colorScheme = Theme.of(context).colorScheme;
+      final bool addDisabled =
+          doingSomething ||
+          pickedSource == null ||
+          (pickedSource!.combinedAppSpecificSettingFormItems.isNotEmpty &&
+              !additionalSettingsValid);
+      final Widget trailingControl = gettingAppInfo
+          ? SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: colorScheme.primary,
+                  ),
                 ),
-              ],
-            ],
-            onValueChanges: (values, valid, isBuilding) {
-              changeUserInput(values['appSourceURL']!, valid, isBuilding);
-            },
-          ),
-        ),
-        const SizedBox(width: 16),
-        gettingAppInfo
-            ? const CircularProgressIndicator()
-            : ElevatedButton(
-                onPressed:
-                    doingSomething ||
-                        pickedSource == null ||
-                        (pickedSource!
-                                .combinedAppSpecificSettingFormItems
-                                .isNotEmpty &&
-                            !additionalSettingsValid)
+              ),
+            )
+          : Material(
+              color: addDisabled
+                  ? colorScheme.primary.withValues(alpha: 0.38)
+                  : colorScheme.primary,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: addDisabled
                     ? null
                     : () {
                         HapticFeedback.selectionClick();
                         addApp();
                       },
-                child: Text(tr('add')),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Icon(
+                    Icons.add,
+                    color: colorScheme.onPrimary,
+                    size: 22,
+                  ),
+                ),
               ),
-      ],
-    );
+            );
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _urlFieldController,
+              onChanged: (String text) {
+                changeUserInput(text, _isUrlInputValid(text), false);
+              },
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.go,
+              onSubmitted: (_) {
+                if (!addDisabled) {
+                  HapticFeedback.selectionClick();
+                  addApp();
+                }
+              },
+              decoration: appPageOutlinedInputDecoration(
+                context,
+                labelText: tr('appSourceURL'),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          trailingControl,
+        ],
+      );
+    }
 
     runSearch({bool filtered = true}) async {
+      _searchSomeSourcesFocusNode.unfocus();
+      FocusManager.instance.primaryFocus?.unfocus();
       setState(() {
         searching = true;
       });
@@ -340,10 +391,17 @@ class AddAppPageState extends State<AddAppPage> {
       });
       try {
         var searchSources =
-            await showDialog<List<String>?>(
+            await showModalBottomSheet<List<String>?>(
               context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
               builder: (BuildContext ctx) {
                 return SelectionModal(
+                  presentAsBottomSheet: true,
+                  showFilterField: false,
                   title: tr(
                     'selectX',
                     args: [plural('source', 2).toLowerCase()],
@@ -424,6 +482,7 @@ class AddAppPageState extends State<AddAppPage> {
                       rethrow;
                     } else {
                       err.unexpected = true;
+                      if (!context.mounted) return null;
                       showError(err, context);
                       return null;
                     }
@@ -450,13 +509,21 @@ class AddAppPageState extends State<AddAppPage> {
           if (res.isEmpty) {
             throw ObtainiumError(tr('noResults'));
           }
+          if (!context.mounted) return;
           List<String>? selectedUrls = res.isEmpty
               ? []
-              // ignore: use_build_context_synchronously
-              : await showDialog<List<String>?>(
+              : await showModalBottomSheet<List<String>?>(
                   context: context,
+                  isScrollControlled: true,
+                  useSafeArea: true,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
                   builder: (BuildContext ctx) {
                     return SelectionModal(
+                      presentAsBottomSheet: true,
+                      showFilterField: true,
+                      title: tr('addAppSearchResultsTitle'),
                       entries: res.map((k, v) => MapEntry(k, v.value)),
                       selectedByDefault: false,
                       onlyOneSelectionAllowed: true,
@@ -475,6 +542,7 @@ class AddAppPageState extends State<AddAppPage> {
           }
         }
       } catch (e) {
+        if (!context.mounted) return;
         showError(e, context);
       } finally {
         setState(() {
@@ -489,6 +557,7 @@ class AddAppPageState extends State<AddAppPage> {
           children: [
             Expanded(
               child: GeneratedForm(
+                outlinedInputFields: true,
                 items: [
                   [
                     GeneratedFormDropdown(
@@ -543,147 +612,229 @@ class AddAppPageState extends State<AddAppPage> {
         pickedSource == null &&
         userInput.isEmpty;
 
-    Widget getSearchBarRow() => Row(
-      children: [
-        Expanded(
-          child: GeneratedForm(
-            items: [
-              [
-                GeneratedFormTextField(
-                  'searchSomeSources',
-                  label: tr('searchSomeSourcesLabel'),
-                  required: false,
+    Widget getSearchBarRow() {
+      final ColorScheme colorScheme = Theme.of(context).colorScheme;
+      final bool searchDisabled =
+          searchQuery.isEmpty || doingSomething;
+      final Widget trailingSearch = searching
+          ? SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: colorScheme.primary,
+                  ),
                 ),
-              ],
-            ],
-            onValueChanges: (values, valid, isBuilding) {
-              if (values.isNotEmpty && valid && !isBuilding) {
-                setState(() {
-                  searchQuery = values['searchSomeSources']!.trim();
-                });
-              }
-            },
-          ),
-        ),
-        const SizedBox(width: 16),
-        searching
-            ? const CircularProgressIndicator()
-            : ElevatedButton(
-                onPressed: searchQuery.isEmpty || doingSomething
+              ),
+            )
+          : Material(
+              color: searchDisabled
+                  ? colorScheme.primary.withValues(alpha: 0.38)
+                  : colorScheme.primary,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: searchDisabled
                     ? null
                     : () {
+                        _searchSomeSourcesFocusNode.unfocus();
+                        FocusManager.instance.primaryFocus?.unfocus();
+                        HapticFeedback.selectionClick();
                         runSearch();
                       },
-                child: Text(tr('search')),
-              ),
-      ],
-    );
-
-    Widget getAdditionalOptsCol() => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 16),
-        Text(
-          tr('additionalOptsFor', args: [pickedSource?.name ?? tr('source')]),
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.primary,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 16),
-        GeneratedForm(
-          key: Key(
-            '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}',
-          ),
-          items: attachRegexAssistToItems(
-            cloneFormItems([
-              ...pickedSource!.combinedAppSpecificSettingFormItems,
-              ...(pickedSourceOverride != null
-                  ? pickedSource!.sourceConfigSettingFormItems.map((e) => [e])
-                  : []),
-            ]),
-            rawLatestVersionFromSource: null,
-            rawApkNamesFromSource: null,
-            rawReleaseTitlesFromSource: null,
-          ),
-          onValueChanges: (values, valid, isBuilding) {
-            if (!isBuilding) {
-              setState(() {
-                additionalSettings = values;
-                additionalSettingsValid = valid;
-              });
-            }
-          },
-        ),
-        Column(
-          children: [
-            const SizedBox(height: 16),
-            CategoryEditorSelector(
-              alignment: WrapAlignment.start,
-              onSelected: (categories) {
-                pickedCategories = categories;
-              },
-            ),
-          ],
-        ),
-        if (pickedSource != null && pickedSource!.appIdInferIsOptional)
-          GeneratedForm(
-            key: const Key('inferAppIdIfOptional'),
-            items: [
-              [
-                GeneratedFormSwitch(
-                  'inferAppIdIfOptional',
-                  label: tr('tryInferAppIdFromCode'),
-                  defaultValue: inferAppIdIfOptional,
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: Icon(
+                    Icons.search,
+                    color: colorScheme.onPrimary,
+                    size: 22,
+                  ),
                 ),
-              ],
-            ],
-            onValueChanges: (values, valid, isBuilding) {
-              if (!isBuilding) {
+              ),
+            );
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: TextField(
+              focusNode: _searchSomeSourcesFocusNode,
+              controller: _searchSomeSourcesController,
+              onChanged: (String text) {
                 setState(() {
-                  inferAppIdIfOptional = values['inferAppIdIfOptional'];
+                  searchQuery = text.trim();
                 });
-              }
-            },
+              },
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) {
+                if (!(searchQuery.isEmpty || doingSomething)) {
+                  _searchSomeSourcesFocusNode.unfocus();
+                  HapticFeedback.selectionClick();
+                  runSearch();
+                }
+              },
+              decoration: InputDecoration(
+                hintText: tr('searchSomeSourcesLabel'),
+                isDense: true,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(30),
+                  borderSide: BorderSide(
+                    color: colorScheme.outline.withValues(alpha: 0.55),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(30),
+                  borderSide: BorderSide(color: colorScheme.primary, width: 2),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+              ),
+            ),
           ),
-        if (pickedSource != null && pickedSource!.enforceTrackOnly)
+          const SizedBox(width: 10),
+          trailingSearch,
+        ],
+      );
+    }
+
+    Widget getAdditionalOptsCol() {
+      final ColorScheme colorScheme = Theme.of(context).colorScheme;
+      final TextStyle? sectionIntroStyle =
+          Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: colorScheme.primary,
+              );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              tr('additionalOptsFor', args: [pickedSource?.name ?? tr('source')]),
+              style: sectionIntroStyle,
+            ),
+          ),
           GeneratedForm(
             key: Key(
-              '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}-appId',
+              '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}',
             ),
-            items: [
-              [
-                GeneratedFormTextField(
-                  'appId',
-                  label: '${tr('appId')} - ${tr('custom')}',
-                  required: false,
-                  additionalValidators: [
-                    (value) {
-                      if (value == null || value.isEmpty) {
-                        return null;
-                      }
-                      final isValid = RegExp(
-                        r'^([A-Za-z]{1}[A-Za-z\d_]*\.)+[A-Za-z][A-Za-z\d_]*$',
-                      ).hasMatch(value);
-                      if (!isValid) {
-                        return tr('invalidInput');
-                      }
-                      return null;
-                    },
-                  ],
-                ),
-              ],
-            ],
+            outlinedInputFields: true,
+            prominentSectionHeaders: true,
+            wrapFormSectionsInCards: true,
+            items: attachRegexAssistToItems(
+              cloneFormItems([
+                ...pickedSource!.combinedAppSpecificSettingFormItems,
+                ...(pickedSourceOverride != null
+                    ? pickedSource!.sourceConfigSettingFormItems.map((e) => [e])
+                    : []),
+              ]),
+              rawLatestVersionFromSource: null,
+              rawApkNamesFromSource: null,
+              rawReleaseTitlesFromSource: null,
+            ),
             onValueChanges: (values, valid, isBuilding) {
               if (!isBuilding) {
                 setState(() {
-                  additionalSettings['appId'] = values['appId'];
+                  additionalSettings = values;
+                  additionalSettingsValid = valid;
                 });
               }
             },
           ),
-      ],
-    );
+          Card(
+            margin: const EdgeInsets.only(top: 12),
+            clipBehavior: Clip.antiAlias,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: CategoryEditorSelector(
+                alignment: WrapAlignment.start,
+                onSelected: (categories) {
+                  pickedCategories = categories;
+                },
+              ),
+            ),
+          ),
+          if (pickedSource != null && pickedSource!.appIdInferIsOptional)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: GeneratedForm(
+                key: const Key('inferAppIdIfOptional'),
+                outlinedInputFields: true,
+                prominentSectionHeaders: true,
+                wrapFormSectionsInCards: true,
+                items: [
+                  [
+                    GeneratedFormSwitch(
+                      'inferAppIdIfOptional',
+                      label: tr('tryInferAppIdFromCode'),
+                      defaultValue: inferAppIdIfOptional,
+                    ),
+                  ],
+                ],
+                onValueChanges: (values, valid, isBuilding) {
+                  if (!isBuilding) {
+                    setState(() {
+                      inferAppIdIfOptional = values['inferAppIdIfOptional'];
+                    });
+                  }
+                },
+              ),
+            ),
+          if (pickedSource != null && pickedSource!.enforceTrackOnly)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: GeneratedForm(
+                key: Key(
+                  '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}-appId',
+                ),
+                outlinedInputFields: true,
+                prominentSectionHeaders: true,
+                wrapFormSectionsInCards: true,
+                items: [
+                  [
+                    GeneratedFormTextField(
+                      'appId',
+                      label: '${tr('appId')} - ${tr('custom')}',
+                      required: false,
+                      additionalValidators: [
+                        (value) {
+                          if (value == null || value.isEmpty) {
+                            return null;
+                          }
+                          final isValid = RegExp(
+                            r'^([A-Za-z]{1}[A-Za-z\d_]*\.)+[A-Za-z][A-Za-z\d_]*$',
+                          ).hasMatch(value);
+                          if (!isValid) {
+                            return tr('invalidInput');
+                          }
+                          return null;
+                        },
+                      ],
+                    ),
+                  ],
+                ],
+                onValueChanges: (values, valid, isBuilding) {
+                  if (!isBuilding) {
+                    setState(() {
+                      additionalSettings['appId'] = values['appId'];
+                    });
+                  }
+                },
+              ),
+            ),
+        ],
+      );
+    }
 
     Widget getSourcesListWidget() => Padding(
       padding: const EdgeInsets.all(16),
@@ -775,7 +926,7 @@ class AddAppPageState extends State<AddAppPage> {
           CustomAppBar(title: tr('addApp')),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,

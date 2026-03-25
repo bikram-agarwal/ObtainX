@@ -497,6 +497,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                         ShizukuApkInstaller().checkPermission().then((
                                           resCode,
                                         ) {
+                                          if (!context.mounted) return;
                                           if (resCode!.startsWith('granted')) {
                                             settingsProvider.installerMode = 'shizuku';
                                           } else {
@@ -758,6 +759,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     IconButton(
                       onPressed: () {
                         context.read<LogsProvider>().get().then((logs) {
+                          if (!context.mounted) return;
                           if (logs.isEmpty) {
                             showMessage(ObtainiumError(tr('noLogs')), context);
                           } else {
@@ -853,6 +855,7 @@ class _LogsDialogState extends State<LogsDialog> {
                 null;
             if (cont) {
               logsProvider.clear();
+              if (!context.mounted) return;
               Navigator.of(context).pop();
             }
           },
@@ -866,7 +869,7 @@ class _LogsDialogState extends State<LogsDialog> {
         ),
         TextButton(
           onPressed: () {
-            Share.share(logString ?? '', subject: tr('appLogs'));
+            SharePlus.instance.share(ShareParams(text: logString ?? '', subject: tr('appLogs')));
             Navigator.of(context).pop();
           },
           child: Text(tr('share')),
@@ -997,58 +1000,64 @@ class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
               initialChildSize: 0.5,
               maxChildSize: 0.85,
               builder: (_, scrollController) {
-                return Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        tr('legacyInstallerSelect'),
-                        style: Theme.of(builderContext).textTheme.titleMedium,
+                return RadioGroup<String>(
+                  groupValue: selectedValue,
+                  onChanged: (String? value) {
+                    setSheetState(() => selectedValue = value);
+                    if (value != null) {
+                      final selected = _installerApps!.firstWhere(
+                        (a) => '${a.packageName}|${a.activityName}' == value,
+                      );
+                      widget.settingsProvider.legacyInstallerPackage =
+                          selected.packageName;
+                      widget.settingsProvider.legacyInstallerActivity =
+                          selected.activityName;
+                    }
+                    Navigator.pop(sheetContext);
+                  },
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          tr('legacyInstallerSelect'),
+                          style: Theme.of(builderContext).textTheme.titleMedium,
+                        ),
                       ),
-                    ),
-                    Expanded(
-                      child: ListView.builder(
-                        controller: scrollController,
-                        itemCount: _installerApps!.length,
-                        itemBuilder: (_, index) {
-                          final app = _installerApps![index];
-                          final radioValue = '${app.packageName}|${app.activityName}';
-                          return RadioListTile<String>(
-                            secondary: app.icon != null && app.icon!.isNotEmpty
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.memory(
-                                      app.icon!,
-                                      width: 40,
-                                      height: 40,
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (_, _, _) =>
-                                          const Icon(Icons.android, size: 40),
-                                    ),
-                                  )
-                                : const Icon(Icons.android, size: 40),
-                            title: Text(app.label),
-                            subtitle: Text(
-                              app.packageName,
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            value: radioValue,
-                            groupValue: selectedValue,
-                            onChanged: (value) {
-                              setSheetState(() => selectedValue = value);
-                              if (value != null) {
-                                widget.settingsProvider.legacyInstallerPackage =
-                                    app.packageName;
-                                widget.settingsProvider.legacyInstallerActivity =
-                                    app.activityName;
-                              }
-                              Navigator.pop(sheetContext);
-                            },
-                          );
-                        },
+                      Expanded(
+                        child: ListView.builder(
+                          controller: scrollController,
+                          itemCount: _installerApps!.length,
+                          itemBuilder: (_, index) {
+                            final app = _installerApps![index];
+                            final radioValue =
+                                '${app.packageName}|${app.activityName}';
+                            return RadioListTile<String>(
+                              secondary: app.icon != null && app.icon!.isNotEmpty
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.memory(
+                                        app.icon!,
+                                        width: 40,
+                                        height: 40,
+                                        fit: BoxFit.contain,
+                                        errorBuilder: (_, _, _) =>
+                                            const Icon(Icons.android, size: 40),
+                                      ),
+                                    )
+                                  : const Icon(Icons.android, size: 40),
+                              title: Text(app.label),
+                              subtitle: Text(
+                                app.packageName,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              value: radioValue,
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               },
             );
