@@ -28,25 +28,15 @@ class GitHub extends AppSource {
         label: tr('githubPATLabel'),
         password: true,
         required: false,
-        belowWidgets: [
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              launchUrlString(
-                'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token',
-                mode: LaunchMode.externalApplication,
-              );
-            },
-            child: Text(
-              tr('about'),
-              style: const TextStyle(
-                decoration: TextDecoration.underline,
-                fontSize: 12,
-              ),
-            ),
+        suffixIcon: IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.help_outline, size: 18),
+          onPressed: () => launchUrlString(
+            'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token',
+            mode: LaunchMode.externalApplication,
           ),
-          const SizedBox(height: 4),
-        ],
+          tooltip: tr('about'),
+        ),
       ),
       GeneratedFormTextField(
         'GHReqPrefix',
@@ -68,25 +58,15 @@ class GitHub extends AppSource {
             return null;
           },
         ],
-        belowWidgets: [
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              launchUrlString(
-                'https://github.com/sky22333/hubproxy',
-                mode: LaunchMode.externalApplication,
-              );
-            },
-            child: Text(
-              tr('about'),
-              style: const TextStyle(
-                decoration: TextDecoration.underline,
-                fontSize: 12,
-              ),
-            ),
+        suffixIcon: IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.help_outline, size: 18),
+          onPressed: () => launchUrlString(
+            'https://github.com/sky22333/hubproxy',
+            mode: LaunchMode.externalApplication,
           ),
-          const SizedBox(height: 4),
-        ],
+          tooltip: tr('about'),
+        ),
       ),
     ];
 

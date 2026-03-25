@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/version_regex_assist_dialog.dart';
@@ -17,6 +18,7 @@ import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
+import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -717,6 +719,32 @@ class AddAppPageState extends State<AddAppPage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (pickedSource != null && pickedSource!.appIdInferIsOptional)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: GeneratedForm(
+                key: const Key('inferAppIdIfOptional'),
+                outlinedInputFields: true,
+                prominentSectionHeaders: true,
+                wrapFormSectionsInCards: true,
+                items: [
+                  [
+                    GeneratedFormSwitch(
+                      'inferAppIdIfOptional',
+                      label: tr('tryInferAppIdFromCode'),
+                      defaultValue: inferAppIdIfOptional,
+                    ),
+                  ],
+                ],
+                onValueChanges: (values, valid, isBuilding) {
+                  if (!isBuilding) {
+                    setState(() {
+                      inferAppIdIfOptional = values['inferAppIdIfOptional'];
+                    });
+                  }
+                },
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
@@ -751,45 +779,33 @@ class AddAppPageState extends State<AddAppPage> {
               }
             },
           ),
-          Card(
-            margin: const EdgeInsets.only(top: 12),
-            clipBehavior: Clip.antiAlias,
+          Container(
+            margin: const EdgeInsets.only(top: 8, bottom: 8),
+            decoration: appPageSectionCardDecoration(context),
             child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: CategoryEditorSelector(
-                alignment: WrapAlignment.start,
-                onSelected: (categories) {
-                  pickedCategories = categories;
-                },
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 6),
+                    child: appPageCardSectionHeaderLabel(
+                      context,
+                      tr('categories'),
+                    ),
+                  ),
+                  CategoryEditorSelector(
+                    alignment: WrapAlignment.start,
+                    showLabelWhenNotEmpty: false,
+                    onSelected: (categories) {
+                      pickedCategories = categories;
+                    },
+                  ),
+                ],
               ),
             ),
           ),
-          if (pickedSource != null && pickedSource!.appIdInferIsOptional)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: GeneratedForm(
-                key: const Key('inferAppIdIfOptional'),
-                outlinedInputFields: true,
-                prominentSectionHeaders: true,
-                wrapFormSectionsInCards: true,
-                items: [
-                  [
-                    GeneratedFormSwitch(
-                      'inferAppIdIfOptional',
-                      label: tr('tryInferAppIdFromCode'),
-                      defaultValue: inferAppIdIfOptional,
-                    ),
-                  ],
-                ],
-                onValueChanges: (values, valid, isBuilding) {
-                  if (!isBuilding) {
-                    setState(() {
-                      inferAppIdIfOptional = values['inferAppIdIfOptional'];
-                    });
-                  }
-                },
-              ),
-            ),
           if (pickedSource != null && pickedSource!.enforceTrackOnly)
             Padding(
               padding: const EdgeInsets.only(top: 12),

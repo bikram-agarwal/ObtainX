@@ -789,8 +789,8 @@ class _SelectionModalState extends State<SelectionModal> {
     final Widget? filterFormWidget = widget.showFilterField
         ? GeneratedForm(
             outlinedInputFields: true,
-            prominentSectionHeaders: true,
-            wrapFormSectionsInCards: true,
+            prominentSectionHeaders: false,
+            wrapFormSectionsInCards: false,
             items: [
               [
                 GeneratedFormTextField(
@@ -983,23 +983,8 @@ class _SelectionModalState extends State<SelectionModal> {
       final ColorScheme colorScheme = Theme.of(context).colorScheme;
       final double screenHeight = MediaQuery.sizeOf(context).height;
       final EdgeInsets viewPadding = MediaQuery.paddingOf(context);
-      // Leave padding below the status bar; let the list scroll in the remaining space.
-      const double sheetChromeBelowListEstimate = 200;
-      final double areaBelowStatusBar =
-          screenHeight - viewPadding.top - 16;
-      final double maxListHeight = (areaBelowStatusBar -
-              sheetChromeBelowListEstimate)
-          .clamp(120.0, areaBelowStatusBar);
-      final Widget tileSection = ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxListHeight),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: entryTileWidgets,
-          ),
-        ),
-      );
+      // Max height for the sheet column — from just below the status bar.
+      final double areaBelowStatusBar = screenHeight - viewPadding.top - 16;
 
       void popWithSelectedKeys() {
         Navigator.of(context).pop(
@@ -1130,38 +1115,49 @@ class _SelectionModalState extends State<SelectionModal> {
           bottom: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: colorScheme.outlineVariant,
-                      borderRadius: BorderRadius.circular(2),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: areaBelowStatusBar),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: colorScheme.outlineVariant,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    widget.title ?? tr('pick'),
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      widget.title ?? tr('pick'),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
                   ),
-                ),
-                if (filterFormWidget != null) ...[
-                  filterFormWidget,
-                  const SizedBox(height: 8),
+                  if (filterFormWidget != null) ...[
+                    filterFormWidget,
+                    const SizedBox(height: 8),
+                  ],
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: entryTileWidgets,
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  sheetIconBar(),
                 ],
-                tileSection,
-                const Divider(height: 1),
-                sheetIconBar(),
-              ],
+              ),
             ),
           ),
         ),

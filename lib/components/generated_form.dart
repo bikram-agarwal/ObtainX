@@ -36,6 +36,7 @@ class GeneratedFormTextField extends GeneratedFormItem {
   late TextInputType? textInputType;
   late List<String>? autoCompleteOptions;
   GeneratedFormTextFieldAssist? assistAction;
+  Widget? suffixIcon;
 
   GeneratedFormTextField(
     super.key, {
@@ -50,6 +51,7 @@ class GeneratedFormTextField extends GeneratedFormItem {
     this.textInputType,
     this.autoCompleteOptions,
     this.assistAction,
+    this.suffixIcon,
   });
 
   @override
@@ -72,6 +74,7 @@ class GeneratedFormTextField extends GeneratedFormItem {
       textInputType: textInputType,
       autoCompleteOptions: autoCompleteOptions,
       assistAction: assistAction,
+      suffixIcon: suffixIcon,
     );
   }
 }
@@ -570,18 +573,19 @@ class _GeneratedFormState extends State<GeneratedForm> {
                   });
                 },
                 decoration: baseDecoration.copyWith(
-                  suffixIcon: formItem.assistAction == null
-                      ? null
-                      : IconButton(
-                          tooltip: tr('regexAssistTooltip'),
-                          icon: const Icon(Icons.auto_fix_high_outlined),
-                          onPressed: () async {
-                            await formItem.assistAction!(
-                              context,
-                              formState.applyTextFieldPatches,
-                            );
-                          },
-                        ),
+                  suffixIcon: formItem.suffixIcon ??
+                      (formItem.assistAction == null
+                          ? null
+                          : IconButton(
+                              tooltip: tr('regexAssistTooltip'),
+                              icon: const Icon(Icons.auto_fix_high_outlined),
+                              onPressed: () async {
+                                await formItem.assistAction!(
+                                  context,
+                                  formState.applyTextFieldPatches,
+                                );
+                              },
+                            )),
                 ),
                 minLines: formItem.max <= 1 ? null : formItem.max,
                 maxLines: formItem.max <= 1 ? 1 : formItem.max,

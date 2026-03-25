@@ -5,7 +5,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:material_symbols_icons/symbols.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -968,7 +967,10 @@ class _AppPageState extends State<AppPage> {
           url,
           mode: LaunchMode.externalApplication,
         ),
-        onLongPress: () => _toastUrl(url),
+        onLongPress: () {
+          _toastUrl(url);
+          Clipboard.setData(ClipboardData(text: url));
+        },
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
@@ -1536,7 +1538,7 @@ class _AppPageState extends State<AppPage> {
           stripeColor = pageTheme.colorScheme.surfaceContainerHigh;
           stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
           stripeLabel = tr('effectivelyEqual');
-          verdictIcon = Symbols.balance;
+          verdictIcon = Icons.balance;
         } else if (installed && versionOrderUnclearState) {
           stripeColor = pageTheme.colorScheme.surfaceContainerHighest;
           stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
@@ -1561,7 +1563,7 @@ class _AppPageState extends State<AppPage> {
           stripeColor = pageTheme.colorScheme.secondaryContainer;
           stripeTextColor = pageTheme.colorScheme.onSecondaryContainer;
           stripeLabel = tr('updateAvailable');
-          verdictIcon = Symbols.release_alert;
+          verdictIcon = Icons.new_releases_rounded;
         }
         if (stripeLabel != null && verdictIcon != null) {
           // A — trailing icon in the stripe.

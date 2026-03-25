@@ -25,25 +25,15 @@ class GitLab extends AppSource {
         label: tr('gitlabPATLabel'),
         password: true,
         required: false,
-        belowWidgets: [
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              launchUrlString(
-                'https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html#create-a-personal-access-token',
-                mode: LaunchMode.externalApplication,
-              );
-            },
-            child: Text(
-              tr('about'),
-              style: const TextStyle(
-                decoration: TextDecoration.underline,
-                fontSize: 12,
-              ),
-            ),
+        suffixIcon: IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.help_outline, size: 18),
+          onPressed: () => launchUrlString(
+            'https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html#create-a-personal-access-token',
+            mode: LaunchMode.externalApplication,
           ),
-          const SizedBox(height: 4),
-        ],
+          tooltip: tr('about'),
+        ),
       ),
     ];
 
