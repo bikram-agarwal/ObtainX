@@ -1,9 +1,22 @@
+### UI Comparisons (Original vs. My Fork)
+| Feature | Original Obtainium | My Fork | Differences |
+| :---: | :---: | :---: | :--- |
+| Apps List |<img alt="Apps - Obtainium" src="https://github.com/user-attachments/assets/a3155b9e-3c7c-4b63-86cb-fc5cff5b4a73" width="300"> | <img alt="Apps - ObtainX" src="https://github.com/user-attachments/assets/e645a8d4-43c2-42e4-b8e5-9535e1583fc2" width="300"> | • Card UI for each category<br>• More group options - by source, non-installed separate<br>• Search at top right, expands to full bar, does live filtering<br>• Each app card supports configurable swipe gesture for edit, update, delete, pin etc<br>• Dynamic buttons in action bar, appear only when applicable. |
+| Filters |<img alt="Filter - Obtainium" src="https://github.com/user-attachments/assets/7447bb28-9b5b-4bc6-b55e-5000fd82777f" width="300"> | <img alt="Filter - ObtainX" src="https://github.com/user-attachments/assets/68555868-d09c-45ec-afae-d7a3f1cf531d" width="300"> | • Live search / filters. Apps filter as you type.<br>• Keeps screen behind visible. |
+| Themes & App Grouping |<img alt="View - Obtainium" src="https://github.com/user-attachments/assets/2b2e0fea-d7fe-4baf-a6b4-a0d060a8d9a9" width="300"> | <img alt="View - ObtainX" src="https://github.com/user-attachments/assets/32406af8-d917-47bf-9bb8-e7cf388ceb2f" width="300"> | • Instead of settings, all theme and view options are on the Apps tab itself, right where you need them. 
+| App Page |<img alt="App AICore - Obtainium" src="https://github.com/user-attachments/assets/9658c03c-2f3f-4405-a17b-de7a96536b24" width="300"> | <img alt="App AICore - ObtainX" src="https://github.com/user-attachments/assets/bb253ce1-90af-41a2-a286-e630e4186c80" width="300"> | • Fluid icon animation during page transition.<br>• Dynamic page color from app icon<br>• Information grouped into separate boxes for easier parsing.<br>• Clear version compare verdict at card header. Emphesised via watermark too. <br>• Additional nuanced verdicts than just update or no update.<br>• Miliseconds, microsends removed from timestamps.<br>• Linked to other stores where the app is / may be available. <br>• Only assigned categories shown, to not crowd the screen. <br>• Cert hash removed. <br>• Slick bottom bar with evenly spaced action buttons. <br>• Let's you "Skip version", instead of falsely "Mark updated".<br>• Live edit the page. 
+| Add Apps |<img alt="Add App 1 - Obtainium" src="https://github.com/user-attachments/assets/cf630d89-e4c9-4bb6-8a7e-bbc96c1c05af" width="300"> | <img alt="Add App 1 - ObtainX" src="https://github.com/user-attachments/assets/3712cbd3-1537-4ca6-a0c2-5a35d20d4d56" width="300"> | • Clearly distinguishable full-bordered text boxes for url and search term. <br>• Modern material UI buttons and toggles, instead of checkboxes and text buttons. <br>• Bottom sheet modal for store selection. 
+| Add Apps |<img alt="Add App 2 - Obtainium" src="https://github.com/user-attachments/assets/b187f6a3-1776-4d15-b9d4-21ea3b060d56" width="300"> | <img alt="Add App 2 - ObtainX" src="https://github.com/user-attachments/assets/597487a0-0c65-41a4-ac88-9057a55504ea" width="300"> | • Wider result sheet showing more results per scroll.<br>• Clearly distinguishable full-bordered text box for filter. 
+| Add Apps |<img alt="Add App 3 - Obtainium" src="https://github.com/user-attachments/assets/6fff2569-44f5-4bdb-902f-ce5e1121d21b" width="300"> | <img alt="Add App 3 - ObtainX" src="https://github.com/user-attachments/assets/0d728fbc-903a-404b-b59f-e4a60db22bf2" width="300"> | • Different options logically grouped and presented in separate boxes. 
+| Settings |<img alt="Settings - Obtainium" src="https://github.com/user-attachments/assets/4ba8a63b-8aaf-4fc2-a447-14e119199148" width="300"> | <img alt="Settings - ObtainX" src="https://github.com/user-attachments/assets/ce459dc9-ddc3-4786-a1be-d0dc9092fdf3" width="300"> | • All settings logically grouped and placed in separate cards for easy parsing. <br>• Material 3 Expressive sliders.   
 
-<details>
-  <summary><b>Click to see UI Comparisons (Original vs. My Fork)</b></summary>
+### Different App Statuses
+| Up to Date | Update Available | Device has Higher Version | Same Version Different Label | Version Diff Not Clear |
+| :---: | :---: | :---: | :---: | :---: |
+| <img alt="App - Up to date" src="https://github.com/user-attachments/assets/a81501c6-4eda-41e6-92fb-8a6314ad832c" width="300"> | <img alt="App - Update" src="https://github.com/user-attachments/assets/61af40a9-4a0a-45c5-a96f-30b96dbd0043" width="300"> | <img alt="App - Newer on Device" src="https://github.com/user-attachments/assets/afc2cff9-934b-42e3-83bc-2493fb03d0e1" width="300"> | <img alt="App - Different Label 2" src="https://github.com/user-attachments/assets/6b0ebf32-2cd2-4606-8af8-2adf74e04906" width="300"> | <img alt="App - Unclear" src="https://github.com/user-attachments/assets/94c944f9-3f6a-4ab7-8511-74466dbc13eb" width="300"> | 
 
-  | Feature | Original Obtainium | My Fork |
-  | :---: | :---: | :---: |
-  | Apps List |<img src="URL_HERE" width="300"> | <img src="URL_HERE" width="300"> |
+### Bulk Add Apps 
+TBD
 
-</details>
+### Extra Features
+TBD
