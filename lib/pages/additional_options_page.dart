@@ -474,7 +474,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         ),
         floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
         body: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 112),
+          padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           child: GeneratedForm(
             items: _items,

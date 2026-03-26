@@ -1,43 +1,77 @@
 # ![ObtainX icon](./assets/graphics/icon_small.png) ObtainX
 
-## Extra features in ObtainX
+ObtainX builds on everything Obtainium does well — same sources, same trust model, same spirit — with a reworked UI and a set of features aimed at making everyday use a little smoother. For a side-by-side comparison with screenshots, see [ObtainX vs Obtainium](./docs/Difference_with_Obtainium.md).
 
-ObtainX is a fork of Obtainium. These are the extra features you get in this fork:
+---
 
-- **📦 Installer choice** - Added a **Third-Party** install path. It sends APKs to any installer you choose (e.g. InstallerX, App Manager). Useful when you cannot grant "install unknown apps" to normal apps (e.g. when _Advanced Protection_ is enabled) but a privileged installer can still do the job.
+## ✨ New Features
 
-- **🎨 Material 3 Expressive Makeover** - Different parts of the app has been overhauled with Material 3 Expressive design, with grouping in cards, slide up panels, fluid animations, expressive buttons, auto-hide menu bars, and visual consistency tweaks. 
+Features that don't exist in Obtainium at all.
 
-- **🎨 Per-app color theming** - Each app's detail page derives its entire color scheme from the app's own icon. Enable *Match app page to icon colors* in Settings to see every app rendered in its own palette - deep, accurate, and dark-mode-safe.
+- **📥 Bulk Import from Device** — Select any apps already on your phone and ObtainX automatically finds their sources on stores you choose. No URL hunting, one by one.
 
-- **🖼️ Custom app icons** - Not happy with an app's icon or a blank placeholder? Tap the icon on any app's detail page to set your own - pick from your gallery or grab one from the web.
+- **📦 Installer choice** — A **Third-Party** install path lets you send APKs to any installer you trust (InstallerX, App Manager, etc.). Particularly useful when you can't grant "install unknown apps" to normal apps — for example, under _Advanced Protection_ — but a privileged installer can still do the job.
 
-- **👆 Configurable swipe gestures** - Left and right swipe actions are independently configurable. Choose from Update, Install, Pin, Edit, Delete, Open, App Info, or None. A color-coded icon hint appears during the drag so you always know what will happen.
+- **🕐 On-Demand Only mode** — Mark an app so it's hidden from the main list and only checked when you explicitly open it. Keeps your main list clean if you have apps you rarely update.
 
-- **🔍 Collapsible inline search** - A search icon sits next to the **Apps** header. Tap it and a full-width search field slides open with the keyboard ready. See the app list filter live while you type. 
+- **👆 Configurable swipe gestures** — Left and right swipe actions are independently configurable per row. Choose from Update, Install, Pin, Edit, Delete, Open, App Info, or None. A color-coded icon hint appears during the drag so you always know what will happen.
 
-- **🔖 Active filter chips** - A pinned row of dismissible chips lives just below the toolbar, showing every active non-text filter (category, pinned, installed state, etc.). Tap any chip to instantly clear that filter. The row disappears entirely when nothing is filtered.
+- **🖼️ Custom app icons** — Not happy with an app's icon or a blank placeholder? Tap the icon on any app's detail page to set your own — pick from your gallery or grab one from the web.
 
-- **🏷️ Source favicon badges** - Every app row shows a tiny favicon badge identifying where the app comes from - GitHub, GitLab, F-Droid, APKMirror, and more - without opening the app.
+- **⏭️ Skip Version** — Pass on a specific release you don't want without marking the app as "updated." The next release will still show up normally.
 
-- **↩️ Reliable undo after delete** - Swipe-to-delete and bulk-delete both show a 5-second **Undo** snackbar. Tap it and the app is fully restored.
+- **🧩 RegEx Assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required.
 
-- **🏪 Check other sources** - Other store shortcut chips on the app page.
-
-- **🔭 Better handling of Track-only sources (e.g. APKMirror)** 
-  - Shows the installed version from the device when the package ID is known. 
-  - New **Update** button opens the concrete release page, not just the app listing. 
-  - Fewer wrong package IDs when adding from APKMirror. 
-  - If the installed version cannot be determined, a dedicated section explains why and lets you **fix the package ID** from the app page.
+- **↩️ Undo after delete** — Swipe-to-delete and bulk-delete both show a 5-second **Undo** snackbar. Tap it and the app is fully restored.
 
 
-- **🧠 Smarter version handling** - Fewer false "update available" / "up to date" states when your installed build and the source label differ in harmless ways (including dev vs release labels).
+---
+
+## 🔧 Enhanced Features
+
+Features Obtainium has, extended or improved here.
+
+- **🏪 APKMirror updates** — In Obtainium, the update button is completely disabled for APKMirror apps. ObtainX enables it and takes you directly to the specific release page for the new version. (Bulk Import is also supported.)
+
+- **🧠 Smarter version status** — Five distinct states instead of a binary "update / up to date" pair: *up to date*, *update available*, *device is ahead*, *same version shown differently*, and *genuinely unclear*. Fewer false alerts; honest status when things are ambiguous.
+
+- **🎯 Add App — three paths, one screen** — URL, Search, and From Device are all on one screen under a segmented control. Search results load inline alongside store chips — no floating sheets, no separate screens. New searches can be started without needing to go back-n-forth. 
+
+- **🔭 Track-only source improvements** — Shows installed version from the device when the package ID is known. The Update button opens the concrete release page, not just the app listing. In Obtainium, if the wrong package ID is fetched (or none at all), the app shows as "not installed" forever and update notifications never work right — with no way to fix it. ObtainX surfaces this clearly and lets you **edit the package ID directly from the app page**, instantly restoring correct install detection and update tracking.
+
+- **🔖 Active filter chips** — Extends Obtainium's filter with dismissible chips pinned below the toolbar showing every active non-text filter (category, pinned, installed state, etc.). Tap any chip to clear just that filter. The row disappears entirely when nothing is active.
+
+---
+
+## 🎨 UI & UX
+
+- **Material 3 Expressive throughout** — Full M3 Expressive treatment across every screen: cards, fluid animations, expressive sliders, and controls that feel like one product.
+
+- **Per-app color theming** — Each app's detail page derives its color scheme from the app's own icon. Deep, accurate, and dark-mode safe. Toggle *Match app page to icon colors* in Settings.
+
+- **Hero icon transition** — Tapping an app row animates its icon smoothly into the detail page. Swipe back and it returns the same way.
+
+- **Richer app list grouping** — New: group by source; non-installed apps split into their own section. Category cards give the list structure at a glance.
+
+- **🏷️ Source favicon badges** — Every app row shows a small favicon identifying where it's tracked — GitHub, GitLab, F-Droid, APKMirror, and more — without opening the app.
+
+- **Inline collapsible search** — A search icon sits in the Apps header. Tap it and a full-width field slides open with the keyboard ready and the list filtering live as you type.
+
+- **Inline edit on detail page** — Edit an app's tracking settings directly from its detail page. An unsaved-changes guard prevents accidental data loss on back.
+
+- **Theme & view controls on Apps tab** — Density, sort order, and visual theme live on the Apps tab itself so you can tune the list and see the result immediately.
+
+- **Auto-hide nav bars** — Navigation bars step out of the way when you're focused on content.
+
+- **Settings and form options in cards** — Related settings and per-app options are grouped into labeled cards. Much easier to scan than a single wall of options.
+
+---
 
 ## Screenshots
-| <img src="./assets/screenshots/1.apps.webp" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.webp" alt="Themes and View Options" /> | <img src="./assets/screenshots/3.filters.webp" alt="Live Filters" /> | 
-| ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | 
-| <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.edit.webp" alt="Editing App Details" /> | <img src="./assets/screenshots/6.options.webp" alt="Additional Options with RegEx Helper" /> | 
-| <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> |  | 
+| <img src="./assets/screenshots/1.apps.webp" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.webp" alt="Themes and View Options" /> | <img src="./assets/screenshots/3.filters.webp" alt="Live Filters" /> |
+| ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.edit.webp" alt="Editing App Details" /> | <img src="./assets/screenshots/6.options.webp" alt="Additional Options with RegEx Helper" /> |
+| <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> | <img src="./assets/screenshots/9.bulk_add.webp" alt="Bulk Import from Device" /> |
 
 ## Screenrecords
 

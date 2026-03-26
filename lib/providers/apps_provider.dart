@@ -2088,7 +2088,7 @@ class AppsProvider with ChangeNotifier {
               } catch (err) {
                 if (err is FormatException) {
                   logs.add(
-                    'Corrupt JSON when loading App (will be ignored): $e',
+                    'Corrupt JSON when loading App (will be ignored): $err',
                   );
                   item.renameSync('${item.path}.corrupt');
                 } else {
@@ -2108,7 +2108,6 @@ class AppsProvider with ChangeNotifier {
                 ),
                 ifAbsent: () => AppInMemory(app!, null, null, null),
               );
-              notifyListeners();
               try {
                 // Try getting the app's source to ensure no invalid apps get loaded
                 sp.getSource(app.url, overrideSource: app.overrideSource);
@@ -2144,7 +2143,6 @@ class AppsProvider with ChangeNotifier {
                   ),
                   ifAbsent: () => AppInMemory(app!, null, installedInfo, null),
                 );
-                notifyListeners();
               } catch (e) {
                 errors.add([app!.id, app.finalName, e.toString()]);
               }

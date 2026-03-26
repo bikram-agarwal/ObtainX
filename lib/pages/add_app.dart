@@ -16,6 +16,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:provider/provider.dart';
@@ -959,7 +960,23 @@ class AddAppPageState extends State<AddAppPage> {
         children: searchableSources.map((source) {
           final selected = searchSelectedStores.contains(source.name);
           return FilterChip(
-            label: Text(source.name),
+            avatar: source.hosts.isNotEmpty
+                ? StoreSourceChipAvatar(
+                    host: source.hosts.first,
+                    size: 16,
+                  )
+                : null,
+            showCheckmark: false,
+            label: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(source.name),
+                if (selected) ...[
+                  const SizedBox(width: 4),
+                  const Icon(Icons.check_rounded, size: 14),
+                ],
+              ],
+            ),
             selected: selected,
             onSelected: (value) {
               setState(() {
@@ -968,7 +985,6 @@ class AddAppPageState extends State<AddAppPage> {
                 } else {
                   searchSelectedStores.remove(source.name);
                 }
-                // Persist the updated deselection list
                 settingsProvider.searchDeselected = searchableSources
                     .map((s) => s.name)
                     .where((n) => !searchSelectedStores.contains(n))

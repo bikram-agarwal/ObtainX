@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:android_package_manager/android_package_manager.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:obtainium/app_sources/github.dart';
 
@@ -14,13 +14,31 @@ class InstalledAppInfo {
   final String name;
   final Uint8List? icon;
   final bool isSystemApp;
+  // Path to the APK on the device — used to identify non-replaceable system apps.
+  final String? sourceDir;
 
   InstalledAppInfo({
     required this.packageName,
     required this.name,
     this.icon,
     required this.isSystemApp,
+    this.sourceDir,
   });
+
+  /// True when this system app lives in a privileged or vendor partition that
+  /// third-party stores never supply APKs for (priv-app, framework, vendor,
+  /// odm, etc.). Apps with FLAG_UPDATED_SYSTEM_APP are always considered
+  /// replaceable even if their sourceDir says otherwise.
+  bool get isLikelyNonReplaceable {
+    if (!isSystemApp) return false;
+    final dir = sourceDir;
+    if (dir == null) return false;
+    return dir.contains('/priv-app/') ||
+        dir.contains('/framework/') ||
+        dir.startsWith('/vendor/') ||
+        dir.startsWith('/odm/') ||
+        dir.startsWith('/oem/');
+  }
 }
 
 class BulkImportService {
@@ -31,41 +49,48 @@ class BulkImportService {
     bool includeSystem = false,
     bool includeUser = true,
   }) async {
+    // No flags: avoids expensive disk I/O (e.g. getSigningCertificates reads
+    // every APK's signing block). applicationInfo is populated by default.
     final packages =
-        await _pm.getInstalledPackages(
-          flags: PackageInfoFlags({PMFlag.getSigningCertificates}),
-        ) ??
-        [];
+        await _pm.getInstalledPackages(flags: PackageInfoFlags({})) ?? [];
 
-    final result = <InstalledAppInfo>[];
+    // Pre-filter before any async work.
+    final filtered = <dynamic>[];
     for (final pkg in packages) {
       final pkgName = pkg.packageName ?? '';
       if (pkgName.isEmpty) continue;
-      // Skip ObtainX itself
       if (pkgName == 'dev.imranr.obtainium') continue;
-
       final appFlags = pkg.applicationInfo?.flags ?? 0;
       final isSystem =
           (appFlags & _flagSystem) != 0 ||
           (appFlags & _flagUpdatedSystemApp) != 0;
-
       if (isSystem && !includeSystem) continue;
       if (!isSystem && !includeUser) continue;
+      filtered.add(pkg);
+    }
 
-      final name =
+    // Fetch all app labels concurrently instead of sequentially.
+    final names = await Future.wait(
+      filtered.map((pkg) async =>
           await pkg.applicationInfo?.getAppLabel() ??
           pkg.applicationInfo?.processName ??
-          pkgName;
+          (pkg.packageName as String)),
+    );
 
-      result.add(
+    final result = <InstalledAppInfo>[
+      for (int i = 0; i < filtered.length; i++)
         InstalledAppInfo(
-          packageName: pkgName,
-          name: name,
-          icon: null, // Icons loaded lazily per-row
-          isSystemApp: isSystem,
+          packageName: filtered[i].packageName as String,
+          name: names[i],
+          icon: null,
+          isSystemApp:
+              ((filtered[i].applicationInfo?.flags ?? 0) & _flagSystem) != 0 ||
+              ((filtered[i].applicationInfo?.flags ?? 0) &
+                      _flagUpdatedSystemApp) !=
+                  0,
+          sourceDir: filtered[i].applicationInfo?.sourceDir,
         ),
-      );
-    }
+    ];
 
     result.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return result;
@@ -166,14 +191,10 @@ class BulkImportService {
             result.putIfAbsent(pkg, () => null);
           }
         } else {
-          for (final pkg in batch) {
-            result[pkg] = null;
-          }
+          // Non-200 (rate limit, server error, etc.) — don't cache; retry next scan.
         }
       } catch (_) {
-        for (final pkg in batch) {
-          result[pkg] = null;
-        }
+        // Network error or timeout — don't cache; retry next scan.
       }
       reportProgress();
       if (shouldAbort?.call() == true) {
@@ -187,7 +208,8 @@ class BulkImportService {
     return result;
   }
 
-  /// Checks APKPure for a list of package names.
+  /// Checks APKPure for a list of package names using the same per-app endpoint
+  /// that the APKPure app source uses (tapi.pureapk.com/v3/get_app_his_version).
   /// Returns a map of packageName -> apkpure URL (null if not found).
   static Future<Map<String, String?>> checkApkPure(
     List<String> packageNames, {
@@ -219,100 +241,54 @@ class BulkImportService {
       return result;
     }
 
-    const batchSize = 50;
-    final rng = Random();
+    // Same endpoint the APKPure app source uses — known to work.
+    const int concurrency = 10;
+    const headers = {
+      'Ual-Access-Businessid': 'projecta',
+      'Ual-Access-ProjectA': '{"device_info":{"os_ver":"30"}}',
+      'User-Agent': 'APKPure/3.19.39 (Aegon)',
+    };
 
-    for (int i = 0; i < toQuery.length; i += batchSize) {
-      if (shouldAbort?.call() == true) {
-        return result;
-      }
-      final batch = toQuery.sublist(
-        i,
-        min(i + batchSize, toQuery.length),
-      );
-      try {
-        // Random device ID to avoid rate limiting (mirrors APKUpdater approach)
-        final androidId =
-            rng.nextInt(0xFFFFFFFF).toRadixString(16).padLeft(8, '0') +
-            rng.nextInt(0xFFFFFFFF).toRadixString(16).padLeft(8, '0');
+    for (int i = 0; i < toQuery.length; i += concurrency) {
+      if (shouldAbort?.call() == true) return result;
+      final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
+      await Future.wait(chunk.map((pkg) async {
+        try {
+          final response = await http
+              .get(
+                Uri.parse(
+                  'https://tapi.pureapk.com/v3/get_app_his_version'
+                  '?package_name=$pkg&hl=en',
+                ),
+                headers: headers,
+              )
+              .timeout(const Duration(seconds: 15));
 
-        final deviceInfo = jsonEncode({
-          'abis': ['arm64-v8a', 'armeabi-v7a', 'armeabi'],
-          'android_id': androidId,
-          'os_ver': '30',
-          'os_ver_name': '11',
-          'platform': 1,
-          'screen_height': 2400,
-          'screen_width': 1080,
-        });
-
-        final appInfoList = batch
-            .map((pkg) => {'package_name': pkg, 'version_code': 0})
-            .toList();
-
-        final response = await http
-            .post(
-              Uri.parse('https://api.pureapk.com/v3/get_app_update'),
-              headers: {
-                'content-type': 'application/json',
-                'ual-access-businessid': 'projecta',
-                'ual-access-projecta': deviceInfo,
-                'User-Agent': 'APKPure/3.19.39 (Aegon)',
-              },
-              body: jsonEncode({
-                'app_info_for_update': appInfoList,
-                'android_id': androidId,
-                'application_id': 'com.apkpure.aegon',
-                'cached_size': -1,
-              }),
-            )
-            .timeout(const Duration(seconds: 30));
-
-        if (response.statusCode == 200) {
-          final body = jsonDecode(response.body);
-          // Handle both List and wrapped object responses
-          List<dynamic> apps;
-          if (body is List) {
-            apps = body;
-          } else if (body is Map && body.containsKey('data')) {
-            apps = body['data'] as List? ?? [];
-          } else {
-            apps = [];
-          }
-
-          final foundPackages = <String>{};
-          for (final app in apps) {
-            final pname = app['package_name'] as String?;
-            final label = app['label'] as String?;
-            if (pname != null && label != null && label.isNotEmpty) {
-              final slug = _slugify(label);
-              result[pname] = 'https://apkpure.net/$slug/$pname';
-              foundPackages.add(pname);
-            } else if (pname != null) {
-              result[pname] = null;
-              foundPackages.add(pname);
+          if (response.statusCode == 200) {
+            final body = jsonDecode(response.body);
+            final List<dynamic> versions = body is Map
+                ? (body['version_list'] as List? ?? [])
+                : [];
+            if (versions.isNotEmpty) {
+              final first = versions.first;
+              final appName =
+                  first is Map ? (first['title'] as String? ?? '') : '';
+              result[pkg] = appName.isNotEmpty
+                  ? 'https://apkpure.net/${_slugify(appName)}/$pkg'
+                  : 'https://apkpure.net/$pkg';
+            } else {
+              result[pkg] = null;
             }
+          } else {
+            // Non-200 — don't cache; retry next scan.
           }
-          for (final pkg in batch) {
-            result.putIfAbsent(pkg, () => null);
-          }
-        } else {
-          for (final pkg in batch) {
-            result[pkg] = null;
-          }
+        } catch (e) {
+          debugPrint('APKPure check failed for $pkg: $e');
+          // Network error or timeout — don't cache; retry next scan.
         }
-      } catch (_) {
-        for (final pkg in batch) {
-          result[pkg] = null;
-        }
-      }
-      reportProgress();
-      if (shouldAbort?.call() == true) {
-        return result;
-      }
-      if (i + batchSize < toQuery.length) {
-        await Future.delayed(const Duration(milliseconds: 300));
-      }
+        reportProgress();
+      }));
+      if (shouldAbort?.call() == true) return result;
     }
     return result;
   }
@@ -349,26 +325,30 @@ class BulkImportService {
       return result;
     }
 
-    for (final String pkg in toQuery) {
-      if (shouldAbort?.call() == true) {
-        return result;
-      }
-      try {
-        final response = await http
-            .get(
-              Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
-              headers: {'User-Agent': 'ObtainX/1.4.0'},
-            )
-            .timeout(const Duration(seconds: 10));
-        if (response.statusCode == 200) {
-          result[pkg] = 'https://f-droid.org/packages/$pkg/';
-        } else {
-          result[pkg] = null;
+    // F-Droid has no batch API but no rate limits either — run concurrently.
+    const int concurrency = 20;
+    for (int i = 0; i < toQuery.length; i += concurrency) {
+      if (shouldAbort?.call() == true) return result;
+      final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
+      await Future.wait(chunk.map((pkg) async {
+        try {
+          final response = await http
+              .get(
+                Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
+                headers: {'User-Agent': 'ObtainX/1.4.0'},
+              )
+              .timeout(const Duration(seconds: 10));
+          if (response.statusCode == 200) {
+            result[pkg] = 'https://f-droid.org/packages/$pkg/';
+          } else if (response.statusCode == 404) {
+            result[pkg] = null; // Definitive: not in F-Droid.
+          }
+          // Other non-200 (rate limit, server error) — don't cache; retry next scan.
+        } catch (_) {
+          // Network error or timeout — don't cache; retry next scan.
         }
-      } catch (_) {
-        result[pkg] = null;
-      }
-      reportProgress();
+        reportProgress();
+      }));
     }
     return result;
   }
@@ -467,11 +447,10 @@ class BulkImportService {
           } else {
             result[pkg] = null;
           }
-        } else {
-          result[pkg] = null;
         }
+        // Non-200 (rate limit, server error) — don't cache; retry next scan.
       } catch (_) {
-        result[pkg] = null;
+        // Network error or timeout — don't cache; retry next scan.
       }
       reportProgress();
       if (!hasAuthToken) {

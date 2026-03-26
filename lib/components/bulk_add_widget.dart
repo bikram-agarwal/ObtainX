@@ -9,6 +9,7 @@ import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
@@ -42,7 +43,7 @@ class BulkFoundApp {
   }
 }
 
-enum BulkStep { config, selectApps, scanning, results }
+enum BulkStep { selectApps, scanning, results }
 
 /// An embeddable bulk-add flow widget.
 ///
@@ -63,15 +64,19 @@ class BulkAddWidget extends StatefulWidget {
 }
 
 class BulkAddWidgetState extends State<BulkAddWidget> {
-  BulkStep _step = BulkStep.config;
+  BulkStep _step = BulkStep.selectApps;
+  bool _firstBuild = true;
 
   // --- Config step ---
   BulkAppFilter _appFilter = BulkAppFilter.userOnly;
   final Set<String> _selectedStores = {'APKMirror', 'APKPure', 'F-Droid'};
   bool _excludeAlreadyTracked = true;
-  bool _deleteScanHistoryBeforeScan = false;
+  bool _excludeNonReplaceableSystem = true;
+  bool _clearCacheBeforeScan = false;
 
   // --- App selection step ---
+  // Full unfiltered list fetched once per session; filter applied in memory.
+  List<InstalledAppInfo> _allInstalledApps = [];
   List<InstalledAppInfo> _installedApps = [];
   bool _loadingApps = false;
   final Set<String> _selectedPackages = {};
@@ -106,15 +111,13 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   List<BulkFoundApp> _addedApps = [];
   List<BulkFoundApp> _failedApps = [];
   final Set<String> _selectedNewFoundPackages = {};
+  // Per-app source selection: package → store name. Empty = use bestStore default.
+  final Map<String, String> _selectedSources = {};
   List<InstalledAppInfo> _cancelledApps = [];
   bool _scanCancelRequested = false;
+  bool _addCancelRequested = false;
 
   late AppsProvider _appsProvider;
-
-  static const Color _summaryFoundGreen = Color(0xFF2E7D32);
-  static const Color _summaryNotFoundRed = Color(0xFFC62828);
-  static const Color _summaryAlreadyTrackedBlue = Color(0xFF1565C0);
-  static const Color _summaryCancelledGrey = Color(0xFF757575);
   static const List<String> _storeIconPriority = [
     'F-Droid',
     'APKPure',
@@ -130,9 +133,18 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _appsProvider = context.read<AppsProvider>();
+    if (_firstBuild) {
+      _firstBuild = false;
+      _proceedToAppList();
+    }
   }
 
   @override
@@ -141,124 +153,125 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     super.dispose();
   }
 
-  // ─── Config Step ─────────────────────────────────────────────────────────
+  // ─── Config Chip Rows (inline in select-apps step) ───────────────────────
 
-  Widget _buildConfigStep() {
+  // Row 1: app type (User / System / All)
+  Widget _buildAppTypeChipRow() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
         children: [
-          Text(
-            tr('appTypeFilter'),
-            style: Theme.of(context).textTheme.titleMedium,
+          FilterChip(
+            avatar: const Icon(Icons.person_rounded, size: 16),
+            showCheckmark: false,
+            label: Text(tr('userAppsOnly')),
+            selected: _appFilter == BulkAppFilter.userOnly,
+            onSelected: (_) {
+              setState(() => _appFilter = BulkAppFilter.userOnly);
+              _proceedToAppList();
+            },
           ),
-          const SizedBox(height: 12),
-          SegmentedButton<BulkAppFilter>(
-            segments: [
-              ButtonSegment(
-                value: BulkAppFilter.userOnly,
-                label: Text(tr('userAppsOnly')),
-                icon: const Icon(Icons.person_rounded),
-              ),
-              ButtonSegment(
-                value: BulkAppFilter.systemOnly,
-                label: Text(tr('systemAppsOnly')),
-                icon: const Icon(Icons.android_rounded),
-              ),
-              ButtonSegment(
-                value: BulkAppFilter.both,
-                label: Text(tr('allApps')),
-                icon: const Icon(Icons.apps_rounded),
-              ),
-            ],
-            selected: {_appFilter},
-            onSelectionChanged: (v) => setState(() => _appFilter = v.first),
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+          const SizedBox(width: 8),
+          FilterChip(
+            avatar: const Icon(Icons.android_rounded, size: 16),
+            showCheckmark: false,
+            label: Text(tr('systemAppsOnly')),
+            selected: _appFilter == BulkAppFilter.systemOnly,
+            onSelected: (_) {
+              setState(() => _appFilter = BulkAppFilter.systemOnly);
+              _proceedToAppList();
+            },
           ),
-          const SizedBox(height: 16),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(tr('excludeAlreadyTrackedApps')),
-            value: _excludeAlreadyTracked,
-            onChanged: (bool value) =>
-                setState(() => _excludeAlreadyTracked = value),
+          const SizedBox(width: 8),
+          FilterChip(
+            avatar: const Icon(Icons.apps_rounded, size: 16),
+            showCheckmark: false,
+            label: Text(tr('allApps')),
+            selected: _appFilter == BulkAppFilter.both,
+            onSelected: (_) {
+              setState(() => _appFilter = BulkAppFilter.both);
+              _proceedToAppList();
+            },
           ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(tr('deleteBulkScanHistory')),
-            subtitle: Text(
-              tr('deleteBulkScanHistorySubtitle'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            value: _deleteScanHistoryBeforeScan,
-            onChanged: (bool value) =>
-                setState(() => _deleteScanHistoryBeforeScan = value),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            tr('storesToSearch'),
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _configurableBulkStores.map((String store) {
-              final selected = _selectedStores.contains(store);
-              return SwitchListTile(
-                title: Text(store),
-                value: selected,
-                onChanged: (bool value) {
-                  setState(() {
-                    if (value) {
-                      _selectedStores.add(store);
-                    } else {
-                      _selectedStores.remove(store);
-                    }
-                  });
-                },
-                secondary: _storeLogo(store, size: 36),
-              );
-            }).toList(),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              tr('bulkScanCacheNote'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          if (_selectedStores.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                tr('selectAtLeastOneStore'),
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          const SizedBox(height: 32),
-          FilledButton.icon(
-            onPressed: _selectedStores.isEmpty ? null : _proceedToAppList,
-            icon: const Icon(Icons.arrow_forward_rounded),
-            label: Text(tr('next')),
-          ),
-          const SizedBox(height: 16),
         ],
       ),
     );
   }
 
-  String _appFilterChipLabel() {
-    return switch (_appFilter) {
-      BulkAppFilter.userOnly => tr('bulkAddChipUserApps'),
-      BulkAppFilter.systemOnly => tr('bulkAddChipSystemApps'),
-      BulkAppFilter.both => tr('bulkAddChipAllApps'),
-    };
+  // Row 2: store chips
+  Widget _buildStoreChipRow() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: _configurableBulkStores.map((store) {
+          final selected = _selectedStores.contains(store);
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilterChip(
+              avatar: StoreSourceChipAvatar(
+                host: _hostForBulkSourceBadge(store, ''),
+                size: 16,
+              ),
+              showCheckmark: false,
+              label: Text(store),
+              selected: selected,
+              onSelected: (v) {
+                setState(() {
+                  if (v) {
+                    _selectedStores.add(store);
+                  } else {
+                    _selectedStores.remove(store);
+                  }
+                });
+              },
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  // Row 3: clear cache + skip tracked + skip privileged (all as chips)
+  Widget _buildOptionsChipRow() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          FilterChip(
+            avatar: const Icon(Icons.delete_sweep_outlined, size: 16),
+            showCheckmark: false,
+            label: Text(tr('deleteBulkScanHistory')),
+            selected: _clearCacheBeforeScan,
+            onSelected: (v) => setState(() => _clearCacheBeforeScan = v),
+          ),
+          const SizedBox(width: 8),
+          FilterChip(
+            showCheckmark: false,
+            label: Text(tr('excludeAlreadyTrackedApps')),
+            selected: _excludeAlreadyTracked,
+            onSelected: (v) {
+              setState(() => _excludeAlreadyTracked = v);
+              _proceedToAppList();
+            },
+          ),
+          if (_appFilter != BulkAppFilter.userOnly) ...[
+            const SizedBox(width: 8),
+            FilterChip(
+              showCheckmark: false,
+              label: Text(tr('excludeNonReplaceableSystem')),
+              selected: _excludeNonReplaceableSystem,
+              onSelected: (v) {
+                setState(() => _excludeNonReplaceableSystem = v);
+                _applyAppFilter();
+              },
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   List<String> _orderedStoreKeysForBadge(Set<String> keys) {
@@ -291,7 +304,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }
 
   /// Fixed-width column of store badges (no overlap); keeps title/checkbox layout balanced.
-  static const double _bulkAddResultBadgeColumnWidth = 22;
+  static const double _bulkAddResultBadgeColumnWidth = 24;
   static const double _bulkAddResultIconSlotWidth = 48;
 
   Widget _buildBulkResultStoreBadgeColumn(Map<String, String>? sourcesByStore) {
@@ -324,6 +337,53 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         children: <Widget>[
           for (int index = 0; index < badgeWidgets.length; index++) ...<Widget>[
             if (index > 0) const SizedBox(height: 5),
+            badgeWidgets[index],
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Badge column for selectable rows with size-differentiated icons.
+  /// The selected store badge is 20dp (full opacity); others are 13dp at 0.4 opacity.
+  Widget _buildSelectableStaticBadgeColumn(
+    Map<String, String> sourcesByStore,
+    String selectedStore,
+  ) {
+    final List<String> ordered = _orderedStoreKeysForBadge(
+      sourcesByStore.keys.toSet(),
+    );
+    final List<String> keys =
+        ordered.length > 5 ? ordered.sublist(0, 5) : ordered;
+    final List<Widget> badgeWidgets = <Widget>[];
+    for (final String storeKey in keys) {
+      final String? url = sourcesByStore[storeKey];
+      if (url == null) continue;
+      final String host = _hostForBulkSourceBadge(storeKey, url);
+      if (host.isEmpty) continue;
+      final bool isSelected = storeKey == selectedStore;
+      badgeWidgets.add(
+        Opacity(
+          opacity: isSelected ? 1.0 : 0.4,
+          child: StoreSourceChipAvatar(
+            host: host,
+            size: isSelected ? 20 : 14,
+          ),
+        ),
+      );
+    }
+    if (badgeWidgets.isEmpty) {
+      return const SizedBox(width: _bulkAddResultBadgeColumnWidth, height: 40);
+    }
+    return SizedBox(
+      width: _bulkAddResultBadgeColumnWidth,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          for (int index = 0; index < badgeWidgets.length; index++) ...<Widget>[
+            if (index > 0) const SizedBox(height: 3),
             badgeWidgets[index],
           ],
         ],
@@ -503,36 +563,51 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }
 
   Future<void> _proceedToAppList() async {
+    final bool needsFetch = _allInstalledApps.isEmpty;
     setState(() {
-      _loadingApps = true;
-      _step = BulkStep.selectApps;
-      _installedApps = [];
+      _loadingApps = needsFetch;
       _selectedPackages.clear();
-      _iconCache.clear();
     });
-    try {
-      List<InstalledAppInfo> apps = await BulkImportService.getInstalledApps(
-        includeSystem: _appFilter != BulkAppFilter.userOnly,
-        includeUser: _appFilter != BulkAppFilter.systemOnly,
-      );
-      if (_excludeAlreadyTracked) {
-        final Set<String> tracked = _appsProvider.apps.keys.toSet();
-        apps = apps
-            .where((InstalledAppInfo a) => !tracked.contains(a.packageName))
-            .toList();
+    if (needsFetch) {
+      try {
+        // Fetch everything once; subsequent calls just re-filter in memory.
+        _allInstalledApps = await BulkImportService.getInstalledApps(
+          includeSystem: true,
+          includeUser: true,
+        );
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _loadingApps = false);
+        showError(e, context);
+        return;
       }
-      if (!mounted) return;
-      setState(() {
-        _installedApps = apps;
-        _loadingApps = false;
-      });
-      // Start loading icons in batches after the list is displayed
-      _loadIconsBatched();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingApps = false);
-      showError(e, context);
+      // Preload icons for every app so filter switches are instant.
+      // Fire-and-forget; _applyAppFilter() below shows the list immediately.
+      _loadIconsBatched(_allInstalledApps);
     }
+    _applyAppFilter();
+  }
+
+  void _applyAppFilter() {
+    List<InstalledAppInfo> apps = _allInstalledApps.where((a) {
+      if (_appFilter == BulkAppFilter.userOnly) return !a.isSystemApp;
+      if (_appFilter == BulkAppFilter.systemOnly) return a.isSystemApp;
+      return true;
+    }).toList();
+    if (_excludeNonReplaceableSystem) {
+      apps = apps.where((a) => !a.isLikelyNonReplaceable).toList();
+    }
+    if (_excludeAlreadyTracked) {
+      final Set<String> tracked = _appsProvider.apps.keys.toSet();
+      apps = apps.where((a) => !tracked.contains(a.packageName)).toList();
+    }
+    if (!mounted) return;
+    setState(() {
+      _installedApps = apps;
+      _loadingApps = false;
+    });
+    // No icon loading here — already handled by _loadIconsBatched(_allInstalledApps)
+    // in _proceedToAppList. Filter switches just show what's already cached.
   }
 
   // ─── App Selection Step ────────────────────────────────────────────────
@@ -549,25 +624,29 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         .toList();
   }
 
-  /// Loads all app icons in batches, calling setState once per batch.
-  /// This avoids per-icon rebuilds that cause visible stutter.
-  Future<void> _loadIconsBatched() async {
+  /// Loads app icons in batches. setState is only called when at least one
+  /// new icon was fetched in a batch — already-cached icons never trigger a
+  /// rebuild, so scrolling through a previously loaded list stays smooth.
+  Future<void> _loadIconsBatched([List<InstalledAppInfo>? source]) async {
     const batchSize = 20;
-    final packages = _installedApps.map((a) => a.packageName).toList();
+    final packages =
+        (source ?? _installedApps).map((a) => a.packageName).toList();
     for (int i = 0; i < packages.length; i += batchSize) {
       if (!mounted) return;
       final batch = packages.sublist(
         i,
         (i + batchSize).clamp(0, packages.length),
       );
+      int newlyLoaded = 0;
       await Future.wait(
         batch.map((pkg) async {
           if (_iconCache.containsKey(pkg)) return;
           final icon = await BulkImportService.getAppIcon(pkg);
           _iconCache[pkg] = icon ?? false;
+          newlyLoaded++;
         }),
       );
-      if (mounted) setState(() {});
+      if (mounted && newlyLoaded > 0) setState(() {});
     }
   }
 
@@ -609,7 +688,15 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     return Stack(
       children: [
         Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            const SizedBox(height: 8),
+            _buildAppTypeChipRow(),
+            const SizedBox(height: 8),
+            _buildStoreChipRow(),
+            const SizedBox(height: 8),
+            _buildOptionsChipRow(),
+            const Divider(height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Row(
@@ -628,30 +715,6 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 8,
-                        ),
-                        suffixIcon: Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: Align(
-                            widthFactor: 1,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                _appFilterChipLabel(),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                          ),
                         ),
                       ),
                       onChanged: (String value) =>
@@ -719,8 +782,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
                     final app = filtered[index];
-                    final selected =
-                        _selectedPackages.contains(app.packageName);
+                    final selected = _selectedPackages.contains(
+                      app.packageName,
+                    );
                     final tracked = alreadyTracked.contains(app.packageName);
                     return _bulkAddAppListRow(
                       leadingIcon: Padding(
@@ -796,11 +860,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     // display and add-loop can use this stable snapshot.
     _trackedAtScanTime = _appsProvider.apps.keys.toSet();
 
-    if (_deleteScanHistoryBeforeScan) {
-      await BulkScanCache.clear();
-      if (mounted) {
-        setState(() => _deleteScanHistoryBeforeScan = false);
-      }
+    if (_clearCacheBeforeScan) {
+      await BulkScanCache.clearStores(_selectedStores);
+      if (mounted) setState(() => _clearCacheBeforeScan = false);
     }
     Map<String, Map<String, String>> persistedScanCache =
         await BulkScanCache.load();
@@ -1128,7 +1190,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         ),
         child: Row(
           children: [
-            _storeLogo(store, size: 32),
+            StoreSourceChipAvatar(
+              host: _hostForBulkSourceBadge(store, ''),
+              size: 32,
+            ),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
@@ -1191,6 +1256,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   // ─── Results Step ──────────────────────────────────────────────────────
 
   Widget _buildResultsStep() {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+
     final List<BulkFoundApp> newFound = _foundApps
         .where(
           (BulkFoundApp a) => !_trackedAtScanTime.contains(a.info.packageName),
@@ -1208,250 +1275,324 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         )
         .length;
     final int cancelledCount = _cancelledApps.length;
+    final bool showFabDone = _addingDone || newFound.isEmpty;
+    final bool showProgress = _addingApps && _addingTotal > 0;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    // Build all list items; banner goes first so it scrolls away naturally.
+    final List<Widget> listItems = [
+      _buildSummaryBanner(newFound, alreadyFoundTracked, cancelledCount),
+    ];
+    if (_addingDone) {
+      if (_addedApps.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('added')} (${_addedApps.length})',
+            colorScheme.primary,
+          ),
+        );
+        listItems.addAll(
+          _addedApps.map((a) => _buildFoundAppTile(a, addedResult: true)),
+        );
+      }
+      if (_failedApps.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('failed')} (${_failedApps.length})',
+            colorScheme.error,
+          ),
+        );
+        listItems.addAll(
+          _failedApps.map((a) => _buildFoundAppTile(a, failedResult: true)),
+        );
+      }
+      if (_notFoundApps.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('notFound')} (${_notFoundApps.length})',
+            colorScheme.error,
+          ),
+        );
+        listItems.addAll(_notFoundApps.map(_buildNotFoundTile));
+      }
+    } else {
+      if (newFound.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('found')} (${newFound.length})',
+            colorScheme.primary,
+          ),
+        );
+        listItems.addAll(
+          newFound.map((a) => _buildFoundAppTile(a, selectable: true)),
+        );
+      }
+      if (alreadyFoundTracked.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
+            colorScheme.tertiary,
+          ),
+        );
+        listItems.addAll(
+          alreadyFoundTracked.map((a) => _buildFoundAppTile(a, tracked: true)),
+        );
+      }
+      if (_notFoundApps.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('notFound')} (${_notFoundApps.length})',
+            colorScheme.error,
+          ),
+        );
+        listItems.addAll(_notFoundApps.map(_buildNotFoundTile));
+      }
+      if (_cancelledApps.isNotEmpty) {
+        listItems.add(
+          _buildSectionHeader(
+            '${tr('bulkScanCancelled')} (${_cancelledApps.length})',
+            colorScheme.onSurfaceVariant,
+          ),
+        );
+        listItems.addAll(_cancelledApps.map(_bulkAddCancelledResultRow));
+      }
+    }
+
+    return Stack(
       children: [
-        // Summary banner
-        Container(
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.secondaryContainer,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: _addingDone
-                ? [
-                    Expanded(
-                      child: _buildSummaryMetricColumn(
-                        Icons.check_circle_rounded,
-                        '$_addedCount',
-                        tr('added'),
-                        _summaryFoundGreen,
-                      ),
-                    ),
-                    if (_failedCount > 0)
-                      Expanded(
-                        child: _buildSummaryMetricColumn(
-                          Icons.error_rounded,
-                          '$_failedCount',
-                          tr('failed'),
-                          _summaryNotFoundRed,
-                        ),
-                      ),
-                    Expanded(
-                      child: _buildSummaryMetricColumn(
-                        Icons.cancel_rounded,
-                        '${_notFoundApps.length}',
-                        tr('notFound'),
-                        _summaryNotFoundRed,
-                      ),
-                    ),
-                  ]
-                : [
-                    Expanded(
-                      child: _buildSummaryMetricColumn(
-                        Icons.check_circle_rounded,
-                        '${_foundApps.length}',
-                        tr('found'),
-                        _summaryFoundGreen,
-                        labelColor: _summaryFoundGreen,
-                      ),
-                    ),
-                    Expanded(
-                      child: _buildSummaryMetricColumn(
-                        Icons.cancel_rounded,
-                        '${_notFoundApps.length}',
-                        tr('notFound'),
-                        _summaryNotFoundRed,
-                        labelColor: _summaryNotFoundRed,
-                      ),
-                    ),
-                    if (cancelledCount > 0)
-                      Expanded(
-                        child: _buildSummaryMetricColumn(
-                          Icons.hourglass_disabled_rounded,
-                          '$cancelledCount',
-                          tr('bulkScanCancelled'),
-                          _summaryCancelledGrey,
-                          labelColor: _summaryCancelledGrey,
-                        ),
-                      ),
-                    if (alreadyFoundTracked.isNotEmpty)
-                      Expanded(
-                        child: _buildSummaryMetricColumn(
-                          Icons.bookmark_rounded,
-                          '${alreadyFoundTracked.length}',
-                          tr('alreadyTracked'),
-                          _summaryAlreadyTrackedBlue,
-                        ),
-                      ),
-                  ],
-          ),
-        ),
+        // Full-height scrollable list; banner is item 0 so it scrolls away.
+        _foundApps.isEmpty && _notFoundApps.isEmpty && _cancelledApps.isEmpty
+            ? Center(child: Text(tr('noAppsFound')))
+            : ListView(
+                // Reserve space for the bottom FAB row.
+                padding: const EdgeInsets.only(bottom: 88),
+                children: listItems,
+              ),
 
-        // App list
-        Expanded(
-          child:
-              _foundApps.isEmpty &&
-                  _notFoundApps.isEmpty &&
-                  _cancelledApps.isEmpty
-              ? Center(child: Text(tr('noAppsFound')))
-              : ListView(
-                  clipBehavior: Clip.none,
-                  children: [
-                    if (_addingDone) ...[
-                      if (_addedApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('added')} (${_addedApps.length})',
-                          Theme.of(context).colorScheme.primary,
-                        ),
-                        ..._addedApps.map(
-                          (a) => _buildFoundAppTile(a, addedResult: true),
-                        ),
-                      ],
-                      if (_failedApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('failed')} (${_failedApps.length})',
-                          Theme.of(context).colorScheme.error,
-                        ),
-                        ..._failedApps.map(
-                          (a) => _buildFoundAppTile(a, failedResult: true),
-                        ),
-                      ],
-                      if (_notFoundApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('notFound')} (${_notFoundApps.length})',
-                          _summaryNotFoundRed,
-                        ),
-                        ..._notFoundApps.map(_buildNotFoundTile),
-                      ],
-                    ] else ...[
-                      if (newFound.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('found')} (${newFound.length})',
-                          _summaryFoundGreen,
-                        ),
-                        ...newFound.map(
-                          (a) => _buildFoundAppTile(a, selectable: true),
-                        ),
-                      ],
-                      if (alreadyFoundTracked.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
-                          Theme.of(context).colorScheme.tertiary,
-                        ),
-                        ...alreadyFoundTracked.map(
-                          (a) => _buildFoundAppTile(a, tracked: true),
-                        ),
-                      ],
-                      if (_notFoundApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('notFound')} (${_notFoundApps.length})',
-                          _summaryNotFoundRed,
-                        ),
-                        ..._notFoundApps.map(_buildNotFoundTile),
-                      ],
-                      if (_cancelledApps.isNotEmpty) ...[
-                        _buildSectionHeader(
-                          '${tr('bulkScanCancelled')} (${_cancelledApps.length})',
-                          _summaryCancelledGrey,
-                        ),
-                        ..._cancelledApps.map(_bulkAddCancelledResultRow),
-                      ],
-                    ],
-                  ],
-                ),
-        ),
-
-        // Action buttons
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+        // Bottom row: progress pill (when active, expanding to the left of the
+        // FAB) + FAB. Both live in the same Positioned so they stay aligned.
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SafeArea(
+            minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                if (_addingStatus.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      _addingStatus,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                if (!_addingDone && newFound.isNotEmpty)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(30),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        if (_addingApps && _addingTotal > 0)
-                          Positioned.fill(
-                            child: LinearProgressIndicator(
-                              value: (_addedCount + _failedCount) /
-                                  _addingTotal,
-                              borderRadius: BorderRadius.circular(30),
-                            ),
-                          ),
-                        FilledButton.icon(
-                          onPressed: _addingApps || selectedNewFoundCount == 0
-                              ? null
-                              : () {
-                                  final List<BulkFoundApp> selectedToAdd =
-                                      newFound
-                                          .where(
-                                            (BulkFoundApp a) =>
-                                                _selectedNewFoundPackages
-                                                    .contains(
-                                                      a.info.packageName,
-                                                    ),
-                                          )
-                                          .toList();
-                                  _addFoundApps(selectedToAdd);
-                                },
-                          icon: _addingApps
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.save_rounded),
-                          label: Text(
-                            _addingApps
-                                ? '${tr('addingApps')} ($_addedCount / $_addingTotal)'
-                                : tr(
-                                    'addFoundApps',
-                                    args: ['$selectedNewFoundCount'],
-                                  ),
-                          ),
+                if (showProgress) ...[
+                  Expanded(child: _buildProgressPill()),
+                  const SizedBox(width: 8),
+                ] else
+                  const Spacer(),
+                showFabDone
+                    ? FloatingActionButton.extended(
+                        heroTag: 'bulkResultsDone',
+                        onPressed: () {
+                          if (widget.standalone) {
+                            Navigator.pop(context);
+                          } else {
+                            widget.onComplete?.call();
+                          }
+                        },
+                        icon: const Icon(Icons.check_rounded),
+                        label: Text(tr('done')),
+                      )
+                    : _addingApps
+                    ? FloatingActionButton.extended(
+                        heroTag: 'bulkResultsCancel',
+                        onPressed: () =>
+                            setState(() => _addCancelRequested = true),
+                        backgroundColor: colorScheme.errorContainer,
+                        foregroundColor: colorScheme.onErrorContainer,
+                        icon: const Icon(Icons.stop_rounded),
+                        label: Text(tr('cancel')),
+                      )
+                    : FloatingActionButton.extended(
+                        heroTag: 'bulkResultsAdd',
+                        onPressed: selectedNewFoundCount == 0
+                            ? null
+                            : () {
+                                final List<BulkFoundApp> selectedToAdd =
+                                    newFound
+                                        .where(
+                                          (BulkFoundApp a) =>
+                                              _selectedNewFoundPackages
+                                                  .contains(a.info.packageName),
+                                        )
+                                        .toList();
+                                _addFoundApps(selectedToAdd);
+                              },
+                        icon: const Icon(Icons.save_rounded),
+                        label: Text(
+                          tr('addFoundApps', args: ['$selectedNewFoundCount']),
                         ),
-                      ],
-                    ),
-                  ),
-                if (_addingDone || newFound.isEmpty)
-                  FilledButton.icon(
-                    onPressed: () {
-                      if (widget.standalone) {
-                        Navigator.pop(context);
-                      } else {
-                        widget.onComplete?.call();
-                      }
-                    },
-                    icon: const Icon(Icons.check_rounded),
-                    label: Text(tr('done')),
-                  ),
+                      ),
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+
+  /// Pill-shaped progress bar that fills from the left edge of the screen up to
+  /// the FAB. Height matches a [FloatingActionButton.extended] (~56 dp).
+  Widget _buildProgressPill() {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final double progress = _addingTotal > 0
+        ? (_addedCount + _failedCount) / _addingTotal
+        : 0.0;
+
+    return SizedBox(
+      height: 56,
+      child: Stack(
+        children: [
+          // Background track
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerHighest.withValues(
+                  alpha: 0.92,
+                ),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          // Progress fill – grows from left to right
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: progress.clamp(0.0, 1.0),
+                  heightFactor: 1.0,
+                  child: Container(color: colorScheme.primaryContainer),
+                ),
+              ),
+            ),
+          ),
+          // "Adding DoorDash..." centered in the pill
+          Positioned.fill(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  _addingStatus,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurface,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryBanner(
+    List<BulkFoundApp> newFound,
+    List<BulkFoundApp> alreadyFoundTracked,
+    int cancelledCount,
+  ) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+
+    // Apps that were selected for adding but skipped because the user
+    // cancelled before they were processed.
+    final int addSkippedCount = _addingTotal - _addedCount - _failedCount;
+
+    final List<Widget> metrics = _addingDone
+        ? [
+            Expanded(
+              child: _buildSummaryMetricColumn(
+                Icons.check_circle_rounded,
+                '$_addedCount',
+                tr('added'),
+                colorScheme.primary,
+              ),
+            ),
+            if (_failedCount > 0)
+              Expanded(
+                child: _buildSummaryMetricColumn(
+                  Icons.error_rounded,
+                  '$_failedCount',
+                  tr('failed'),
+                  colorScheme.error,
+                ),
+              ),
+            if (addSkippedCount > 0)
+              Expanded(
+                child: _buildSummaryMetricColumn(
+                  Icons.stop_circle_rounded,
+                  '$addSkippedCount',
+                  tr('cancelled'),
+                  colorScheme.onSurfaceVariant,
+                ),
+              ),
+            if (_notFoundApps.isNotEmpty)
+              Expanded(
+                child: _buildSummaryMetricColumn(
+                  Icons.cancel_rounded,
+                  '${_notFoundApps.length}',
+                  tr('notFound'),
+                  colorScheme.error,
+                ),
+              ),
+          ]
+        : [
+            Expanded(
+              child: _buildSummaryMetricColumn(
+                Icons.check_circle_rounded,
+                '${_foundApps.length}',
+                tr('found'),
+                colorScheme.primary,
+              ),
+            ),
+            Expanded(
+              child: _buildSummaryMetricColumn(
+                Icons.cancel_rounded,
+                '${_notFoundApps.length}',
+                tr('notFound'),
+                colorScheme.error,
+              ),
+            ),
+            if (cancelledCount > 0)
+              Expanded(
+                child: _buildSummaryMetricColumn(
+                  Icons.hourglass_disabled_rounded,
+                  '$cancelledCount',
+                  tr('bulkScanCancelled'),
+                  colorScheme.onSurfaceVariant,
+                ),
+              ),
+            if (alreadyFoundTracked.isNotEmpty)
+              Expanded(
+                child: _buildSummaryMetricColumn(
+                  Icons.bookmark_rounded,
+                  '${alreadyFoundTracked.length}',
+                  tr('alreadyTracked'),
+                  colorScheme.tertiary,
+                ),
+              ),
+          ];
+
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(8),
+      clipBehavior: Clip.hardEdge,
+      decoration: BoxDecoration(
+        color: colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: metrics,
+      ),
     );
   }
 
@@ -1477,28 +1618,37 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }) {
     final Color resolvedLabelColor =
         labelColor ?? Theme.of(context).colorScheme.onSurfaceVariant;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
+    return Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none,
       children: [
-        Icon(icon, color: accentColor, size: 28),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: accentColor,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Text(
-          label,
-          textAlign: TextAlign.center,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: resolvedLabelColor),
+        // SizedBox fixes the banner height independently of text or icon.
+        const SizedBox(height: 90),
+        // 81 dp = 90 % of 90 — fills most of the banner, stays entirely inside.
+        Icon(icon, size: 90, color: accentColor.withValues(alpha: 0.15)),
+        // Number + label only; no duplicate small icon
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              value,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                color: accentColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: resolvedLabelColor),
+            ),
+          ],
         ),
       ],
     );
@@ -1550,7 +1700,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             child: Center(
               child: Icon(
                 Icons.pending_rounded,
-                color: _summaryCancelledGrey,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 size: 24,
               ),
             ),
@@ -1568,17 +1718,105 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     bool failedResult = false,
   }) {
     final Widget leadingIcon = _buildAppIcon(app.info.packageName);
-    final Widget storeBadgesColumn = _buildBulkResultStoreBadgeColumn(
-      app.sources,
-    );
+    final Widget storeBadgesColumn = _buildBulkResultStoreBadgeColumn(app.sources);
 
     if (selectable && !tracked) {
       final bool isSelected = _selectedNewFoundPackages.contains(
         app.info.packageName,
       );
+
+      final String selectedStore =
+          _selectedSources[app.info.packageName] ??
+          (() {
+            for (final s in ['F-Droid', 'APKPure', 'APKMirror', 'GitHub']) {
+              if (app.sources.containsKey(s)) return s;
+            }
+            return app.sources.keys.first;
+          })();
+
+      // Single-source: render the one badge at 20dp directly — no loop or
+      // selection logic needed.
+      // Multi-source: use _buildSelectableStaticBadgeColumn to differentiate
+      // selected (20dp) from unselected (14dp).
+      Widget badgesColumnWidget = app.sources.length == 1
+          ? SizedBox(
+              width: _bulkAddResultBadgeColumnWidth,
+              height: 40,
+              child: Center(
+                child: StoreSourceChipAvatar(
+                  host: _hostForBulkSourceBadge(
+                    selectedStore,
+                    app.sources[selectedStore] ?? '',
+                  ),
+                  size: 20,
+                ),
+              ),
+            )
+          : _buildSelectableStaticBadgeColumn(app.sources, selectedStore);
+      Widget leadingIconWidget = leadingIcon;
+
+      if (app.sources.length > 1) {
+        final List<String> ordered = _orderedStoreKeysForBadge(
+          app.sources.keys.toSet(),
+        );
+
+        Future<void> openStorePopup(TapUpDetails details) async {
+          final Offset pos = details.globalPosition;
+          final RelativeRect rect = RelativeRect.fromLTRB(
+            pos.dx,
+            pos.dy,
+            pos.dx + 1,
+            pos.dy + 1,
+          );
+          final String? chosen = await showMenu<String>(
+            context: context,
+            position: rect,
+            items: ordered.map((store) {
+              final String host = _hostForBulkSourceBadge(
+                store,
+                app.sources[store] ?? '',
+              );
+              return PopupMenuItem<String>(
+                value: store,
+                child: Row(
+                  children: [
+                    StoreSourceChipAvatar(host: host, size: 22),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        store,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                    if (store == selectedStore)
+                      Icon(
+                        Icons.check_rounded,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                  ],
+                ),
+              );
+            }).toList(),
+          );
+          if (chosen != null && mounted) {
+            setState(() => _selectedSources[app.info.packageName] = chosen);
+          }
+        }
+
+        badgesColumnWidget = GestureDetector(
+          onTapUp: openStorePopup,
+          child: badgesColumnWidget,
+        );
+        leadingIconWidget = GestureDetector(
+          onTapUp: openStorePopup,
+          child: leadingIcon,
+        );
+      }
+
       return _bulkAddResultAppRow(
-        leadingIcon: leadingIcon,
-        storeBadgesColumn: storeBadgesColumn,
+        leadingIcon: leadingIconWidget,
+        storeBadgesColumn: badgesColumnWidget,
         appName: app.info.name,
         packageName: app.info.packageName,
         checkboxValue: isSelected,
@@ -1647,6 +1885,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Future<void> _addFoundApps(List<BulkFoundApp> apps) async {
     setState(() {
       _addingApps = true;
+      _addCancelRequested = false;
       _addingTotal = apps.length;
       _addedCount = 0;
       _failedCount = 0;
@@ -1655,6 +1894,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       _failedApps = [];
     });
 
+    final logsProvider = context.read<LogsProvider>();
     final sourceProvider = SourceProvider();
     final apkMirrorSource = APKMirror();
     final apkPureSource = APKPure();
@@ -1676,14 +1916,13 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       }
     }
 
-    for (final app in apps) {
-      if (!mounted) break;
-
+    Future<void> addOne(BulkFoundApp app) async {
+      if (!mounted || _addCancelRequested) return;
       setState(() => _addingStatus = tr('addingApp', args: [app.info.name]));
 
-      final store = app.bestStore;
-      final url = app.bestUrl;
-      final source = sourceFor(store);
+      final String storeName =
+          _selectedSources[app.info.packageName] ?? app.bestStore;
+      final source = sourceFor(storeName);
       final settings = getDefaultValuesFromFormItems(
         source.combinedAppSpecificSettingFormItems,
       );
@@ -1694,25 +1933,43 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       try {
         final newApp = await sourceProvider.getApp(
           source,
-          url,
+          app.sources[storeName] ?? app.bestUrl,
           settings,
           inferAppIdIfOptional: true,
         );
         await _appsProvider.saveApps([newApp], onlyIfExists: false);
-        setState(() {
-          _addedCount++;
-          _addedApps = [..._addedApps, app];
-        });
+        if (mounted) {
+          setState(() {
+            _addedCount++;
+            _addedApps = [..._addedApps, app];
+          });
+        }
       } catch (e) {
-        setState(() {
-          _failedCount++;
-          _failedApps = [..._failedApps, app];
-          _addingStatus =
-              '${tr('error')}: ${app.info.name} – ${e is ObtainiumError ? e.toString() : tr('unexpectedError')}';
-        });
-        // Small pause so the user can see the error briefly
-        await Future.delayed(const Duration(milliseconds: 600));
+        final String errMsg = e is ObtainiumError
+            ? e.toString()
+            : tr('unexpectedError');
+        logsProvider.add(
+          'Bulk add failed for ${app.info.name} (${app.info.packageName}): $errMsg',
+          level: LogLevels.error,
+        );
+        if (mounted) {
+          setState(() {
+            _failedCount++;
+            _failedApps = [..._failedApps, app];
+            _addingStatus = '${tr('error')}: ${app.info.name} – $errMsg';
+          });
+        }
       }
+    }
+
+    // Process apps concurrently in chunks. The network fetch (getApp) is the
+    // bottleneck; running a few in parallel cuts wall-clock time proportionally
+    // without hammering any single store's rate limits.
+    const int concurrency = 4;
+    for (int i = 0; i < apps.length; i += concurrency) {
+      if (!mounted || _addCancelRequested) break;
+      final chunk = apps.sublist(i, math.min(i + concurrency, apps.length));
+      await Future.wait(chunk.map(addOne));
     }
 
     if (mounted) {
@@ -1726,9 +1983,11 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   // ─── Step Navigation ───────────────────────────────────────────────────
 
-  /// True while [_addFoundApps] is running. Used by [AddAppPageState] to
-  /// suppress the home-page auto-navigate-to-apps logic during bulk add.
-  bool get isAdding => _addingApps;
+  /// True while adding is in progress OR while the result screen is visible.
+  /// Used by [AddAppPageState] to suppress the home-page auto-navigate-to-apps
+  /// logic so the user is not thrown back to the Apps tab mid-operation or
+  /// before they have reviewed the results.
+  bool get isAdding => _addingApps || _addingDone;
 
   /// Called by [AddAppPageState.handleBack] when the Device tab is active.
   /// Returns true if the back press was consumed (moved to previous step).
@@ -1742,8 +2001,6 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   String _stepTitle() {
     switch (_step) {
-      case BulkStep.config:
-        return tr('bulkAddApps');
       case BulkStep.selectApps:
         return tr('selectAppsToImport');
       case BulkStep.scanning:
@@ -1755,10 +2012,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   bool _canGoBack() {
     switch (_step) {
-      case BulkStep.config:
-        return false;
       case BulkStep.selectApps:
-        return true;
+        return false;
       case BulkStep.scanning:
         return false;
       case BulkStep.results:
@@ -1767,15 +2022,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }
 
   void _goBack() {
-    switch (_step) {
-      case BulkStep.selectApps:
-        setState(() => _step = BulkStep.config);
-        break;
-      case BulkStep.results:
-        setState(() => _step = BulkStep.selectApps);
-        break;
-      default:
-        break;
+    if (_step == BulkStep.results) {
+      setState(() => _step = BulkStep.selectApps);
     }
   }
 
@@ -1786,45 +2034,6 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     color: Theme.of(context).colorScheme.primary,
   );
 
-  Widget _storeLogo(String store, {double size = 24}) {
-    switch (store) {
-      case 'APKMirror':
-        return Image.asset(
-          'assets/graphics/ic_apkmirror.png',
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
-        );
-      case 'APKPure':
-        return Image.asset(
-          'assets/graphics/ic_apkpure.png',
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
-        );
-      case 'F-Droid':
-        return Image.asset(
-          'assets/graphics/ic_fdroid.png',
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
-        );
-      case 'GitHub':
-        return Image.asset(
-          'assets/graphics/ic_github.png',
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
-        );
-      default:
-        return Icon(Icons.store_rounded, size: size);
-    }
-  }
-
   // ─── Build ─────────────────────────────────────────────────────────────
 
   Widget _buildStepContent() {
@@ -1833,7 +2042,6 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       child: KeyedSubtree(
         key: ValueKey(_step),
         child: switch (_step) {
-          BulkStep.config => _buildConfigStep(),
           BulkStep.selectApps => _buildSelectAppsStep(),
           BulkStep.scanning => _buildScanningStep(),
           BulkStep.results => _buildResultsStep(),
@@ -1846,7 +2054,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget build(BuildContext context) {
     if (widget.standalone) {
       return PopScope(
-        canPop: _step == BulkStep.config,
+        canPop: _step == BulkStep.selectApps,
         onPopInvokedWithResult: (didPop, _) {
           if (!didPop && _canGoBack()) {
             _goBack();
@@ -1871,7 +2079,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     // Embedded mode: no Scaffold; back navigation handled via PopScope so
     // Android back moves through steps instead of popping AddAppPage.
     return PopScope(
-      canPop: _step == BulkStep.config,
+      canPop: _step == BulkStep.selectApps,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _canGoBack()) {
           _goBack();

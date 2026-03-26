@@ -1729,56 +1729,6 @@ class _AppPageState extends State<AppPage> {
         }
       }
 
-      // #6 — inline download/install status inside the version card.
-      if (app?.downloadProgress != null) {
-        final double dp = app!.downloadProgress!;
-        final bool isInstalling = dp < 0;
-        versionCardChildren.add(
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    if (isInstalling)
-                      SizedBox(
-                        width: 13,
-                        height: 13,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: pageTheme.colorScheme.primary,
-                        ),
-                      )
-                    else
-                      Icon(
-                        Icons.download_rounded,
-                        size: 14,
-                        color: pageTheme.colorScheme.primary,
-                      ),
-                    const SizedBox(width: 7),
-                    Text(
-                      isInstalling
-                          ? '${tr('installing')}…'
-                          : tr('downloadingX', args: ['${dp.round()}%']),
-                      style: pageTheme.textTheme.bodySmall?.copyWith(
-                        color: pageTheme.colorScheme.primary,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 5),
-                LinearProgressIndicator(
-                  value: isInstalling ? null : dp / 100,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-
       // #4 — last-checked caption at the bottom.
       versionCardChildren.add(lastCheckedCaption);
 

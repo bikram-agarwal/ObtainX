@@ -65,6 +65,32 @@ class BulkScanCache {
     }
   }
 
+  /// Removes cached entries for the given stores only, leaving other stores intact.
+  static Future<void> clearStores(Set<String> storeNames) async {
+    if (storeNames.isEmpty) return;
+    try {
+      final Map<String, Map<String, String>> cache = await load();
+      for (final Map<String, String> storeMap in cache.values) {
+        for (final String store in storeNames) {
+          storeMap.remove(store);
+        }
+      }
+      await save(cache);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  /// Returns the set of store names that have at least one cached entry.
+  static Future<Set<String>> cachedStores() async {
+    final Map<String, Map<String, String>> cache = await load();
+    final Set<String> stores = {};
+    for (final Map<String, String> storeMap in cache.values) {
+      stores.addAll(storeMap.keys);
+    }
+    return stores;
+  }
+
   /// Merges [storeResults] into [cache] and persists.
   static Future<void> mergeStoreAndSave(
     Map<String, Map<String, String>> cache,

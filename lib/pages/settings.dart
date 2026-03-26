@@ -19,6 +19,17 @@ import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 
+IconData _swipeActionIcon(SwipeAction action) => switch (action) {
+  SwipeAction.update   => Icons.system_update_alt_rounded,
+  SwipeAction.pin      => Icons.push_pin_rounded,
+  SwipeAction.appOptions => Icons.tune_rounded,
+  SwipeAction.delete   => Icons.delete_rounded,
+  SwipeAction.open     => Icons.open_in_new_rounded,
+  SwipeAction.appInfo  => Icons.info_rounded,
+  SwipeAction.edit     => Icons.edit_rounded,
+  SwipeAction.none     => Icons.block_rounded,
+};
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -655,51 +666,44 @@ class _SettingsPageState extends State<SettingsPage> {
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                DropdownButtonFormField<SwipeAction>(
-                                  key: ValueKey(
-                                      settingsProvider.rightSwipeAction),
-                                  decoration: InputDecoration(
-                                    labelText: tr('rightSwipeAction'),
-                                  ),
-                                  initialValue: settingsProvider.rightSwipeAction,
-                                  items: swipeActionsSortedByLocalizedLabel()
-                                      .map(
-                                        (action) => DropdownMenuItem(
-                                          value: action,
-                                          child: Text(
-                                              tr('swipeAction_${action.name}')),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) {
+                                DropdownMenu<SwipeAction>(
+                                  key: ValueKey(settingsProvider.rightSwipeAction),
+                                  initialSelection: settingsProvider.rightSwipeAction,
+                                  label: Text(tr('rightSwipeAction')),
+                                  expandedInsets: EdgeInsets.zero,
+                                  onSelected: (value) {
                                     if (value != null) {
                                       settingsProvider.rightSwipeAction = value;
                                     }
                                   },
+                                  dropdownMenuEntries: swipeActionsSortedByLocalizedLabel()
+                                      .map((action) => DropdownMenuEntry(
+                                            value: action,
+                                            label: tr('swipeAction_${action.name}'),
+                                            leadingIcon: Icon(_swipeActionIcon(action), size: 18),
+                                          ))
+                                      .toList(),
                                 ),
                                 const SizedBox(height: 16),
-                                DropdownButtonFormField<SwipeAction>(
-                                  key:
-                                      ValueKey(settingsProvider.leftSwipeAction),
-                                  decoration: InputDecoration(
-                                    labelText: tr('leftSwipeAction'),
-                                  ),
-                                  initialValue: settingsProvider.leftSwipeAction,
-                                  items: swipeActionsSortedByLocalizedLabel()
-                                      .map(
-                                        (action) => DropdownMenuItem(
-                                          value: action,
-                                          child: Text(
-                                              tr('swipeAction_${action.name}')),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (value) {
+                                DropdownMenu<SwipeAction>(
+                                  key: ValueKey(settingsProvider.leftSwipeAction),
+                                  initialSelection: settingsProvider.leftSwipeAction,
+                                  label: Text(tr('leftSwipeAction')),
+                                  expandedInsets: EdgeInsets.zero,
+                                  onSelected: (value) {
                                     if (value != null) {
                                       settingsProvider.leftSwipeAction = value;
                                     }
                                   },
+                                  dropdownMenuEntries: swipeActionsSortedByLocalizedLabel()
+                                      .map((action) => DropdownMenuEntry(
+                                            value: action,
+                                            label: tr('swipeAction_${action.name}'),
+                                            leadingIcon: Icon(_swipeActionIcon(action), size: 18),
+                                          ))
+                                      .toList(),
                                 ),
                               ],
                             ),
