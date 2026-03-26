@@ -102,6 +102,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          draft: true
           tag_name: ${{ github.ref == 'refs/heads/main' && format('v{0}', steps.extract_version.outputs.version) || github.ref_name }}
           files: build/app/outputs/flutter-apk/ObtainX-*.apk
           generate_release_notes: true

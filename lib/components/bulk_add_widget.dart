@@ -98,6 +98,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   // Snapshot of tracked apps at scan time – prevents just-added apps showing as "already tracked"
   Set<String> _trackedAtScanTime = {};
   bool _addingApps = false;
+  int _addingTotal = 0;
   int _addedCount = 0;
   int _failedCount = 0;
   bool _addingDone = false;
@@ -1384,32 +1385,54 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                     ),
                   ),
                 if (!_addingDone && newFound.isNotEmpty)
-                  FilledButton.icon(
-                    onPressed: _addingApps || selectedNewFoundCount == 0
-                        ? null
-                        : () {
-                            final List<BulkFoundApp> selectedToAdd = newFound
-                                .where(
-                                  (BulkFoundApp a) => _selectedNewFoundPackages
-                                      .contains(a.info.packageName),
-                                )
-                                .toList();
-                            _addFoundApps(selectedToAdd);
-                          },
-                    icon: _addingApps
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.save_rounded),
-                    label: Text(
-                      _addingApps
-                          ? tr('addingApps')
-                          : tr(
-                              'addFoundApps',
-                              args: ['$selectedNewFoundCount'],
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(30),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        if (_addingApps && _addingTotal > 0)
+                          Positioned.fill(
+                            child: LinearProgressIndicator(
+                              value: (_addedCount + _failedCount) /
+                                  _addingTotal,
+                              borderRadius: BorderRadius.circular(30),
                             ),
+                          ),
+                        FilledButton.icon(
+                          onPressed: _addingApps || selectedNewFoundCount == 0
+                              ? null
+                              : () {
+                                  final List<BulkFoundApp> selectedToAdd =
+                                      newFound
+                                          .where(
+                                            (BulkFoundApp a) =>
+                                                _selectedNewFoundPackages
+                                                    .contains(
+                                                      a.info.packageName,
+                                                    ),
+                                          )
+                                          .toList();
+                                  _addFoundApps(selectedToAdd);
+                                },
+                          icon: _addingApps
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.save_rounded),
+                          label: Text(
+                            _addingApps
+                                ? '${tr('addingApps')} ($_addedCount / $_addingTotal)'
+                                : tr(
+                                    'addFoundApps',
+                                    args: ['$selectedNewFoundCount'],
+                                  ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 if (_addingDone || newFound.isEmpty)
@@ -1624,6 +1647,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Future<void> _addFoundApps(List<BulkFoundApp> apps) async {
     setState(() {
       _addingApps = true;
+      _addingTotal = apps.length;
       _addedCount = 0;
       _failedCount = 0;
       _addingStatus = '';
@@ -1701,6 +1725,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }
 
   // ─── Step Navigation ───────────────────────────────────────────────────
+
+  /// True while [_addFoundApps] is running. Used by [AddAppPageState] to
+  /// suppress the home-page auto-navigate-to-apps logic during bulk add.
+  bool get isAdding => _addingApps;
 
   /// Called by [AddAppPageState.handleBack] when the Device tab is active.
   /// Returns true if the back press was consumed (moved to previous step).

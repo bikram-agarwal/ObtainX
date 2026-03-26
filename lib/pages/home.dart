@@ -344,12 +344,15 @@ class _HomePageState extends State<HomePage> {
     );
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
 
+    final AddAppPageState? addPageState =
+        (pages[1].widget.key as GlobalKey<AddAppPageState>).currentState;
     if (!prevIsLoading &&
         prevAppCount >= 0 &&
         appsCount > prevAppCount &&
         selectedIndexHistory.isNotEmpty &&
         selectedIndexHistory.last == 1 &&
-        !isLinkActivity) {
+        !isLinkActivity &&
+        !(addPageState?.isBulkAdding ?? false)) {
       switchToPage(0);
     }
     prevAppCount = appsCount;

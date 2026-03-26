@@ -50,6 +50,12 @@ class AddAppPageState extends State<AddAppPage> {
   // ─── Device mode state ────────────────────────────────────────────────
   final GlobalKey<BulkAddWidgetState> _bulkWidgetKey = GlobalKey();
 
+  /// True while the Device tab's bulk-add is actively saving apps.
+  /// Used by [HomePageState] to suppress auto-navigation during bulk add.
+  bool get isBulkAdding =>
+      _mode == _AddMode.fromDevice &&
+      (_bulkWidgetKey.currentState?.isAdding ?? false);
+
   /// Called by [HomePageState] when the user presses back while this tab is
   /// active. Returns true if the bulk flow consumed the event (moved one step
   /// back). Returns false so the caller falls through to normal tab navigation.

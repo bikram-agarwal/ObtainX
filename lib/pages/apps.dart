@@ -3145,7 +3145,7 @@ class AppsPageState extends State<AppsPage> {
                       ),
                       ...getLoadingWidgets(),
                       getDisplayedList(),
-                      if (!widget.onDemandOnlyList && onDemandOnlyAppCount > 0)
+                      if (!widget.onDemandOnlyList)
                         SliverToBoxAdapter(
                           child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
