@@ -487,7 +487,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                       ),
                                       ButtonSegment(
                                         value: 'legacy',
-                                        label: Text(tr('installerModeLegacy')),
+                                        label: Text(tr('installerModeThirdParty')),
                                       ),
                                     ],
                                     selected: {settingsProvider.installerMode},
@@ -549,7 +549,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           if (settingsProvider.installerMode == 'legacy')
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                              child: _LegacyInstallerSelector(
+                              child: _ThirdPartyInstallerSelector(
                                 settingsProvider: settingsProvider,
                               ),
                             ),
@@ -951,16 +951,16 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
   }
 }
 
-class _LegacyInstallerSelector extends StatefulWidget {
+class _ThirdPartyInstallerSelector extends StatefulWidget {
   final SettingsProvider settingsProvider;
-  const _LegacyInstallerSelector({required this.settingsProvider});
+  const _ThirdPartyInstallerSelector({required this.settingsProvider});
 
   @override
-  State<_LegacyInstallerSelector> createState() =>
-      _LegacyInstallerSelectorState();
+  State<_ThirdPartyInstallerSelector> createState() =>
+      _ThirdPartyInstallerSelectorState();
 }
 
-class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
+class _ThirdPartyInstallerSelectorState extends State<_ThirdPartyInstallerSelector> {
   List<installer.InstallerAppInfo>? _installerApps;
   bool _loading = true;
 
@@ -1020,7 +1020,7 @@ class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
                       Padding(
                         padding: const EdgeInsets.all(16),
                         child: Text(
-                          tr('legacyInstallerSelect'),
+                          tr('thirdPartyInstallerSelect'),
                           style: Theme.of(builderContext).textTheme.titleMedium,
                         ),
                       ),
@@ -1097,9 +1097,9 @@ class _LegacyInstallerSelectorState extends State<_LegacyInstallerSelector> {
                       ),
                     )
                   : null,
-              title: Text(tr('legacyInstallerSelect')),
+              title: Text(tr('thirdPartyInstallerSelect')),
               subtitle: Text(
-                selectedApp?.label ?? selectedPkg ?? tr('legacyInstallerNoneSelected'),
+                selectedApp?.label ?? selectedPkg ?? tr('thirdPartyInstallerNoneSelected'),
               ),
               trailing: const Icon(Icons.arrow_drop_down),
               onTap: _showInstallerPicker,

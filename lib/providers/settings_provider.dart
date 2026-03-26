@@ -148,7 +148,7 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // 'stock' = default Android installer, 'shizuku' = Shizuku, 'legacy' = Droid-ify style legacy installer
+  // 'stock' = default Android installer, 'shizuku' = Shizuku, 'Third-Party' = third-party installer (user-chosen app; stored value unchanged for prefs compatibility)
   String get installerMode {
     return prefs?.getString('installerMode') ?? 'stock';
   }

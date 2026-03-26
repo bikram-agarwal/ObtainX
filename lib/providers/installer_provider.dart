@@ -38,9 +38,10 @@ Future<List<InstallerAppInfo>> getApkInstallerApps() async {
   }).toList();
 }
 
+/// Sends the APK to a user-chosen third-party installer app (Settings: Third-Party mode).
 /// Returns true if the system broadcast confirms the package was installed.
 /// Times out after 2 minutes and returns false.
-Future<bool> installApkViaLegacy(
+Future<bool> installApkViaThirdParty(
   String apkFilePath, {
   required String targetPackage,
   required String targetActivity,

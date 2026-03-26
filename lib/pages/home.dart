@@ -361,6 +361,15 @@ class _HomePageState extends State<HomePage> {
           selectedIndexHistory.last == 1,
       onPopInvokedWithResult: (bool didPop, dynamic result) {
         if (didPop) return;
+        // Give the active tab a chance to handle back internally (e.g. bulk
+        // import stepping back through its own flow before navigating tabs).
+        final int currentIndex = selectedIndexHistory.isEmpty
+            ? 0
+            : selectedIndexHistory.last;
+        final currentKey = pages[currentIndex].widget.key;
+        if (currentKey is GlobalKey<AddAppPageState>) {
+          if (currentKey.currentState?.handleBack() == true) return;
+        }
         setIsReversing(
           selectedIndexHistory.length >= 2
               ? selectedIndexHistory.reversed.toList()[1]

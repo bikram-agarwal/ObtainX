@@ -1362,21 +1362,21 @@ class AppsProvider with ChangeNotifier {
       final targetPkg = settingsProvider.legacyInstallerPackage;
       final targetAct = settingsProvider.legacyInstallerActivity;
       if (targetPkg == null || targetAct == null) {
-        throw ObtainiumError(tr('legacyInstallerNotSelected'));
+        throw ObtainiumError(tr('thirdPartyInstallerNotSelected'));
       }
-      bool legacyInstalled = await installer.installApkViaLegacy(
+      bool thirdPartyInstallSucceeded = await installer.installApkViaThirdParty(
         file.file.path,
         targetPackage: targetPkg,
         targetActivity: targetAct,
         expectedPackageName: apps[file.appId]!.app.id,
       );
-      if (legacyInstalled) {
+      if (thirdPartyInstallSucceeded) {
         apps[file.appId]!.app.installedVersion =
             apps[file.appId]!.app.latestVersion;
         file.file.delete(recursive: true);
       }
       await saveApps([apps[file.appId]!.app]);
-      return legacyInstalled;
+      return thirdPartyInstallSucceeded;
     }
     int? code;
     if (!settingsProvider.useShizuku) {
@@ -1684,7 +1684,7 @@ class AppsProvider with ChangeNotifier {
         id = downloadedFile?.appId ?? downloadedDir!.appId;
         willBeSilent = await canInstallSilently(apps[id]!.app);
         if (settingsProvider.installerMode == 'legacy') {
-          // Legacy installer bypasses the standard permission check.
+          // Third-party installer path bypasses the standard permission check.
         } else if (!settingsProvider.useShizuku) {
           if (!(await settingsProvider.getInstallPermission(enforce: false))) {
             throw ObtainiumError(tr('cancelled'));
