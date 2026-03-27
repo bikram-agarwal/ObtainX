@@ -26,6 +26,18 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:markdown/markdown.dart' as md;
 
+String _formatBytes(int bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  } else if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
+  } else if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  } else {
+    return '$bytes B';
+  }
+}
+
 Color _labelColorOnCategoryFill(Color categoryFill) {
   return categoryFill.computeLuminance() > 0.5
       ? const Color(0xFF1A1A1A)
@@ -912,6 +924,10 @@ class _AppPageState extends State<AppPage> {
         updating = true;
       });
       await appsProvider.checkUpdate(id);
+      // saveApps (called inside checkUpdate) replaces the in-memory icon with
+      // null for non-installed apps.  Reset the one-shot flag so the rebuild
+      // that follows will re-invoke updateAppIcon and restore any user icon.
+      setState(() => _requestedMissingIconLoad = false);
       if (resetVersion) {
         appsProvider.apps[id]?.app.additionalSettings['versionDetection'] =
             true;
@@ -2355,13 +2371,28 @@ class _AppPageState extends State<AppPage> {
         return const SizedBox.shrink();
       }
 
+      // Update label shows size when known (GitHub apps); plain otherwise.
+      final int? knownApkSizeBytes = app?.app.apkSizeBytes;
+      // Appends "· 43 MB" to install/update labels when size is known (GitHub).
+      String sizeAnnotated(String base) =>
+          !trackOnly && knownApkSizeBytes != null
+          ? '$base · ${_formatBytes(knownApkSizeBytes)}'
+          : base;
+      final String updateLabel = sizeAnnotated(tr('update'));
+      final String installLabel = sizeAnnotated(tr('install'));
+
       // #2 — inline progress button replaces the action button while downloading/installing.
       if (app?.downloadProgress != null) {
         final double dp = app!.downloadProgress!;
         final bool isInstalling = dp < 0;
+        final int? totalBytes = app.downloadTotalBytes;
+        final String bytesLabel =
+            !isInstalling && totalBytes != null
+            ? ' · ${_formatBytes((dp / 100 * totalBytes).round())} / ${_formatBytes(totalBytes)}'
+            : '';
         final String label = isInstalling
             ? '${tr('installing')}…'
-            : 'Downloading ${dp.round()}%';
+            : 'Downloading ${dp.round()}%$bytesLabel';
         return ClipRRect(
           borderRadius: BorderRadius.circular(expressiveRadius),
           child: SizedBox(
@@ -2585,7 +2616,7 @@ class _AppPageState extends State<AppPage> {
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.center,
                       child: Text(
-                        tr('update'),
+                        updateLabel,
                         maxLines: 1,
                         textAlign: TextAlign.center,
                       ),
@@ -2626,7 +2657,7 @@ class _AppPageState extends State<AppPage> {
               fit: BoxFit.scaleDown,
               alignment: Alignment.center,
               child: Text(
-                tr('update'),
+                updateLabel,
                 maxLines: 1,
                 textAlign: TextAlign.center,
               ),
@@ -2643,8 +2674,8 @@ class _AppPageState extends State<AppPage> {
           alignment: Alignment.center,
           child: Text(
             installedVersionIsNull
-                ? (!trackOnly ? tr('install') : tr('markInstalled'))
-                : (!trackOnly ? tr('update') : tr('markUpdated')),
+                ? (!trackOnly ? installLabel : tr('markInstalled'))
+                : (!trackOnly ? updateLabel : tr('markUpdated')),
             maxLines: 1,
             textAlign: TextAlign.center,
           ),
@@ -2978,12 +3009,13 @@ class _AppPageState extends State<AppPage> {
             ),
             floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
             body: RefreshIndicator(
+              displacement: 20,
               child: showAppWebpageFinal
                   ? getAppWebView(themedPageContext)
                   : CustomScrollView(
                       controller: _appPageScrollController,
                       physics: const AlwaysScrollableScrollPhysics(
-                        parent: BouncingScrollPhysics(),
+                        parent: ClampingScrollPhysics(),
                       ),
                       slivers: [
                         SliverToBoxAdapter(

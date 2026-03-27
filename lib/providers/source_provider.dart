@@ -62,6 +62,9 @@ class APKDetails {
   /// Release names/titles seen before [filterReleaseTitlesByRegEx] (RegEx assist).
   List<String> rawReleaseTitleCandidates;
 
+  /// Size of the preferred APK in bytes, if known at update-check time (e.g. GitHub releases).
+  int? apkSizeBytes;
+
   APKDetails(
     this.version,
     this.apkUrls,
@@ -71,6 +74,7 @@ class APKDetails {
     this.allAssetUrls = const [],
     this.iconUrl,
     this.rawReleaseTitleCandidates = const [],
+    this.apkSizeBytes,
   });
 }
 
@@ -343,6 +347,8 @@ class App {
   late String? overrideSource;
   bool allowIdChange = false;
   String? iconUrl;
+  /// Size of the preferred APK in bytes, if known at update-check time.
+  int? apkSizeBytes;
   App(
     this.id,
     this.url,
@@ -365,6 +371,7 @@ class App {
     this.rawLatestVersionFromSource,
     this.rawApkNamesFromSource,
     this.rawReleaseTitlesFromSource,
+    this.apkSizeBytes,
   });
 
   @override
@@ -412,6 +419,7 @@ class App {
     rawLatestVersionFromSource: rawLatestVersionFromSource,
     rawApkNamesFromSource: rawApkNamesFromSource,
     rawReleaseTitlesFromSource: rawReleaseTitlesFromSource,
+    apkSizeBytes: apkSizeBytes,
   );
 
   factory App.fromJson(Map<String, dynamic> json) {
@@ -464,6 +472,7 @@ class App {
       rawApkNamesFromSource: json['rawApkNamesFromSource'] as String?,
       rawReleaseTitlesFromSource:
           json['rawReleaseTitlesFromSource'] as String?,
+      apkSizeBytes: json['apkSizeBytes'] as int?,
     );
   }
 
@@ -492,6 +501,7 @@ class App {
       'rawApkNamesFromSource': rawApkNamesFromSource,
     if (rawReleaseTitlesFromSource != null)
       'rawReleaseTitlesFromSource': rawReleaseTitlesFromSource,
+    if (apkSizeBytes != null) 'apkSizeBytes': apkSizeBytes,
   };
 }
 
@@ -1459,6 +1469,7 @@ class SourceProvider {
       rawLatestVersionFromSource: rawLatestVersionFromSource,
       rawApkNamesFromSource: rawApkNamesFromSource,
       rawReleaseTitlesFromSource: rawReleaseTitlesFromSource,
+      apkSizeBytes: apk.apkSizeBytes,
     );
     return source.endOfGetAppChanges(finalApp);
   }

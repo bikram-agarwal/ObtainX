@@ -8,6 +8,7 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -497,6 +498,102 @@ class SettingsProvider with ChangeNotifier {
     prefs?.setString('categories', jsonEncode(cats));
     notifyListeners();
   }
+
+  List<AppFolder> get appFolders {
+    final raw = prefs?.getString('appFolders') ?? '[]';
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list
+        .map((e) => AppFolder.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  set appFolders(List<AppFolder> folders) {
+    prefs?.setString('appFolders', jsonEncode(folders.map((f) => f.toJson()).toList()));
+    notifyListeners();
+  }
+
+  bool get showFolderedAppsOnMainPage =>
+      prefs?.getBool('showFolderedAppsOnMainPage') ?? false;
+
+  set showFolderedAppsOnMainPage(bool value) {
+    prefs?.setBool('showFolderedAppsOnMainPage', value);
+    notifyListeners();
+  }
+
+  // ── Per-folder view settings ──────────────────────────────────────────────
+  // Stored as JSON maps in SharedPreferences under 'folderView_<id>'.
+  // Each getter falls back to the global setting when no override is stored.
+
+  Map<String, dynamic>? _getFolderViewRaw(String folderId) {
+    final raw = prefs?.getString('folderView_$folderId');
+    if (raw == null) return null;
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  void _setFolderViewField(String folderId, String key, dynamic value) {
+    final data = _getFolderViewRaw(folderId) ?? {};
+    data[key] = value;
+    prefs?.setString('folderView_$folderId', jsonEncode(data));
+    notifyListeners();
+  }
+
+  void clearFolderViewSettings(String folderId) {
+    prefs?.remove('folderView_$folderId');
+    notifyListeners();
+  }
+
+  SortColumnSettings folderSortColumn(String id) {
+    final idx = _getFolderViewRaw(id)?['sortColumn'] as int?;
+    if (idx == null) return sortColumn;
+    return SortColumnSettings.values[idx.clamp(0, SortColumnSettings.values.length - 1)];
+  }
+
+  void setFolderSortColumn(String id, SortColumnSettings v) =>
+      _setFolderViewField(id, 'sortColumn', v.index);
+
+  SortOrderSettings folderSortOrder(String id) {
+    final idx = _getFolderViewRaw(id)?['sortOrder'] as int?;
+    if (idx == null) return sortOrder;
+    return SortOrderSettings.values[idx.clamp(0, SortOrderSettings.values.length - 1)];
+  }
+
+  void setFolderSortOrder(String id, SortOrderSettings v) =>
+      _setFolderViewField(id, 'sortOrder', v.index);
+
+  AppsListGroupBy folderGroupBy(String id) {
+    final idx = _getFolderViewRaw(id)?['groupBy'] as int?;
+    if (idx == null) return appsListGroupBy;
+    return AppsListGroupBy.values[idx.clamp(0, AppsListGroupBy.values.length - 1)];
+  }
+
+  void setFolderGroupBy(String id, AppsListGroupBy v) =>
+      _setFolderViewField(id, 'groupBy', v.index);
+
+  bool folderPinUpdates(String id) =>
+      (_getFolderViewRaw(id)?['pinUpdates'] as bool?) ?? pinUpdates;
+
+  void setFolderPinUpdates(String id, bool v) =>
+      _setFolderViewField(id, 'pinUpdates', v);
+
+  bool folderBuryNonInstalled(String id) =>
+      (_getFolderViewRaw(id)?['buryNonInstalled'] as bool?) ?? buryNonInstalled;
+
+  void setFolderBuryNonInstalled(String id, bool v) =>
+      _setFolderViewField(id, 'buryNonInstalled', v);
+
+  bool folderGroupNonInstalledSeparately(String id) =>
+      (_getFolderViewRaw(id)?['groupNonInstalledSeparately'] as bool?) ??
+      groupNonInstalledSeparately;
+
+  void setFolderGroupNonInstalledSeparately(String id, bool v) =>
+      _setFolderViewField(id, 'groupNonInstalledSeparately', v);
+
+  bool folderGroupUpdatesSeparately(String id) =>
+      (_getFolderViewRaw(id)?['groupUpdatesSeparately'] as bool?) ??
+      groupUpdatesSeparately;
+
+  void setFolderGroupUpdatesSeparately(String id, bool v) =>
+      _setFolderViewField(id, 'groupUpdatesSeparately', v);
 
   Locale? get forcedLocale {
     var flSegs = prefs?.getString('forcedLocale')?.split('-');

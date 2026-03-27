@@ -11,6 +11,8 @@
 - **APKMirror updates unlocked** – Enabled the update button and takes you directly to the specific release page for that new version.
 - **Smarter "do I need to update?" logic** – Fewer false alarms when version labels differ in harmless ways; clear, honest status when things are genuinely uncertain.
 - **Gestures, undo, and filter chips** – Swipe app rows for quick actions, recover a deleted app within 5 seconds, and see exactly what filters are active at a glance.
+- **Folders** – Named groups that hide apps from the main list and surface them via their own button. Rule-based auto-assignment keeps the list organised without manual work.
+- **APK size on the button** – See the file size before you tap Update or Install, and watch real-time progress with byte counts during the download.
 
 For full details and screenshots, see the [ObtainX README](../README.md).
 
@@ -218,12 +220,44 @@ Side-by-side screenshots for bulk add are not in this doc yet; see the [ObtainX 
 
 ---
 
+## Folders
+
+Obtainium has one flat list. Once you're tracking 30+ apps it becomes hard to navigate — even with grouping, everything is on one page.
+
+ObtainX adds **Folders**: persistent named views that pull apps off the main list and give them their own button at the bottom of the Apps page. The main list shows only apps that don't belong to any folder, so it stays focused.
+
+**How folders work:**
+- **Rule-based** — Set a match rule (field: name, author, package ID, category, or source; match type: contains, equals, starts with; value: any text) and ObtainX auto-assigns every matching app to the folder, including any new apps you add later.
+- **Manual** — Long-press one or more apps and tap the folder icon in the multi-select toolbar to assign them directly.
+- **Mixed** — A folder can have a rule for new apps and still accept manual additions.
+- **Mutual exclusivity with On-Demand** — An app can't be both in a regular folder and On-Demand Only at the same time; selecting one deselects the other.
+- **Exclusions** — If you manually remove an app from a rule-based folder, it's excluded and the rule won't re-add it. Manually adding it back clears the exclusion.
+
+**Per-folder view settings** — Each folder (and the On-Demand Only page) remembers its own sort column, group-by mode, pinned state, and filter — completely independent from the main list and from each other.
+
+**Inline folder creation** — The "Add to Folder" dialog (from long-press) has a "New Folder" row. Tap it, name the folder, and it's created and immediately selected — no need to open a separate manage dialog first.
+
+---
+
+## APK size on the button
+
+Obtainium shows no size information before or during a download — you tap Update and wait to find out how big it is.
+
+ObtainX surfaces size at both points:
+
+- **Before download** — For GitHub releases, the Update or Install button label includes the file size once a version check has run: "Update · 43 MB". This comes from the GitHub Releases API asset size, so no extra network request is needed.
+- **During download** — The progress indicator expands from "Downloading 67%" to "Downloading 67% · 29 / 43 MB" for any source that returns a `Content-Length` response header. Both the received bytes and the total are shown.
+
+---
+
 ## More features worth knowing
 
 These aren't cosmetic — they change how you install, how you recover from mistakes, and how you interact with apps day to day.
 
 - **Choose your installer** – Send APKs to a trusted installer app (like InstallerX or App Manager) when ObtainX itself can't install directly. Particularly helpful under Google's Advanced Protection mode.
 - **Custom app icons** – Tap the icon on any app's detail page to replace it with one from your gallery or the web. Useful when source artwork is missing or not to your taste.
+- **Folders** – Named persistent views that remove apps from the main list and put them behind their own dedicated button. Rule-based or manual assignment, per-folder view settings. See the [Folders](#folders) section above for the full breakdown.
+- **APK size on Update/Install button** – File size shown in the button label before download (GitHub), and as live byte progress during the download for any source with a Content-Length header.
 - **Source badges on every row** – A small icon on each app row shows where it's tracked (GitHub, GitLab, F-Droid, APKMirror, and more), so you know at a glance without opening the app.
 - **5-second undo after delete** – Delete an app by swiping or via bulk delete and a brief undo option appears. Tap it to get it back immediately.
 - **Active filter chips** – When filters are on, small chips below the toolbar show exactly what's active. Tap any chip to remove just that filter. The chip row disappears entirely when nothing is filtered.

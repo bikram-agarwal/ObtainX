@@ -14,11 +14,14 @@ Features that don't exist in Obtainium at all.
 
 - **🕐 On-Demand Only mode** — Mark an app so it's hidden from the main list and only checked when you explicitly open it. Keeps your main list clean if you have apps you rarely update.
 
+- **📁 Folders** — Create named folders to organise your app list. Apps in a folder are hidden from the main list to keep it decluttered. Folders can auto-assign apps via a rule (match by name, author, package ID, category, or source) or accept manual assignment via long-press. Each folder remembers its own view settings independently.
+
 - **👆 Configurable swipe gestures** — Left and right swipe actions are independently configurable per row. Choose from Update, Install, Pin, Edit, Delete, Open, App Info, or None. A color-coded icon hint appears during the drag so you always know what will happen.
 
 - **🖼️ Custom app icons** — Not happy with an app's icon or a blank placeholder? Tap the icon on any app's detail page to set your own — pick from your gallery or grab one from the web.
 
 - **⏭️ Skip Version** — Pass on a specific release you don't want without marking the app as "updated." The next release will still show up normally.
+
 
 - **🧩 RegEx Assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required.
 
@@ -38,6 +41,7 @@ Features Obtainium has, extended or improved here.
 - **🎯 Add App — three paths, one screen** — URL, Search, and From Device are all on one screen under a segmented control. Search results load inline alongside store chips — no floating sheets, no separate screens. New searches can be started without needing to go back-n-forth. 
 
 - **🔭 Track-only source improvements** — Shows installed version from the device when the package ID is known. The Update button opens the concrete release page, not just the app listing. In Obtainium, if the wrong package ID is fetched (or none at all), the app shows as "not installed" forever and update notifications never work right — with no way to fix it. ObtainX surfaces this clearly and lets you **edit the package ID directly from the app page**, instantly restoring correct install detection and update tracking.
+- **📏 APK size on the button** — For GitHub apps, the Update or Install button shows the file size right in the label (e.g. "Update · 43 MB") once a version check has run. During the download, the progress label expands to "Downloading 45% · 19 / 43 MB" for any source that provides a Content-Length header.
 
 - **🔖 Active filter chips** — Extends Obtainium's filter with dismissible chips pinned below the toolbar showing every active non-text filter (category, pinned, installed state, etc.). Tap any chip to clear just that filter. The row disappears entirely when nothing is active.
 
@@ -51,7 +55,7 @@ Features Obtainium has, extended or improved here.
 
 - **Hero icon transition** — Tapping an app row animates its icon smoothly into the detail page. Swipe back and it returns the same way.
 
-- **Richer app list grouping** — New: group by source; non-installed apps split into their own section. Category cards give the list structure at a glance.
+- **Richer app list grouping** — Group by source, app type (user/system/privileged), or non-installed split; a dedicated "Updates" group can float apps with available updates to the top independent of the active grouping mode.
 
 - **🏷️ Source favicon badges** — Every app row shows a small favicon identifying where it's tracked — GitHub, GitLab, F-Droid, APKMirror, and more — without opening the app.
 

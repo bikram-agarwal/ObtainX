@@ -624,15 +624,32 @@ class GitHub extends AppSource {
         throw NoVersionError();
       }
       var changeLog = (targetRelease['body'] ?? '').toString();
+      final apkUrls =
+          targetRelease['apkUrls'] as List<MapEntry<String, String>>;
+      // Build a name→size map from the filtered asset objects so we can look
+      // up the size of whichever APK ends up being preferred.
+      final filteredAssets =
+          (targetRelease['filteredAssets'] as List<dynamic>?) ?? [];
+      final Map<String, int> sizeByName = {
+        for (final e in filteredAssets)
+          if (e['name'] != null && e['size'] != null)
+            e['name'] as String: (e['size'] as num).toInt(),
+      };
+      // Default preferred index is the last APK (mirrors getApp() behaviour).
+      final int? apkSizeBytes =
+          apkUrls.isNotEmpty
+          ? sizeByName[apkUrls.last.key]
+          : null;
       return APKDetails(
         version,
-        targetRelease['apkUrls'] as List<MapEntry<String, String>>,
+        apkUrls,
         getAppNames(standardUrl),
         releaseDate: releaseDate,
         changeLog: changeLog.isEmpty ? null : changeLog,
         allAssetUrls:
             targetRelease['allAssetUrls'] as List<MapEntry<String, String>>,
         rawReleaseTitleCandidates: rawReleaseTitleCandidates,
+        apkSizeBytes: apkSizeBytes,
       );
     } else {
       if (onHttpErrorCode != null) {

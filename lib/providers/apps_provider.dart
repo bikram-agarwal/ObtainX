@@ -43,6 +43,7 @@ import 'package:obtainium/providers/installer_provider.dart' as installer;
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
+import 'package:obtainium/folders/app_folder.dart';
 
 final pm = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
@@ -355,6 +356,9 @@ String trackOnlyDownloadPageUrl(App app) {
 class AppInMemory {
   late App app;
   double? downloadProgress;
+  /// Total download size in bytes, available once the HTTP Content-Length header
+  /// is received (may remain null if the server doesn't report it).
+  int? downloadTotalBytes;
   PackageInfo? installedInfo;
   Uint8List? icon;
 
@@ -487,6 +491,7 @@ Future<File> downloadFileWithRetry(
   bool fileNameHasExt,
   Function? onProgress,
   String destDir, {
+  void Function(int?)? onContentLength,
   bool useExisting = true,
   Map<String, String>? headers,
   int retries = 3,
@@ -500,6 +505,7 @@ Future<File> downloadFileWithRetry(
       fileNameHasExt,
       onProgress,
       destDir,
+      onContentLength: onContentLength,
       useExisting: useExisting,
       headers: headers,
       allowInsecure: allowInsecure,
@@ -514,6 +520,7 @@ Future<File> downloadFileWithRetry(
         fileNameHasExt,
         onProgress,
         destDir,
+        onContentLength: onContentLength,
         useExisting: useExisting,
         headers: headers,
         retries: (retries - 1),
@@ -617,6 +624,7 @@ Future<File> downloadFile(
   bool fileNameHasExt,
   Function? onProgress,
   String destDir, {
+  void Function(int?)? onContentLength,
   bool useExisting = true,
   Map<String, String>? headers,
   bool allowInsecure = false,
@@ -660,6 +668,7 @@ Future<File> downloadFile(
   // If you have an existing file that is usable,
   // decide whether you can use it (either return full or resume partial)
   var fullContentLength = headersResponse.contentLength;
+  onContentLength?.call(fullContentLength);
   if (useExisting && downloadedFile.existsSync()) {
     var length = downloadedFile.lengthSync();
     if (fullContentLength == null || !rangeFeatureEnabled) {
@@ -1021,6 +1030,11 @@ class AppsProvider with ChangeNotifier {
         fileNameNoExt,
         source.urlsAlwaysHaveExtension,
         headers: headers,
+        onContentLength: (int? bytes) {
+          if (apps[app.id] != null) {
+            apps[app.id]!.downloadTotalBytes = bytes;
+          }
+        },
         (double? progress) {
           int? prog = progress?.ceil();
           if (apps[app.id] != null) {
@@ -1145,6 +1159,7 @@ class AppsProvider with ChangeNotifier {
       notificationsProvider?.cancel(notifId);
       if (apps[app.id] != null) {
         apps[app.id]!.downloadProgress = null;
+        apps[app.id]!.downloadTotalBytes = null;
         notifyListeners();
       }
     }
@@ -3084,11 +3099,27 @@ class AppsProvider with ChangeNotifier {
     );
     List<App> pps = results[0];
     Map<String, dynamic> errorsMap = results[1];
+    final sourceProvider = SourceProvider();
     for (var app in pps) {
       if (apps.containsKey(app.id)) {
         errorsMap.addAll({app.id: tr('appAlreadyAdded')});
       } else {
         await saveApps([app], onlyIfExists: false);
+        // Auto-assign to any folder whose rule matches this new app.
+        final resolvedSource = sourceProvider
+            .getSource(app.url, overrideSource: app.overrideSource)
+            .runtimeType
+            .toString();
+        bool changed = false;
+        for (final folder in settingsProvider.appFolders) {
+          if (folder.rule == null) continue;
+          if (excludedFolderIdsForApp(app).contains(folder.id)) continue;
+          if (folder.rule!.matches(app, resolvedSource: resolvedSource)) {
+            addAppToFolder(app, folder.id);
+            changed = true;
+          }
+        }
+        if (changed) await saveApps([app]);
       }
     }
     List<List<String>> errors = errorsMap.keys

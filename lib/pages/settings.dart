@@ -620,6 +620,14 @@ class _SettingsPageState extends State<SettingsPage> {
                             },
                           ),
                           SwitchListTile(
+                            title: Text(tr('showFolderedAppsOnMainPage')),
+                            value: settingsProvider.showFolderedAppsOnMainPage,
+                            onChanged: (value) {
+                              settingsProvider.showFolderedAppsOnMainPage =
+                                  value;
+                            },
+                          ),
+                          SwitchListTile(
                             title: Text(tr('dontShowTrackOnlyWarnings')),
                             value: settingsProvider.hideTrackOnlyWarning,
                             onChanged: (value) {

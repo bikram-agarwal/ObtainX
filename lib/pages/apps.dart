@@ -14,6 +14,7 @@ import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/pages/settings.dart';
+import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -126,6 +127,11 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
         Object.hashAll(a.app.categories),
         a.app.additionalSettings['onDemandOnly'] == true,
         a.app.additionalSettings['skippedLatestVersion'],
+        // Folder membership — needed so the main-page filter (hide foldered
+        // apps) and folder-view filter both re-run when membership changes.
+        Object.hashAll(
+          (a.app.additionalSettings['folderIds'] as List? ?? []),
+        ),
         // Icon fields deliberately excluded: each row watches its own icon
         // via _AppIconWidget.context.select, so icon loads only rebuild that
         // one row widget instead of the entire apps list.
@@ -732,11 +738,18 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
 }
 
 class AppsPage extends StatefulWidget {
-  const AppsPage({super.key, this.onDemandOnlyList = false});
+  const AppsPage({
+    super.key,
+    this.onDemandOnlyList = false,
+    this.folderId,
+  });
 
   /// When true, only apps with [App.additionalSettings] `onDemandOnly` are listed
   /// and pull-to-refresh checks only those IDs.
   final bool onDemandOnlyList;
+
+  /// When non-null, only apps belonging to this folder ID are shown.
+  final String? folderId;
 
   @override
   State<AppsPage> createState() => AppsPageState();
@@ -844,7 +857,7 @@ Null Function()? getChangeLogFn(BuildContext context, App app) {
         };
 }
 
-void showAppsViewOptionsSheet(BuildContext context) {
+void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -856,6 +869,59 @@ void showAppsViewOptionsSheet(BuildContext context) {
       return StatefulBuilder(
         builder: (ctx, setSheetState) {
           final settingsProvider = ctx.watch<SettingsProvider>();
+
+          // Effective view-setting accessors — use per-folder overrides when
+          // viewing a folder, otherwise fall back to global settings.
+          final effectiveSortColumn = folderId != null
+              ? settingsProvider.folderSortColumn(folderId)
+              : settingsProvider.sortColumn;
+          void setEffectiveSortColumn(SortColumnSettings v) => folderId != null
+              ? settingsProvider.setFolderSortColumn(folderId, v)
+              : (settingsProvider.sortColumn = v);
+
+          final effectiveSortOrder = folderId != null
+              ? settingsProvider.folderSortOrder(folderId)
+              : settingsProvider.sortOrder;
+          void setEffectiveSortOrder(SortOrderSettings v) => folderId != null
+              ? settingsProvider.setFolderSortOrder(folderId, v)
+              : (settingsProvider.sortOrder = v);
+
+          final effectiveGroupBy = folderId != null
+              ? settingsProvider.folderGroupBy(folderId)
+              : settingsProvider.appsListGroupBy;
+          void setEffectiveGroupBy(AppsListGroupBy v) => folderId != null
+              ? settingsProvider.setFolderGroupBy(folderId, v)
+              : (settingsProvider.appsListGroupBy = v);
+
+          final effectivePinUpdates = folderId != null
+              ? settingsProvider.folderPinUpdates(folderId)
+              : settingsProvider.pinUpdates;
+          void setEffectivePinUpdates(bool v) => folderId != null
+              ? settingsProvider.setFolderPinUpdates(folderId, v)
+              : (settingsProvider.pinUpdates = v);
+
+          final effectiveBuryNonInstalled = folderId != null
+              ? settingsProvider.folderBuryNonInstalled(folderId)
+              : settingsProvider.buryNonInstalled;
+          void setEffectiveBuryNonInstalled(bool v) => folderId != null
+              ? settingsProvider.setFolderBuryNonInstalled(folderId, v)
+              : (settingsProvider.buryNonInstalled = v);
+
+          final effectiveGroupNonInstalledSeparately = folderId != null
+              ? settingsProvider.folderGroupNonInstalledSeparately(folderId)
+              : settingsProvider.groupNonInstalledSeparately;
+          void setEffectiveGroupNonInstalledSeparately(bool v) =>
+              folderId != null
+                  ? settingsProvider.setFolderGroupNonInstalledSeparately(folderId, v)
+                  : (settingsProvider.groupNonInstalledSeparately = v);
+
+          final effectiveGroupUpdatesSeparately = folderId != null
+              ? settingsProvider.folderGroupUpdatesSeparately(folderId)
+              : settingsProvider.groupUpdatesSeparately;
+          void setEffectiveGroupUpdatesSeparately(bool v) => folderId != null
+              ? settingsProvider.setFolderGroupUpdatesSeparately(folderId, v)
+              : (settingsProvider.groupUpdatesSeparately = v);
+
           final colorScheme = Theme.of(ctx).colorScheme;
           final textTheme = Theme.of(ctx).textTheme;
 
@@ -1076,51 +1142,46 @@ void showAppsViewOptionsSheet(BuildContext context) {
                       children: [
                         sortChip(
                           label: tr('authorName'),
-                          selected: settingsProvider.sortColumn ==
+                          selected: effectiveSortColumn ==
                               SortColumnSettings.authorName,
                           onTap: () {
-                            settingsProvider.sortColumn =
-                                SortColumnSettings.authorName;
+                            setEffectiveSortColumn(SortColumnSettings.authorName);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('nameAuthor'),
-                          selected: settingsProvider.sortColumn ==
+                          selected: effectiveSortColumn ==
                               SortColumnSettings.nameAuthor,
                           onTap: () {
-                            settingsProvider.sortColumn =
-                                SortColumnSettings.nameAuthor;
+                            setEffectiveSortColumn(SortColumnSettings.nameAuthor);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('asAdded'),
-                          selected: settingsProvider.sortColumn ==
+                          selected: effectiveSortColumn ==
                               SortColumnSettings.added,
                           onTap: () {
-                            settingsProvider.sortColumn =
-                                SortColumnSettings.added;
+                            setEffectiveSortColumn(SortColumnSettings.added);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('releaseDate'),
-                          selected: settingsProvider.sortColumn ==
+                          selected: effectiveSortColumn ==
                               SortColumnSettings.releaseDate,
                           onTap: () {
-                            settingsProvider.sortColumn =
-                                SortColumnSettings.releaseDate;
+                            setEffectiveSortColumn(SortColumnSettings.releaseDate);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('sortByLastUpdateCheck'),
-                          selected: settingsProvider.sortColumn ==
+                          selected: effectiveSortColumn ==
                               SortColumnSettings.lastUpdateCheck,
                           onTap: () {
-                            settingsProvider.sortColumn =
-                                SortColumnSettings.lastUpdateCheck;
+                            setEffectiveSortColumn(SortColumnSettings.lastUpdateCheck);
                             setSheetState(() {});
                           },
                         ),
@@ -1134,21 +1195,19 @@ void showAppsViewOptionsSheet(BuildContext context) {
                       children: [
                         sortChip(
                           label: tr('ascending'),
-                          selected: settingsProvider.sortOrder ==
+                          selected: effectiveSortOrder ==
                               SortOrderSettings.ascending,
                           onTap: () {
-                            settingsProvider.sortOrder =
-                                SortOrderSettings.ascending;
+                            setEffectiveSortOrder(SortOrderSettings.ascending);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('descending'),
-                          selected: settingsProvider.sortOrder ==
+                          selected: effectiveSortOrder ==
                               SortOrderSettings.descending,
                           onTap: () {
-                            settingsProvider.sortOrder =
-                                SortOrderSettings.descending;
+                            setEffectiveSortOrder(SortOrderSettings.descending);
                             setSheetState(() {});
                           },
                         ),
@@ -1164,55 +1223,48 @@ void showAppsViewOptionsSheet(BuildContext context) {
                       children: [
                         sortChip(
                           label: tr('groupByNone'),
-                          selected: settingsProvider.appsListGroupBy ==
-                              AppsListGroupBy.none,
+                          selected: effectiveGroupBy == AppsListGroupBy.none,
                           onTap: () {
-                            settingsProvider.appsListGroupBy =
-                                AppsListGroupBy.none;
+                            setEffectiveGroupBy(AppsListGroupBy.none);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('category'),
-                          selected: settingsProvider.appsListGroupBy ==
+                          selected: effectiveGroupBy ==
                               AppsListGroupBy.category,
                           onTap: () {
-                            settingsProvider.appsListGroupBy =
-                                AppsListGroupBy.category;
+                            setEffectiveGroupBy(AppsListGroupBy.category);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('groupByTrackedSource'),
-                          selected: settingsProvider.appsListGroupBy ==
-                              AppsListGroupBy.source,
+                          selected: effectiveGroupBy == AppsListGroupBy.source,
                           onTap: () {
-                            settingsProvider.appsListGroupBy =
-                                AppsListGroupBy.source;
+                            setEffectiveGroupBy(AppsListGroupBy.source);
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('groupByAppType'),
-                          selected: settingsProvider.appsListGroupBy ==
+                          selected: effectiveGroupBy ==
                               AppsListGroupBy.appType,
                           onTap: () {
-                            settingsProvider.appsListGroupBy =
-                                AppsListGroupBy.appType;
+                            setEffectiveGroupBy(AppsListGroupBy.appType);
                             setSheetState(() {});
                           },
                         ),
                       ],
                     ),
-                    if (settingsProvider.appsListGroupBy !=
-                        AppsListGroupBy.none) ...[
+                    if (effectiveGroupBy != AppsListGroupBy.none) ...[
                       const SizedBox(height: 8),
                       _GroupToggleRow(
                         label: tr('groupNonInstalledSeparately'),
                         tooltip: tr('groupNonInstalledSeparatelyDescription'),
-                        value: settingsProvider.groupNonInstalledSeparately,
+                        value: effectiveGroupNonInstalledSeparately,
                         onChanged: (value) {
-                          settingsProvider.groupNonInstalledSeparately = value;
+                          setEffectiveGroupNonInstalledSeparately(value);
                           setSheetState(() {});
                         },
                       ),
@@ -1221,9 +1273,9 @@ void showAppsViewOptionsSheet(BuildContext context) {
                     _GroupToggleRow(
                       label: tr('groupUpdatesSeparately'),
                       tooltip: tr('groupUpdatesSeparatelyDescription'),
-                      value: settingsProvider.groupUpdatesSeparately,
+                      value: effectiveGroupUpdatesSeparately,
                       onChanged: (value) {
-                        settingsProvider.groupUpdatesSeparately = value;
+                        setEffectiveGroupUpdatesSeparately(value);
                         setSheetState(() {});
                       },
                     ),
@@ -1233,18 +1285,18 @@ void showAppsViewOptionsSheet(BuildContext context) {
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: Text(tr('pinUpdates')),
-                      value: settingsProvider.pinUpdates,
+                      value: effectivePinUpdates,
                       onChanged: (value) {
-                        settingsProvider.pinUpdates = value;
+                        setEffectivePinUpdates(value);
                         setSheetState(() {});
                       },
                     ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: Text(tr('moveNonInstalledAppsToBottom')),
-                      value: settingsProvider.buryNonInstalled,
+                      value: effectiveBuryNonInstalled,
                       onChanged: (value) {
-                        settingsProvider.buryNonInstalled = value;
+                        setEffectiveBuryNonInstalled(value);
                         setSheetState(() {});
                       },
                     ),
@@ -1366,6 +1418,9 @@ class _ScrollLinkedAppFooterState extends State<_ScrollLinkedAppFooter> {
   }
 }
 
+// Reserved settings key for the On-Demand Only page's per-view options.
+const String _onDemandViewSettingsId = '__on_demand_only__';
+
 class AppsPageState extends State<AppsPage> {
   AppsFilter filter = AppsFilter();
   final AppsFilter neutralFilter = AppsFilter();
@@ -1380,6 +1435,32 @@ class AppsPageState extends State<AppsPage> {
     if (selectedAppIds.isNotEmpty) {
       setState(() {
         selectedAppIds.clear();
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /// Called by [_HomePageState] when the system back button is pressed while
+  /// this tab is active. Returns true if the back event was consumed.
+  bool handleBack() {
+    if (clearSelected()) return true;
+    if (_searchExpanded) {
+      setState(() {
+        _searchExpanded = false;
+        _searchController.clear();
+        _searchFocusNode.unfocus();
+      });
+      return true;
+    }
+    final sp = context.read<SettingsProvider>();
+    final isFilterActive =
+        !filter.isIdenticalTo(neutralFilter, sp) || _searchField != 'appName';
+    if (isFilterActive) {
+      setState(() {
+        filter = AppsFilter();
+        _searchField = 'appName';
+        _searchController.clear();
       });
       return true;
     }
@@ -1448,6 +1529,53 @@ class AppsPageState extends State<AppsPage> {
         _ => filter.nameFilter,
       };
 
+  // ── Effective view-setting helpers ─────────────────────────────────────────
+  // When in a folder view, these return the folder's stored override or fall
+  // back to the global setting. On the main page they just return the global.
+
+  /// Returns the per-view settings key for this page, or null for the main page.
+  String? get _viewSettingsId =>
+      widget.folderId ?? (widget.onDemandOnlyList ? _onDemandViewSettingsId : null);
+
+  SortColumnSettings _effectiveSortColumn(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderSortColumn(id) : sp.sortColumn;
+  }
+
+  SortOrderSettings _effectiveSortOrder(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderSortOrder(id) : sp.sortOrder;
+  }
+
+  AppsListGroupBy _effectiveGroupBy(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderGroupBy(id) : sp.appsListGroupBy;
+  }
+
+  bool _effectivePinUpdates(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderPinUpdates(id) : sp.pinUpdates;
+  }
+
+  bool _effectiveBuryNonInstalled(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderBuryNonInstalled(id) : sp.buryNonInstalled;
+  }
+
+  bool _effectiveGroupNonInstalledSeparately(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null
+        ? sp.folderGroupNonInstalledSeparately(id)
+        : sp.groupNonInstalledSeparately;
+  }
+
+  bool _effectiveGroupUpdatesSeparately(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null
+        ? sp.folderGroupUpdatesSeparately(id)
+        : sp.groupUpdatesSeparately;
+  }
+
   void _applySearchText(String field, String text) {
     switch (field) {
       case 'author':
@@ -1461,16 +1589,19 @@ class AppsPageState extends State<AppsPage> {
     }
   }
 
-  /// Switches the active search field, preserving any text in the old field
-  /// and loading the new field's current value into the controller.
+  /// Switches the active search field, moving the current search text to the
+  /// new field and clearing the old one.
   void _changeSearchField(String newField) {
     if (newField == _searchField) return;
     _changingSearchField = true;
     setState(() {
-      // Commit whatever is in the controller to the current field.
-      _applySearchText(_searchField, _searchController.text);
+      final text = _searchController.text;
+      // Clear the old field so the text isn't applied to two fields at once.
+      _applySearchText(_searchField, '');
       _searchField = newField;
-      _searchController.text = _searchFieldValue(newField);
+      // Move the current text to the new field.
+      _applySearchText(newField, text);
+      // Controller already has the text; no change needed.
     });
     _changingSearchField = false;
   }
@@ -1534,18 +1665,6 @@ class AppsPageState extends State<AppsPage> {
         suffix: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_searchController.text.isNotEmpty)
-              GestureDetector(
-                onTap: _searchController.clear,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Icon(
-                    Icons.close,
-                    size: 16,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
             GestureDetector(
               onTap: showFilterSheet,
               child: AnimatedContainer(
@@ -1732,6 +1851,8 @@ class AppsPageState extends State<AppsPage> {
     final int listBuildToken = Object.hashAll([
       appsToken,
       widget.onDemandOnlyList,
+      widget.folderId,
+      settingsProvider.showFolderedAppsOnMainPage,
       filter.nameFilter,
       filter.authorFilter,
       filter.idFilter,
@@ -1739,12 +1860,13 @@ class AppsPageState extends State<AppsPage> {
       filter.includeNonInstalled,
       Object.hashAll(filter.categoryFilter.toList()..sort()),
       filter.sourceFilter,
-      settingsProvider.sortColumn.index,
-      settingsProvider.sortOrder.index,
-      settingsProvider.pinUpdates,
-      settingsProvider.buryNonInstalled,
-      settingsProvider.groupNonInstalledSeparately,
-      settingsProvider.groupUpdatesSeparately,
+      _effectiveSortColumn(settingsProvider).index,
+      _effectiveSortOrder(settingsProvider).index,
+      _effectiveGroupBy(settingsProvider).index,
+      _effectivePinUpdates(settingsProvider),
+      _effectiveBuryNonInstalled(settingsProvider),
+      _effectiveGroupNonInstalledSeparately(settingsProvider),
+      _effectiveGroupUpdatesSeparately(settingsProvider),
     ]);
     if (listBuildToken != _lastListBuildToken) {
       _lastListBuildToken = listBuildToken;
@@ -1763,6 +1885,22 @@ class AppsPageState extends State<AppsPage> {
               (appInMem) =>
                   appInMem.app.additionalSettings['onDemandOnly'] != true,
             )
+            .toList();
+      }
+
+      // ── Folder filter ───────────────────────────────────────────────────
+      if (widget.folderId != null) {
+        workingList = workingList
+            .where(
+              (appInMem) => folderIdsForApp(appInMem.app).contains(widget.folderId),
+            )
+            .toList();
+      } else if (!widget.onDemandOnlyList &&
+          !settingsProvider.showFolderedAppsOnMainPage) {
+        // On the main page only: hide apps that belong to any folder.
+        // The on-demand page shows all on-demand apps regardless of folder membership.
+        workingList = workingList
+            .where((appInMem) => folderIdsForApp(appInMem.app).isEmpty)
             .toList();
       }
 
@@ -1827,24 +1965,23 @@ class AppsPageState extends State<AppsPage> {
         return true;
       }).toList();
 
+      final sortCol = _effectiveSortColumn(settingsProvider);
+      final sortOrd = _effectiveSortOrder(settingsProvider);
       workingList.sort((a, b) {
         int result = 0;
-        if (settingsProvider.sortColumn == SortColumnSettings.authorName) {
+        if (sortCol == SortColumnSettings.authorName) {
           result = ((a.author + a.name).toLowerCase()).compareTo(
             (b.author + b.name).toLowerCase(),
           );
-        } else if (settingsProvider.sortColumn ==
-            SortColumnSettings.nameAuthor) {
+        } else if (sortCol == SortColumnSettings.nameAuthor) {
           result = ((a.name + a.author).toLowerCase()).compareTo(
             (b.name + b.author).toLowerCase(),
           );
-        } else if (settingsProvider.sortColumn ==
-            SortColumnSettings.releaseDate) {
+        } else if (sortCol == SortColumnSettings.releaseDate) {
           // Handle null dates: apps with unknown release dates go to end.
           final aDate = a.app.releaseDate;
           final bDate = b.app.releaseDate;
-          final isDescending =
-              settingsProvider.sortOrder == SortOrderSettings.descending;
+          final isDescending = sortOrd == SortOrderSettings.descending;
           if (aDate == null && bDate == null) {
             result = ((a.name + a.author).toLowerCase()).compareTo(
               (b.name + b.author).toLowerCase(),
@@ -1856,12 +1993,10 @@ class AppsPageState extends State<AppsPage> {
           } else {
             result = aDate.compareTo(bDate);
           }
-        } else if (settingsProvider.sortColumn ==
-            SortColumnSettings.lastUpdateCheck) {
+        } else if (sortCol == SortColumnSettings.lastUpdateCheck) {
           final aDate = a.app.lastUpdateCheck;
           final bDate = b.app.lastUpdateCheck;
-          final isDescending =
-              settingsProvider.sortOrder == SortOrderSettings.descending;
+          final isDescending = sortOrd == SortOrderSettings.descending;
           if (aDate == null && bDate == null) {
             result = ((a.name + a.author).toLowerCase()).compareTo(
               (b.name + b.author).toLowerCase(),
@@ -1873,13 +2008,13 @@ class AppsPageState extends State<AppsPage> {
           } else {
             result = aDate.compareTo(bDate);
           }
-        } else if (settingsProvider.sortColumn == SortColumnSettings.added) {
+        } else if (sortCol == SortColumnSettings.added) {
           result = 0;
         }
         return result;
       });
 
-      if (settingsProvider.sortOrder == SortOrderSettings.descending) {
+      if (sortOrd == SortOrderSettings.descending) {
         workingList = workingList.reversed.toList();
       }
 
@@ -1894,7 +2029,7 @@ class AppsPageState extends State<AppsPage> {
       _newInstallsCache =
           appsProvider.findExistingUpdates(nonInstalledOnly: true).toList();
 
-      if (settingsProvider.pinUpdates) {
+      if (_effectivePinUpdates(settingsProvider)) {
         final temp = <AppInMemory>[];
         workingList = workingList.where((sa) {
           if (_existingUpdatesCache.contains(sa.app.id)) {
@@ -1906,7 +2041,7 @@ class AppsPageState extends State<AppsPage> {
         workingList = [...temp, ...workingList];
       }
 
-      if (settingsProvider.buryNonInstalled) {
+      if (_effectiveBuryNonInstalled(settingsProvider)) {
         final temp = <AppInMemory>[];
         workingList = workingList.where((sa) {
           if (sa.app.installedVersion == null) {
@@ -1936,6 +2071,38 @@ class AppsPageState extends State<AppsPage> {
     final int onDemandOnlyAppCount = appsProvider.apps.values
         .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
         .length;
+
+    // Folder counts: number of non-on-demand apps in each folder.
+    final appFolders = settingsProvider.appFolders;
+    final Map<String, int> folderAppCounts = {
+      for (final f in appFolders)
+        f.id: appsProvider.apps.values
+            .where(
+              (a) =>
+                  a.app.additionalSettings['onDemandOnly'] != true &&
+                  folderIdsForApp(a.app).contains(f.id),
+            )
+            .length,
+    };
+    // Update counts per folder (mirrors the badge logic on the home tab icon).
+    final Map<String, int> folderUpdateCounts = {
+      for (final f in appFolders)
+        f.id: appsProvider.apps.values
+            .where(
+              (a) =>
+                  a.app.additionalSettings['onDemandOnly'] != true &&
+                  folderIdsForApp(a.app).contains(f.id) &&
+                  (appHasActionableUpdate(a.app) ||
+                      versionOrderUncertainUpdate(a.app)),
+            )
+            .length,
+    };
+    final String? currentFolderName = widget.folderId != null
+        ? appFolders
+              .where((f) => f.id == widget.folderId)
+              .map((f) => f.name)
+              .firstOrNull
+        : null;
 
     var existingUpdateIdsAllOrSelected = existingUpdates
         .where(
@@ -1968,12 +2135,13 @@ class AppsPageState extends State<AppsPage> {
       return true;
     }).toList();
 
+    final effectiveGroupBy = _effectiveGroupBy(settingsProvider);
     final segregateNonInstalled =
-        settingsProvider.groupNonInstalledSeparately &&
-            (settingsProvider.appsListGroupBy == AppsListGroupBy.category ||
-                settingsProvider.appsListGroupBy == AppsListGroupBy.source ||
-                settingsProvider.appsListGroupBy == AppsListGroupBy.appType);
-    final separateUpdates = settingsProvider.groupUpdatesSeparately;
+        _effectiveGroupNonInstalledSeparately(settingsProvider) &&
+            (effectiveGroupBy == AppsListGroupBy.category ||
+                effectiveGroupBy == AppsListGroupBy.source ||
+                effectiveGroupBy == AppsListGroupBy.appType);
+    final separateUpdates = _effectiveGroupUpdatesSeparately(settingsProvider);
 
     // Returns true when an app should be shown in the dedicated "Updates" group.
     bool isInUpdatesGroup(AppInMemory e) =>
@@ -2192,7 +2360,9 @@ class AppsPageState extends State<AppsPage> {
       }
       return GestureDetector(
         child: Hero(
-          tag: 'app-icon-$rowAppId',
+          tag: widget.folderId != null
+              ? 'folder-${widget.folderId}-icon-$rowAppId'
+              : 'app-icon-$rowAppId',
           // Preserve the ClipRRect/shape during the flight.
           flightShuttleBuilder: (_, animation, _, _, _) =>
               _AppIconWidget(appId: rowAppId),
@@ -3089,18 +3259,34 @@ class AppsPageState extends State<AppsPage> {
 
                       // ── Category selector ─────────────────────────────────
                       Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          20,
-                          16,
-                          20,
-                          20 + MediaQuery.of(context).viewPadding.bottom,
-                        ),
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                         child: CategoryEditorSelector(
                           preselected: filter.categoryFilter,
                           onSelected: (categories) {
                             update(() {
                               filter.categoryFilter = categories.toSet();
                             });
+                          },
+                        ),
+                      ),
+
+                      // ── Save as Folder ────────────────────────────────────
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          20,
+                          12,
+                          20,
+                          20 + MediaQuery.of(context).viewPadding.bottom,
+                        ),
+                        child: OutlinedButton.icon(
+                          icon: const Icon(
+                            Icons.create_new_folder_outlined,
+                            size: 18,
+                          ),
+                          label: Text(tr('saveAsFolder')),
+                          onPressed: () {
+                            Navigator.of(sheetCtx).pop();
+                            _saveFilterAsFolder(context, filter);
                           },
                         ),
                       ),
@@ -3233,6 +3419,19 @@ class AppsPageState extends State<AppsPage> {
                   visualDensity: VisualDensity.compact,
                   iconSize: 24,
                   color: colorScheme.primary,
+                  onPressed: () =>
+                      _showFolderAssignDialog(context, selectedApps),
+                  tooltip: tr('addToFolder'),
+                  icon: const Icon(Icons.folder_copy_outlined),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 24,
+                  color: colorScheme.primary,
                   onPressed: showMoreOptionsDialog,
                   tooltip: tr('more'),
                   icon: const Icon(Icons.more_horiz),
@@ -3284,7 +3483,7 @@ class AppsPageState extends State<AppsPage> {
                 iconSize: 24,
                 color: colorScheme.primary,
                 tooltip: tr('appsViewOptions'),
-                onPressed: () => showAppsViewOptionsSheet(context),
+                onPressed: () => showAppsViewOptionsSheet(context, folderId: _viewSettingsId),
                 icon: const Icon(Icons.tune),
               ),
             ),
@@ -3294,8 +3493,8 @@ class AppsPageState extends State<AppsPage> {
     }
 
     getDisplayedList() {
-      final groupBy = settingsProvider.appsListGroupBy;
-      final pinUpdatesEnabled = settingsProvider.pinUpdates;
+      final groupBy = effectiveGroupBy;
+      final pinUpdatesEnabled = _effectivePinUpdates(settingsProvider);
 
       // Builds a SliverList where the optional updates group is prepended
       // (pinUpdatesEnabled=true) or appended (false) to [mainChildCount] items
@@ -3396,11 +3595,35 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
+    // Back intercept priority:
+    // 1. Multi-select active → deselect all
+    // 2. Search expanded → collapse search bar
+    // 3. Filter active → reset filter
+    // 4. Otherwise → normal pop (exit / go up)
+    final bool isFilterActive =
+        !filter.isIdenticalTo(neutralFilter, settingsProvider) ||
+        _searchField != 'appName';
+    final bool shouldInterceptBack =
+        selectedAppIds.isNotEmpty || _searchExpanded || isFilterActive;
+
     return PopScope(
-      canPop: selectedAppIds.isEmpty,
+      canPop: !shouldInterceptBack,
       onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (!didPop && selectedAppIds.isNotEmpty) {
+        if (didPop) return;
+        if (selectedAppIds.isNotEmpty) {
           clearSelected();
+        } else if (_searchExpanded) {
+          setState(() {
+            _searchExpanded = false;
+            _searchController.clear();
+            _searchFocusNode.unfocus();
+          });
+        } else if (isFilterActive) {
+          setState(() {
+            filter = AppsFilter();
+            _searchField = 'appName';
+            _searchController.clear();
+          });
         }
       },
       child: Scaffold(
@@ -3416,12 +3639,15 @@ class AppsPageState extends State<AppsPage> {
                   interactive: true,
                   controller: scrollController,
                   child: CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
+                    physics: const AlwaysScrollableScrollPhysics(
+                      parent: ClampingScrollPhysics(),
+                    ),
                     controller: scrollController,
                     cacheExtent: 900,
                     slivers: <Widget>[
                       CustomAppBar(
-                        leading: widget.onDemandOnlyList
+                        leading: (widget.onDemandOnlyList ||
+                                widget.folderId != null)
                             ? IconButton(
                                 icon: const Icon(Icons.arrow_back),
                                 onPressed: () =>
@@ -3432,7 +3658,7 @@ class AppsPageState extends State<AppsPage> {
                             : null,
                         title: widget.onDemandOnlyList
                             ? tr('onDemandOnlyAppsTitle')
-                            : tr('appsString'),
+                            : currentFolderName ?? tr('appsString'),
                         titleStyle: _searchExpanded
                             ? Theme.of(context).textTheme.titleSmall
                             : null,
@@ -3470,31 +3696,94 @@ class AppsPageState extends State<AppsPage> {
                       ),
                       ...getLoadingWidgets(),
                       getDisplayedList(),
-                      if (!widget.onDemandOnlyList)
+                      // Extra bottom space for folder / on-demand pages so the
+                      // last item isn't clipped by the phone's rounded corners.
+                      if (widget.onDemandOnlyList || widget.folderId != null)
+                        const SliverToBoxAdapter(
+                          child: SizedBox(height: 80),
+                        ),
+                      if (!widget.onDemandOnlyList && widget.folderId == null)
                         SliverToBoxAdapter(
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
-                            child: SizedBox(
-                              width: double.infinity,
-                              child: FilledButton.icon(
-                                onPressed: () {
-                                  Navigator.push(
-                                    context,
-                                    slideUpPageRoute(
-                                      (_) => const AppsPage(
-                                        onDemandOnlyList: true,
+                            padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // Manage Folders button
+                                TextButton.icon(
+                                  onPressed: () =>
+                                      _showFolderManageDialog(context),
+                                  icon: const Icon(
+                                    Icons.folder_copy_outlined,
+                                    size: 18,
+                                  ),
+                                  label: Text(tr('manageFolders')),
+                                ),
+                                // User-defined folder buttons
+                                if (appFolders.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  ...appFolders.map(
+                                    (folder) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                      child: FilledButton.icon(
+                                        onPressed: () {
+                                          Navigator.push(
+                                            context,
+                                            slideUpPageRoute(
+                                              (_) => AppsPage(
+                                                folderId: folder.id,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        icon: () {
+                                          final int upd = folderUpdateCounts[folder.id] ?? 0;
+                                          if (upd > 0) {
+                                            return Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Badge(
+                                                  label: Text('$upd'),
+                                                  child: const SizedBox(width: 4, height: 16),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                const Icon(Icons.folder_outlined),
+                                              ],
+                                            );
+                                          }
+                                          return const Icon(Icons.folder_outlined);
+                                        }(),
+                                        label: Text(
+                                          '${folder.name} '
+                                          '(${folderAppCounts[folder.id] ?? 0} ${tr('appsString').toLowerCase()})',
+                                        ),
                                       ),
                                     ),
-                                  );
-                                },
-                                icon: const Icon(
-                                  Icons.folder_special_outlined,
+                                  ),
+                                  const SizedBox(height: 8),
+                                ],
+                                // On-Demand Only button (always last)
+                                FilledButton.icon(
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      slideUpPageRoute(
+                                        (_) => const AppsPage(
+                                          onDemandOnlyList: true,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.folder_special_outlined,
+                                  ),
+                                  label: Text(
+                                    '${tr('onDemandOnly')} '
+                                    '($onDemandOnlyAppCount ${tr('appsString').toLowerCase()})',
+                                  ),
                                 ),
-                                label: Text(
-                                  '${tr('onDemandOnly')} '
-                                  '($onDemandOnlyAppCount)',
-                                ),
-                              ),
+                                const SizedBox(height: 20),
+                              ],
                             ),
                           ),
                         ),
@@ -3541,6 +3830,624 @@ class AppsPageState extends State<AppsPage> {
     Navigator.push(
       context,
       heroFriendlyAppPageRoute((_) => AppPage(appId: app.app.id)),
+    );
+  }
+
+  // ── Folder helpers ──────────────────────────────────────────────────────────
+
+  /// Applies [folder]'s rule to every app, skipping excluded apps.
+  Future<void> _applyFolderRuleToAllApps(AppFolder folder) async {
+    if (folder.rule == null) return;
+    final appsProvider = context.read<AppsProvider>();
+    final sourceProvider = SourceProvider();
+    final changed = <App>[];
+    for (final appInMem in appsProvider.apps.values) {
+      final app = appInMem.app;
+      if (excludedFolderIdsForApp(app).contains(folder.id)) continue;
+      final resolvedSource = sourceProvider
+          .getSource(app.url, overrideSource: app.overrideSource)
+          .runtimeType
+          .toString();
+      if (folder.rule!.matches(app, resolvedSource: resolvedSource)) {
+        final before = List<String>.from(
+          app.additionalSettings['folderIds'] as List? ?? [],
+        );
+        addAppToFolder(app, folder.id);
+        final after = List<String>.from(
+          app.additionalSettings['folderIds'] as List? ?? [],
+        );
+        if (before.length != after.length) changed.add(app);
+      }
+    }
+    if (changed.isNotEmpty) {
+      await appsProvider.saveApps(changed);
+    }
+  }
+
+  /// Removes all traces of [folderId] from every app.
+  Future<void> _removeFolderFromAllApps(String folderId) async {
+    final appsProvider = context.read<AppsProvider>();
+    final changed = <App>[];
+    for (final appInMem in appsProvider.apps.values) {
+      final app = appInMem.app;
+      final hadId = folderIdsForApp(app).contains(folderId) ||
+          excludedFolderIdsForApp(app).contains(folderId);
+      if (hadId) {
+        clearFolderFromApp(app, folderId);
+        changed.add(app);
+      }
+    }
+    if (changed.isNotEmpty) {
+      await appsProvider.saveApps(changed);
+    }
+  }
+
+  // ── Folder edit dialog ──────────────────────────────────────────────────────
+
+  void _showFolderEditDialog(
+    BuildContext context, {
+    AppFolder? existing,
+    FolderRule? prefillRule,
+  }) {
+    // Capture providers BEFORE entering the dialog builder.
+    // context.read() must NOT be called inside a build/StatefulBuilder body.
+    // SourceProvider is not in the widget tree — always instantiate directly.
+    final sourceProvider = SourceProvider();
+    final appsProvider = context.read<AppsProvider>();
+    final settingsProvider = context.read<SettingsProvider>();
+
+    int countRuleMatches(FolderRule rule) {
+      return appsProvider.apps.values
+          .where((a) => a.app.additionalSettings['onDemandOnly'] != true)
+          .where((a) {
+            final resolvedSource = sourceProvider
+                .getSource(a.app.url, overrideSource: a.app.overrideSource)
+                .runtimeType
+                .toString();
+            return rule.matches(a.app, resolvedSource: resolvedSource);
+          })
+          .length;
+    }
+
+    final initialRule = existing?.rule ?? prefillRule;
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    var ruleEnabled = initialRule != null;
+    var ruleField = initialRule?.field ?? FolderRuleField.name;
+    var ruleMatch = initialRule?.matchType ?? FolderRuleMatchType.contains;
+    final ruleValueCtrl =
+        TextEditingController(text: initialRule?.value ?? '');
+
+    showDialog<void>(
+      context: context,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setDState) {
+          final currentRule = ruleEnabled && ruleValueCtrl.text.isNotEmpty
+              ? FolderRule(
+                  field: ruleField,
+                  matchType: ruleMatch,
+                  value: ruleValueCtrl.text,
+                )
+              : null;
+          // Safe: countRuleMatches uses the pre-captured providers,
+          // not context.read() inside build.
+          final matchCount =
+              currentRule != null ? countRuleMatches(currentRule) : null;
+
+          return AlertDialog(
+            title: Text(
+              existing == null ? tr('newFolder') : tr('editFolder'),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: InputDecoration(
+                      labelText: tr('folderName'),
+                      border: const OutlineInputBorder(),
+                    ),
+                    autofocus: true,
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          tr('folderRule'),
+                          style: Theme.of(dCtx).textTheme.titleSmall,
+                        ),
+                      ),
+                      Switch(
+                        value: ruleEnabled,
+                        onChanged: (v) => setDState(() => ruleEnabled = v),
+                      ),
+                    ],
+                  ),
+                  if (ruleEnabled) ...[
+                    const SizedBox(height: 8),
+                    // PopupMenuButton opens a floating menu without touching
+                    // keyboard focus, so the keyboard stays open while picking.
+                    PopupMenuButton<FolderRuleField>(
+                      initialValue: ruleField,
+                      onSelected: (v) => setDState(() => ruleField = v),
+                      itemBuilder: (_) => FolderRuleField.values
+                          .map(
+                            (f) => PopupMenuItem(
+                              value: f,
+                              child: Text(_folderRuleFieldLabel(f)),
+                            ),
+                          )
+                          .toList(),
+                      child: InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: tr('folderRuleField'),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: const Icon(Icons.arrow_drop_down),
+                          contentPadding: const EdgeInsets.fromLTRB(12, 16, 4, 16),
+                        ),
+                        child: Text(_folderRuleFieldLabel(ruleField)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    PopupMenuButton<FolderRuleMatchType>(
+                      initialValue: ruleMatch,
+                      onSelected: (v) => setDState(() => ruleMatch = v),
+                      itemBuilder: (_) => FolderRuleMatchType.values
+                          .map(
+                            (m) => PopupMenuItem(
+                              value: m,
+                              child: Text(_folderRuleMatchLabel(m)),
+                            ),
+                          )
+                          .toList(),
+                      child: InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: tr('folderRuleMatch'),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: const Icon(Icons.arrow_drop_down),
+                          contentPadding: const EdgeInsets.fromLTRB(12, 16, 4, 16),
+                        ),
+                        child: Text(_folderRuleMatchLabel(ruleMatch)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: ruleValueCtrl,
+                      decoration: InputDecoration(
+                        labelText: tr('folderRuleValue'),
+                        border: const OutlineInputBorder(),
+                        helperText: matchCount != null
+                            ? tr(
+                                'ruleMatchesXApps',
+                                namedArgs: {'count': '$matchCount'},
+                              )
+                            : null,
+                      ),
+                      onChanged: (_) => setDState(() {}),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dCtx).pop(),
+                child: Text(tr('cancel')),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final name = nameCtrl.text.trim();
+                  if (name.isEmpty) return;
+                  final rule =
+                      ruleEnabled && ruleValueCtrl.text.trim().isNotEmpty
+                      ? FolderRule(
+                          field: ruleField,
+                          matchType: ruleMatch,
+                          value: ruleValueCtrl.text.trim(),
+                        )
+                      : null;
+                  final folders =
+                      List<AppFolder>.from(settingsProvider.appFolders);
+                  final AppFolder folder;
+                  if (existing == null) {
+                    folder = AppFolder(
+                      id: AppFolder.generateId(),
+                      name: name,
+                      rule: rule,
+                    );
+                    folders.add(folder);
+                  } else {
+                    folder = existing.copyWith(
+                      name: name,
+                      rule: rule,
+                      clearRule: rule == null,
+                    );
+                    final idx =
+                        folders.indexWhere((f) => f.id == existing.id);
+                    if (idx >= 0) folders[idx] = folder;
+                  }
+                  settingsProvider.appFolders = folders;
+                  if (!dCtx.mounted) return;
+                  Navigator.of(dCtx).pop();
+                  await _applyFolderRuleToAllApps(folder);
+                },
+                child: Text(tr('save')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String _folderRuleFieldLabel(FolderRuleField field) {
+    switch (field) {
+      case FolderRuleField.name:
+        return tr('folderRuleFieldName');
+      case FolderRuleField.author:
+        return tr('folderRuleFieldAuthor');
+      case FolderRuleField.id:
+        return tr('folderRuleFieldId');
+      case FolderRuleField.category:
+        return tr('folderRuleFieldCategory');
+      case FolderRuleField.source:
+        return tr('folderRuleFieldSource');
+    }
+  }
+
+  String _folderRuleMatchLabel(FolderRuleMatchType match) {
+    switch (match) {
+      case FolderRuleMatchType.contains:
+        return tr('folderRuleMatchContains');
+      case FolderRuleMatchType.equals:
+        return tr('folderRuleMatchEquals');
+      case FolderRuleMatchType.startsWith:
+        return tr('folderRuleMatchStartsWith');
+    }
+  }
+
+  // ── Save filter as folder ───────────────────────────────────────────────────
+
+  void _saveFilterAsFolder(BuildContext context, AppsFilter currentFilter) {
+    // Determine which filter fields are active.
+    final activeFields = <FolderRuleField, String>{};
+    if (currentFilter.nameFilter.isNotEmpty) {
+      activeFields[FolderRuleField.name] = currentFilter.nameFilter;
+    }
+    if (currentFilter.authorFilter.isNotEmpty) {
+      activeFields[FolderRuleField.author] = currentFilter.authorFilter;
+    }
+    if (currentFilter.idFilter.isNotEmpty) {
+      activeFields[FolderRuleField.id] = currentFilter.idFilter;
+    }
+    if (currentFilter.categoryFilter.length == 1) {
+      activeFields[FolderRuleField.category] =
+          currentFilter.categoryFilter.first;
+    }
+    if (currentFilter.sourceFilter.isNotEmpty) {
+      activeFields[FolderRuleField.source] = currentFilter.sourceFilter;
+    }
+
+    FolderRule? derivedRule;
+    if (activeFields.length == 1) {
+      // Exactly one active field — derive rule automatically.
+      final entry = activeFields.entries.first;
+      derivedRule = FolderRule(
+        field: entry.key,
+        matchType: FolderRuleMatchType.contains,
+        value: entry.value,
+      );
+    }
+    // Multiple fields or no fields → open edit dialog with no pre-filled rule;
+    // the user can configure it manually.
+    _showFolderEditDialog(
+      context,
+      prefillRule: derivedRule,
+    );
+  }
+
+  // ── Folder assign dialog ────────────────────────────────────────────────────
+
+  void _showFolderAssignDialog(BuildContext context, Set<App> apps) {
+    final settingsProvider = context.read<SettingsProvider>();
+    // Mutable so newly created folders can be reflected without re-opening.
+    var folders = settingsProvider.appFolders;
+
+    // Determine which folders all selected apps already belong to.
+    final commonFolderIds = folders
+        .map((f) => f.id)
+        .where((id) => apps.every((a) => folderIdsForApp(a).contains(id)))
+        .toSet();
+    final selected = Set<String>.from(commonFolderIds);
+
+    // On-Demand Only: checked if ALL selected apps have onDemandOnly == true.
+    const String onDemandKey = '__onDemandOnly__';
+    final bool allOnDemand = apps.every(
+      (a) => a.additionalSettings['onDemandOnly'] == true,
+    );
+    if (allOnDemand) selected.add(onDemandKey);
+
+    showDialog<void>(
+      context: context,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setDState) {
+          Future<void> createNewFolder() async {
+            final nameCtrl = TextEditingController();
+            final name = await showDialog<String>(
+              context: dCtx,
+              builder: (ctx) => AlertDialog(
+                title: Text(tr('newFolder')),
+                content: TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    labelText: tr('folderName'),
+                    border: const OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) =>
+                      Navigator.of(ctx).pop(nameCtrl.text.trim()),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: Text(tr('cancel')),
+                  ),
+                  FilledButton(
+                    onPressed: () =>
+                        Navigator.of(ctx).pop(nameCtrl.text.trim()),
+                    child: Text(tr('ok')),
+                  ),
+                ],
+              ),
+            );
+            nameCtrl.dispose();
+            if (name == null || name.isEmpty) return;
+            final newFolder = AppFolder(
+              id: AppFolder.generateId(),
+              name: name,
+            );
+            final updatedFolders = [...settingsProvider.appFolders, newFolder];
+            settingsProvider.appFolders = updatedFolders;
+            setDState(() {
+              folders = updatedFolders;
+              selected.remove(onDemandKey);
+              selected.add(newFolder.id);
+            });
+          }
+
+          return AlertDialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
+            ),
+            title: Text(tr('addToFolder')),
+            contentPadding: const EdgeInsets.fromLTRB(0, 20, 0, 0),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ...folders.map(
+                      (f) => CheckboxListTile(
+                        title: Text(f.name),
+                        secondary: const Icon(Icons.folder_outlined),
+                        value: selected.contains(f.id),
+                        onChanged: (v) => setDState(() {
+                          if (v == true) {
+                            selected.add(f.id);
+                            // Regular folder and On-Demand are mutually exclusive.
+                            selected.remove(onDemandKey);
+                          } else {
+                            selected.remove(f.id);
+                          }
+                        }),
+                      ),
+                    ),
+                    CheckboxListTile(
+                      title: Text(tr('onDemandOnly')),
+                      secondary: const Icon(Icons.folder_special_outlined),
+                      value: selected.contains(onDemandKey),
+                      onChanged: (v) => setDState(() {
+                        if (v == true) {
+                          // On-Demand is mutually exclusive with all regular folders.
+                          selected
+                            ..removeWhere((id) => id != onDemandKey)
+                            ..add(onDemandKey);
+                        } else {
+                          selected.remove(onDemandKey);
+                        }
+                      }),
+                    ),
+                    const Divider(height: 8),
+                    ListTile(
+                      leading: const Icon(Icons.create_new_folder_outlined),
+                      title: Text(tr('newFolder')),
+                      onTap: createNewFolder,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dCtx).pop(),
+                child: Text(tr('cancel')),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final appsProvider = context.read<AppsProvider>();
+                  final bool setOnDemand = selected.contains(onDemandKey);
+                  for (final app in apps) {
+                    // Add to newly-checked folders, remove from unchecked ones.
+                    for (final f in folders) {
+                      if (selected.contains(f.id)) {
+                        addAppToFolder(app, f.id);
+                      } else if (commonFolderIds.contains(f.id)) {
+                        removeAppFromFolder(app, f.id);
+                      }
+                    }
+                    // On-Demand Only: toggle setting when state changed.
+                    if (setOnDemand) {
+                      app.additionalSettings['onDemandOnly'] = true;
+                    } else if (allOnDemand) {
+                      // Was checked for all, now unchecked — clear it.
+                      app.additionalSettings['onDemandOnly'] = false;
+                    }
+                  }
+                  await appsProvider.saveApps(apps.toList());
+                  if (!dCtx.mounted) return;
+                  Navigator.of(dCtx).pop();
+                },
+                child: Text(tr('save')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Folder manage dialog ────────────────────────────────────────────────────
+
+  void _showFolderManageDialog(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) {
+          final settingsProvider = sheetCtx.watch<SettingsProvider>();
+          final folders = settingsProvider.appFolders;
+          final bottomInset =
+              MediaQuery.viewPaddingOf(sheetCtx).bottom;
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    tr('folders'),
+                    style: Theme.of(sheetCtx).textTheme.titleMedium,
+                  ),
+                ),
+                if (folders.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Center(child: Text(tr('noFolders'))),
+                  )
+                else
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: folders.length,
+                    itemBuilder: (_, i) {
+                      final folder = folders[i];
+                      return ListTile(
+                        leading: const Icon(Icons.folder_outlined),
+                        title: Text(folder.name),
+                        subtitle: folder.rule != null
+                            ? Text(
+                                '${_folderRuleFieldLabel(folder.rule!.field)}'
+                                ' ${_folderRuleMatchLabel(folder.rule!.matchType).toLowerCase()}'
+                                ' "${folder.rule!.value}"',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              )
+                            : null,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined),
+                              tooltip: tr('editFolder'),
+                              onPressed: () {
+                                Navigator.of(sheetCtx).pop();
+                                _showFolderEditDialog(
+                                  context,
+                                  existing: folder,
+                                );
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outlined),
+                              tooltip: tr('deleteFolder'),
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: sheetCtx,
+                                  builder: (dCtx) => AlertDialog(
+                                    content: Text(
+                                      tr(
+                                        'deleteFolderConfirm',
+                                        namedArgs: {
+                                          'name': folder.name,
+                                        },
+                                      ),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.of(
+                                          dCtx,
+                                        ).pop(false),
+                                        child: Text(tr('cancel')),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () => Navigator.of(
+                                          dCtx,
+                                        ).pop(true),
+                                        child: Text(tr('delete')),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirm != true) return;
+                                // ignore: use_build_context_synchronously
+                                if (!context.mounted) return;
+                                final sp =
+                                    context.read<SettingsProvider>();
+                                final updated = sp.appFolders
+                                    .where((f) => f.id != folder.id)
+                                    .toList();
+                                sp.appFolders = updated;
+                                sp.clearFolderViewSettings(folder.id);
+                                await _removeFolderFromAllApps(folder.id);
+                                if (sheetCtx.mounted) {
+                                  setSheetState(() {});
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(sheetCtx).pop();
+                      _showFolderEditDialog(context);
+                    },
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    label: Text(tr('newFolder')),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
