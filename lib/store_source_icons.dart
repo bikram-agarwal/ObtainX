@@ -2,6 +2,23 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:obtainium/favicon_cache.dart';
 
+/// Inversion filter: swaps black ↔ white while preserving alpha.
+const ColorFilter _invertColorFilter = ColorFilter.matrix([
+  -1, 0, 0, 0, 255,
+   0,-1, 0, 0, 255,
+   0, 0,-1, 0, 255,
+   0, 0, 0, 1,   0,
+]);
+
+/// Returns true if [assetPath]'s icon should be colour-inverted for the current
+/// brightness. GitHub ships a black mark (needs inversion in dark mode);
+/// APKMirror ships a white mark (needs inversion in light mode).
+bool _iconNeedsInversion(String assetPath, bool isDark) {
+  if (assetPath == StoreSourceIconPaths.github && isDark) return true;
+  if (assetPath == StoreSourceIconPaths.apkmirror && !isDark) return true;
+  return false;
+}
+
 /// Logo widget for store chips: bundled asset for known hosts, favicon for others.
 /// Suitable as a [FilterChip] avatar — transparent background, no container border.
 class StoreSourceChipAvatar extends StatefulWidget {
@@ -42,20 +59,12 @@ class _StoreSourceChipAvatarState extends State<StoreSourceChipAvatar> {
       return SizedBox(width: widget.size, height: widget.size);
     }
 
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final String? localAsset = storeSourceAssetPathForHost(widget.host);
     if (localAsset != null) {
       Widget img = StoreSourceIconImage(assetPath: localAsset, size: widget.size);
-      if (Theme.of(context).brightness == Brightness.dark &&
-          localAsset == StoreSourceIconPaths.github) {
-        img = ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            -1, 0, 0, 0, 255,
-             0,-1, 0, 0, 255,
-             0, 0,-1, 0, 255,
-             0, 0, 0, 1,   0,
-          ]),
-          child: img,
-        );
+      if (_iconNeedsInversion(localAsset, isDark)) {
+        img = ColorFiltered(colorFilter: _invertColorFilter, child: img);
       }
       return img;
     }
@@ -212,16 +221,8 @@ class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
     Widget image;
     if (localAsset != null) {
       image = StoreSourceIconImage(assetPath: localAsset, size: 13);
-      if (isDark && localAsset == StoreSourceIconPaths.github) {
-        image = ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            -1, 0, 0, 0, 255,
-            0, -1, 0, 0, 255,
-            0, 0, -1, 0, 255,
-            0, 0, 0, 1, 0,
-          ]),
-          child: image,
-        );
+      if (_iconNeedsInversion(localAsset, isDark)) {
+        image = ColorFiltered(colorFilter: _invertColorFilter, child: image);
       }
     } else {
       image = FutureBuilder<Uint8List?>(

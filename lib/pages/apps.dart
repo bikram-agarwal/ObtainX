@@ -25,6 +25,87 @@ import 'package:markdown/markdown.dart' as md;
 
 const double _appsListGroupCardRadius = 20;
 
+// Android ApplicationInfo flag constants used for app type classification.
+const int _androidFlagSystem = 1; // ApplicationInfo.FLAG_SYSTEM
+const int _androidFlagUpdatedSystemApp = 128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+
+/// App type groups for the "Group by App Type" feature.
+enum AppTypeGroup { user, system, privileged }
+
+/// Returns the [AppTypeGroup] for a given [AppInMemory] based on Android package flags.
+/// Non-installed apps (no [AppInMemory.installedInfo]) are treated as user apps.
+AppTypeGroup classifyAppType(AppInMemory app) {
+  final info = app.installedInfo;
+  if (info == null) return AppTypeGroup.user;
+  final flags = info.applicationInfo?.flags ?? 0;
+  final isSystem =
+      (flags & _androidFlagSystem) != 0 ||
+      (flags & _androidFlagUpdatedSystemApp) != 0;
+  if (!isSystem) return AppTypeGroup.user;
+  // Privileged: system app NOT updated by the user that lives in a privileged partition.
+  final isUpdatedByUser = (flags & _androidFlagUpdatedSystemApp) != 0;
+  if (!isUpdatedByUser) {
+    final sourceDir = info.applicationInfo?.sourceDir ?? '';
+    if (sourceDir.contains('/priv-app/') ||
+        sourceDir.contains('/framework/') ||
+        sourceDir.startsWith('/vendor/') ||
+        sourceDir.startsWith('/odm/') ||
+        sourceDir.startsWith('/oem/')) {
+      return AppTypeGroup.privileged;
+    }
+  }
+  return AppTypeGroup.system;
+}
+
+/// A labeled row with an info tooltip and a [Switch], used in the view-options sheet.
+class _GroupToggleRow extends StatelessWidget {
+  const _GroupToggleRow({
+    required this.label,
+    required this.tooltip,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String tooltip;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Flexible(child: Text(label)),
+              Tooltip(
+                message: tooltip,
+                triggerMode: TooltipTriggerMode.tap,
+                waitDuration: Duration.zero,
+                showDuration: const Duration(seconds: 5),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Icon(
+                    Icons.help_outline,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Switch(value: value, onChanged: onChanged),
+      ],
+    );
+  }
+}
+
 /// Fingerprint so [AppsPage] rebuilds only when app-list data changes,
 /// not on every [AppsProvider.notifyListeners] (e.g. download-progress ticks
 /// or icon-load completions — icons are watched per-row by [_AppIconWidget]).
@@ -126,6 +207,9 @@ class _AppListItem extends StatelessWidget {
     required this.onLongPress,
     required this.highlightTouchTargets,
     required this.categoryColors,
+    required this.showAppTypeBadge,
+    required this.showTrackedStoreBadge,
+    this.sourceHost,
   });
 
   final String appId;
@@ -136,6 +220,9 @@ class _AppListItem extends StatelessWidget {
   final VoidCallback onLongPress;
   final bool highlightTouchTargets;
   final Map<String?, int> categoryColors;
+  final bool showAppTypeBadge;
+  final bool showTrackedStoreBadge;
+  final String? sourceHost;
 
   @override
   Widget build(BuildContext context) {
@@ -286,6 +373,51 @@ class _AppListItem extends StatelessWidget {
     ];
     if (stops.length == 2) stops[0] = 0.9999;
 
+    // App-type badge at bottom-right of icon — icon only, no background.
+    final appType = classifyAppType(app);
+    final (IconData appTypeIcon, Color appTypeColor) = switch (appType) {
+      AppTypeGroup.user => (Icons.person_rounded, Colors.green),
+      AppTypeGroup.system => (Icons.android_rounded, Colors.grey),
+      AppTypeGroup.privileged => (Icons.security_rounded, Colors.grey.shade600),
+    };
+    // App type badge on icon (gated by showAppTypeBadge).
+    final Widget iconWithBadge = showAppTypeBadge
+        ? Stack(
+            clipBehavior: Clip.none,
+            children: [
+              iconWidget,
+              Positioned(
+                right: -3,
+                bottom: -3,
+                child: Icon(appTypeIcon, size: 14, color: appTypeColor),
+              ),
+            ],
+          )
+        : iconWidget;
+
+    // Leading = [icon+type-badge] + [store column] inside ListTile.leading.
+    // Store column always rendered (keeps title position stable); badge shown
+    // only when showTrackedStoreBadge is true and sourceHost is known.
+    final Widget leadingWidget = Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        iconWithBadge,
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 20,
+          child: Center(
+            child: (showTrackedStoreBadge && sourceHost != null)
+                ? Transform.scale(
+                    scale: 1.25,
+                    child: StoreSourceListBadge(host: sourceHost!),
+                  )
+                : null,
+          ),
+        ),
+      ],
+    );
+
     return RepaintBoundary(
       child: Container(
         decoration: BoxDecoration(
@@ -312,7 +444,7 @@ class _AppListItem extends StatelessWidget {
           ),
           selected: isSelected,
           onLongPress: onLongPress,
-          leading: iconWidget,
+          leading: leadingWidget,
           title: Text(
             app.name,
             maxLines: 1,
@@ -903,6 +1035,37 @@ void showAppsViewOptionsSheet(BuildContext context) {
                         setSheetState(() {});
                       },
                     ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Text(
+                          tr('showBadges'),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(width: 12),
+                        FilterChip(
+                          avatar: const Icon(Icons.person_rounded, size: 16),
+                          showCheckmark: false,
+                          label: Text(tr('showAppTypeBadge')),
+                          selected: settingsProvider.showAppTypeBadge,
+                          onSelected: (value) {
+                            settingsProvider.showAppTypeBadge = value;
+                            setSheetState(() {});
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                        FilterChip(
+                          avatar: const Icon(Icons.store_rounded, size: 16),
+                          showCheckmark: false,
+                          label: Text(tr('showTrackedStoreBadge')),
+                          selected: settingsProvider.showTrackedStoreBadge,
+                          onSelected: (value) {
+                            settingsProvider.showTrackedStoreBadge = value;
+                            setSheetState(() {});
+                          },
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 16),
                     Divider(color: colorScheme.outlineVariant),
                     const SizedBox(height: 8),
@@ -1029,53 +1192,41 @@ void showAppsViewOptionsSheet(BuildContext context) {
                             setSheetState(() {});
                           },
                         ),
+                        sortChip(
+                          label: tr('groupByAppType'),
+                          selected: settingsProvider.appsListGroupBy ==
+                              AppsListGroupBy.appType,
+                          onTap: () {
+                            settingsProvider.appsListGroupBy =
+                                AppsListGroupBy.appType;
+                            setSheetState(() {});
+                          },
+                        ),
                       ],
                     ),
                     if (settingsProvider.appsListGroupBy !=
                         AppsListGroupBy.none) ...[
                       const SizedBox(height: 8),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Flexible(
-                                  child: Text(tr('groupNonInstalledSeparately')),
-                                ),
-                                Tooltip(
-                                  message: tr(
-                                    'groupNonInstalledSeparatelyDescription',
-                                  ),
-                                  triggerMode: TooltipTriggerMode.tap,
-                                  waitDuration: Duration.zero,
-                                  showDuration: const Duration(seconds: 5),
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(left: 6),
-                                    child: Icon(
-                                      Icons.help_outline,
-                                      size: 20,
-                                      color: colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Switch(
-                            value:
-                                settingsProvider.groupNonInstalledSeparately,
-                            onChanged: (value) {
-                              settingsProvider.groupNonInstalledSeparately =
-                                  value;
-                              setSheetState(() {});
-                            },
-                          ),
-                        ],
+                      _GroupToggleRow(
+                        label: tr('groupNonInstalledSeparately'),
+                        tooltip: tr('groupNonInstalledSeparatelyDescription'),
+                        value: settingsProvider.groupNonInstalledSeparately,
+                        onChanged: (value) {
+                          settingsProvider.groupNonInstalledSeparately = value;
+                          setSheetState(() {});
+                        },
                       ),
                     ],
+                    const SizedBox(height: 8),
+                    _GroupToggleRow(
+                      label: tr('groupUpdatesSeparately'),
+                      tooltip: tr('groupUpdatesSeparatelyDescription'),
+                      value: settingsProvider.groupUpdatesSeparately,
+                      onChanged: (value) {
+                        settingsProvider.groupUpdatesSeparately = value;
+                        setSheetState(() {});
+                      },
+                    ),
                     const SizedBox(height: 16),
                     Divider(color: colorScheme.outlineVariant),
                     const SizedBox(height: 4),
@@ -1258,7 +1409,11 @@ class AppsPageState extends State<AppsPage> {
   Map<String, List<int>> _categoryGroupListedIndices = const {};
   /// Maps source runtime type string → indices into [_listedAppsCache].
   Map<String, List<int>> _sourceGroupListedIndices = const {};
+  /// Maps [AppTypeGroup] → indices into [_listedAppsCache].
+  Map<AppTypeGroup, List<int>> _appTypeGroupListedIndices = const {};
   List<int> _nonInstalledListedIndices = const [];
+  /// Indices of apps shown in the "Updates" group (groupUpdatesSeparately).
+  List<int> _updatesGroupListedIndices = const [];
   int? _lastGroupIndexCacheToken;
 
   // ── Group expansion state ─────────────────────────────────────────────────
@@ -1589,6 +1744,7 @@ class AppsPageState extends State<AppsPage> {
       settingsProvider.pinUpdates,
       settingsProvider.buryNonInstalled,
       settingsProvider.groupNonInstalledSeparately,
+      settingsProvider.groupUpdatesSeparately,
     ]);
     if (listBuildToken != _lastListBuildToken) {
       _lastListBuildToken = listBuildToken;
@@ -1815,15 +1971,31 @@ class AppsPageState extends State<AppsPage> {
     final segregateNonInstalled =
         settingsProvider.groupNonInstalledSeparately &&
             (settingsProvider.appsListGroupBy == AppsListGroupBy.category ||
-                settingsProvider.appsListGroupBy == AppsListGroupBy.source);
-    final appsListedForCategoryKeys = segregateNonInstalled
-        ? listedApps.where((e) => e.app.installedVersion != null).toList()
-        : listedApps;
-    final appsListedForSourceKeys = segregateNonInstalled
-        ? listedApps.where((e) => e.app.installedVersion != null).toList()
-        : listedApps;
+                settingsProvider.appsListGroupBy == AppsListGroupBy.source ||
+                settingsProvider.appsListGroupBy == AppsListGroupBy.appType);
+    final separateUpdates = settingsProvider.groupUpdatesSeparately;
+
+    // Returns true when an app should be shown in the dedicated "Updates" group.
+    bool isInUpdatesGroup(AppInMemory e) =>
+        separateUpdates &&
+        _existingUpdatesCache.contains(e.app.id) &&
+        e.app.additionalSettings['onDemandOnly'] != true;
+
+    // Apps that go into normal category/source/appType groups (excluding
+    // segregated non-installed and the updates group when those features are on).
+    List<AppInMemory> appsForGroups(List<AppInMemory> source) => source
+        .where((e) =>
+            !(segregateNonInstalled && e.app.installedVersion == null) &&
+            !isInUpdatesGroup(e))
+        .toList();
+
+    final appsListedForCategoryKeys = appsForGroups(listedApps);
+    final appsListedForSourceKeys = appsListedForCategoryKeys;
+    final appsListedForAppTypeKeys = appsListedForCategoryKeys;
     final showNonInstalledGroupSection = segregateNonInstalled &&
         listedApps.any((e) => e.app.installedVersion == null);
+    final showUpdatesGroupSection =
+        separateUpdates && listedApps.any(isInUpdatesGroup);
 
     List<String?> getListedCategories(List<AppInMemory> appsSource) {
       var temp = appsSource.map(
@@ -1864,6 +2036,11 @@ class AppsPageState extends State<AppsPage> {
 
     var listedSources = getListedSourceKeys(appsListedForSourceKeys);
 
+    // App types that are present in the non-updates, non-uninstalled subset.
+    final listedAppTypes = AppTypeGroup.values
+        .where((t) => appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t))
+        .toList();
+
     if (listBuildToken != _lastGroupIndexCacheToken) {
       _lastGroupIndexCacheToken = listBuildToken;
       final nextCategoryMap = <String, List<int>>{};
@@ -1877,9 +2054,8 @@ class AppsPageState extends State<AppsPage> {
             listingIndex < listedApps.length;
             listingIndex++) {
           final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) {
-            continue;
-          }
+          if (segregateNonInstalled && row.app.installedVersion == null) continue;
+          if (isInUpdatesGroup(row)) continue;
           if (row.app.categories.contains(categoryNullable) ||
               (row.app.categories.isEmpty && categoryNullable == null)) {
             indices.add(listingIndex);
@@ -1899,9 +2075,8 @@ class AppsPageState extends State<AppsPage> {
             listingIndex < listedApps.length;
             listingIndex++) {
           final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) {
-            continue;
-          }
+          if (segregateNonInstalled && row.app.installedVersion == null) continue;
+          if (isInUpdatesGroup(row)) continue;
           if (sourceProvider
                   .getSource(row.app.url, overrideSource: row.app.overrideSource)
                   .runtimeType
@@ -1914,6 +2089,23 @@ class AppsPageState extends State<AppsPage> {
       }
       _sourceGroupListedIndices = nextSourceMap;
 
+      final nextAppTypeMap = <AppTypeGroup, List<int>>{};
+      for (final type in AppTypeGroup.values) {
+        final indices = <int>[];
+        for (int listingIndex = 0;
+            listingIndex < listedApps.length;
+            listingIndex++) {
+          final AppInMemory row = listedApps[listingIndex];
+          if (segregateNonInstalled && row.app.installedVersion == null) continue;
+          if (isInUpdatesGroup(row)) continue;
+          if (classifyAppType(row) == type) {
+            indices.add(listingIndex);
+          }
+        }
+        if (indices.isNotEmpty) nextAppTypeMap[type] = indices;
+      }
+      _appTypeGroupListedIndices = nextAppTypeMap;
+
       final nonInstalled = <int>[];
       for (int listingIndex = 0;
           listingIndex < listedApps.length;
@@ -1923,6 +2115,16 @@ class AppsPageState extends State<AppsPage> {
         }
       }
       _nonInstalledListedIndices = nonInstalled;
+
+      final updatesIndices = <int>[];
+      for (int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++) {
+        if (isInUpdatesGroup(listedApps[listingIndex])) {
+          updatesIndices.add(listingIndex);
+        }
+      }
+      _updatesGroupListedIndices = updatesIndices;
     }
 
     Set<App> selectedApps = listedApps
@@ -2024,19 +2226,6 @@ class AppsPageState extends State<AppsPage> {
           .getSource(app.app.url, overrideSource: app.app.overrideSource)
           .hosts
           .firstOrNull;
-      final iconWithBadge = sourceHost != null
-          ? Stack(
-              clipBehavior: Clip.none,
-              children: [
-                getAppIcon(index),
-                Positioned(
-                  right: -3,
-                  bottom: -3,
-                  child: StoreSourceListBadge(host: sourceHost),
-                ),
-              ],
-            )
-          : getAppIcon(index);
       return _SwipeableListItem(
         key: ValueKey(appId),
         appId: appId,
@@ -2051,7 +2240,10 @@ class AppsPageState extends State<AppsPage> {
           appId: appId,
           isSelected: selectedAppIds.contains(appId),
           areDownloadsRunning: downloadsRunning,
-          iconWidget: iconWithBadge,
+          iconWidget: getAppIcon(index),
+          sourceHost: sourceHost,
+          showAppTypeBadge: settingsProvider.showAppTypeBadge,
+          showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
           onTap: selectedAppIds.isNotEmpty
               ? () => toggleAppSelected(app.app)
               : () {
@@ -2266,6 +2458,88 @@ class AppsPageState extends State<AppsPage> {
             ),
           ),
         ),
+      );
+    }
+
+    // ── Generic collapsible group tile ──────────────────────────────────────
+    Widget buildCollapsibleTile({
+      required String groupKey,
+      required String title,
+      required List<int> matchingIndices,
+    }) {
+      final isExpanded = !_collapsedGroups.contains(groupKey);
+      final tiles = isExpanded
+          ? matchingIndices
+              .map((i) => getSingleAppHorizTile(i))
+              .toList()
+          : const <Widget>[];
+      final theme = Theme.of(context);
+      return RepaintBoundary(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          child: Material(
+            elevation: 3,
+            shadowColor: theme.colorScheme.shadow.withAlpha(100),
+            surfaceTintColor: theme.colorScheme.surfaceTint,
+            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            color: theme.colorScheme.surfaceContainerLow,
+            clipBehavior: Clip.antiAlias,
+            child: Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                key: PageStorageKey(groupKey),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
+                ),
+                collapsedShape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(_appsListGroupCardRadius),
+                  ),
+                ),
+                initiallyExpanded: isExpanded,
+                onExpansionChanged: (expanded) => setState(() {
+                  if (expanded) {
+                    _collapsedGroups.remove(groupKey);
+                  } else {
+                    _collapsedGroups.add(groupKey);
+                  }
+                }),
+                title: Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+                trailing: Text(matchingIndices.length.toString()),
+                children: tiles,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    getAppTypeCollapsibleTile(AppTypeGroup type) {
+      final String groupKey = 'appType:${type.name}';
+      final matchingIndices = _appTypeGroupListedIndices[type] ?? const <int>[];
+      final String title = switch (type) {
+        AppTypeGroup.user => tr('appTypeUser'),
+        AppTypeGroup.system => tr('appTypeSystem'),
+        AppTypeGroup.privileged => tr('appTypePrivileged'),
+      };
+      return buildCollapsibleTile(
+        groupKey: groupKey,
+        title: title,
+        matchingIndices: matchingIndices,
+      );
+    }
+
+    getUpdatesCollapsibleTile() {
+      return buildCollapsibleTile(
+        groupKey: '__updates__',
+        title: tr('updatesGroup'),
+        matchingIndices: _updatesGroupListedIndices,
       );
     }
 
@@ -3021,6 +3295,43 @@ class AppsPageState extends State<AppsPage> {
 
     getDisplayedList() {
       final groupBy = settingsProvider.appsListGroupBy;
+      final pinUpdatesEnabled = settingsProvider.pinUpdates;
+
+      // Builds a SliverList where the optional updates group is prepended
+      // (pinUpdatesEnabled=true) or appended (false) to [mainChildCount] items
+      // built by [mainBuilder].
+      SliverList buildGroupedSliver({
+        required int mainChildCount,
+        required Widget Function(int index) mainBuilder,
+      }) {
+        final totalCount = mainChildCount +
+            (showNonInstalledGroupSection ? 1 : 0) +
+            (showUpdatesGroupSection ? 1 : 0);
+        return SliverList(
+          delegate: SliverChildBuilderDelegate((context, index) {
+            int i = index;
+            // Updates group pinned to top.
+            if (showUpdatesGroupSection && pinUpdatesEnabled) {
+              if (i == 0) return getUpdatesCollapsibleTile();
+              i--;
+            }
+            // Main groups.
+            if (i < mainChildCount) return mainBuilder(i);
+            i -= mainChildCount;
+            // Non-installed group.
+            if (showNonInstalledGroupSection) {
+              if (i == 0) return getNonInstalledCollapsibleTile();
+              i--;
+            }
+            // Updates group at bottom (when not pinned).
+            if (showUpdatesGroupSection && !pinUpdatesEnabled) {
+              if (i == 0) return getUpdatesCollapsibleTile();
+            }
+            return null;
+          }, childCount: totalCount),
+        );
+      }
+
       final useCategoryGroups = groupBy == AppsListGroupBy.category &&
           (segregateNonInstalled
               ? (listedCategories.isNotEmpty || showNonInstalledGroupSection)
@@ -3028,39 +3339,53 @@ class AppsPageState extends State<AppsPage> {
                   (listedCategories.length == 1 &&
                       listedCategories[0] == null)));
       if (useCategoryGroups) {
-        final categoryChildCount = listedCategories.length +
-            (showNonInstalledGroupSection ? 1 : 0);
-        return SliverList(
-          delegate: SliverChildBuilderDelegate((
-            BuildContext context,
-            int index,
-          ) {
-            if (showNonInstalledGroupSection &&
-                index == listedCategories.length) {
-              return getNonInstalledCollapsibleTile();
-            }
-            return getCategoryCollapsibleTile(index);
-          }, childCount: categoryChildCount),
+        return buildGroupedSliver(
+          mainChildCount: listedCategories.length,
+          mainBuilder: (i) => getCategoryCollapsibleTile(i),
         );
       }
+
       final useSourceGroups = groupBy == AppsListGroupBy.source &&
           (listedSources.isNotEmpty || showNonInstalledGroupSection);
       if (useSourceGroups) {
-        final sourceChildCount =
-            listedSources.length + (showNonInstalledGroupSection ? 1 : 0);
-        return SliverList(
-          delegate: SliverChildBuilderDelegate((
-            BuildContext context,
-            int index,
-          ) {
-            if (showNonInstalledGroupSection &&
-                index == listedSources.length) {
-              return getNonInstalledCollapsibleTile();
-            }
-            return getSourceCollapsibleTile(index);
-          }, childCount: sourceChildCount),
+        return buildGroupedSliver(
+          mainChildCount: listedSources.length,
+          mainBuilder: (i) => getSourceCollapsibleTile(i),
         );
       }
+
+      final useAppTypeGroups = groupBy == AppsListGroupBy.appType &&
+          (listedAppTypes.isNotEmpty || showNonInstalledGroupSection);
+      if (useAppTypeGroups) {
+        return buildGroupedSliver(
+          mainChildCount: listedAppTypes.length,
+          mainBuilder: (i) => getAppTypeCollapsibleTile(listedAppTypes[i]),
+        );
+      }
+
+      // Flat list — still supports the updates group.
+      if (showUpdatesGroupSection) {
+        // Non-updates app indices (already in _listedAppsCache order, minus those in updates).
+        final nonUpdatesIndices = [
+          for (int i = 0; i < listedApps.length; i++)
+            if (!isInUpdatesGroup(listedApps[i])) i,
+        ];
+        final totalCount = 1 + nonUpdatesIndices.length;
+        return SliverList(
+          delegate: SliverChildBuilderDelegate((context, index) {
+            if (pinUpdatesEnabled) {
+              if (index == 0) return getUpdatesCollapsibleTile();
+              return getSingleAppHorizTile(nonUpdatesIndices[index - 1]);
+            } else {
+              if (index < nonUpdatesIndices.length) {
+                return getSingleAppHorizTile(nonUpdatesIndices[index]);
+              }
+              return getUpdatesCollapsibleTile();
+            }
+          }, childCount: totalCount),
+        );
+      }
+
       return SliverList(
         delegate: SliverChildBuilderDelegate((
           BuildContext context,

@@ -30,7 +30,7 @@ enum SortColumnSettings {
 
 enum SortOrderSettings { ascending, descending }
 
-enum AppsListGroupBy { none, category, source }
+enum AppsListGroupBy { none, category, source, appType }
 
 enum SwipeAction {
   update,
@@ -241,6 +241,24 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  bool get showAppTypeBadge {
+    return prefs?.getBool('showAppTypeBadge') ?? true;
+  }
+
+  set showAppTypeBadge(bool value) {
+    prefs?.setBool('showAppTypeBadge', value);
+    notifyListeners();
+  }
+
+  bool get showTrackedStoreBadge {
+    return prefs?.getBool('showTrackedStoreBadge') ?? true;
+  }
+
+  set showTrackedStoreBadge(bool value) {
+    prefs?.setBool('showTrackedStoreBadge', value);
+    notifyListeners();
+  }
+
   int get updateInterval {
     return prefs?.getInt('updateInterval') ?? 360;
   }
@@ -380,6 +398,15 @@ class SettingsProvider with ChangeNotifier {
 
   set groupNonInstalledSeparately(bool show) {
     prefs?.setBool('groupNonInstalledSeparately', show);
+    notifyListeners();
+  }
+
+  bool get groupUpdatesSeparately {
+    return prefs?.getBool('groupUpdatesSeparately') ?? false;
+  }
+
+  set groupUpdatesSeparately(bool value) {
+    prefs?.setBool('groupUpdatesSeparately', value);
     notifyListeners();
   }
 
