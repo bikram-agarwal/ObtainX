@@ -376,184 +376,172 @@ Color generateRandomLightColor() {
   return Color.fromARGB(255, rgbValues[0], rgbValues[1], rgbValues[2]);
 }
 
-/// Builds a 4×12 palette covering the full hue spectrum at four lightness levels
-/// (vivid→pastel). Used by [_showCategoryColorPicker].
+/// Builds a 5×12 palette using standard HSL for a smooth vivid→pastel gradient.
+/// Each row decreases saturation and increases lightness uniformly across all hues,
+/// so brightness fades gradually rather than in a perceptual-cliff jump.
 List<Color> _buildCategoryColorPalette() {
-  const lightnesses = [45.0, 55.0, 65.0, 75.0];
-  const hues = [
-    0.0, 30.0, 60.0, 90.0, 120.0, 150.0,
-    180.0, 210.0, 240.0, 270.0, 300.0, 330.0,
+  const hues = [0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0, 300.0, 330.0];
+  // (saturation, lightness) pairs — vivid at top, pastel at bottom
+  const rows = [
+    (1.00, 0.50), // vivid/pure
+    (0.75, 0.64), // medium-vivid
+    (0.58, 0.72), // medium
+    (0.50, 0.76), // medium-soft (intermediate)
+    (0.42, 0.80), // pastel
   ];
   final palette = <Color>[];
-  for (final l in lightnesses) {
+  for (final (sat, lig) in rows) {
     for (final h in hues) {
-      final rgb = Hsluv.hpluvToRgb([h, 100, l]);
-      palette.add(Color.fromARGB(
-        255,
-        (rgb[0] * 255).clamp(0, 255).toInt(),
-        (rgb[1] * 255).clamp(0, 255).toInt(),
-        (rgb[2] * 255).clamp(0, 255).toInt(),
-      ));
+      palette.add(HSLColor.fromAHSL(1.0, h, sat, lig).toColor());
     }
   }
   return palette;
 }
 
-/// Hex color entry field with live preview square and an Apply button.
-/// Dismisses the enclosing route with the chosen [Color] via [onPicked].
-class _CategoryHexInput extends StatefulWidget {
-  const _CategoryHexInput({required this.current, required this.onPicked});
-  final Color current;
-  final ValueChanged<Color> onPicked;
+/// Unified bottom-sheet for creating or editing a category.
+/// Label field with live chip preview at top, 5×12 color swatch grid below,
+/// hex input that auto-stages on valid input. Single "Save" button.
+/// Returns ({Color color, String name}) or null if dismissed.
+class _CategoryColorPickerSheet extends StatefulWidget {
+  const _CategoryColorPickerSheet({
+    required this.initialColor,
+    required this.initialName,
+  });
+  final Color initialColor;
+  final String initialName;
 
   @override
-  State<_CategoryHexInput> createState() => _CategoryHexInputState();
+  State<_CategoryColorPickerSheet> createState() =>
+      _CategoryColorPickerSheetState();
 }
 
-class _CategoryHexInputState extends State<_CategoryHexInput> {
-  late final TextEditingController _ctrl;
-  bool _valid = true;
+class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
+  late Color _staged;
+  Color? _paletteColor;
+  bool _hexError = false;
+  late final List<Color> _palette;
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _hexCtrl;
+
+  static String _colorToHex(Color c) {
+    final v = c.toARGB32() & 0xFFFFFF;
+    return '#${v.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
 
   @override
   void initState() {
     super.initState();
-    final hex = widget.current.toARGB32() & 0xFFFFFF;
-    _ctrl = TextEditingController(
-      text: '#${hex.toRadixString(16).padLeft(6, '0').toUpperCase()}',
-    );
+    _palette = _buildCategoryColorPalette();
+    _staged = widget.initialColor;
+    _nameCtrl = TextEditingController(text: widget.initialName);
+    _hexCtrl = TextEditingController(text: _colorToHex(_staged));
+    final match = _palette.where((c) => c.toARGB32() == _staged.toARGB32());
+    _paletteColor = match.isNotEmpty ? _staged : null;
   }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _nameCtrl.dispose();
+    _hexCtrl.dispose();
     super.dispose();
   }
 
-  void _tryApply() {
-    final raw = _ctrl.text.trim().replaceFirst('#', '');
-    if (raw.length == 6) {
-      final value = int.tryParse(raw, radix: 16);
+  void _onHexChanged(String text) {
+    final clean = text.replaceFirst('#', '');
+    if (clean.length == 6) {
+      final value = int.tryParse(clean, radix: 16);
       if (value != null) {
-        widget.onPicked(Color(0xFF000000 | value));
+        setState(() {
+          _staged = Color(0xFF000000 | value);
+          _paletteColor = null;
+          _hexError = false;
+        });
         return;
       }
+      setState(() => _hexError = true);
+    } else if (_hexError) {
+      setState(() => _hexError = false);
     }
-    setState(() => _valid = false);
+  }
+
+  void _selectSwatch(Color color) {
+    setState(() {
+      _staged = color;
+      _paletteColor = color;
+      _hexCtrl.text = _colorToHex(color);
+      _hexError = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: TextField(
-            controller: _ctrl,
-            decoration: InputDecoration(
-              labelText: 'HEX',
-              hintText: '#FF5733',
-              errorText: _valid ? null : tr('invalidInput'),
-              prefixIcon: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _ctrl,
-                builder: (_, value, _) {
-                  final raw = value.text.trim().replaceFirst('#', '');
-                  final parsed =
-                      raw.length == 6 ? int.tryParse(raw, radix: 16) : null;
-                  final preview =
-                      parsed != null ? Color(0xFF000000 | parsed) : null;
-                  return Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        color: preview,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: Theme.of(context).colorScheme.outline,
-                          width: 1,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            inputFormatters: [
-              TextInputFormatter.withFunction((oldValue, newValue) {
-                var text = newValue.text.toUpperCase();
-                if (!text.startsWith('#')) text = '#$text';
-                if (text.length > 7) return oldValue;
-                return newValue.copyWith(
-                  text: text,
-                  selection: TextSelection.collapsed(offset: text.length),
-                );
-              }),
-            ],
-            onChanged: (_) {
-              if (!_valid) setState(() => _valid = true);
-            },
-            onSubmitted: (_) => _tryApply(),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: FilledButton(
-            onPressed: _tryApply,
-            child: Text(tr('apply')),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Shows a bottom sheet with a 4×12 hue/lightness palette and a hex input.
-/// Returns the chosen [Color], or null if dismissed.
-Future<Color?> _showCategoryColorPicker(
-  BuildContext context,
-  Color current,
-) {
-  final palette = _buildCategoryColorPalette();
-  return showModalBottomSheet<Color>(
-    context: context,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (ctx) => SafeArea(
+    final theme = Theme.of(context);
+    final name = _nameCtrl.text.trim();
+    return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          16,
-          16,
-          16,
-          MediaQuery.of(ctx).viewInsets.bottom + 8,
+          16, 20, 16,
+          MediaQuery.of(context).viewInsets.bottom + 8,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(tr('colour'), style: Theme.of(ctx).textTheme.titleMedium),
-            const SizedBox(height: 12),
+            // Label field + live chip preview
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _nameCtrl,
+                    autofocus: widget.initialName.isEmpty,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: InputDecoration(
+                      labelText: tr('label'),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 14,
+                      ),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ChoiceChip(
+                  label: Text(name.isEmpty ? ' ' : name),
+                  selected: true,
+                  selectedColor: _staged,
+                  showCheckmark: false,
+                  labelStyle: TextStyle(
+                    color: _staged.computeLuminance() > 0.35
+                        ? Colors.black87
+                        : Colors.white,
+                  ),
+                  onSelected: (_) {},
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // 5×12 swatch grid
             GridView.count(
               crossAxisCount: 12,
               shrinkWrap: true,
-              mainAxisSpacing: 5,
-              crossAxisSpacing: 5,
+              mainAxisSpacing: 4,
+              crossAxisSpacing: 4,
               physics: const NeverScrollableScrollPhysics(),
-              children: palette.map((color) {
+              children: _palette.map((color) {
                 final bool selected =
-                    color.toARGB32() == current.toARGB32();
+                    _paletteColor?.toARGB32() == color.toARGB32();
                 return GestureDetector(
-                  onTap: () => Navigator.pop(ctx, color),
+                  onTap: () => _selectSwatch(color),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       color: color,
                       borderRadius: BorderRadius.circular(6),
                       border: selected
                           ? Border.all(
-                              color: Theme.of(ctx).colorScheme.onSurface,
+                              color: theme.colorScheme.onSurface,
                               width: 2.5,
                             )
                           : null,
@@ -572,14 +560,92 @@ Future<Color?> _showCategoryColorPicker(
               }).toList(),
             ),
             const SizedBox(height: 12),
-            _CategoryHexInput(
-              current: current,
-              onPicked: (c) => Navigator.pop(ctx, c),
+            // Hex input + Cancel + Save all in one row
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 148,
+                  child: TextField(
+                    controller: _hexCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'HEX',
+                      hintText: '#FF5733',
+                      errorText: _hexError ? tr('invalidInput') : null,
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      prefixIcon: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            color: _staged,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: theme.colorScheme.outline,
+                              width: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    inputFormatters: [
+                      TextInputFormatter.withFunction((old, updated) {
+                        var text = updated.text.toUpperCase();
+                        if (!text.startsWith('#')) text = '#$text';
+                        if (text.length > 7) return old;
+                        return updated.copyWith(
+                          text: text,
+                          selection:
+                              TextSelection.collapsed(offset: text.length),
+                        );
+                      }),
+                    ],
+                    onChanged: _onHexChanged,
+                  ),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(tr('cancel')),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: name.isEmpty
+                      ? null
+                      : () => Navigator.pop(
+                            context,
+                            (color: _staged, name: name),
+                          ),
+                  child: Text(tr('save')),
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Opens [_CategoryColorPickerSheet] for creating or editing a category.
+/// Returns ({Color color, String name}) or null if dismissed.
+Future<({Color color, String name})?> _showCategorySheet(
+  BuildContext context, {
+  required Color initialColor,
+  required String initialName,
+}) {
+  return showModalBottomSheet<({Color color, String name})>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (_) => _CategoryColorPickerSheet(
+      initialColor: initialColor,
+      initialName: initialName,
     ),
   );
 }
@@ -1002,40 +1068,24 @@ class _GeneratedFormState extends State<GeneratedForm> {
             ],
           );
         } else if (widget.items[r][e] is GeneratedFormTagInput) {
-          onAddPressed() {
-            showDialog<Map<String, dynamic>?>(
-              context: context,
-              builder: (BuildContext ctx) {
-                return GeneratedFormModal(
-                  title: widget.items[r][e].label,
-                  items: [
-                    [GeneratedFormTextField('label', label: tr('label'))],
-                  ],
-                );
-              },
-            ).then((value) {
-              String? label = value?['label'];
-              if (label != null) {
-                setState(() {
-                  var temp =
-                      values[fieldKey] as Map<String, MapEntry<int, bool>>?;
-                  temp ??= {};
-                  if (temp[label] == null) {
-                    var singleSelect =
-                        (widget.items[r][e] as GeneratedFormTagInput)
-                            .singleSelect;
-                    var someSelected = temp.entries
-                        .where((element) => element.value.value)
-                        .isNotEmpty;
-                    temp[label] = MapEntry(
-                      generateRandomLightColor().toARGB32(),
-                      !(someSelected && singleSelect),
-                    );
-                    values[fieldKey] = temp;
-                    someValueChanged();
-                  }
-                });
-              }
+          onAddPressed() async {
+            // ignore: use_build_context_synchronously
+            final result = await _showCategorySheet(context,
+                initialColor: generateRandomLightColor(), initialName: '');
+            if (!context.mounted || result == null) return;
+            var temp = values[fieldKey] as Map<String, MapEntry<int, bool>>?;
+            temp ??= {};
+            if (temp.containsKey(result.name)) return;
+            final singleSelect =
+                (widget.items[r][e] as GeneratedFormTagInput).singleSelect;
+            final someSelected = temp.values.any((v) => v.value);
+            setState(() {
+              temp![result.name] = MapEntry(
+                result.color.toARGB32(),
+                !(someSelected && singleSelect),
+              );
+              values[fieldKey] = temp;
+              someValueChanged();
             });
           }
 
@@ -1080,10 +1130,15 @@ class _GeneratedFormState extends State<GeneratedForm> {
                               ),
                               child: ChoiceChip(
                                 label: Text(e2.key),
-                                backgroundColor: Color(
-                                  e2.value.key,
-                                ).withAlpha(50),
+                                backgroundColor: Color(e2.value.key),
                                 selectedColor: Color(e2.value.key),
+                                labelStyle: TextStyle(
+                                  color: Color(e2.value.key)
+                                              .computeLuminance() >
+                                          0.35
+                                      ? Colors.black87
+                                      : Colors.white,
+                                ),
                                 visualDensity: VisualDensity.compact,
                                 selected: e2.value.value,
                                 onSelected: (value) {
@@ -1149,23 +1204,26 @@ class _GeneratedFormState extends State<GeneratedForm> {
                               final oldEntry = temp.entries.firstWhere(
                                 (e) => e.value.value,
                               );
-                              final picked = await _showCategoryColorPicker(
-                                context,
-                                Color(oldEntry.value.key),
-                              );
-                              if (picked == null) return;
+                              // ignore: use_build_context_synchronously
+                              final result = await _showCategorySheet(context,
+                                  initialColor: Color(oldEntry.value.key),
+                                  initialName: oldEntry.key);
+                              if (!context.mounted || result == null) return;
                               setState(() {
-                                temp.update(
-                                  oldEntry.key,
-                                  (old) => MapEntry(picked.toARGB32(), old.value),
+                                if (result.name != oldEntry.key) {
+                                  temp.remove(oldEntry.key);
+                                }
+                                temp[result.name] = MapEntry(
+                                  result.color.toARGB32(),
+                                  oldEntry.value.value,
                                 );
                                 values[fieldKey] = temp;
                                 someValueChanged();
                               });
                             },
-                            icon: const Icon(Icons.palette_outlined),
+                            icon: const Icon(Icons.edit_outlined),
                             visualDensity: VisualDensity.compact,
-                            tooltip: tr('colour'),
+                            tooltip: tr('edit'),
                           ),
                         )
                       : const SizedBox.shrink(),

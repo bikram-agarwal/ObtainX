@@ -1685,6 +1685,11 @@ class _AppPageState extends State<AppPage> {
           stripeTextColor = pageTheme.colorScheme.onSecondaryContainer;
           stripeLabel = tr('updateAvailable');
           verdictIcon = Icons.new_releases_rounded;
+        } else if (!installed) {
+          stripeColor = pageTheme.colorScheme.surfaceContainerHighest;
+          stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
+          stripeLabel = tr('notInstalled');
+          verdictIcon = Icons.install_mobile_rounded;
         }
         if (stripeLabel != null && verdictIcon != null) {
           // A — trailing icon in the stripe.
@@ -1804,7 +1809,7 @@ class _AppPageState extends State<AppPage> {
           );
         } else {
           versionCardChildren.add(
-            versionRow(pageThemeContext, tr('installed'), tr('notInstalled')),
+            versionRow(pageThemeContext, tr('installed'), tr('none')),
           );
         }
         versionCardChildren.add(

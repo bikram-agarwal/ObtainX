@@ -481,12 +481,34 @@ class SettingsProvider with ChangeNotifier {
 
   void setCategories(Map<String, int> cats, {AppsProvider? appsProvider}) {
     if (appsProvider != null) {
+      // Detect a rename: one key removed from old map, one key added to new map.
+      // Each UI action (rename, delete) fires a separate call, so at most one
+      // rename is in flight per call.
+      final Map<String, int> oldCats = categories;
+      final Set<String> removed =
+          oldCats.keys.toSet().difference(cats.keys.toSet());
+      final Set<String> added =
+          cats.keys.toSet().difference(oldCats.keys.toSet());
+      final String? renamedFrom =
+          (removed.length == 1 && added.length == 1) ? removed.first : null;
+      final String? renamedTo =
+          (removed.length == 1 && added.length == 1) ? added.first : null;
+
       List<App> changedApps = appsProvider
           .getAppValues()
           .map((a) {
-            var n1 = a.app.categories.length;
+            bool changed = false;
+            if (renamedFrom != null && renamedTo != null) {
+              final idx = a.app.categories.indexOf(renamedFrom);
+              if (idx >= 0) {
+                a.app.categories[idx] = renamedTo;
+                changed = true;
+              }
+            }
+            final n1 = a.app.categories.length;
             a.app.categories.removeWhere((c) => !cats.keys.contains(c));
-            return n1 > a.app.categories.length ? a.app : null;
+            if (a.app.categories.length < n1) changed = true;
+            return changed ? a.app : null;
           })
           .where((element) => element != null)
           .map((e) => e as App)

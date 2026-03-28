@@ -27,7 +27,16 @@ These control **what counts as “the version”** and **how it compares** to wh
 
 **What it does:** A **regular expression** is run on the version text ObtainX gets from the source (tag, title, page text, and so on). The regex must **match** somewhere in that text. ObtainX then builds the final version string using the match and your **match group** setting (next row).
 
-**Example:** The source gives `release-v12.4.0-final`. You only want `12.4.0`. You set trim regex `v(\d+\.\d+\.\d+)` so the pattern finds a `v` followed by three version numbers. You set match group to `$1` (see below) so the stored version is `12.4.0`, not the whole `release-v12.4.0-final`.
+**You don't need to write the regex yourself.** Tap the helper button next to this field and the dialog does it for you:
+1. It pre-fills the raw version string ObtainX last fetched from the source.
+2. It parses it and suggests the most useful substrings as a list — strips "v" prefixes, letter-only words, extracts semver patterns, and more.
+3. Pick the one you want (or type a custom value), tap Apply, and it writes the regex and match group into the fields automatically.
+
+If it can't build a pattern, it says so and leaves the fields unchanged — you can still type manually.
+
+**Example (manual):** The source gives `release-v12.4.0-final`. You only want `12.4.0`. You set trim regex `v(\d+\.\d+\.\d+)` so the pattern finds a `v` followed by three version numbers. You set match group to `$1` (see below) so the stored version is `12.4.0`, not the whole `release-v12.4.0-final`.
+
+**Example (helper):** Same tag. The helper suggests `12.4.0` as a candidate. You select it, tap Apply — done. The helper writes `(\d+\.\d+\.\d+)` and `$1` for you.
 
 ---
 
@@ -67,7 +76,7 @@ These narrow **which APK file** ObtainX picks when several builds exist (split A
 
 | Option | What it does | Example |
 |--------|----------------|---------|
-| **Filter APKs by regular expression** | Only APKs whose **name or URL** matches the pattern are considered. | Release contains `app-arm64.apk`, `app-x86.apk`, `app-universal.apk`; regex `arm64` limits to the ARM 64-bit build. |
+| **Filter APKs by regular expression** | Only APKs whose **name or URL** matches the pattern are considered. Tap the helper button to pick from the actual filenames ObtainX found — it generates the regex from your selection. | Release contains `app-arm64.apk`, `app-x86.apk`, `app-universal.apk`; tap helper → select `arm64` → Apply. |
 | **Invert regular expression** | **Flips** the filter: APKs that **do not** match the regex are kept. | Regex `debug` with invert **on** drops any file with “debug” in the name and keeps **release** builds. |
 | **Attempt to filter APKs by CPU architecture if possible** | Tries to prefer an APK that matches your device’s **CPU architecture** when the source lists several. | Your phone is **arm64-v8a**; the source offers `armeabi-v7a` and `arm64-v8a`; ObtainX prefers the arm64 file. |
 | **Include ZIP files** | *(Sources that support it.)* Treats **ZIP** downloads like other assets so you can pick an APK inside. | Release uploads **`MyApp-2.0.zip`** containing one APK and readme; you enable ZIP handling for that source pattern. |
@@ -95,7 +104,7 @@ The following appear **only** (or mainly) for apps using that kind of source. Wo
 |--------|----------------|---------|
 | **Include prereleases** | Treats **pre-releases** (beta, RC, etc.) like normal releases when picking the newest. | You want **nightly** or **beta** tags, not only stable. |
 | **Fallback to older releases** | If the newest matching release has **no usable APK**, ObtainX tries **older** releases. | Latest release is **source-only**; the previous one has the APK – fallback finds it. |
-| **Filter release titles by regular expression** | Only releases whose **title** matches are considered. | Titles like `v2.0`, `v2.1`; regex `v2\.` keeps only 2.x line. |
+| **Filter release titles by regular expression** | Only releases whose **title** matches are considered. Tap the helper button — it lists actual release titles from this repo and generates the regex from whichever you pick. | Titles include `v2.0 (stable)` and `v2.1-beta`; tap helper → select the stable title → Apply. |
 | **Filter release notes by regular expression** | Same, but scans **release notes / body**. | Notes must contain **`[playstore]`** to count as a consumer build. |
 | **Verify the ‘latest’ tag** | Uses GitHub’s **`/latest`** API so the “latest” release is not missed when list order is odd. | Repo maintains **`latest`** correctly but API list order is not chronological. |
 | **Sort method** | How releases are **ordered** before ObtainX walks them (date, smart name parsing, raw name, API order, or hybrid). | Many assets share similar names; **Release date** picks strictly by publish time. |
@@ -182,7 +191,8 @@ The following appear **only** (or mainly) for apps using that kind of source. Wo
 
 ## Quick tips
 
-- **Regex:** Start simple (one clear pattern), **save**, then **check for updates** and see the version ObtainX shows. If it fails, widen the pattern or fix the match group.
+- **Use the regex helper first** — Tap the helper button next to any regex field before writing a pattern manually. It reads what the source actually returned, suggests the part you likely want, and generates the regex for you. Only write one manually if the helper can't build it.
+- **Regex (manual fallback):** Start simple (one clear pattern), **save**, then **check for updates** and see the version ObtainX shows. If it fails, widen the pattern or fix the match group.
 - **Match group:** If unsure, try **`$1`** when you have **one pair** of parentheses around the version; try **`$0`** when there are **no** parentheses and the whole match should be the version.
 - After changes, **save**, then refresh **this app** or pull to refresh the list.
 - When debugging, turn **off** filters and turn **on** **fallback to older releases** one step at a time.

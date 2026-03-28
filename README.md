@@ -22,11 +22,9 @@ Features that don't exist in Obtainium at all.
 
 - **⏭️ Skip Version** — Pass on a specific release you don't want without marking the app as "updated." The next release will still show up normally.
 
-
-- **🧩 RegEx Assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required.
+- **🧩 Advanced filter / RegEx Assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required. Full details in the [Additional options guide](./additional-options-guide.md).
 
 - **↩️ Undo after delete** — Swipe-to-delete and bulk-delete both show a 5-second **Undo** snackbar. Tap it and the app is fully restored.
-
 
 ---
 
@@ -36,7 +34,9 @@ Features Obtainium has, extended or improved here.
 
 - **🏪 APKMirror updates** — In Obtainium, the update button is completely disabled for APKMirror apps. ObtainX enables it and takes you directly to the specific release page for the new version. (Bulk Import is also supported.)
 
-- **🧠 Smarter version status** — Five distinct states instead of a binary "update / up to date" pair: *up to date*, *update available*, *device is ahead*, *same version shown differently*, and *genuinely unclear*. Fewer false alerts; honest status when things are ambiguous.
+- **🔍 Verified "also available on" store links** — Each app detail page shows a list of other stores (beside the one you are tracking) where the app is available. Only confirmed-present stores are shown. 
+
+- **🧠 Smarter version status** — ObtainX handles harmless version label differences more intelligently, so you're only notified when there's genuinely something new. Six distinct states instead of a binary "update / up to date" pair: *up to date*, *update available*, *device is ahead*, *same version shown differently*, *genuinely unclear* and *Not installed*.
 
 - **🎯 Add App — three paths, one screen** — URL, Search, and From Device are all on one screen under a segmented control. Search results load inline alongside store chips — no floating sheets, no separate screens. New searches can be started without needing to go back-n-forth. 
 
@@ -45,15 +45,19 @@ Features Obtainium has, extended or improved here.
 
 - **🔖 Active filter chips** — Extends Obtainium's filter with dismissible chips pinned below the toolbar showing every active non-text filter (category, pinned, installed state, etc.). Tap any chip to clear just that filter. The row disappears entirely when nothing is active.
 
+- **🏷️ Category customization** — More control over your categories: instead of cycling between a few random colors, choose from a 5×12 color palette (vivid to pastel), or enter the hex value yourself. A live preview of the category chip as you name and color it. Category colors are WYSIWYG. Category's name switches between black and white text automatically for readability. You can also rename an existing category, and all assigned apps automatically receive it. 
+
 ---
 
 ## 🎨 UI & UX
 
-- **Material 3 Expressive throughout** — Full M3 Expressive treatment across every screen: cards, fluid animations, expressive sliders, and controls that feel like one product.
+- **Material 3 Expressive throughout** — Full M3 Expressive treatment across every screen: cards, fluid animations, expressive sliders, FAB and controls that feel like one product.
 
 - **Per-app color theming** — Each app's detail page derives its color scheme from the app's own icon. Deep, accurate, and dark-mode safe. Toggle *Match app page to icon colors* in Settings.
 
 - **Hero icon transition** — Tapping an app row animates its icon smoothly into the detail page. Swipe back and it returns the same way.
+
+- **App Type and store badges on every row** – Small icons on each app row shows the app type (User, System, Priviledged) and where it's tracked (GitHub, GitLab, F-Droid, APKMirror, and more), so you know at a glance without opening the app. (Configurable. You can turn it off.)
 
 - **Richer app list grouping** — Group by source, app type (user/system/privileged), or non-installed split; a dedicated "Updates" group can float apps with available updates to the top independent of the active grouping mode.
 
@@ -65,7 +69,7 @@ Features Obtainium has, extended or improved here.
 
 - **Theme & view controls on Apps tab** — Density, sort order, and visual theme live on the Apps tab itself so you can tune the list and see the result immediately.
 
-- **Auto-hide nav bars** — Navigation bars step out of the way when you're focused on content.
+- **Auto-hide action bars** — Action bars step out of the way when you're focused on content, giving you more screen space automatically.
 
 - **Settings and form options in cards** — Related settings and per-app options are grouped into labeled cards. Much easier to scan than a single wall of options.
 
@@ -75,7 +79,7 @@ Features Obtainium has, extended or improved here.
 | <img src="./assets/screenshots/1.apps.webp" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.webp" alt="Themes and View Options" /> | <img src="./assets/screenshots/3.filters.webp" alt="Live Filters" /> |
 | ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.edit.webp" alt="Editing App Details" /> | <img src="./assets/screenshots/6.options.webp" alt="Additional Options with RegEx Helper" /> |
-| <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> | <img src="./assets/screenshots/9.bulk_add.webp" alt="Bulk Import from Device" /> |
+| <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page, custom category colors" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> | <img src="./assets/screenshots/9.bulk_add.webp" alt="Bulk Import from Device" /> |
 
 ## Screenrecords
 
