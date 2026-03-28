@@ -244,6 +244,8 @@ class _AppListItem extends StatelessWidget {
     final double? downloadProgress = context
         .select<AppsProvider, double?>((p) => p.apps[appId]?.downloadProgress);
 
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final showChangesFn = getChangeLogFn(context, app.app);
     final installed = app.app.installedVersion;
     final hasUpdate =
@@ -275,7 +277,7 @@ class _AppListItem extends StatelessWidget {
       final trackOnly = app.app.additionalSettings['trackOnly'] == true;
       return IconButton(
         visualDensity: VisualDensity.compact,
-        color: Theme.of(context).colorScheme.primary,
+        color: colorScheme.primary,
         tooltip: trackOnly ? tr('openDownloadPage') : tr('update'),
         onPressed:
             areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
@@ -286,7 +288,7 @@ class _AppListItem extends StatelessWidget {
     Widget buildUncertainUpdateButton() {
       return IconButton(
         visualDensity: VisualDensity.compact,
-        color: Theme.of(context).colorScheme.primary,
+        color: colorScheme.primary,
         tooltip: tr('uncertainUpdateTooltip'),
         onPressed:
             areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
@@ -315,13 +317,11 @@ class _AppListItem extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               color: highlightTouchTargets && showChangesFn != null
-                  ? (Theme.of(context).brightness == Brightness.light
-                            ? Theme.of(context).primaryColor
-                            : Theme.of(context).primaryColorLight)
+                  ? (theme.brightness == Brightness.light
+                            ? theme.primaryColor
+                            : theme.primaryColorLight)
                         .withAlpha(
-                          Theme.of(context).brightness == Brightness.light
-                              ? 20
-                              : 40,
+                          theme.brightness == Brightness.light ? 20 : 40,
                         )
                   : null,
             ),
@@ -372,7 +372,7 @@ class _AppListItem extends StatelessWidget {
     );
 
     final int transparent =
-        Theme.of(context).colorScheme.surface.withValues(alpha: 0).toARGB32();
+        colorScheme.surface.withValues(alpha: 0).toARGB32();
     List<double> stops = [
       ...app.app.categories.asMap().entries.map(
         (e) =>
@@ -447,8 +447,7 @@ class _AppListItem extends StatelessWidget {
           tileColor: app.app.pinned
               ? Colors.grey.withValues(alpha: 0.1)
               : Colors.transparent,
-          selectedTileColor:
-              Theme.of(context).colorScheme.primary.withValues(
+          selectedTileColor: colorScheme.primary.withValues(
             alpha: app.app.pinned ? 0.2 : 0.1,
           ),
           selected: isSelected,

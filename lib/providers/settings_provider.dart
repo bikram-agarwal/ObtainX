@@ -14,8 +14,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
-String obtainiumTempId = 'imranr98_obtainium_${GitHub().hosts[0]}';
-String obtainiumId = 'dev.imranr.obtainium';
+String obtainiumTempId = 'bikram-agarwal_ObtainX_${GitHub().hosts[0]}';
+String obtainiumId = 'dev.bikram.obtainx';
 String obtainiumUrl = 'https://github.com/bikram-agarwal/ObtainX';
 Color obtainiumThemeColor = const Color(0xFF6438B5);
 

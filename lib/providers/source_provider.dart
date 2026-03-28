@@ -1273,6 +1273,8 @@ bool isVersionPseudo(App app) =>
         app.additionalSettings['versionDetection'] != true);
 
 class SourceProvider {
+  static final Map<String, RegExp> _sourceRegexCache = {};
+
   // Add more source classes here so they are available via the service
   List<AppSource> get sources => [
     GitHub(),
@@ -1327,9 +1329,13 @@ class SourceProvider {
     AppSource? source;
     for (var s in sources.where((element) => element.hosts.isNotEmpty)) {
       try {
-        if (RegExp(
-          '^${s.allowSubDomains ? '([^\\.]+\\.)*' : '(www\\.)?'}(${getSourceRegex(s.hosts)})\$',
-        ).hasMatch(Uri.parse(url).host)) {
+        final cacheKey =
+            '${s.allowSubDomains}:${s.hosts.join(',')}';
+        final regex = SourceProvider._sourceRegexCache[cacheKey] ??=
+            RegExp(
+              '^${s.allowSubDomains ? '([^\\.]+\\.)*' : '(www\\.)?'}(${getSourceRegex(s.hosts)})\$',
+            );
+        if (regex.hasMatch(Uri.parse(url).host)) {
           source = s;
           break;
         }

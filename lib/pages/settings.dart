@@ -38,6 +38,9 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  late final Future<AndroidDeviceInfo> _androidInfo =
+      DeviceInfoPlugin().androidInfo;
+
   List<int> updateIntervalNodes = [
     15,
     30,
@@ -416,7 +419,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     )
                                   : const SizedBox.shrink();
                             },
-                            future: DeviceInfoPlugin().androidInfo,
+                            future: _androidInfo,
                           ),
                           SwitchListTile(
                             title: Text(tr('checkOnStart')),
@@ -610,7 +613,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     )
                                   : const SizedBox.shrink();
                             },
-                            future: DeviceInfoPlugin().androidInfo,
+                            future: _androidInfo,
                           ),
                           SwitchListTile(
                             title: Text(tr('showWebInAppView')),

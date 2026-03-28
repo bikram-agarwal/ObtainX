@@ -873,6 +873,7 @@ class AppsProvider with ChangeNotifier {
   // In memory App state (should always be kept in sync with local storage versions)
   Map<String, AppInMemory> apps = {};
   bool loadingApps = false;
+  Completer<void>? _loadingCompleter;
   bool gettingUpdates = false;
   LogsProvider logs = LogsProvider();
 
@@ -2077,10 +2078,9 @@ class AppsProvider with ChangeNotifier {
   }
 
   Future<void> loadApps({String? singleId}) async {
-    while (loadingApps) {
-      await Future.delayed(const Duration(microseconds: 1));
-    }
+    await _loadingCompleter?.future;
     loadingApps = true;
+    _loadingCompleter = Completer<void>();
     notifyListeners();
     await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
     var sp = SourceProvider();
@@ -2098,14 +2098,14 @@ class AppsProvider with ChangeNotifier {
                         '${singleId.toLowerCase()}.json')) {
               try {
                 app = App.fromJson(
-                  jsonDecode(File(item.path).readAsStringSync()),
+                  jsonDecode(await File(item.path).readAsString()),
                 );
               } catch (err) {
                 if (err is FormatException) {
                   logs.add(
                     'Corrupt JSON when loading App (will be ignored): $err',
                   );
-                  item.renameSync('${item.path}.corrupt');
+                  await item.rename('${item.path}.corrupt');
                 } else {
                   rethrow;
                 }
@@ -2179,6 +2179,8 @@ class AppsProvider with ChangeNotifier {
       }
     }
     loadingApps = false;
+    _loadingCompleter?.complete();
+    _loadingCompleter = null;
     notifyListeners();
   }
 
@@ -2456,10 +2458,10 @@ class AppsProvider with ChangeNotifier {
         }
         if (!onlyIfExists || this.apps.containsKey(app.id)) {
           String filePath = '${(await getAppsDir()).path}/${app.id}.json';
-          File(
+          await File(
             '$filePath.tmp',
-          ).writeAsStringSync(jsonEncode(app.toJson())); // #2089
-          File('$filePath.tmp').renameSync(filePath);
+          ).writeAsString(jsonEncode(app.toJson())); // #2089
+          await File('$filePath.tmp').rename(filePath);
         }
         try {
           this.apps.update(
@@ -3037,16 +3039,14 @@ class AppsProvider with ChangeNotifier {
         ((newFormat ? decodedJSON['apps'] : decodedJSON) as List<dynamic>)
             .map((e) => App.fromJson(e))
             .toList();
-    while (loadingApps) {
-      await Future.delayed(const Duration(microseconds: 1));
-    }
-    for (App a in importedApps) {
+    await _loadingCompleter?.future;
+    await Future.wait(importedApps.map((a) async {
       var installedInfo = await getInstalledInfo(a.id, printErr: false);
       a.installedVersion =
           a.additionalSettings['useVersionCodeAsOSVersion'] == true
           ? installedInfo?.versionCode.toString()
           : installedInfo?.versionName;
-    }
+    }));
     await saveApps(importedApps, onlyIfExists: false);
     notifyListeners();
     if (newFormat && decodedJSON['settings'] != null) {

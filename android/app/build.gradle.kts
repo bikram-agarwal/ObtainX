@@ -44,7 +44,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.imranr.obtainium"
+        applicationId = "dev.bikram.obtainx"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 26
@@ -77,6 +77,8 @@ android {
 
     buildTypes {
         getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
             val releaseSigningConfig = signingConfigs.getByName("release")
             signingConfig = if (keystorePropertiesExists && releaseSigningConfig.storeFile != null) {
                 releaseSigningConfig

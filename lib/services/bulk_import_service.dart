@@ -5,6 +5,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 
 const int _flagSystem = 1; // ApplicationInfo.FLAG_SYSTEM = 0x1
 const int _flagUpdatedSystemApp = 128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP = 0x80
@@ -59,7 +60,7 @@ class BulkImportService {
     for (final pkg in packages) {
       final pkgName = pkg.packageName ?? '';
       if (pkgName.isEmpty) continue;
-      if (pkgName == 'dev.imranr.obtainium') continue;
+      if (pkgName == obtainiumId) continue;
       final appFlags = pkg.applicationInfo?.flags ?? 0;
       final isSystem =
           (appFlags & _flagSystem) != 0 ||
