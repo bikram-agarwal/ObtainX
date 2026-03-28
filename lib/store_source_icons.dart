@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:obtainium/favicon_cache.dart';
 
 /// Inversion filter: swaps black ↔ white while preserving alpha.
-const ColorFilter _invertColorFilter = ColorFilter.matrix([
+const ColorFilter invertColorFilter = ColorFilter.matrix([
   -1, 0, 0, 0, 255,
    0,-1, 0, 0, 255,
    0, 0,-1, 0, 255,
@@ -13,7 +13,7 @@ const ColorFilter _invertColorFilter = ColorFilter.matrix([
 /// Returns true if [assetPath]'s icon should be colour-inverted for the current
 /// brightness. GitHub ships a black mark (needs inversion in dark mode);
 /// APKMirror ships a white mark (needs inversion in light mode).
-bool _iconNeedsInversion(String assetPath, bool isDark) {
+bool iconNeedsInversion(String assetPath, bool isDark) {
   if (assetPath == StoreSourceIconPaths.github && isDark) return true;
   if (assetPath == StoreSourceIconPaths.apkmirror && !isDark) return true;
   return false;
@@ -63,8 +63,8 @@ class _StoreSourceChipAvatarState extends State<StoreSourceChipAvatar> {
     final String? localAsset = storeSourceAssetPathForHost(widget.host);
     if (localAsset != null) {
       Widget img = StoreSourceIconImage(assetPath: localAsset, size: widget.size);
-      if (_iconNeedsInversion(localAsset, isDark)) {
-        img = ColorFiltered(colorFilter: _invertColorFilter, child: img);
+      if (iconNeedsInversion(localAsset, isDark)) {
+        img = ColorFiltered(colorFilter: invertColorFilter, child: img);
       }
       return img;
     }
@@ -127,6 +127,18 @@ String? storeSourceAssetPathForUrl(String url) {
   return storeSourceAssetPathForHost(uri.host);
 }
 
+/// Maps an [AppSource] runtimeType class name to a bundled icon path, or null.
+/// Use [storeSourceAssetPathForHost] when a URL or host is available instead.
+String? storeSourceAssetPathForClassName(String className) {
+  switch (className) {
+    case 'GitHub':    return StoreSourceIconPaths.github;
+    case 'FDroid':    return StoreSourceIconPaths.fdroid;
+    case 'APKMirror': return StoreSourceIconPaths.apkmirror;
+    case 'APKPure':   return StoreSourceIconPaths.apkpure;
+    default:          return null;
+  }
+}
+
 /// Square clip; wide assets (Play wordmark) use [BoxFit.cover] with a leading
 /// alignment so the triangle reads instead of shrinking the whole bar.
 class StoreSourceIconImage extends StatelessWidget {
@@ -177,6 +189,69 @@ class StoreSourceIconImage extends StatelessWidget {
   }
 }
 
+/// Icon for a tracked source URL: bundled asset for known hosts, favicon from
+/// cache for unknown hosts, [Icons.link] if neither resolves.
+class StoreSourceIconForUrl extends StatefulWidget {
+  const StoreSourceIconForUrl({
+    super.key,
+    required this.url,
+    required this.size,
+  });
+
+  final String url;
+  final double size;
+
+  @override
+  State<StoreSourceIconForUrl> createState() => _StoreSourceIconForUrlState();
+}
+
+class _StoreSourceIconForUrlState extends State<StoreSourceIconForUrl> {
+  Future<Uint8List?>? _iconFuture;
+  late final String _host;
+
+  @override
+  void initState() {
+    super.initState();
+    _host = Uri.tryParse(widget.url)?.host ?? '';
+    if (_host.isNotEmpty && storeSourceAssetPathForHost(_host) == null) {
+      _iconFuture = FaviconCache.get(_host);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final String? localAsset = storeSourceAssetPathForHost(_host);
+    if (localAsset != null) {
+      Widget img = StoreSourceIconImage(assetPath: localAsset, size: widget.size);
+      if (iconNeedsInversion(localAsset, isDark)) {
+        img = ColorFiltered(colorFilter: invertColorFilter, child: img);
+      }
+      return img;
+    }
+    return FutureBuilder<Uint8List?>(
+      future: _iconFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.data != null) {
+          return Image.memory(
+            snapshot.data!,
+            width: widget.size,
+            height: widget.size,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+          );
+        }
+        return Icon(
+          Icons.link,
+          size: widget.size * 0.75,
+          color: Theme.of(context).colorScheme.primary,
+        );
+      },
+    );
+  }
+}
+
 /// Small source favicon badge overlaid on the app icon (Apps list, bulk import results).
 /// Known hosts use bundled assets; unknown hosts use a persistent disk-cached
 /// DuckDuckGo favicon so the network is only hit once per host.
@@ -221,8 +296,8 @@ class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
     Widget image;
     if (localAsset != null) {
       image = StoreSourceIconImage(assetPath: localAsset, size: 13);
-      if (_iconNeedsInversion(localAsset, isDark)) {
-        image = ColorFiltered(colorFilter: _invertColorFilter, child: image);
+      if (iconNeedsInversion(localAsset, isDark)) {
+        image = ColorFiltered(colorFilter: invertColorFilter, child: image);
       }
     } else {
       image = FutureBuilder<Uint8List?>(
@@ -243,15 +318,13 @@ class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
       );
     }
 
-    return Container(
+    return SizedBox(
       width: 16,
       height: 16,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.all(1.5),
+        child: image,
       ),
-      padding: const EdgeInsets.all(1.5),
-      child: image,
     );
   }
 }

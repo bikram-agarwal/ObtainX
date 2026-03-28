@@ -20,6 +20,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
+import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -59,20 +60,55 @@ bool _trackedUrlIsFromHost(String? trackedUrl, String hostFragment) {
 ///
 /// Logic:
 /// - [alreadyTracked] → hide (user already tracks this store)
-/// - cache entry == `""` → confirmed absent in that store → hide
+/// - [storeData] == null → app never scanned → show [fallbackUrl] (unverified)
+/// - cache entry == `""` → confirmed absent → hide
 /// - cache entry is a non-empty URL → show with that URL
-/// - no cache entry → show with [fallbackUrl] (not yet scanned)
+/// - cache entry missing for this store (but app was scanned for others) → hide
+///   (we have scan data for this app; don't surface unconfirmed stores)
 String? _resolveStoreUrl({
   required Map<String, String>? storeData,
   required String storeName,
-  required String fallbackUrl,
+  required String? fallbackUrl,
   required bool alreadyTracked,
 }) {
   if (alreadyTracked) return null;
-  final entry = storeData?[storeName];
-  if (entry == '') return null;
-  if (entry != null && entry.isNotEmpty) return entry;
-  return fallbackUrl;
+  // Key absent means this store was never explicitly checked for this app
+  // (either no scan at all, or a different store's check ran first).
+  // In both cases show the fallback URL — don't suppress unverified stores.
+  if (storeData == null || !storeData.containsKey(storeName)) return fallbackUrl;
+  final entry = storeData[storeName]!;
+  if (entry.isEmpty) return null; // confirmed absent (empty string sentinel)
+  return entry; // confirmed present
+}
+
+/// Checks whether a package exists on the Play Store by sending a HEAD request
+/// without following redirects. Play Store returns 200 for valid listings and
+/// 302 (redirect to search) for non-existent packages.
+///
+/// Returns the Play Store URL if the app is present, or null if absent.
+/// Returns null also on network error — caller should not cache the result.
+Future<String?> _checkPlayStoreAvailability(String packageId) async {
+  try {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    final uri = Uri.parse(
+      'https://play.google.com/store/apps/details?id=$packageId&hl=en&gl=US',
+    );
+    final request = await client.headUrl(uri);
+    request.followRedirects = false;
+    request.headers.set(HttpHeaders.userAgentHeader,
+        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36');
+    final response =
+        await request.close().timeout(const Duration(seconds: 10));
+    await response.drain<void>();
+    client.close();
+    if (response.statusCode == 200) {
+      return 'https://play.google.com/store/apps/details?id=$packageId';
+    }
+    return null; // 302 = redirect to search (not found); 404 = also not found
+  } catch (_) {
+    return null; // network error — caller skips caching
+  }
 }
 
 void _toastUrl(String url) {
@@ -916,6 +952,60 @@ class _AppPageState extends State<AppPage> {
       );
   }
 
+  /// After a pull-to-refresh, checks all 4 stores (APKMirror, F-Droid, APKPure,
+  /// Play Store) for this single app concurrently, skipping any store already
+  /// cached or already tracked from that source. Caches results and triggers a
+  /// FutureBuilder rebuild so the Other Sources row updates in place.
+  Future<void> _maybeCheckAndCacheAllStores() async {
+    final pid = widget.appId;
+    if (pid.isEmpty) return;
+
+    final trackedUrl =
+        Provider.of<AppsProvider>(context, listen: false).apps[pid]?.app.url;
+
+    final cache = await BulkScanCache.load();
+    final storeData = cache[pid] ?? {};
+
+    final futures = <Future<MapEntry<String, String?>>>[];
+
+    if (!_trackedUrlIsFromHost(trackedUrl, 'apkmirror.com') &&
+        !storeData.containsKey('APKMirror')) {
+      futures.add(BulkImportService.checkApkMirror([pid])
+          .then((r) => MapEntry('APKMirror', r[pid])));
+    }
+    if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
+        !storeData.containsKey('F-Droid')) {
+      futures.add(BulkImportService.checkFDroid([pid])
+          .then((r) => MapEntry('F-Droid', r[pid])));
+    }
+    if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
+        !storeData.containsKey('APKPure')) {
+      futures.add(BulkImportService.checkApkPure([pid])
+          .then((r) => MapEntry('APKPure', r[pid])));
+    }
+    if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
+        !storeData.containsKey('PlayStore')) {
+      futures.add(_checkPlayStoreAvailability(pid)
+          .then((url) => MapEntry('PlayStore', url)));
+    }
+
+    if (futures.isEmpty) return;
+
+    final results = await Future.wait(futures);
+
+    final entry = cache.putIfAbsent(pid, () => {});
+    for (final r in results) {
+      entry[r.key] = r.value ?? '';
+    }
+    await BulkScanCache.save(cache);
+
+    if (mounted) {
+      setState(() {
+        _storeAvailabilityCacheFuture = Future.value(cache[pid]);
+      });
+    }
+  }
+
   Future<void> _runCheckUpdate(String id, {bool resetVersion = false}) async {
     final AppsProvider appsProvider =
         Provider.of<AppsProvider>(context, listen: false);
@@ -927,7 +1017,18 @@ class _AppPageState extends State<AppPage> {
       // saveApps (called inside checkUpdate) replaces the in-memory icon with
       // null for non-installed apps.  Reset the one-shot flag so the rebuild
       // that follows will re-invoke updateAppIcon and restore any user icon.
-      setState(() => _requestedMissingIconLoad = false);
+      // Also reload the bulk-scan cache: the page's future was resolved at
+      // initState time and won't see cache writes made by a bulk scan that ran
+      // while this page was already open in the navigation stack.
+      setState(() {
+        _requestedMissingIconLoad = false;
+        _storeAvailabilityCacheFuture =
+            BulkScanCache.load().then((cache) => cache[widget.appId]);
+      });
+      // Independently check Play Store in the background so other store
+      // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
+      // without waiting for the Play Store network round-trip.
+      _maybeCheckAndCacheAllStores();
       if (resetVersion) {
         appsProvider.apps[id]?.app.additionalSettings['versionDetection'] =
             true;
@@ -979,11 +1080,7 @@ class _AppPageState extends State<AppPage> {
               color: colorScheme.primary,
             ),
           )
-        : Icon(
-            Icons.link,
-            size: _storeSourceIconSize * 0.75,
-            color: colorScheme.primary,
-          );
+        : StoreSourceIconForUrl(url: url, size: _storeSourceIconSize);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1892,10 +1989,15 @@ class _AppPageState extends State<AppPage> {
               final pid = alternateStoresPackageId;
               final trackedUrl = alternateStoresTrackedUrl;
 
-              final playStoreUrl =
-                  _trackedUrlIsFromHost(trackedUrl, 'play.google.com')
-                      ? null
-                      : 'https://play.google.com/store/apps/details?id=$pid';
+              // Play Store: only show when confirmed present in cache.
+              // Populated by _maybeCheckAndCachePlayStore on pull-to-refresh.
+              final playStoreUrl = _resolveStoreUrl(
+                storeData: storeData,
+                storeName: 'PlayStore',
+                fallbackUrl: null,
+                alreadyTracked:
+                    _trackedUrlIsFromHost(trackedUrl, 'play.google.com'),
+              );
 
               final fdroidUrl = _resolveStoreUrl(
                 storeData: storeData,
@@ -1907,8 +2009,7 @@ class _AppPageState extends State<AppPage> {
               final apkpureUrl = _resolveStoreUrl(
                 storeData: storeData,
                 storeName: 'APKPure',
-                fallbackUrl:
-                    'https://apkpure.net/search?q=${Uri.encodeComponent(pid)}',
+                fallbackUrl: null, // search-by-package-ID is not useful; only show confirmed URL
                 alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkpure.'),
               );
 

@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:hsluv/hsluv.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -366,13 +367,221 @@ Color generateRandomLightColor() {
   final goldenAngle = 180 * (3 - sqrt(5));
   // Generate next golden angle hue
   final double hue = randomSeed * goldenAngle;
-  // Map from HPLuv color space to RGB, use constant saturation=100, lightness=70
-  final List<double> rgbValuesDbl = Hsluv.hpluvToRgb([hue, 100, 70]);
+  // Map from HPLuv color space to RGB, use constant saturation=100, lightness=55
+  final List<double> rgbValuesDbl = Hsluv.hpluvToRgb([hue, 100, 55]);
   // Map RBG values from 0-1 to 0-255:
   final List<int> rgbValues = rgbValuesDbl
-      .map((rgb) => (rgb * 255).toInt())
+      .map((rgb) => (rgb * 255).clamp(0, 255).toInt())
       .toList();
   return Color.fromARGB(255, rgbValues[0], rgbValues[1], rgbValues[2]);
+}
+
+/// Builds a 4×12 palette covering the full hue spectrum at four lightness levels
+/// (vivid→pastel). Used by [_showCategoryColorPicker].
+List<Color> _buildCategoryColorPalette() {
+  const lightnesses = [45.0, 55.0, 65.0, 75.0];
+  const hues = [
+    0.0, 30.0, 60.0, 90.0, 120.0, 150.0,
+    180.0, 210.0, 240.0, 270.0, 300.0, 330.0,
+  ];
+  final palette = <Color>[];
+  for (final l in lightnesses) {
+    for (final h in hues) {
+      final rgb = Hsluv.hpluvToRgb([h, 100, l]);
+      palette.add(Color.fromARGB(
+        255,
+        (rgb[0] * 255).clamp(0, 255).toInt(),
+        (rgb[1] * 255).clamp(0, 255).toInt(),
+        (rgb[2] * 255).clamp(0, 255).toInt(),
+      ));
+    }
+  }
+  return palette;
+}
+
+/// Hex color entry field with live preview square and an Apply button.
+/// Dismisses the enclosing route with the chosen [Color] via [onPicked].
+class _CategoryHexInput extends StatefulWidget {
+  const _CategoryHexInput({required this.current, required this.onPicked});
+  final Color current;
+  final ValueChanged<Color> onPicked;
+
+  @override
+  State<_CategoryHexInput> createState() => _CategoryHexInputState();
+}
+
+class _CategoryHexInputState extends State<_CategoryHexInput> {
+  late final TextEditingController _ctrl;
+  bool _valid = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final hex = widget.current.toARGB32() & 0xFFFFFF;
+    _ctrl = TextEditingController(
+      text: '#${hex.toRadixString(16).padLeft(6, '0').toUpperCase()}',
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _tryApply() {
+    final raw = _ctrl.text.trim().replaceFirst('#', '');
+    if (raw.length == 6) {
+      final value = int.tryParse(raw, radix: 16);
+      if (value != null) {
+        widget.onPicked(Color(0xFF000000 | value));
+        return;
+      }
+    }
+    setState(() => _valid = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _ctrl,
+            decoration: InputDecoration(
+              labelText: 'HEX',
+              hintText: '#FF5733',
+              errorText: _valid ? null : tr('invalidInput'),
+              prefixIcon: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _ctrl,
+                builder: (_, value, _) {
+                  final raw = value.text.trim().replaceFirst('#', '');
+                  final parsed =
+                      raw.length == 6 ? int.tryParse(raw, radix: 16) : null;
+                  final preview =
+                      parsed != null ? Color(0xFF000000 | parsed) : null;
+                  return Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: preview,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outline,
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            inputFormatters: [
+              TextInputFormatter.withFunction((oldValue, newValue) {
+                var text = newValue.text.toUpperCase();
+                if (!text.startsWith('#')) text = '#$text';
+                if (text.length > 7) return oldValue;
+                return newValue.copyWith(
+                  text: text,
+                  selection: TextSelection.collapsed(offset: text.length),
+                );
+              }),
+            ],
+            onChanged: (_) {
+              if (!_valid) setState(() => _valid = true);
+            },
+            onSubmitted: (_) => _tryApply(),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: FilledButton(
+            onPressed: _tryApply,
+            child: Text(tr('apply')),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Shows a bottom sheet with a 4×12 hue/lightness palette and a hex input.
+/// Returns the chosen [Color], or null if dismissed.
+Future<Color?> _showCategoryColorPicker(
+  BuildContext context,
+  Color current,
+) {
+  final palette = _buildCategoryColorPalette();
+  return showModalBottomSheet<Color>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          16,
+          16,
+          MediaQuery.of(ctx).viewInsets.bottom + 8,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(tr('colour'), style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            GridView.count(
+              crossAxisCount: 12,
+              shrinkWrap: true,
+              mainAxisSpacing: 5,
+              crossAxisSpacing: 5,
+              physics: const NeverScrollableScrollPhysics(),
+              children: palette.map((color) {
+                final bool selected =
+                    color.toARGB32() == current.toARGB32();
+                return GestureDetector(
+                  onTap: () => Navigator.pop(ctx, color),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(6),
+                      border: selected
+                          ? Border.all(
+                              color: Theme.of(ctx).colorScheme.onSurface,
+                              width: 2.5,
+                            )
+                          : null,
+                    ),
+                    child: selected
+                        ? Icon(
+                            Icons.check_rounded,
+                            size: 14,
+                            color: color.computeLuminance() > 0.35
+                                ? Colors.black87
+                                : Colors.white,
+                          )
+                        : null,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 12),
+            _CategoryHexInput(
+              current: current,
+              onPicked: (c) => Navigator.pop(ctx, c),
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 int generateRandomNumber(
@@ -933,30 +1142,28 @@ class _GeneratedFormState extends State<GeneratedForm> {
                       ? Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
                           child: IconButton(
-                            onPressed: () {
+                            onPressed: () async {
+                              final temp =
+                                  values[fieldKey]
+                                      as Map<String, MapEntry<int, bool>>;
+                              final oldEntry = temp.entries.firstWhere(
+                                (e) => e.value.value,
+                              );
+                              final picked = await _showCategoryColorPicker(
+                                context,
+                                Color(oldEntry.value.key),
+                              );
+                              if (picked == null) return;
                               setState(() {
-                                var temp =
-                                    values[fieldKey]
-                                        as Map<String, MapEntry<int, bool>>;
-                                // get selected category str where bool is true
-                                final oldEntry = temp.entries.firstWhere(
-                                  (entry) => entry.value.value,
-                                );
-                                // generate new color, ensure it is not the same
-                                int newColor = oldEntry.value.key;
-                                while (oldEntry.value.key == newColor) {
-                                  newColor = generateRandomLightColor().toARGB32();
-                                }
-                                // Update entry with new color, remain selected
                                 temp.update(
                                   oldEntry.key,
-                                  (old) => MapEntry(newColor, old.value),
+                                  (old) => MapEntry(picked.toARGB32(), old.value),
                                 );
                                 values[fieldKey] = temp;
                                 someValueChanged();
                               });
                             },
-                            icon: const Icon(Icons.format_color_fill_rounded),
+                            icon: const Icon(Icons.palette_outlined),
                             visualDensity: VisualDensity.compact,
                             tooltip: tr('colour'),
                           ),

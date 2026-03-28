@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:convert';
 
 import 'package:device_info_plus/device_info_plus.dart';
@@ -18,6 +19,8 @@ import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/bulk_import_service.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -1792,6 +1795,27 @@ class AppsPageState extends State<AppsPage> {
     var appsProvider = context.read<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
 
+    Future<void> backgroundScanStoreAvailability() async {
+      final ids = appsProvider.apps.keys.toList();
+      if (ids.isEmpty) return;
+      final cache = await BulkScanCache.load();
+      final needsApkMirror = ids
+          .where((id) => !(cache[id]?.containsKey('APKMirror') ?? false))
+          .toList();
+      final needsFDroid = ids
+          .where((id) => !(cache[id]?.containsKey('F-Droid') ?? false))
+          .toList();
+      if (needsApkMirror.isEmpty && needsFDroid.isEmpty) return;
+      await Future.wait([
+        if (needsApkMirror.isNotEmpty)
+          BulkImportService.checkApkMirror(needsApkMirror)
+              .then((r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r)),
+        if (needsFDroid.isNotEmpty)
+          BulkImportService.checkFDroid(needsFDroid)
+              .then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
+      ]);
+    }
+
     refresh() {
       HapticFeedback.lightImpact();
       setState(() {
@@ -1818,6 +1842,7 @@ class AppsPageState extends State<AppsPage> {
             setState(() {
               refreshingSince = null;
             });
+            unawaited(backgroundScanStoreAvailability());
           });
     }
 

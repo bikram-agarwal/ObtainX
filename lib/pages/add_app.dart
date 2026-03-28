@@ -1246,23 +1246,14 @@ class AddAppPageState extends State<AddAppPage> {
 
   /// Small icon to indicate which source a search result came from.
   Widget _searchSourceIcon(String sourceName) {
-    final assetMap = {
-      'APKMirror': 'assets/graphics/ic_apkmirror.png',
-      'APKPure': 'assets/graphics/ic_apkpure.png',
-      'F-Droid': 'assets/graphics/ic_fdroid.png',
-      'GitHub': 'assets/graphics/ic_github.png',
-    };
-    final asset = assetMap[sourceName];
-    if (asset != null) {
-      return Image.asset(
-        asset,
-        width: 20,
-        height: 20,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.medium,
-      );
+    final String? assetPath = storeSourceAssetPathForClassName(sourceName);
+    if (assetPath == null) return const Icon(Icons.store_rounded, size: 20);
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    Widget img = StoreSourceIconImage(assetPath: assetPath, size: 20);
+    if (iconNeedsInversion(assetPath, isDark)) {
+      img = ColorFiltered(colorFilter: invertColorFilter, child: img);
     }
-    return const Icon(Icons.store_rounded, size: 20);
+    return img;
   }
 }
 
