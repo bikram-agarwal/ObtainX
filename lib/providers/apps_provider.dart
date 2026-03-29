@@ -3088,6 +3088,29 @@ class AppsProvider with ChangeNotifier {
     super.dispose();
   }
 
+  /// After a new app is in [apps] (e.g. [saveApps] with [onlyIfExists]: false),
+  /// adds it to every folder whose rule matches and saves again if anything changed.
+  /// Prefer the live [App] from [apps] so post-save corrections apply to rule matching.
+  Future<void> assignMatchingFoldersToAppIfNeeded(App app) async {
+    final sourceProvider = SourceProvider();
+    final resolvedSource = sourceProvider
+        .getSource(app.url, overrideSource: app.overrideSource)
+        .runtimeType
+        .toString();
+    bool changed = false;
+    for (final folder in settingsProvider.appFolders) {
+      if (folder.rule == null) continue;
+      if (excludedFolderIdsForApp(app).contains(folder.id)) continue;
+      if (folder.rule!.matches(app, resolvedSource: resolvedSource)) {
+        addAppToFolder(app, folder.id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      await saveApps([app]);
+    }
+  }
+
   Future<List<List<String>>> addAppsByURL(
     List<String> urls, {
     AppSource? sourceOverride,
@@ -3099,27 +3122,15 @@ class AppsProvider with ChangeNotifier {
     );
     List<App> pps = results[0];
     Map<String, dynamic> errorsMap = results[1];
-    final sourceProvider = SourceProvider();
     for (var app in pps) {
       if (apps.containsKey(app.id)) {
         errorsMap.addAll({app.id: tr('appAlreadyAdded')});
       } else {
         await saveApps([app], onlyIfExists: false);
-        // Auto-assign to any folder whose rule matches this new app.
-        final resolvedSource = sourceProvider
-            .getSource(app.url, overrideSource: app.overrideSource)
-            .runtimeType
-            .toString();
-        bool changed = false;
-        for (final folder in settingsProvider.appFolders) {
-          if (folder.rule == null) continue;
-          if (excludedFolderIdsForApp(app).contains(folder.id)) continue;
-          if (folder.rule!.matches(app, resolvedSource: resolvedSource)) {
-            addAppToFolder(app, folder.id);
-            changed = true;
-          }
+        final liveApp = apps[app.id]?.app;
+        if (liveApp != null) {
+          await assignMatchingFoldersToAppIfNeeded(liveApp);
         }
-        if (changed) await saveApps([app]);
       }
     }
     List<List<String>> errors = errorsMap.keys

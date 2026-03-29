@@ -336,6 +336,10 @@ class AddAppPageState extends State<AddAppPage> {
           }
           app.categories = pickedCategories;
           await appsProvider.saveApps([app], onlyIfExists: false);
+          final liveApp = appsProvider.apps[app.id]?.app;
+          if (liveApp != null) {
+            await appsProvider.assignMatchingFoldersToAppIfNeeded(liveApp);
+          }
         }
         if (app != null) {
           Navigator.push(

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flex_color_picker/flex_color_picker.dart';
@@ -894,6 +896,39 @@ class _LogsDialogState extends State<LogsDialog> {
   }
 }
 
+/// Canonical JSON for [GeneratedForm] key (prefs key order can vary).
+String _stableCategoriesMapJson(Map<String, int> categories) {
+  final List<MapEntry<String, int>> sorted =
+      List<MapEntry<String, int>>.from(categories.entries)
+        ..sort(
+          (MapEntry<String, int> left, MapEntry<String, int> right) =>
+              left.key.compareTo(right.key),
+        );
+  return jsonEncode(Map<String, int>.fromEntries(sorted));
+}
+
+Map<String, MapEntry<int, bool>> _mergeCategoryEditorMaps(
+  Map<String, int> fromPrefs,
+  Map<String, MapEntry<int, bool>> previousSelections,
+  Set<String> preselected,
+) {
+  final Map<String, MapEntry<int, bool>> merged =
+      <String, MapEntry<int, bool>>{};
+  for (final MapEntry<String, int> entry in fromPrefs.entries) {
+    merged[entry.key] = MapEntry(
+      entry.value,
+      previousSelections[entry.key]?.value ?? preselected.contains(entry.key),
+    );
+  }
+  for (final MapEntry<String, MapEntry<int, bool>> entry
+      in previousSelections.entries) {
+    if (!merged.containsKey(entry.key)) {
+      merged[entry.key] = entry.value;
+    }
+  }
+  return merged;
+}
+
 class CategoryEditorSelector extends StatefulWidget {
   final void Function(List<String> categories)? onSelected;
   final bool singleSelect;
@@ -918,25 +953,26 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
 
   @override
   Widget build(BuildContext context) {
-    var settingsProvider = context.watch<SettingsProvider>();
-    var appsProvider = context.watch<AppsProvider>();
-    storedValues = settingsProvider.categories.map(
-      (key, value) => MapEntry(
-        key,
-        MapEntry(
-          value,
-          storedValues[key]?.value ?? widget.preselected.contains(key),
-        ),
-      ),
+    final settingsProvider = context.watch<SettingsProvider>();
+    final appsProvider =
+        context.read<AppsProvider>(); // not watch: saveApps would rebuild form
+    final Map<String, int> fromPrefs = settingsProvider.categories;
+    final Map<String, MapEntry<int, bool>> merged = _mergeCategoryEditorMaps(
+      fromPrefs,
+      storedValues,
+      widget.preselected,
     );
     return GeneratedForm(
+      key: ValueKey<String>(
+        'categories_${_stableCategoriesMapJson(fromPrefs)}',
+      ),
       items: [
         [
           GeneratedFormTagInput(
             'categories',
             label: tr('categories'),
             emptyMessage: tr('noCategories'),
-            defaultValue: storedValues,
+            defaultValue: merged,
             alignment: widget.alignment,
             deleteConfirmationMessage: MapEntry(
               tr('deleteCategoriesQuestion'),
@@ -949,17 +985,18 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
       ],
       onValueChanges: ((values, valid, isBuilding) {
         if (!isBuilding) {
-          storedValues =
+          final Map<String, MapEntry<int, bool>> catMap =
               values['categories'] as Map<String, MapEntry<int, bool>>;
+          storedValues = cloneCategoryTagInputValueMap(catMap);
+          final Map<String, int> colorsByName =
+              catMap.map((key, value) => MapEntry(key, value.key));
+          final List<String> selected =
+              catMap.keys.where((k) => catMap[k]!.value).toList();
+          widget.onSelected?.call(selected);
           settingsProvider.setCategories(
-            storedValues.map((key, value) => MapEntry(key, value.key)),
+            colorsByName,
             appsProvider: appsProvider,
           );
-          if (widget.onSelected != null) {
-            widget.onSelected!(
-              storedValues.keys.where((k) => storedValues[k]!.value).toList(),
-            );
-          }
         }
       }),
     );

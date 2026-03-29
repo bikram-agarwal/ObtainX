@@ -751,7 +751,7 @@ class _AppPageState extends State<AppPage> {
           tr('categories'),
           [
             CategoryEditorSelector(
-              key: ValueKey(_editCategories.join(',')),
+              key: ValueKey<String>('app_categories_${widget.appId}'),
               preselected: _editCategories.toSet(),
               alignment: WrapAlignment.start,
               showLabelWhenNotEmpty: false,

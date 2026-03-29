@@ -207,6 +207,23 @@ class GeneratedFormTagInput extends GeneratedFormItem {
   }
 }
 
+/// Copy tag map so form state is not the same instance as [GeneratedFormTagInput.defaultValue].
+Map<String, MapEntry<int, bool>> cloneCategoryTagInputValueMap(
+  Map<String, MapEntry<int, bool>>? source,
+) {
+  if (source == null || source.isEmpty) {
+    return <String, MapEntry<int, bool>>{};
+  }
+  return Map<String, MapEntry<int, bool>>.fromEntries(
+    source.entries.map(
+      (MapEntry<String, MapEntry<int, bool>> entry) => MapEntry(
+        entry.key,
+        MapEntry(entry.value.key, entry.value.value),
+      ),
+    ),
+  );
+}
+
 typedef OnValueChanges =
     void Function(Map<String, dynamic> values, bool valid, bool isBuilding);
 
@@ -749,7 +766,6 @@ class _GeneratedFormState extends State<GeneratedForm> {
   Map<String, dynamic> values = {};
   late List<List<Widget>> formInputs;
   List<List<Widget>> rows = [];
-  String? initKey;
   int forceUpdateKeyCount = 0;
   final Map<String, TextEditingController> _textFieldControllers = {};
 
@@ -791,14 +807,19 @@ class _GeneratedFormState extends State<GeneratedForm> {
   }
 
   void initForm() {
-    initKey = widget.key.toString();
     _disposeTextFieldControllers();
     // Initialize form values as all empty
     values.clear();
     for (var row in widget.items) {
       for (var e in row) {
         if (e is GeneratedFormSectionHeader) continue;
-        values[e.key] = e.defaultValue;
+        if (e is GeneratedFormTagInput) {
+          values[e.key] = cloneCategoryTagInputValueMap(
+            e.defaultValue as Map<String, MapEntry<int, bool>>?,
+          );
+        } else {
+          values[e.key] = e.defaultValue;
+        }
       }
     }
 
@@ -958,6 +979,14 @@ class _GeneratedFormState extends State<GeneratedForm> {
   }
 
   @override
+  void didUpdateWidget(covariant GeneratedForm oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.key != widget.key) {
+      initForm();
+    }
+  }
+
+  @override
   void dispose() {
     _disposeTextFieldControllers();
     super.dispose();
@@ -965,9 +994,6 @@ class _GeneratedFormState extends State<GeneratedForm> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.key.toString() != initKey) {
-      initForm();
-    }
     for (var r = 0; r < formInputs.length; r++) {
       for (var e = 0; e < formInputs[r].length; e++) {
         String fieldKey = widget.items[r][e].key;
@@ -1068,6 +1094,10 @@ class _GeneratedFormState extends State<GeneratedForm> {
             ],
           );
         } else if (widget.items[r][e] is GeneratedFormTagInput) {
+          // Capture the form item here so that closures defined below don't
+          // close over the for-loop variables r and e, which have stale
+          // (final-iteration) values by the time the closures are invoked.
+          final tagInput = widget.items[r][e] as GeneratedFormTagInput;
           onAddPressed() async {
             // ignore: use_build_context_synchronously
             final result = await _showCategorySheet(context,
@@ -1076,8 +1106,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
             var temp = values[fieldKey] as Map<String, MapEntry<int, bool>>?;
             temp ??= {};
             if (temp.containsKey(result.name)) return;
-            final singleSelect =
-                (widget.items[r][e] as GeneratedFormTagInput).singleSelect;
+            final singleSelect = tagInput.singleSelect;
             final someSelected = temp.values.any((v) => v.value);
             setState(() {
               temp![result.name] = MapEntry(
@@ -1085,8 +1114,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 !(someSelected && singleSelect),
               );
               values[fieldKey] = temp;
-              someValueChanged();
             });
+            someValueChanged();
           }
 
           formInputs[r][e] = Column(
@@ -1113,78 +1142,55 @@ class _GeneratedFormState extends State<GeneratedForm> {
                     (widget.items[r][e] as GeneratedFormTagInput).alignment,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  // (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
-                  //             ?.isEmpty ==
-                  //         true
-                  //     ? Text(
-                  //         (widget.items[r][e] as GeneratedFormTagInput)
-                  //             .emptyMessage,
-                  //       )
-                  //     : const SizedBox.shrink(),
                   ...(values[fieldKey] as Map<String, MapEntry<int, bool>>?)
                           ?.entries
                           .map((e2) {
+                            void onCategoryChipSelected(bool newValue) {
+                              setState(() {
+                                final Map<String, MapEntry<int, bool>> map =
+                                    values[fieldKey]
+                                        as Map<String, MapEntry<int, bool>>;
+                                map[e2.key] = MapEntry(
+                                  map[e2.key]!.key,
+                                  newValue,
+                                );
+                                if (tagInput.singleSelect && newValue) {
+                                  for (final String key in map.keys) {
+                                    if (key != e2.key) {
+                                      map[key] = MapEntry(
+                                        map[key]!.key,
+                                        false,
+                                      );
+                                    }
+                                  }
+                                }
+                              });
+                              someValueChanged();
+                            }
+
+                            final Color chipColor = Color(e2.value.key);
+                            final bool lightChip =
+                                chipColor.computeLuminance() > 0.35;
+                            final TextStyle chipLabelStyle = TextStyle(
+                              color: lightChip ? Colors.black87 : Colors.white,
+                            );
+                            final Color checkColor =
+                                lightChip ? Colors.black87 : Colors.white;
                             return Padding(
+                              key: ValueKey<String>('category_chip_${e2.key}'),
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 4,
                               ),
-                              child: ChoiceChip(
+                              child: FilterChip(
                                 label: Text(e2.key),
-                                backgroundColor: Color(e2.value.key),
-                                selectedColor: Color(e2.value.key),
-                                labelStyle: TextStyle(
-                                  color: Color(e2.value.key)
-                                              .computeLuminance() >
-                                          0.35
-                                      ? Colors.black87
-                                      : Colors.white,
-                                ),
+                                backgroundColor: chipColor,
+                                selectedColor: chipColor,
+                                labelStyle: chipLabelStyle,
+                                showCheckmark: true,
+                                checkmarkColor: checkColor,
                                 visualDensity: VisualDensity.compact,
                                 selected: e2.value.value,
-                                onSelected: (value) {
-                                  setState(() {
-                                    (values[fieldKey]
-                                        as Map<String, MapEntry<int, bool>>)[e2
-                                        .key] = MapEntry(
-                                      (values[fieldKey]
-                                              as Map<
-                                                String,
-                                                MapEntry<int, bool>
-                                              >)[e2.key]!
-                                          .key,
-                                      value,
-                                    );
-                                    if ((widget.items[r][e]
-                                                as GeneratedFormTagInput)
-                                            .singleSelect &&
-                                        value == true) {
-                                      for (var key
-                                          in (values[fieldKey]
-                                                  as Map<
-                                                    String,
-                                                    MapEntry<int, bool>
-                                                  >)
-                                              .keys) {
-                                        if (key != e2.key) {
-                                          (values[fieldKey]
-                                              as Map<
-                                                String,
-                                                MapEntry<int, bool>
-                                              >)[key] = MapEntry(
-                                            (values[fieldKey]
-                                                    as Map<
-                                                      String,
-                                                      MapEntry<int, bool>
-                                                    >)[key]!
-                                                .key,
-                                            false,
-                                          );
-                                        }
-                                      }
-                                    }
-                                    someValueChanged();
-                                  });
-                                },
+                                onSelected: onCategoryChipSelected,
                               ),
                             );
                           }) ??
@@ -1218,8 +1224,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                   oldEntry.value.value,
                                 );
                                 values[fieldKey] = temp;
-                                someValueChanged();
                               });
+                              someValueChanged();
                             },
                             icon: const Icon(Icons.edit_outlined),
                             visualDensity: VisualDensity.compact,
@@ -1243,17 +1249,13 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                           as Map<String, MapEntry<int, bool>>;
                                   temp.removeWhere((key, value) => value.value);
                                   values[fieldKey] = temp;
-                                  someValueChanged();
                                 });
+                                someValueChanged();
                               }
 
-                              if ((widget.items[r][e] as GeneratedFormTagInput)
-                                      .deleteConfirmationMessage !=
-                                  null) {
+                              if (tagInput.deleteConfirmationMessage != null) {
                                 var message =
-                                    (widget.items[r][e]
-                                            as GeneratedFormTagInput)
-                                        .deleteConfirmationMessage!;
+                                    tagInput.deleteConfirmationMessage!;
                                 showDialog<Map<String, dynamic>?>(
                                   context: context,
                                   builder: (BuildContext ctx) {

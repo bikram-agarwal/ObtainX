@@ -1938,6 +1938,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           inferAppIdIfOptional: true,
         );
         await _appsProvider.saveApps([newApp], onlyIfExists: false);
+        final liveApp = _appsProvider.apps[newApp.id]?.app;
+        if (liveApp != null) {
+          await _appsProvider.assignMatchingFoldersToAppIfNeeded(liveApp);
+        }
         if (mounted) {
           setState(() {
             _addedCount++;

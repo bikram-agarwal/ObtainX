@@ -63,11 +63,15 @@ class SettingsProvider with ChangeNotifier {
   String? defaultAppDir;
   bool justStarted = true;
 
+  /// Mirrors last [setCategories] write; [getString] can lag [setString] briefly.
+  Map<String, int>? _categoriesMemory;
+
   String sourceUrl = 'https://github.com/bikram-agarwal/ObtainX';
 
   // Not done in constructor as we want to be able to await it
   Future<void> initializeSettings() async {
     prefs = await SharedPreferences.getInstance();
+    _categoriesMemory = null;
     defaultAppDir = (await getAppStorageDir()).path;
     _migrateShizukuSetting();
     _migrateSwipeActionPrefs();
@@ -476,8 +480,14 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Map<String, int> get categories =>
-      Map<String, int>.from(jsonDecode(prefs?.getString('categories') ?? '{}'));
+  Map<String, int> get categories {
+    if (_categoriesMemory != null) {
+      return Map<String, int>.from(_categoriesMemory!);
+    }
+    return Map<String, int>.from(
+      jsonDecode(prefs?.getString('categories') ?? '{}'),
+    );
+  }
 
   void setCategories(Map<String, int> cats, {AppsProvider? appsProvider}) {
     if (appsProvider != null) {
@@ -517,6 +527,7 @@ class SettingsProvider with ChangeNotifier {
         appsProvider.saveApps(changedApps);
       }
     }
+    _categoriesMemory = Map<String, int>.from(cats);
     prefs?.setString('categories', jsonEncode(cats));
     notifyListeners();
   }
