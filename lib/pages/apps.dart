@@ -521,9 +521,11 @@ class _SwipeableListItem extends StatefulWidget {
     required this.rightAction,
     required this.leftAction,
     required this.child,
+    this.appsListHeroFolderId,
   });
 
   final String appId;
+  final String? appsListHeroFolderId;
   final bool hasUpdate;
   final bool isPinned;
   final bool isInstalled;
@@ -623,6 +625,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
               (_) => AppPage(
                 appId: widget.appId,
                 openInEditMode: true,
+                appsListHeroFolderId: widget.appsListHeroFolderId,
               ),
             ),
           );
@@ -2400,6 +2403,7 @@ class AppsPageState extends State<AppsPage> {
               (_) => AppPage(
                 appId: rowAppId,
                 showOppositeOfPreferredView: true,
+                appsListHeroFolderId: widget.folderId,
               ),
             ),
           );
@@ -2430,6 +2434,7 @@ class AppsPageState extends State<AppsPage> {
         keepAlive: _heroKeepaliveAppId == appId,
         rightAction: settingsProvider.rightSwipeAction,
         leftAction: settingsProvider.leftSwipeAction,
+        appsListHeroFolderId: widget.folderId,
         child: _AppListItem(
           appId: appId,
           isSelected: selectedAppIds.contains(appId),
@@ -2444,7 +2449,12 @@ class AppsPageState extends State<AppsPage> {
                   setState(() => _heroKeepaliveAppId = appId);
                   Navigator.push(
                     context,
-                    heroFriendlyAppPageRoute((_) => AppPage(appId: appId)),
+                    heroFriendlyAppPageRoute(
+                      (_) => AppPage(
+                        appId: appId,
+                        appsListHeroFolderId: widget.folderId,
+                      ),
+                    ),
                   ).then((_) {
                     if (mounted) setState(() => _heroKeepaliveAppId = null);
                   });
@@ -3853,7 +3863,12 @@ class AppsPageState extends State<AppsPage> {
 
     Navigator.push(
       context,
-      heroFriendlyAppPageRoute((_) => AppPage(appId: app.app.id)),
+      heroFriendlyAppPageRoute(
+        (_) => AppPage(
+          appId: app.app.id,
+          appsListHeroFolderId: widget.folderId,
+        ),
+      ),
     );
   }
 

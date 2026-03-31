@@ -196,10 +196,13 @@ class AppPage extends StatefulWidget {
     required this.appId,
     this.showOppositeOfPreferredView = false,
     this.openInEditMode = false,
+    this.appsListHeroFolderId,
   });
 
   final String appId;
   final bool showOppositeOfPreferredView;
+  /// Folder id when opened from [AppsPage] with [AppsPage.folderId]; matches list [Hero] tags.
+  final String? appsListHeroFolderId;
   /// When true (e.g. swipe-to-edit), enter inline edit mode once the app is loaded.
   final bool openInEditMode;
 
@@ -2189,12 +2192,15 @@ class _AppPageState extends State<AppPage> {
       final scaledIconSize = heroIconSize * heroScale;
       final titleStyle = Theme.of(themeContext).textTheme.titleLarge;
       final bylineStyle = Theme.of(themeContext).textTheme.bodySmall;
+      final String listHeroTag = widget.appsListHeroFolderId != null
+          ? 'folder-${widget.appsListHeroFolderId}-icon-${widget.appId}'
+          : 'app-icon-${widget.appId}';
       final iconWidget = _tappableAppIconDisplay(
         themeContext: themeContext,
         appInMemory: app,
         size: scaledIconSize,
         borderRadius: 16,
-        heroTag: 'app-icon-${widget.appId}',
+        heroTag: listHeroTag,
         iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
         exclusiveIconMemoryBytes: _editStagedClearOverride,
         onTap: _editMode
