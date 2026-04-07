@@ -82,9 +82,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   final Set<String> _selectedPackages = {};
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
-  // Icon cache: packageName -> icon bytes (null while loading, Uint8List or false when done)
-  final Map<String, Object?> _iconCache =
-      {}; // Object? = Uint8List | false | null
+  // Icon cache: packageName -> Uint8List | false (failed). Absent key = not loaded yet.
+  final Map<String, Object?> _iconCache = {};
+  final Map<String, Future<void>> _iconLoadFutures = {};
 
   // --- Scanning step ---
   String _scanStatus = '';
@@ -116,6 +116,15 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   List<InstalledAppInfo> _cancelledApps = [];
   bool _scanCancelRequested = false;
   bool _addCancelRequested = false;
+
+  /// Live maps while a bulk scan runs; used to show partial results as soon as
+  /// the user cancels without waiting for in-flight HTTP to finish.
+  final Map<String, Map<String, String>> _bulkScanCombined =
+      <String, Map<String, String>>{};
+  final Map<String, Set<String>> _bulkScanPackageStoresDone =
+      <String, Set<String>>{};
+  List<String> _bulkScanPackageNames = <String>[];
+  bool _bulkScanResultsCommitted = false;
 
   late AppsProvider _appsProvider;
   static const List<String> _storeIconPriority = [
@@ -506,7 +515,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             child: SizedBox(
               width: _bulkAddResultIconSlotWidth,
               height: 48,
-              child: Center(child: _buildAppIcon(app.packageName)),
+              child: Center(child: _lazyBulkAppIcon(app.packageName)),
             ),
           ),
           const SizedBox(width: 8),
@@ -581,9 +590,6 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         showError(e, context);
         return;
       }
-      // Preload icons for every app so filter switches are instant.
-      // Fire-and-forget; _applyAppFilter() below shows the list immediately.
-      _loadIconsBatched(_allInstalledApps);
     }
     _applyAppFilter();
   }
@@ -606,8 +612,27 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       _installedApps = apps;
       _loadingApps = false;
     });
-    // No icon loading here — already handled by _loadIconsBatched(_allInstalledApps)
-    // in _proceedToAppList. Filter switches just show what's already cached.
+  }
+
+  /// One fetch per package; visible list rows await the same future; only the
+  /// icon subtree rebuilds when data arrives (no whole-list setState storms).
+  Future<void> _ensurePackageIconLoaded(String packageName) {
+    if (_iconCache.containsKey(packageName)) return Future<void>.value();
+    return _iconLoadFutures.putIfAbsent(packageName, () async {
+      try {
+        final Uint8List? icon = await BulkImportService.getAppIcon(
+          packageName,
+        );
+        if (!mounted) return;
+        _iconCache.putIfAbsent(packageName, () => icon ?? false);
+      } catch (_) {
+        if (mounted) {
+          _iconCache.putIfAbsent(packageName, () => false);
+        }
+      } finally {
+        _iconLoadFutures.remove(packageName);
+      }
+    });
   }
 
   // ─── App Selection Step ────────────────────────────────────────────────
@@ -624,58 +649,12 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         .toList();
   }
 
-  /// Loads app icons in batches. setState is only called when at least one
-  /// new icon was fetched in a batch — already-cached icons never trigger a
-  /// rebuild, so scrolling through a previously loaded list stays smooth.
-  Future<void> _loadIconsBatched([List<InstalledAppInfo>? source]) async {
-    const batchSize = 20;
-    final packages =
-        (source ?? _installedApps).map((a) => a.packageName).toList();
-    for (int i = 0; i < packages.length; i += batchSize) {
-      if (!mounted) return;
-      final batch = packages.sublist(
-        i,
-        (i + batchSize).clamp(0, packages.length),
-      );
-      int newlyLoaded = 0;
-      await Future.wait(
-        batch.map((pkg) async {
-          if (_iconCache.containsKey(pkg)) return;
-          final icon = await BulkImportService.getAppIcon(pkg);
-          _iconCache[pkg] = icon ?? false;
-          newlyLoaded++;
-        }),
-      );
-      if (mounted && newlyLoaded > 0) setState(() {});
-    }
-  }
-
-  Widget _buildAppIcon(String packageName, {double size = 40}) {
-    // Icons are populated by _loadIconsBatched; no loading triggered here.
-    final cached = _iconCache[packageName];
-    if (cached is Uint8List) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.memory(
-          cached,
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-        ),
-      );
-    }
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Icon(
-        Icons.android_rounded,
-        size: size * 0.6,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
+  Widget _lazyBulkAppIcon(String packageName, {double size = 40}) {
+    return _LazyBulkAppIcon(
+      packageName: packageName,
+      iconCache: _iconCache,
+      requestLoad: _ensurePackageIconLoaded,
+      size: size,
     );
   }
 
@@ -779,6 +758,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   // Bottom padding reserves space so the last item isn't
                   // hidden behind the FAB.
                   padding: const EdgeInsets.only(bottom: 88),
+                  cacheExtent: 1200,
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
                     final app = filtered[index];
@@ -789,7 +769,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                     return _bulkAddAppListRow(
                       leadingIcon: Padding(
                         padding: const EdgeInsets.only(right: 4),
-                        child: _buildAppIcon(app.packageName),
+                        child: _lazyBulkAppIcon(app.packageName),
                       ),
                       appName: app.name,
                       packageName: app.packageName,
@@ -855,6 +835,56 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   // ─── Scanning Step ─────────────────────────────────────────────────────
 
+  /// Builds [found] / [notFound] / [cancelled] from live scan maps and moves
+  /// to the results step. Safe to call while network work is still running
+  /// (e.g. user tapped cancel) — only the first call applies.
+  void _commitBulkScanResults() {
+    if (_bulkScanResultsCommitted || !mounted) return;
+    _bulkScanResultsCommitted = true;
+
+    final Map<String, InstalledAppInfo> appInfoMap = {
+      for (final InstalledAppInfo a in _installedApps) a.packageName: a,
+    };
+    final List<BulkFoundApp> found = <BulkFoundApp>[];
+    final List<InstalledAppInfo> notFound = <InstalledAppInfo>[];
+    final List<InstalledAppInfo> cancelledApps = <InstalledAppInfo>[];
+
+    for (final String pkg in _bulkScanPackageNames) {
+      final InstalledAppInfo? info = appInfoMap[pkg];
+      if (info == null) continue;
+      final Set<String>? doneForPackage = _bulkScanPackageStoresDone[pkg];
+      final bool coveredAllSelectedStores = _selectedStores.every(
+        (String storeLabel) => doneForPackage?.contains(storeLabel) ?? false,
+      );
+      if (!coveredAllSelectedStores) {
+        cancelledApps.add(info);
+        continue;
+      }
+      final Map<String, String>? sources = _bulkScanCombined[pkg];
+      if (sources != null && sources.isNotEmpty) {
+        found.add(BulkFoundApp(info: info, sources: sources));
+      } else {
+        notFound.add(info);
+      }
+    }
+
+    final Set<String> newFoundIds = {
+      for (final BulkFoundApp a in found)
+        if (!_trackedAtScanTime.contains(a.info.packageName))
+          a.info.packageName,
+    };
+
+    setState(() {
+      _foundApps = found;
+      _notFoundApps = notFound;
+      _cancelledApps = cancelledApps;
+      _selectedNewFoundPackages
+        ..clear()
+        ..addAll(newFoundIds);
+      _step = BulkStep.results;
+    });
+  }
+
   Future<void> _startScanning() async {
     // Capture which apps are already tracked BEFORE we start, so results
     // display and add-loop can use this stable snapshot.
@@ -885,14 +915,14 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       _cancelledApps = [];
     });
 
-    final List<String> pkgList = _selectedPackages.toList();
-    final Map<String, Map<String, String>> combined =
-        <String, Map<String, String>>{};
-    final Map<String, Set<String>> packageStoresDone = <String, Set<String>>{};
+    _bulkScanCombined.clear();
+    _bulkScanPackageStoresDone.clear();
+    _bulkScanPackageNames = List<String>.from(_selectedPackages);
+    _bulkScanResultsCommitted = false;
 
     void recordStoreCoverage(String storeLabel, Map<String, String?> results) {
       for (final String packageName in results.keys) {
-        packageStoresDone
+        _bulkScanPackageStoresDone
             .putIfAbsent(packageName, () => <String>{})
             .add(storeLabel);
       }
@@ -905,7 +935,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         .toList();
 
     for (final String storeName in storeOrder) {
-      if (!mounted) return;
+      if (!mounted || _bulkScanResultsCommitted) return;
       if (_scanCancelRequested) break;
 
       switch (storeName) {
@@ -913,18 +943,18 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           if (mounted) {
             setState(() {
               _scanStatus = tr('scanningStore', args: ['APKMirror']);
-              _apkMirrorTotal = pkgList.length;
+              _apkMirrorTotal = _bulkScanPackageNames.length;
               _apkMirrorDone = 0;
             });
           }
           final Map<String, String?> mirrorKnown = _persistedStoreColumn(
             persistedScanCache,
-            pkgList,
+            _bulkScanPackageNames,
             'APKMirror',
           );
           final Map<String, String?> mirrorResults =
               await BulkImportService.checkApkMirror(
-                pkgList,
+                _bulkScanPackageNames,
                 alreadyKnown: mirrorKnown.isEmpty ? null : mirrorKnown,
                 shouldAbort: shouldAbortScan,
                 onProgress: (int done, int total) {
@@ -936,38 +966,42 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   }
                 },
               );
+          if (!mounted || _bulkScanResultsCommitted) return;
           recordStoreCoverage('APKMirror', mirrorResults);
           await BulkScanCache.mergeStoreAndSave(
             persistedScanCache,
             'APKMirror',
             mirrorResults,
           );
+          if (!mounted || _bulkScanResultsCommitted) return;
           if (mounted) {
             setState(() => _apkMirrorDone = _apkMirrorTotal);
           }
           mirrorResults.forEach((String pkg, String? url) {
             if (url != null) {
-              combined.putIfAbsent(pkg, () => <String, String>{})['APKMirror'] =
+              _bulkScanCombined
+                  .putIfAbsent(pkg, () => <String, String>{})['APKMirror'] =
                   url;
             }
           });
         case 'APKPure':
-          if (!mounted || _scanCancelRequested) break;
+          if (!mounted || _bulkScanResultsCommitted) return;
+          if (_scanCancelRequested) break;
           if (mounted) {
             setState(() {
               _scanStatus = tr('scanningStore', args: ['APKPure']);
-              _apkPureTotal = pkgList.length;
+              _apkPureTotal = _bulkScanPackageNames.length;
               _apkPureDone = 0;
             });
           }
           final Map<String, String?> pureKnown = _persistedStoreColumn(
             persistedScanCache,
-            pkgList,
+            _bulkScanPackageNames,
             'APKPure',
           );
           final Map<String, String?> pureResults =
               await BulkImportService.checkApkPure(
-                pkgList,
+                _bulkScanPackageNames,
                 alreadyKnown: pureKnown.isEmpty ? null : pureKnown,
                 shouldAbort: shouldAbortScan,
                 onProgress: (int done, int total) {
@@ -979,38 +1013,41 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   }
                 },
               );
+          if (!mounted || _bulkScanResultsCommitted) return;
           recordStoreCoverage('APKPure', pureResults);
           await BulkScanCache.mergeStoreAndSave(
             persistedScanCache,
             'APKPure',
             pureResults,
           );
+          if (!mounted || _bulkScanResultsCommitted) return;
           if (mounted) {
             setState(() => _apkPureDone = _apkPureTotal);
           }
           pureResults.forEach((String pkg, String? url) {
             if (url != null) {
-              combined.putIfAbsent(pkg, () => <String, String>{})['APKPure'] =
-                  url;
+              _bulkScanCombined
+                  .putIfAbsent(pkg, () => <String, String>{})['APKPure'] = url;
             }
           });
         case 'F-Droid':
-          if (!mounted || _scanCancelRequested) break;
+          if (!mounted || _bulkScanResultsCommitted) return;
+          if (_scanCancelRequested) break;
           if (mounted) {
             setState(() {
               _scanStatus = tr('scanningStore', args: ['F-Droid']);
-              _fdroidTotal = pkgList.length;
+              _fdroidTotal = _bulkScanPackageNames.length;
               _fdroidDone = 0;
             });
           }
           final Map<String, String?> fdroidKnown = _persistedStoreColumn(
             persistedScanCache,
-            pkgList,
+            _bulkScanPackageNames,
             'F-Droid',
           );
           final Map<String, String?> fdroidResults =
               await BulkImportService.checkFDroid(
-                pkgList,
+                _bulkScanPackageNames,
                 alreadyKnown: fdroidKnown.isEmpty ? null : fdroidKnown,
                 shouldAbort: shouldAbortScan,
                 onProgress: (int done, int total) {
@@ -1022,38 +1059,41 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   }
                 },
               );
+          if (!mounted || _bulkScanResultsCommitted) return;
           recordStoreCoverage('F-Droid', fdroidResults);
           await BulkScanCache.mergeStoreAndSave(
             persistedScanCache,
             'F-Droid',
             fdroidResults,
           );
+          if (!mounted || _bulkScanResultsCommitted) return;
           if (mounted) {
             setState(() => _fdroidDone = _fdroidTotal);
           }
           fdroidResults.forEach((String pkg, String? url) {
             if (url != null) {
-              combined.putIfAbsent(pkg, () => <String, String>{})['F-Droid'] =
-                  url;
+              _bulkScanCombined
+                  .putIfAbsent(pkg, () => <String, String>{})['F-Droid'] = url;
             }
           });
         case 'GitHub':
-          if (!mounted || _scanCancelRequested) break;
+          if (!mounted || _bulkScanResultsCommitted) return;
+          if (_scanCancelRequested) break;
           if (mounted) {
             setState(() {
               _scanStatus = tr('scanningStore', args: ['GitHub']);
-              _githubTotal = pkgList.length;
+              _githubTotal = _bulkScanPackageNames.length;
               _githubDone = 0;
             });
           }
           final Map<String, String?> githubKnown = _persistedStoreColumn(
             persistedScanCache,
-            pkgList,
+            _bulkScanPackageNames,
             'GitHub',
           );
           final Map<String, String?> githubResults =
               await BulkImportService.checkGitHub(
-                pkgList,
+                _bulkScanPackageNames,
                 alreadyKnown: githubKnown.isEmpty ? null : githubKnown,
                 shouldAbort: shouldAbortScan,
                 onProgress: (int done, int total) {
@@ -1065,19 +1105,21 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   }
                 },
               );
+          if (!mounted || _bulkScanResultsCommitted) return;
           recordStoreCoverage('GitHub', githubResults);
           await BulkScanCache.mergeStoreAndSave(
             persistedScanCache,
             'GitHub',
             githubResults,
           );
+          if (!mounted || _bulkScanResultsCommitted) return;
           if (mounted) {
             setState(() => _githubDone = _githubTotal);
           }
           githubResults.forEach((String pkg, String? url) {
             if (url != null) {
-              combined.putIfAbsent(pkg, () => <String, String>{})['GitHub'] =
-                  url;
+              _bulkScanCombined
+                  .putIfAbsent(pkg, () => <String, String>{})['GitHub'] = url;
             }
           });
         default:
@@ -1085,48 +1127,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       }
     }
 
-    final Map<String, InstalledAppInfo> appInfoMap = {
-      for (final InstalledAppInfo a in _installedApps) a.packageName: a,
-    };
-    final List<BulkFoundApp> found = <BulkFoundApp>[];
-    final List<InstalledAppInfo> notFound = <InstalledAppInfo>[];
-    final List<InstalledAppInfo> cancelledApps = <InstalledAppInfo>[];
-
-    for (final String pkg in pkgList) {
-      final InstalledAppInfo? info = appInfoMap[pkg];
-      if (info == null) continue;
-      final Set<String>? doneForPackage = packageStoresDone[pkg];
-      final bool coveredAllSelectedStores = _selectedStores.every(
-        (String storeLabel) => doneForPackage?.contains(storeLabel) ?? false,
-      );
-      if (!coveredAllSelectedStores) {
-        cancelledApps.add(info);
-        continue;
-      }
-      final Map<String, String>? sources = combined[pkg];
-      if (sources != null && sources.isNotEmpty) {
-        found.add(BulkFoundApp(info: info, sources: sources));
-      } else {
-        notFound.add(info);
-      }
-    }
-
-    final Set<String> newFoundIds = {
-      for (final BulkFoundApp a in found)
-        if (!_trackedAtScanTime.contains(a.info.packageName))
-          a.info.packageName,
-    };
-
-    if (mounted) {
-      setState(() {
-        _foundApps = found;
-        _notFoundApps = notFound;
-        _cancelledApps = cancelledApps;
-        _selectedNewFoundPackages
-          ..clear()
-          ..addAll(newFoundIds);
-        _step = BulkStep.results;
-      });
+    if (!_bulkScanResultsCommitted) {
+      _commitBulkScanResults();
     }
   }
 
@@ -1159,7 +1161,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             _buildStoreCard('GitHub', _githubDone, _githubTotal),
           const SizedBox(height: 24),
           OutlinedButton.icon(
-            onPressed: () => setState(() => _scanCancelRequested = true),
+            onPressed: () {
+              _scanCancelRequested = true;
+              _commitBulkScanResults();
+            },
             icon: const Icon(Icons.stop_circle_outlined),
             label: Text(tr('cancelBulkScan')),
           ),
@@ -1669,7 +1674,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             child: SizedBox(
               width: _bulkAddResultIconSlotWidth,
               height: 48,
-              child: Center(child: _buildAppIcon(app.packageName)),
+              child: Center(child: _lazyBulkAppIcon(app.packageName)),
             ),
           ),
           const SizedBox(width: 8),
@@ -1717,7 +1722,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     bool addedResult = false,
     bool failedResult = false,
   }) {
-    final Widget leadingIcon = _buildAppIcon(app.info.packageName);
+    final Widget leadingIcon = _lazyBulkAppIcon(app.info.packageName);
     final Widget storeBadgesColumn = _buildBulkResultStoreBadgeColumn(app.sources);
 
     if (selectable && !tracked) {
@@ -2090,6 +2095,83 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         }
       },
       child: _buildStepContent(),
+    );
+  }
+}
+
+typedef _BulkIconRequestLoad = Future<void> Function(String packageName);
+
+/// Loads one app icon on demand; only this widget rebuilds when bytes arrive.
+class _LazyBulkAppIcon extends StatefulWidget {
+  const _LazyBulkAppIcon({
+    required this.packageName,
+    required this.iconCache,
+    required this.requestLoad,
+    this.size = 40,
+  });
+
+  final String packageName;
+  final Map<String, Object?> iconCache;
+  final _BulkIconRequestLoad requestLoad;
+  final double size;
+
+  @override
+  State<_LazyBulkAppIcon> createState() => _LazyBulkAppIconState();
+}
+
+class _LazyBulkAppIconState extends State<_LazyBulkAppIcon> {
+  @override
+  void initState() {
+    super.initState();
+    _requestIfMissing();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LazyBulkAppIcon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.packageName != widget.packageName) {
+      _requestIfMissing();
+    }
+  }
+
+  void _requestIfMissing() {
+    if (widget.iconCache.containsKey(widget.packageName)) return;
+    widget.requestLoad(widget.packageName).then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Object? cached = widget.iconCache[widget.packageName];
+    if (cached is Uint8List) {
+      final double devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+      final int cachePixels = (widget.size * devicePixelRatio).round();
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.memory(
+          cached,
+          width: widget.size,
+          height: widget.size,
+          fit: BoxFit.cover,
+          cacheWidth: cachePixels,
+          cacheHeight: cachePixels,
+          filterQuality: FilterQuality.low,
+        ),
+      );
+    }
+    return Container(
+      width: widget.size,
+      height: widget.size,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(
+        Icons.android_rounded,
+        size: widget.size * 0.6,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     );
   }
 }

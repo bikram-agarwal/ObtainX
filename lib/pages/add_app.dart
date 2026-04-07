@@ -19,6 +19,7 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -1152,11 +1153,16 @@ class AddAppPageState extends State<AddAppPage> {
     // bounded height via Expanded, with no outer CustomScrollView that could
     // steal scroll gestures or push content off-screen.
     if (_mode == _AddMode.fromDevice) {
+      final ColorScheme deviceScheme = Theme.of(context).colorScheme;
       return Scaffold(
-        backgroundColor: Theme.of(context).colorScheme.surface,
+        backgroundColor: deviceScheme.surface,
         appBar: AppBar(
           title: Text(tr('addApp')),
           automaticallyImplyLeading: false,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          surfaceTintColor: Colors.transparent,
+          backgroundColor: deviceScheme.surface,
         ),
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1173,76 +1179,115 @@ class AddAppPageState extends State<AddAppPage> {
       );
     }
 
+    final ColorScheme addScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      backgroundColor: addScheme.surface,
       // Show supported-sources footer only for URL mode when no source is detected
       bottomNavigationBar: (_mode == _AddMode.byUrl && pickedSource == null)
           ? getSourcesListWidget()
           : null,
-      body: CustomScrollView(
-        slivers: <Widget>[
-          CustomAppBar(title: tr('addApp')),
-          // Mode selector pinned just below the app bar
-          SliverPersistentHeader(
-            pinned: false,
-            delegate: _PaddedWidgetDelegate(
-              child: buildModeSelector(),
-              height: 60,
-            ),
-          ),
-          SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  child: KeyedSubtree(
-                    key: ValueKey(_mode),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // ── By URL ─────────────────────────────────────
-                        if (_mode == _AddMode.byUrl) ...[
-                          const SizedBox(height: 8),
-                          getUrlInputRow(),
-                          const SizedBox(height: 16),
-                          if (pickedSource != null)
-                            getHTMLSourceOverrideDropdown(),
-                          if (pickedSource != null)
-                            FutureBuilder(
-                              builder: (ctx, val) {
-                                return val.data != null && val.data!.isNotEmpty
-                                    ? Text(
-                                        val.data!,
-                                        style: Theme.of(context).textTheme.bodySmall,
-                                      )
-                                    : const SizedBox();
-                              },
-                              future: pickedSource?.getSourceNote(),
-                            ),
-                          if (pickedSource != null) getAdditionalOptsCol(),
-                        ],
-
-                        // ── Search ─────────────────────────────────────
-                        if (_mode == _AddMode.search) ...[
-                          const SizedBox(height: 8),
-                          getSearchBarRow(),
-                          const SizedBox(height: 12),
-                          Text(
-                            tr('storesToSearch'),
-                            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                ),
-                          ),
-                          const SizedBox(height: 6),
-                          getSearchStoreChips(),
-                          getSearchResultsList(),
-                        ],
-                      ],
-                    ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (settingsProvider.useGradientBackground)
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0, 0.38, 0.72, 1],
+                    colors: [
+                      addScheme.schemePageGradientTopColor,
+                      addScheme.schemePageGradientMidColor,
+                      addScheme.surface,
+                      addScheme.surface,
+                    ],
                   ),
                 ),
               ),
             ),
+          CustomScrollView(
+            cacheExtent: 1600,
+            slivers: <Widget>[
+              CustomAppBar(title: tr('addApp')),
+              // Mode selector pinned just below the app bar
+              SliverPersistentHeader(
+                pinned: false,
+                delegate: _PaddedWidgetDelegate(
+                  child: buildModeSelector(),
+                  height: 60,
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: KeyedSubtree(
+                      key: ValueKey(_mode),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // ── By URL ─────────────────────────────────────
+                          if (_mode == _AddMode.byUrl) ...[
+                            const SizedBox(height: 8),
+                            getUrlInputRow(),
+                            const SizedBox(height: 16),
+                            if (pickedSource != null)
+                              getHTMLSourceOverrideDropdown(),
+                            if (pickedSource != null)
+                              FutureBuilder(
+                                builder: (ctx, val) {
+                                  return val.data != null &&
+                                          val.data!.isNotEmpty
+                                      ? Text(
+                                          val.data!,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        )
+                                      : const SizedBox();
+                                },
+                                future: pickedSource?.getSourceNote(),
+                              ),
+                            if (pickedSource != null) getAdditionalOptsCol(),
+                          ],
+
+                          // ── Search ─────────────────────────────────────
+                          if (_mode == _AddMode.search) ...[
+                            const SizedBox(height: 8),
+                            getSearchBarRow(),
+                            const SizedBox(height: 12),
+                            Text(
+                              tr('storesToSearch'),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(height: 6),
+                            getSearchStoreChips(),
+                            getSearchResultsList(),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (settingsProvider.progressiveBlurEnabled)
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: MediaQuery.paddingOf(context).bottom,
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );

@@ -3126,6 +3126,7 @@ class _AppPageState extends State<AppPage> {
                   ? getAppWebView(themedPageContext)
                   : CustomScrollView(
                       controller: _appPageScrollController,
+                      cacheExtent: 1600,
                       physics: const AlwaysScrollableScrollPhysics(
                         parent: ClampingScrollPhysics(),
                       ),

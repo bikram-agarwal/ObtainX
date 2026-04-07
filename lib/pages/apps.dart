@@ -1,7 +1,6 @@
 import 'dart:async' show unawaited;
 import 'dart:convert';
 
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +21,7 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -29,9 +29,139 @@ import 'package:markdown/markdown.dart' as md;
 
 const double _appsListGroupCardRadius = 20;
 
+// M3E Expressive grouped-list item shape constants.
+const double _m3eOuterRadius = 14.0;
+const double _m3eInnerRadius = 4.0;
+const double _m3eItemGap = 3.0;
+
+/// Visible separation between group header and first app row (not only row gaps).
+const double _m3eHeaderToFirstCardGap = 3.0;
+
+/// Group header strip: stronger primary tint than rows; when luminance matches
+/// row fill (common with Material You), nudge toward [surfaceBright] so the
+/// header still reads as its own band.
+Color _appsListGroupHeaderColor(ColorScheme scheme) {
+  final Color rowFill = _appsListGroupedRowColor(scheme);
+  Color header = Color.lerp(
+    scheme.surfaceContainerHighest,
+    scheme.primary,
+    0.11,
+  )!;
+  if ((header.computeLuminance() - rowFill.computeLuminance()).abs() <
+      0.032) {
+    header = Color.lerp(
+      header,
+      scheme.surfaceBright,
+      scheme.brightness == Brightness.light ? 0.22 : 0.14,
+    )!;
+  }
+  return header;
+}
+
+/// Backdrop behind grouped rows: page [surface] keeps visible gutters when
+/// Material You compresses container ramp (low vs highest nearly equal).
+Color _appsListGroupedSectionBackdropColor(ColorScheme scheme) => scheme.surface;
+
+/// Darker, slightly more saturated app row fill inside groups.
+Color _appsListGroupedRowColor(ColorScheme scheme) => Color.lerp(
+      scheme.surfaceContainer,
+      scheme.primary,
+      0.08,
+    )!;
+
+enum _GroupPosition { first, middle, last, only }
+
+/// [flatListBody]: ungrouped list — outer only on first card top and last card
+/// bottom (or all four on a single-card list). Grouped list body: outer only on
+/// last row bottom (and single row under header: inner top, outer bottom); rows
+/// under a header use inner tops. Group header chrome uses [_appsListGroupCardRadius]
+/// separately on the outer [Material].
+BorderRadius _groupItemRadius(
+  _GroupPosition pos, {
+  required bool flatListBody,
+}) {
+  if (flatListBody) {
+    return switch (pos) {
+      _GroupPosition.first => const BorderRadius.only(
+          topLeft: Radius.circular(_m3eOuterRadius),
+          topRight: Radius.circular(_m3eOuterRadius),
+          bottomLeft: Radius.circular(_m3eInnerRadius),
+          bottomRight: Radius.circular(_m3eInnerRadius),
+        ),
+      _GroupPosition.middle => BorderRadius.circular(_m3eInnerRadius),
+      _GroupPosition.last => const BorderRadius.only(
+          topLeft: Radius.circular(_m3eInnerRadius),
+          topRight: Radius.circular(_m3eInnerRadius),
+          bottomLeft: Radius.circular(_m3eOuterRadius),
+          bottomRight: Radius.circular(_m3eOuterRadius),
+        ),
+      _GroupPosition.only => const BorderRadius.only(
+          topLeft: Radius.circular(_m3eOuterRadius),
+          topRight: Radius.circular(_m3eOuterRadius),
+          bottomLeft: Radius.circular(_m3eOuterRadius),
+          bottomRight: Radius.circular(_m3eOuterRadius),
+        ),
+    };
+  }
+  return switch (pos) {
+    _GroupPosition.first => BorderRadius.circular(_m3eInnerRadius),
+    _GroupPosition.middle => BorderRadius.circular(_m3eInnerRadius),
+    _GroupPosition.last => const BorderRadius.only(
+        topLeft: Radius.circular(_m3eInnerRadius),
+        topRight: Radius.circular(_m3eInnerRadius),
+        bottomLeft: Radius.circular(_m3eOuterRadius),
+        bottomRight: Radius.circular(_m3eOuterRadius),
+      ),
+    _GroupPosition.only => const BorderRadius.only(
+        topLeft: Radius.circular(_m3eInnerRadius),
+        topRight: Radius.circular(_m3eInnerRadius),
+        bottomLeft: Radius.circular(_m3eOuterRadius),
+        bottomRight: Radius.circular(_m3eOuterRadius),
+      ),
+  };
+}
+
+/// Collapsed group card; expanded header row uses inner radius on bottom edge.
+const RoundedRectangleBorder _appsExpansionTileCollapsedShape =
+    RoundedRectangleBorder(
+  borderRadius: BorderRadius.all(Radius.circular(_appsListGroupCardRadius)),
+);
+
+const RoundedRectangleBorder _appsExpansionTileExpandedShape =
+    RoundedRectangleBorder(
+  borderRadius: BorderRadius.only(
+    topLeft: Radius.circular(_appsListGroupCardRadius),
+    topRight: Radius.circular(_appsListGroupCardRadius),
+    bottomLeft: Radius.circular(_m3eInnerRadius),
+    bottomRight: Radius.circular(_m3eInnerRadius),
+  ),
+);
+
+Widget _appsGroupedExpansionListBody({
+  required ColorScheme scheme,
+  required List<Widget> tiles,
+}) {
+  return ClipRRect(
+    borderRadius: const BorderRadius.vertical(
+      top: Radius.circular(_m3eInnerRadius),
+    ),
+    child: ColoredBox(
+      color: _appsListGroupedSectionBackdropColor(scheme),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: _m3eHeaderToFirstCardGap),
+          ...tiles,
+        ],
+      ),
+    ),
+  );
+}
+
 // Android ApplicationInfo flag constants used for app type classification.
 const int _androidFlagSystem = 1; // ApplicationInfo.FLAG_SYSTEM
-const int _androidFlagUpdatedSystemApp = 128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+const int _androidFlagUpdatedSystemApp =
+    128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
 
 /// App type groups for the "Group by App Type" feature.
 enum AppTypeGroup { user, system, privileged }
@@ -132,9 +262,7 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
         a.app.additionalSettings['skippedLatestVersion'],
         // Folder membership — needed so the main-page filter (hide foldered
         // apps) and folder-view filter both re-run when membership changes.
-        Object.hashAll(
-          (a.app.additionalSettings['folderIds'] as List? ?? []),
-        ),
+        Object.hashAll((a.app.additionalSettings['folderIds'] as List? ?? [])),
         // Icon fields deliberately excluded: each row watches its own icon
         // via _AppIconWidget.context.select, so icon loads only rebuild that
         // one row widget instead of the entire apps list.
@@ -152,14 +280,14 @@ class _AppIconWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (Uint8List? icon, bool notInstalled) =
-        context.select<AppsProvider, (Uint8List?, bool)>(
-      (p) {
-        final a = p.apps[appId];
-        return (a?.icon, a?.installedInfo == null);
-      },
-    );
+    final (Uint8List? icon, bool notInstalled) = context
+        .select<AppsProvider, (Uint8List?, bool)>((p) {
+          final a = p.apps[appId];
+          return (a?.icon, a?.installedInfo == null);
+        });
     if (icon != null) {
+      final double devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+      final int iconCachePx = (40 * devicePixelRatio).round();
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: Image.memory(
@@ -168,6 +296,9 @@ class _AppIconWidget extends StatelessWidget {
           height: 40,
           fit: BoxFit.cover,
           gaplessPlayback: true,
+          cacheWidth: iconCachePx,
+          cacheHeight: iconCachePx,
+          filterQuality: FilterQuality.low,
           opacity: AlwaysStoppedAnimation(notInstalled ? 0.6 : 1.0),
         ),
       );
@@ -219,6 +350,7 @@ class _AppListItem extends StatelessWidget {
     required this.showAppTypeBadge,
     required this.showTrackedStoreBadge,
     this.sourceHost,
+    this.itemBorderRadius,
   });
 
   final String appId;
@@ -232,24 +364,26 @@ class _AppListItem extends StatelessWidget {
   final bool showAppTypeBadge;
   final bool showTrackedStoreBadge;
   final String? sourceHost;
+  final BorderRadius? itemBorderRadius;
 
   @override
   Widget build(BuildContext context) {
     // Full app data — rebuilds when any field changes (gated by page token).
-    final AppInMemory? app =
-        context.select<AppsProvider, AppInMemory?>((p) => p.apps[appId]);
+    final AppInMemory? app = context.select<AppsProvider, AppInMemory?>(
+      (p) => p.apps[appId],
+    );
     if (app == null) return const SizedBox.shrink();
 
     // Download progress watched independently so only this row rebuilds on ticks.
-    final double? downloadProgress = context
-        .select<AppsProvider, double?>((p) => p.apps[appId]?.downloadProgress);
+    final double? downloadProgress = context.select<AppsProvider, double?>(
+      (p) => p.apps[appId]?.downloadProgress,
+    );
 
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final showChangesFn = getChangeLogFn(context, app.app);
     final installed = app.app.installedVersion;
-    final hasUpdate =
-        installed != null && appHasActionableUpdate(app.app);
+    final hasUpdate = installed != null && appHasActionableUpdate(app.app);
     final hasUncertainUpdate =
         installed != null && versionOrderUncertainUpdate(app.app);
 
@@ -263,13 +397,14 @@ class _AppListItem extends StatelessWidget {
       } else {
         context
             .read<AppsProvider>()
-            .downloadAndInstallLatestApps(
-                [app.app.id], globalNavigatorKey.currentContext)
+            .downloadAndInstallLatestApps([
+              app.app.id,
+            ], globalNavigatorKey.currentContext)
             .catchError((e) {
-          if (!context.mounted) return <String>[];
-          showError(e, context);
-          return <String>[];
-        });
+              if (!context.mounted) return <String>[];
+              showError(e, context);
+              return <String>[];
+            });
       }
     }
 
@@ -279,8 +414,7 @@ class _AppListItem extends StatelessWidget {
         visualDensity: VisualDensity.compact,
         color: colorScheme.primary,
         tooltip: trackOnly ? tr('openDownloadPage') : tr('update'),
-        onPressed:
-            areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
+        onPressed: areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
         icon: const Icon(Icons.install_mobile),
       );
     }
@@ -290,14 +424,12 @@ class _AppListItem extends StatelessWidget {
         visualDensity: VisualDensity.compact,
         color: colorScheme.primary,
         tooltip: tr('uncertainUpdateTooltip'),
-        onPressed:
-            areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
+        onPressed: areDownloadsRunning ? null : onUpdateOrOpenReleasePressed,
         icon: const Icon(Icons.help_outline),
       );
     }
 
-    final String versionText =
-        app.app.installedVersion ?? tr('notInstalled');
+    final String versionText = app.app.installedVersion ?? tr('notInstalled');
     final String changesButtonString = app.app.releaseDate == null
         ? (showChangesFn != null ? tr('changes') : '')
         : DateFormat('yyyy-MM-dd').format(app.app.releaseDate!.toLocal());
@@ -371,12 +503,10 @@ class _AppListItem extends StatelessWidget {
       ],
     );
 
-    final int transparent =
-        colorScheme.surface.withValues(alpha: 0).toARGB32();
+    final int transparent = colorScheme.surface.withValues(alpha: 0).toARGB32();
     List<double> stops = [
       ...app.app.categories.asMap().entries.map(
-        (e) =>
-            ((e.key / (app.app.categories.length - 1)) - 0.0001),
+        (e) => ((e.key / (app.app.categories.length - 1)) - 0.0001),
       ),
       1,
     ];
@@ -427,26 +557,24 @@ class _AppListItem extends StatelessWidget {
       ],
     );
 
-    return RepaintBoundary(
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            stops: stops,
-            begin: const Alignment(-1, 0),
-            end: const Alignment(-0.97, 0),
-            colors: [
-              ...app.app.categories.map(
-                (e) =>
-                    Color(categoryColors[e] ?? transparent).withAlpha(255),
-              ),
-              Color(transparent),
-            ],
-          ),
+    final Widget tile = Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          stops: stops,
+          begin: const Alignment(-1, 0),
+          end: const Alignment(-0.97, 0),
+          colors: [
+            ...app.app.categories.map(
+              (e) => Color(categoryColors[e] ?? transparent).withAlpha(255),
+            ),
+            Color(transparent),
+          ],
         ),
-        child: ListTile(
-          tileColor: app.app.pinned
-              ? Colors.grey.withValues(alpha: 0.1)
-              : Colors.transparent,
+      ),
+      child: ListTile(
+        tileColor: app.app.pinned
+            ? Colors.grey.withValues(alpha: 0.1)
+            : Colors.transparent,
           selectedTileColor: colorScheme.primary.withValues(
             alpha: app.app.pinned ? 0.2 : 0.1,
           ),
@@ -458,8 +586,7 @@ class _AppListItem extends StatelessWidget {
             maxLines: 1,
             style: TextStyle(
               overflow: TextOverflow.ellipsis,
-              fontWeight:
-                  app.app.pinned ? FontWeight.bold : FontWeight.normal,
+              fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
             ),
           ),
           subtitle: Text(
@@ -467,16 +594,17 @@ class _AppListItem extends StatelessWidget {
             maxLines: 1,
             style: TextStyle(
               overflow: TextOverflow.ellipsis,
-              fontWeight:
-                  app.app.pinned ? FontWeight.bold : FontWeight.normal,
+              fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
             ),
           ),
           trailing: downloadProgress != null
               ? SizedBox(
                   child: Text(
                     downloadProgress >= 0
-                        ? tr('percentProgress',
-                            args: [downloadProgress.toInt().toString()])
+                        ? tr(
+                            'percentProgress',
+                            args: [downloadProgress.toInt().toString()],
+                          )
                         : tr('installing'),
                     textAlign: downloadProgress >= 0
                         ? TextAlign.start
@@ -486,8 +614,19 @@ class _AppListItem extends StatelessWidget {
               : trailingRow,
           onTap: onTap,
         ),
-      ),
     );
+
+    if (itemBorderRadius != null) {
+      return RepaintBoundary(
+        child: Material(
+          color: _appsListGroupedRowColor(colorScheme),
+          shape: RoundedRectangleBorder(borderRadius: itemBorderRadius!),
+          clipBehavior: Clip.antiAlias,
+          child: tile,
+        ),
+      );
+    }
+    return RepaintBoundary(child: tile);
   }
 }
 
@@ -501,9 +640,7 @@ Future<void> _openAdditionalOptionsModal(
   if (!context.mounted) return;
   await Navigator.push<void>(
     context,
-    slideUpPageRoute(
-      (_) => AdditionalOptionsPage(appId: appId),
-    ),
+    slideUpPageRoute((_) => AdditionalOptionsPage(appId: appId)),
   );
 }
 
@@ -604,12 +741,13 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           );
         } else {
           provider
-              .downloadAndInstallLatestApps(
-                  [widget.appId], globalNavigatorKey.currentContext)
+              .downloadAndInstallLatestApps([
+                widget.appId,
+              ], globalNavigatorKey.currentContext)
               .catchError((e) {
-            showError(e, globalNavigatorKey.currentContext!);
-            return <String>[];
-          });
+                showError(e, globalNavigatorKey.currentContext!);
+                return <String>[];
+              });
         }
       case SwipeAction.pin:
         if (app != null) {
@@ -634,8 +772,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         if (app != null) {
           // Capture messenger before the await – the widget may be disposed after removal
           final messenger = scaffoldMessengerKey.currentState;
-          final RemoveAppsWithModalResult removeResult =
-              await provider.removeAppsWithModal(context, [app]);
+          final RemoveAppsWithModalResult removeResult = await provider
+              .removeAppsWithModal(context, [app]);
           if (removeResult.shouldShowSnackBar) {
             final Set<String> undoAppIds = removeResult.deferredUndoAppIds;
             messenger
@@ -666,7 +804,6 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     }
   }
 
-  @override
   @override
   Widget build(BuildContext context) {
     super.build(context); // required by AutomaticKeepAliveClientMixin
@@ -723,8 +860,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         child: Stack(
           children: [
             Positioned.fill(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
+              child: Container(
                 color: bgColor,
                 alignment: bgAlign,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -743,11 +879,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
 }
 
 class AppsPage extends StatefulWidget {
-  const AppsPage({
-    super.key,
-    this.onDemandOnlyList = false,
-    this.folderId,
-  });
+  const AppsPage({super.key, this.onDemandOnlyList = false, this.folderId});
 
   /// When true, only apps with [App.additionalSettings] `onDemandOnly` are listed
   /// and pull-to-refresh checks only those IDs.
@@ -917,8 +1049,11 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
               : settingsProvider.groupNonInstalledSeparately;
           void setEffectiveGroupNonInstalledSeparately(bool v) =>
               folderId != null
-                  ? settingsProvider.setFolderGroupNonInstalledSeparately(folderId, v)
-                  : (settingsProvider.groupNonInstalledSeparately = v);
+              ? settingsProvider.setFolderGroupNonInstalledSeparately(
+                  folderId,
+                  v,
+                )
+              : (settingsProvider.groupNonInstalledSeparately = v);
 
           final effectiveGroupUpdatesSeparately = folderId != null
               ? settingsProvider.folderGroupUpdatesSeparately(folderId)
@@ -958,28 +1093,6 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
             );
           }
 
-          Widget themeIconButton({
-            required IconData icon,
-            required String tooltip,
-            required bool selected,
-            required VoidCallback? onPressed,
-          }) {
-            return IconButton(
-              tooltip: tooltip,
-              visualDensity: VisualDensity.compact,
-              style: IconButton.styleFrom(
-                backgroundColor: selected
-                    ? colorScheme.primaryContainer
-                    : null,
-                foregroundColor: selected
-                    ? colorScheme.onPrimaryContainer
-                    : null,
-              ),
-              onPressed: onPressed,
-              icon: Icon(icon),
-            );
-          }
-
           return SafeArea(
             child: Padding(
               padding: EdgeInsets.fromLTRB(20, 12, 20, 16 + bottomInset),
@@ -1006,107 +1119,6 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    sectionLabel(tr('theme')),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: FutureBuilder(
-                        future: DeviceInfoPlugin().androidInfo,
-                        builder: (context, snapshot) {
-                          final sdkInt = snapshot.data?.version.sdkInt ?? 0;
-                          final showMaterialYou = sdkInt >= 31;
-                          final themeModeBlack =
-                              settingsProvider.useBlackTheme;
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.start,
-                            children: [
-                              if (showMaterialYou) ...[
-                                themeIconButton(
-                                  icon: Icons.palette_outlined,
-                                  tooltip: tr('useMaterialYou'),
-                                  selected: settingsProvider.useMaterialYou,
-                                  onPressed: () {
-                                    settingsProvider.useMaterialYou =
-                                        !settingsProvider.useMaterialYou;
-                                    setSheetState(() {});
-                                  },
-                                ),
-                                const SizedBox(width: 16),
-                              ],
-                              themeIconButton(
-                                icon: Icons.brightness_auto,
-                                tooltip: tr('followSystem'),
-                                selected: settingsProvider.theme ==
-                                        ThemeSettings.system &&
-                                    !themeModeBlack,
-                                onPressed: () {
-                                  settingsProvider.useBlackTheme = false;
-                                  settingsProvider.theme =
-                                      ThemeSettings.system;
-                                  setSheetState(() {});
-                                },
-                              ),
-                              const SizedBox(width: 10),
-                              themeIconButton(
-                                icon: Icons.light_mode_outlined,
-                                tooltip: tr('light'),
-                                selected: settingsProvider.theme ==
-                                        ThemeSettings.light &&
-                                    !themeModeBlack,
-                                onPressed: () {
-                                  settingsProvider.useBlackTheme = false;
-                                  settingsProvider.theme =
-                                      ThemeSettings.light;
-                                  setSheetState(() {});
-                                },
-                              ),
-                              const SizedBox(width: 10),
-                              themeIconButton(
-                                icon: Icons.dark_mode_outlined,
-                                tooltip: tr('dark'),
-                                selected: settingsProvider.theme ==
-                                        ThemeSettings.dark &&
-                                    !themeModeBlack,
-                                onPressed: () {
-                                  settingsProvider.useBlackTheme = false;
-                                  settingsProvider.theme =
-                                      ThemeSettings.dark;
-                                  setSheetState(() {});
-                                },
-                              ),
-                              const SizedBox(width: 10),
-                              themeIconButton(
-                                icon: Icons.square,
-                                tooltip: tr('useBlackTheme'),
-                                selected: themeModeBlack,
-                                onPressed: () {
-                                  if (themeModeBlack) {
-                                    settingsProvider.useBlackTheme = false;
-                                    settingsProvider.theme =
-                                        ThemeSettings.dark;
-                                  } else {
-                                    settingsProvider.theme =
-                                        ThemeSettings.dark;
-                                    settingsProvider.useBlackTheme = true;
-                                  }
-                                  setSheetState(() {});
-                                },
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(tr('matchAppPageToIconColors')),
-                      value: settingsProvider.matchAppPageToIconColors,
-                      onChanged: (value) {
-                        settingsProvider.matchAppPageToIconColors = value;
-                        setSheetState(() {});
-                      },
-                    ),
-                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Text(
@@ -1147,26 +1159,32 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                       children: [
                         sortChip(
                           label: tr('authorName'),
-                          selected: effectiveSortColumn ==
+                          selected:
+                              effectiveSortColumn ==
                               SortColumnSettings.authorName,
                           onTap: () {
-                            setEffectiveSortColumn(SortColumnSettings.authorName);
+                            setEffectiveSortColumn(
+                              SortColumnSettings.authorName,
+                            );
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('nameAuthor'),
-                          selected: effectiveSortColumn ==
+                          selected:
+                              effectiveSortColumn ==
                               SortColumnSettings.nameAuthor,
                           onTap: () {
-                            setEffectiveSortColumn(SortColumnSettings.nameAuthor);
+                            setEffectiveSortColumn(
+                              SortColumnSettings.nameAuthor,
+                            );
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('asAdded'),
-                          selected: effectiveSortColumn ==
-                              SortColumnSettings.added,
+                          selected:
+                              effectiveSortColumn == SortColumnSettings.added,
                           onTap: () {
                             setEffectiveSortColumn(SortColumnSettings.added);
                             setSheetState(() {});
@@ -1174,19 +1192,25 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                         sortChip(
                           label: tr('releaseDate'),
-                          selected: effectiveSortColumn ==
+                          selected:
+                              effectiveSortColumn ==
                               SortColumnSettings.releaseDate,
                           onTap: () {
-                            setEffectiveSortColumn(SortColumnSettings.releaseDate);
+                            setEffectiveSortColumn(
+                              SortColumnSettings.releaseDate,
+                            );
                             setSheetState(() {});
                           },
                         ),
                         sortChip(
                           label: tr('sortByLastUpdateCheck'),
-                          selected: effectiveSortColumn ==
+                          selected:
+                              effectiveSortColumn ==
                               SortColumnSettings.lastUpdateCheck,
                           onTap: () {
-                            setEffectiveSortColumn(SortColumnSettings.lastUpdateCheck);
+                            setEffectiveSortColumn(
+                              SortColumnSettings.lastUpdateCheck,
+                            );
                             setSheetState(() {});
                           },
                         ),
@@ -1200,8 +1224,8 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                       children: [
                         sortChip(
                           label: tr('ascending'),
-                          selected: effectiveSortOrder ==
-                              SortOrderSettings.ascending,
+                          selected:
+                              effectiveSortOrder == SortOrderSettings.ascending,
                           onTap: () {
                             setEffectiveSortOrder(SortOrderSettings.ascending);
                             setSheetState(() {});
@@ -1209,7 +1233,8 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                         sortChip(
                           label: tr('descending'),
-                          selected: effectiveSortOrder ==
+                          selected:
+                              effectiveSortOrder ==
                               SortOrderSettings.descending,
                           onTap: () {
                             setEffectiveSortOrder(SortOrderSettings.descending);
@@ -1236,8 +1261,8 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                         sortChip(
                           label: tr('category'),
-                          selected: effectiveGroupBy ==
-                              AppsListGroupBy.category,
+                          selected:
+                              effectiveGroupBy == AppsListGroupBy.category,
                           onTap: () {
                             setEffectiveGroupBy(AppsListGroupBy.category);
                             setSheetState(() {});
@@ -1253,8 +1278,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                         sortChip(
                           label: tr('groupByAppType'),
-                          selected: effectiveGroupBy ==
-                              AppsListGroupBy.appType,
+                          selected: effectiveGroupBy == AppsListGroupBy.appType,
                           onTap: () {
                             setEffectiveGroupBy(AppsListGroupBy.appType);
                             setSheetState(() {});
@@ -1493,11 +1517,14 @@ class AppsPageState extends State<AppsPage> {
 
   /// Maps category key (`__null__` for uncategorized) → indices into [_listedAppsCache].
   Map<String, List<int>> _categoryGroupListedIndices = const {};
+
   /// Maps source runtime type string → indices into [_listedAppsCache].
   Map<String, List<int>> _sourceGroupListedIndices = const {};
+
   /// Maps [AppTypeGroup] → indices into [_listedAppsCache].
   Map<AppTypeGroup, List<int>> _appTypeGroupListedIndices = const {};
   List<int> _nonInstalledListedIndices = const [];
+
   /// Indices of apps shown in the "Updates" group (groupUpdatesSeparately).
   List<int> _updatesGroupListedIndices = const [];
   int? _lastGroupIndexCacheToken;
@@ -1529,10 +1556,10 @@ class AppsPageState extends State<AppsPage> {
   final FocusNode _searchFocusNode = FocusNode();
 
   String _searchFieldValue(String field) => switch (field) {
-        'author' => filter.authorFilter,
-        'appId' => filter.idFilter,
-        _ => filter.nameFilter,
-      };
+    'author' => filter.authorFilter,
+    'appId' => filter.idFilter,
+    _ => filter.nameFilter,
+  };
 
   // ── Effective view-setting helpers ─────────────────────────────────────────
   // When in a folder view, these return the folder's stored override or fall
@@ -1540,7 +1567,8 @@ class AppsPageState extends State<AppsPage> {
 
   /// Returns the per-view settings key for this page, or null for the main page.
   String? get _viewSettingsId =>
-      widget.folderId ?? (widget.onDemandOnlyList ? _onDemandViewSettingsId : null);
+      widget.folderId ??
+      (widget.onDemandOnlyList ? _onDemandViewSettingsId : null);
 
   SortColumnSettings _effectiveSortColumn(SettingsProvider sp) {
     final id = _viewSettingsId;
@@ -1663,9 +1691,7 @@ class AppsPageState extends State<AppsPage> {
         hintText: tr('search'),
         prefixIcon: const Icon(Icons.search, size: 18),
         isDense: true,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(30),
-        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(30)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         suffix: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1674,8 +1700,7 @@ class AppsPageState extends State<AppsPage> {
               onTap: showFilterSheet,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: anyFilterActive
                       ? colorScheme.primaryContainer
@@ -1740,34 +1765,43 @@ class AppsPageState extends State<AppsPage> {
     final chips = <Widget>[];
 
     if (!filter.includeUptodate) {
-      chips.add(_filterChip(
-        tr('updatesOnly'),
-        () => setState(() => filter.includeUptodate = true),
-      ));
+      chips.add(
+        _filterChip(
+          tr('updatesOnly'),
+          () => setState(() => filter.includeUptodate = true),
+        ),
+      );
     }
 
     if (!filter.includeNonInstalled) {
-      chips.add(_filterChip(
-        tr('installedOnly'),
-        () => setState(() => filter.includeNonInstalled = true),
-      ));
+      chips.add(
+        _filterChip(
+          tr('installedOnly'),
+          () => setState(() => filter.includeNonInstalled = true),
+        ),
+      );
     }
 
     if (filter.sourceFilter.isNotEmpty) {
-      chips.add(_filterChip(
-        '${tr('source')}: ${_getSourceName(filter.sourceFilter)}',
-        () => setState(() => filter.sourceFilter = ''),
-      ));
+      chips.add(
+        _filterChip(
+          '${tr('source')}: ${_getSourceName(filter.sourceFilter)}',
+          () => setState(() => filter.sourceFilter = ''),
+        ),
+      );
     }
 
     for (final cat in filter.categoryFilter) {
-      chips.add(_filterChip(
-        cat,
-        () => setState(
-          () => filter.categoryFilter = Set.from(filter.categoryFilter)
-            ..remove(cat),
+      chips.add(
+        _filterChip(
+          cat,
+          () => setState(
+            () =>
+                filter.categoryFilter = Set.from(filter.categoryFilter)
+                  ..remove(cat),
+          ),
         ),
-      ));
+      );
     }
 
     if (chips.isEmpty) return null;
@@ -1778,9 +1812,7 @@ class AppsPageState extends State<AppsPage> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
         child: Row(
-          children: chips
-              .expand((c) => [c, const SizedBox(width: 6)])
-              .toList()
+          children: chips.expand((c) => [c, const SizedBox(width: 6)]).toList()
             ..removeLast(),
         ),
       ),
@@ -1792,8 +1824,9 @@ class AppsPageState extends State<AppsPage> {
     // select() prevents rebuilds for notifications that don't affect list data
     // (download-progress ticks, icon-load completions). The returned token is
     // also used as part of the list-computation cache key below.
-    final int appsToken =
-        context.select<AppsProvider, int>(_appsPageAppsRebuildToken);
+    final int appsToken = context.select<AppsProvider, int>(
+      _appsPageAppsRebuildToken,
+    );
     var appsProvider = context.read<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
 
@@ -1810,11 +1843,13 @@ class AppsPageState extends State<AppsPage> {
       if (needsApkMirror.isEmpty && needsFDroid.isEmpty) return;
       await Future.wait([
         if (needsApkMirror.isNotEmpty)
-          BulkImportService.checkApkMirror(needsApkMirror)
-              .then((r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r)),
+          BulkImportService.checkApkMirror(
+            needsApkMirror,
+          ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r)),
         if (needsFDroid.isNotEmpty)
-          BulkImportService.checkFDroid(needsFDroid)
-              .then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
+          BulkImportService.checkFDroid(
+            needsFDroid,
+          ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
       ]);
     }
 
@@ -1919,7 +1954,8 @@ class AppsPageState extends State<AppsPage> {
       if (widget.folderId != null) {
         workingList = workingList
             .where(
-              (appInMem) => folderIdsForApp(appInMem.app).contains(widget.folderId),
+              (appInMem) =>
+                  folderIdsForApp(appInMem.app).contains(widget.folderId),
             )
             .toList();
       } else if (!widget.onDemandOnlyList &&
@@ -1937,10 +1973,10 @@ class AppsPageState extends State<AppsPage> {
         final upToDate = installed == null
             ? false
             : isSkipActiveForCurrentLatest(app.app) ||
-                installed == latest ||
-                versionsEffectivelyEqual(installed, latest) ||
-                (installedVersionIsNewerOrEqual(installed, latest) &&
-                    !versionOrderIsUnclear(installed, latest));
+                  installed == latest ||
+                  versionsEffectivelyEqual(installed, latest) ||
+                  (installedVersionIsNewerOrEqual(installed, latest) &&
+                      !versionOrderIsUnclear(installed, latest));
         if (upToDate && !(filter.includeUptodate)) {
           return false;
         }
@@ -2053,8 +2089,9 @@ class AppsPageState extends State<AppsPage> {
             includeVersionOrderUncertain: true,
           )
           .toList();
-      _newInstallsCache =
-          appsProvider.findExistingUpdates(nonInstalledOnly: true).toList();
+      _newInstallsCache = appsProvider
+          .findExistingUpdates(nonInstalledOnly: true)
+          .toList();
 
       if (_effectivePinUpdates(settingsProvider)) {
         final temp = <AppInMemory>[];
@@ -2165,9 +2202,9 @@ class AppsPageState extends State<AppsPage> {
     final effectiveGroupBy = _effectiveGroupBy(settingsProvider);
     final segregateNonInstalled =
         _effectiveGroupNonInstalledSeparately(settingsProvider) &&
-            (effectiveGroupBy == AppsListGroupBy.category ||
-                effectiveGroupBy == AppsListGroupBy.source ||
-                effectiveGroupBy == AppsListGroupBy.appType);
+        (effectiveGroupBy == AppsListGroupBy.category ||
+            effectiveGroupBy == AppsListGroupBy.source ||
+            effectiveGroupBy == AppsListGroupBy.appType);
     final separateUpdates = _effectiveGroupUpdatesSeparately(settingsProvider);
 
     // Returns true when an app should be shown in the dedicated "Updates" group.
@@ -2179,15 +2216,18 @@ class AppsPageState extends State<AppsPage> {
     // Apps that go into normal category/source/appType groups (excluding
     // segregated non-installed and the updates group when those features are on).
     List<AppInMemory> appsForGroups(List<AppInMemory> source) => source
-        .where((e) =>
-            !(segregateNonInstalled && e.app.installedVersion == null) &&
-            !isInUpdatesGroup(e))
+        .where(
+          (e) =>
+              !(segregateNonInstalled && e.app.installedVersion == null) &&
+              !isInUpdatesGroup(e),
+        )
         .toList();
 
     final appsListedForCategoryKeys = appsForGroups(listedApps);
     final appsListedForSourceKeys = appsListedForCategoryKeys;
     final appsListedForAppTypeKeys = appsListedForCategoryKeys;
-    final showNonInstalledGroupSection = segregateNonInstalled &&
+    final showNonInstalledGroupSection =
+        segregateNonInstalled &&
         listedApps.any((e) => e.app.installedVersion == null);
     final showUpdatesGroupSection =
         separateUpdates && listedApps.any(isInUpdatesGroup);
@@ -2223,9 +2263,7 @@ class AppsPageState extends State<AppsPage> {
           )
           .toSet()
           .toList();
-      keys.sort(
-        (a, b) => a.toLowerCase().compareTo(b.toLowerCase()),
-      );
+      keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       return keys;
     }
 
@@ -2233,23 +2271,31 @@ class AppsPageState extends State<AppsPage> {
 
     // App types that are present in the non-updates, non-uninstalled subset.
     final listedAppTypes = AppTypeGroup.values
-        .where((t) => appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t))
+        .where(
+          (t) => appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t),
+        )
         .toList();
 
     if (listBuildToken != _lastGroupIndexCacheToken) {
       _lastGroupIndexCacheToken = listBuildToken;
       final nextCategoryMap = <String, List<int>>{};
-      for (int categoryIndex = 0;
-          categoryIndex < listedCategories.length;
-          categoryIndex++) {
+      for (
+        int categoryIndex = 0;
+        categoryIndex < listedCategories.length;
+        categoryIndex++
+      ) {
         final String? categoryNullable = listedCategories[categoryIndex];
         final String mapKey = categoryNullable ?? '__null__';
         final indices = <int>[];
-        for (int listingIndex = 0;
-            listingIndex < listedApps.length;
-            listingIndex++) {
+        for (
+          int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++
+        ) {
           final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) continue;
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
           if (isInUpdatesGroup(row)) continue;
           if (row.app.categories.contains(categoryNullable) ||
               (row.app.categories.isEmpty && categoryNullable == null)) {
@@ -2261,19 +2307,28 @@ class AppsPageState extends State<AppsPage> {
       _categoryGroupListedIndices = nextCategoryMap;
 
       final nextSourceMap = <String, List<int>>{};
-      for (int sourceIndex = 0;
-          sourceIndex < listedSources.length;
-          sourceIndex++) {
+      for (
+        int sourceIndex = 0;
+        sourceIndex < listedSources.length;
+        sourceIndex++
+      ) {
         final String sourceKey = listedSources[sourceIndex];
         final indices = <int>[];
-        for (int listingIndex = 0;
-            listingIndex < listedApps.length;
-            listingIndex++) {
+        for (
+          int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++
+        ) {
           final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) continue;
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
           if (isInUpdatesGroup(row)) continue;
           if (sourceProvider
-                  .getSource(row.app.url, overrideSource: row.app.overrideSource)
+                  .getSource(
+                    row.app.url,
+                    overrideSource: row.app.overrideSource,
+                  )
                   .runtimeType
                   .toString() ==
               sourceKey) {
@@ -2287,11 +2342,15 @@ class AppsPageState extends State<AppsPage> {
       final nextAppTypeMap = <AppTypeGroup, List<int>>{};
       for (final type in AppTypeGroup.values) {
         final indices = <int>[];
-        for (int listingIndex = 0;
-            listingIndex < listedApps.length;
-            listingIndex++) {
+        for (
+          int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++
+        ) {
           final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) continue;
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
           if (isInUpdatesGroup(row)) continue;
           if (classifyAppType(row) == type) {
             indices.add(listingIndex);
@@ -2302,9 +2361,11 @@ class AppsPageState extends State<AppsPage> {
       _appTypeGroupListedIndices = nextAppTypeMap;
 
       final nonInstalled = <int>[];
-      for (int listingIndex = 0;
-          listingIndex < listedApps.length;
-          listingIndex++) {
+      for (
+        int listingIndex = 0;
+        listingIndex < listedApps.length;
+        listingIndex++
+      ) {
         if (listedApps[listingIndex].app.installedVersion == null) {
           nonInstalled.add(listingIndex);
         }
@@ -2312,9 +2373,11 @@ class AppsPageState extends State<AppsPage> {
       _nonInstalledListedIndices = nonInstalled;
 
       final updatesIndices = <int>[];
-      for (int listingIndex = 0;
-          listingIndex < listedApps.length;
-          listingIndex++) {
+      for (
+        int listingIndex = 0;
+        listingIndex < listedApps.length;
+        listingIndex++
+      ) {
         if (isInUpdatesGroup(listedApps[listingIndex])) {
           updatesIndices.add(listingIndex);
         }
@@ -2364,7 +2427,9 @@ class AppsPageState extends State<AppsPage> {
                             .where(
                               (element) =>
                                   !widget.onDemandOnlyList ||
-                                  element.app.additionalSettings['onDemandOnly'] ==
+                                  element
+                                          .app
+                                          .additionalSettings['onDemandOnly'] ==
                                       true,
                             )
                             .length /
@@ -2411,12 +2476,15 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    getSingleAppHorizTile(int index) {
+    getSingleAppHorizTile(
+      int index, {
+      _GroupPosition? groupPosition,
+      bool flatListBody = false,
+    }) {
       final app = listedApps[index];
       final appId = app.app.id;
       final installed = app.app.installedVersion;
-      final hasUpdate =
-          installed != null && appHasActionableUpdate(app.app);
+      final hasUpdate = installed != null && appHasActionableUpdate(app.app);
       final hasUncertainUpdate =
           installed != null && versionOrderUncertainUpdate(app.app);
       final downloadsRunning = appsProvider.areDownloadsRunning();
@@ -2424,7 +2492,7 @@ class AppsPageState extends State<AppsPage> {
           .getSource(app.app.url, overrideSource: app.app.overrideSource)
           .hosts
           .firstOrNull;
-      return _SwipeableListItem(
+      final Widget swipeItem = _SwipeableListItem(
         key: ValueKey(appId),
         appId: appId,
         hasUpdate: hasUpdate || hasUncertainUpdate,
@@ -2462,8 +2530,83 @@ class AppsPageState extends State<AppsPage> {
           onLongPress: () => toggleAppSelected(app.app),
           highlightTouchTargets: settingsProvider.highlightTouchTargets,
           categoryColors: settingsProvider.categories,
+          itemBorderRadius: groupPosition != null
+              ? _groupItemRadius(
+                  groupPosition,
+                  flatListBody: flatListBody,
+                )
+              : null,
         ),
       );
+      if (groupPosition != null) {
+        return ClipRRect(
+          borderRadius: _groupItemRadius(
+            groupPosition,
+            flatListBody: flatListBody,
+          ),
+          child: swipeItem,
+        );
+      }
+      return swipeItem;
+    }
+
+    /// Ungrouped list: each app as its own M3E card; corners follow [flatListBody]
+    /// rules with [first]/[middle]/[last]/[only] by index in the run.
+    Widget flatListAppRow(
+      int listedAppIndex,
+      int indexInRun,
+      int runLength, {
+      bool spacerBeforeFirstRow = false,
+      bool spacerAfterLastRow = false,
+    }) {
+      final bool gapBeforeTile = indexInRun > 0 || spacerBeforeFirstRow;
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (gapBeforeTile) const SizedBox(height: _m3eItemGap),
+            if (indexInRun == 0 && !spacerBeforeFirstRow)
+              const SizedBox(height: 6),
+            getSingleAppHorizTile(
+              listedAppIndex,
+              groupPosition: runLength == 1
+                  ? _GroupPosition.only
+                  : indexInRun == 0
+                      ? _GroupPosition.first
+                      : indexInRun == runLength - 1
+                          ? _GroupPosition.last
+                          : _GroupPosition.middle,
+              flatListBody: true,
+            ),
+            if (indexInRun == runLength - 1) ...[
+              const SizedBox(height: 6),
+              if (spacerAfterLastRow) const SizedBox(height: _m3eItemGap),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // Builds a position-aware children list with 2px gaps for M3E grouped style.
+    List<Widget> buildGroupedChildren(List<int> indices) {
+      final int n = indices.length;
+      return [
+        for (int i = 0; i < n; i++) ...[
+          if (i > 0) const SizedBox(height: _m3eItemGap),
+          getSingleAppHorizTile(
+            indices[i],
+            groupPosition: n == 1
+                ? _GroupPosition.only
+                : i == 0
+                    ? _GroupPosition.first
+                    : i == n - 1
+                        ? _GroupPosition.last
+                        : _GroupPosition.middle,
+          ),
+        ],
+      ];
     }
 
     getCategoryCollapsibleTile(int index) {
@@ -2474,9 +2617,7 @@ class AppsPageState extends State<AppsPage> {
       final matchingIndices =
           _categoryGroupListedIndices[categoryMapKey] ?? const <int>[];
       final tiles = isExpanded
-          ? matchingIndices
-              .map((listingIndex) => getSingleAppHorizTile(listingIndex))
-              .toList()
+          ? buildGroupedChildren(matchingIndices)
           : const <Widget>[];
 
       capFirstChar(String str) => str[0].toUpperCase() + str.substring(1);
@@ -2489,22 +2630,14 @@ class AppsPageState extends State<AppsPage> {
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
             borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-            color: theme.colorScheme.surfaceContainerLow,
+            color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: PageStorageKey(catKey),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
-                collapsedShape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
+                shape: _appsExpansionTileExpandedShape,
+                collapsedShape: _appsExpansionTileCollapsedShape,
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -2519,7 +2652,13 @@ class AppsPageState extends State<AppsPage> {
                 ),
                 controlAffinity: ListTileControlAffinity.leading,
                 trailing: Text(matchingIndices.length.toString()),
-                children: tiles,
+                childrenPadding: EdgeInsets.zero,
+                children: [
+                  _appsGroupedExpansionListBody(
+                    scheme: theme.colorScheme,
+                    tiles: tiles,
+                  ),
+                ],
               ),
             ),
           ),
@@ -2533,9 +2672,7 @@ class AppsPageState extends State<AppsPage> {
 
       final matchingIndices = _nonInstalledListedIndices;
       final tiles = isExpanded
-          ? matchingIndices
-              .map((listingIndex) => getSingleAppHorizTile(listingIndex))
-              .toList()
+          ? buildGroupedChildren(matchingIndices)
           : const <Widget>[];
 
       final theme = Theme.of(context);
@@ -2547,22 +2684,14 @@ class AppsPageState extends State<AppsPage> {
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
             borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-            color: theme.colorScheme.surfaceContainerLow,
+            color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: const PageStorageKey(nonInstalledKey),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
-                collapsedShape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
+                shape: _appsExpansionTileExpandedShape,
+                collapsedShape: _appsExpansionTileCollapsedShape,
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -2577,7 +2706,13 @@ class AppsPageState extends State<AppsPage> {
                 ),
                 controlAffinity: ListTileControlAffinity.leading,
                 trailing: Text(matchingIndices.length.toString()),
-                children: tiles,
+                childrenPadding: EdgeInsets.zero,
+                children: [
+                  _appsGroupedExpansionListBody(
+                    scheme: theme.colorScheme,
+                    tiles: tiles,
+                  ),
+                ],
               ),
             ),
           ),
@@ -2593,9 +2728,7 @@ class AppsPageState extends State<AppsPage> {
       final matchingIndices =
           _sourceGroupListedIndices[sourceKey] ?? const <int>[];
       final tiles = isExpanded
-          ? matchingIndices
-              .map((listingIndex) => getSingleAppHorizTile(listingIndex))
-              .toList()
+          ? buildGroupedChildren(matchingIndices)
           : const <Widget>[];
 
       final AppInMemory firstForTitle = matchingIndices.isEmpty
@@ -2627,22 +2760,14 @@ class AppsPageState extends State<AppsPage> {
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
             borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-            color: theme.colorScheme.surfaceContainerLow,
+            color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: PageStorageKey(groupKey),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
-                collapsedShape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
+                shape: _appsExpansionTileExpandedShape,
+                collapsedShape: _appsExpansionTileCollapsedShape,
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -2657,7 +2782,13 @@ class AppsPageState extends State<AppsPage> {
                 ),
                 controlAffinity: ListTileControlAffinity.leading,
                 trailing: Text(matchingIndices.length.toString()),
-                children: tiles,
+                childrenPadding: EdgeInsets.zero,
+                children: [
+                  _appsGroupedExpansionListBody(
+                    scheme: theme.colorScheme,
+                    tiles: tiles,
+                  ),
+                ],
               ),
             ),
           ),
@@ -2673,9 +2804,7 @@ class AppsPageState extends State<AppsPage> {
     }) {
       final isExpanded = !_collapsedGroups.contains(groupKey);
       final tiles = isExpanded
-          ? matchingIndices
-              .map((i) => getSingleAppHorizTile(i))
-              .toList()
+          ? buildGroupedChildren(matchingIndices)
           : const <Widget>[];
       final theme = Theme.of(context);
       return RepaintBoundary(
@@ -2686,22 +2815,14 @@ class AppsPageState extends State<AppsPage> {
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
             borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
-            color: theme.colorScheme.surfaceContainerLow,
+            color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: PageStorageKey(groupKey),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
-                collapsedShape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(_appsListGroupCardRadius),
-                  ),
-                ),
+                shape: _appsExpansionTileExpandedShape,
+                collapsedShape: _appsExpansionTileCollapsedShape,
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -2716,7 +2837,13 @@ class AppsPageState extends State<AppsPage> {
                 ),
                 controlAffinity: ListTileControlAffinity.leading,
                 trailing: Text(matchingIndices.length.toString()),
-                children: tiles,
+                childrenPadding: EdgeInsets.zero,
+                children: [
+                  _appsGroupedExpansionListBody(
+                    scheme: theme.colorScheme,
+                    tiles: tiles,
+                  ),
+                ],
               ),
             ),
           ),
@@ -3020,10 +3147,12 @@ class AppsPageState extends State<AppsPage> {
                         urls += '${a.url}\n';
                       }
                       urls = urls.substring(0, urls.length - 1);
-                      SharePlus.instance.share(ShareParams(
-                        text: urls,
-                        subject: 'ObtainX - ${tr('appsString')}',
-                      ));
+                      SharePlus.instance.share(
+                        ShareParams(
+                          text: urls,
+                          subject: 'ObtainX - ${tr('appsString')}',
+                        ),
+                      );
                       Navigator.of(context).pop();
                     },
                     child: Text(
@@ -3041,10 +3170,12 @@ class AppsPageState extends State<AppsPage> {
                               urls +=
                                   'https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/${Uri.encodeComponent(jsonEncode({'id': a.id, 'url': a.url, 'author': a.author, 'name': a.name, 'preferredApkIndex': a.preferredApkIndex, 'additionalSettings': jsonEncode(a.additionalSettings), 'overrideSource': a.overrideSource}))}\n\n';
                             }
-                            SharePlus.instance.share(ShareParams(
-                              text: urls,
-                              subject: 'ObtainX - ${tr('appsString')}',
-                            ));
+                            SharePlus.instance.share(
+                              ShareParams(
+                                text: urls,
+                                subject: 'ObtainX - ${tr('appsString')}',
+                              ),
+                            );
                           },
                     child: Text(
                       tr('shareAppConfigLinks'),
@@ -3070,10 +3201,12 @@ class AppsPageState extends State<AppsPage> {
                               mimeType: 'application/json',
                               name: fn,
                             );
-                            SharePlus.instance.share(ShareParams(
-                              files: [f],
-                              fileNameOverrides: ['$fn.json'],
-                            ));
+                            SharePlus.instance.share(
+                              ShareParams(
+                                files: [f],
+                                fileNameOverrides: ['$fn.json'],
+                              ),
+                            );
                           },
                     child: Text(
                       '${tr('share')} - ${tr('obtainiumExport')}',
@@ -3199,11 +3332,8 @@ class AppsPageState extends State<AppsPage> {
                             Expanded(
                               child: Text(
                                 tr('filterApps'),
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
                               ),
                             ),
                             TextButton(
@@ -3249,7 +3379,8 @@ class AppsPageState extends State<AppsPage> {
                         dense: true,
                         title: Text(tr('upToDateApps')),
                         value: filter.includeUptodate,
-                        onChanged: (v) => update(() => filter.includeUptodate = v),
+                        onChanged: (v) =>
+                            update(() => filter.includeUptodate = v),
                       ),
                       SwitchListTile(
                         dense: true,
@@ -3295,6 +3426,7 @@ class AppsPageState extends State<AppsPage> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                         child: CategoryEditorSelector(
+                          allowCategoryManagement: false,
                           preselected: filter.categoryFilter,
                           onSelected: (categories) {
                             update(() {
@@ -3341,9 +3473,9 @@ class AppsPageState extends State<AppsPage> {
         visualDensity: VisualDensity.compact,
         iconSize: 24,
         textStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: colorScheme.primary,
-              fontWeight: FontWeight.w600,
-            ),
+          color: colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
       );
       if (selectedAppIds.isNotEmpty) {
         return Row(
@@ -3397,14 +3529,14 @@ class AppsPageState extends State<AppsPage> {
                     final messenger = scaffoldMessengerKey.currentState;
                     final RemoveAppsWithModalResult removeResult =
                         await appsProviderRef.removeAppsWithModal(
-                      context,
-                      selectedApps.toList(),
-                    );
+                          context,
+                          selectedApps.toList(),
+                        );
                     if (removeResult.shouldShowSnackBar) {
                       final Set<String> undoAppIds =
                           removeResult.deferredUndoAppIds;
-                      final int removedCount = removeResult
-                              .deferredUndoAppIds.isNotEmpty
+                      final int removedCount =
+                          removeResult.deferredUndoAppIds.isNotEmpty
                           ? removeResult.deferredUndoAppIds.length
                           : selectedApps.length;
                       messenger
@@ -3422,8 +3554,8 @@ class AppsPageState extends State<AppsPage> {
                                     label: tr('undo'),
                                     onPressed: () => appsProviderRef
                                         .undoDeferredObtainiumRemovals(
-                                      undoAppIds,
-                                    ),
+                                          undoAppIds,
+                                        ),
                                   )
                                 : null,
                           ),
@@ -3517,7 +3649,10 @@ class AppsPageState extends State<AppsPage> {
                 iconSize: 24,
                 color: colorScheme.primary,
                 tooltip: tr('appsViewOptions'),
-                onPressed: () => showAppsViewOptionsSheet(context, folderId: _viewSettingsId),
+                onPressed: () => showAppsViewOptionsSheet(
+                  context,
+                  folderId: _viewSettingsId,
+                ),
                 icon: const Icon(Icons.tune),
               ),
             ),
@@ -3537,7 +3672,8 @@ class AppsPageState extends State<AppsPage> {
         required int mainChildCount,
         required Widget Function(int index) mainBuilder,
       }) {
-        final totalCount = mainChildCount +
+        final totalCount =
+            mainChildCount +
             (showNonInstalledGroupSection ? 1 : 0) +
             (showUpdatesGroupSection ? 1 : 0);
         return SliverList(
@@ -3565,12 +3701,13 @@ class AppsPageState extends State<AppsPage> {
         );
       }
 
-      final useCategoryGroups = groupBy == AppsListGroupBy.category &&
+      final useCategoryGroups =
+          groupBy == AppsListGroupBy.category &&
           (segregateNonInstalled
               ? (listedCategories.isNotEmpty || showNonInstalledGroupSection)
               : !(listedCategories.isEmpty ||
-                  (listedCategories.length == 1 &&
-                      listedCategories[0] == null)));
+                    (listedCategories.length == 1 &&
+                        listedCategories[0] == null)));
       if (useCategoryGroups) {
         return buildGroupedSliver(
           mainChildCount: listedCategories.length,
@@ -3578,7 +3715,8 @@ class AppsPageState extends State<AppsPage> {
         );
       }
 
-      final useSourceGroups = groupBy == AppsListGroupBy.source &&
+      final useSourceGroups =
+          groupBy == AppsListGroupBy.source &&
           (listedSources.isNotEmpty || showNonInstalledGroupSection);
       if (useSourceGroups) {
         return buildGroupedSliver(
@@ -3587,7 +3725,8 @@ class AppsPageState extends State<AppsPage> {
         );
       }
 
-      final useAppTypeGroups = groupBy == AppsListGroupBy.appType &&
+      final useAppTypeGroups =
+          groupBy == AppsListGroupBy.appType &&
           (listedAppTypes.isNotEmpty || showNonInstalledGroupSection);
       if (useAppTypeGroups) {
         return buildGroupedSliver(
@@ -3608,10 +3747,22 @@ class AppsPageState extends State<AppsPage> {
           delegate: SliverChildBuilderDelegate((context, index) {
             if (pinUpdatesEnabled) {
               if (index == 0) return getUpdatesCollapsibleTile();
-              return getSingleAppHorizTile(nonUpdatesIndices[index - 1]);
+              final int runIndex = index - 1;
+              return flatListAppRow(
+                nonUpdatesIndices[runIndex],
+                runIndex,
+                nonUpdatesIndices.length,
+                spacerBeforeFirstRow: runIndex == 0,
+              );
             } else {
               if (index < nonUpdatesIndices.length) {
-                return getSingleAppHorizTile(nonUpdatesIndices[index]);
+                return flatListAppRow(
+                  nonUpdatesIndices[index],
+                  index,
+                  nonUpdatesIndices.length,
+                  spacerAfterLastRow:
+                      index == nonUpdatesIndices.length - 1,
+                );
               }
               return getUpdatesCollapsibleTile();
             }
@@ -3620,11 +3771,8 @@ class AppsPageState extends State<AppsPage> {
       }
 
       return SliverList(
-        delegate: SliverChildBuilderDelegate((
-          BuildContext context,
-          int index,
-        ) {
-          return getSingleAppHorizTile(index);
+        delegate: SliverChildBuilderDelegate((BuildContext context, int index) {
+          return flatListAppRow(index, index, listedApps.length);
         }, childCount: listedApps.length),
       );
     }
@@ -3639,6 +3787,8 @@ class AppsPageState extends State<AppsPage> {
         _searchField != 'appName';
     final bool shouldInterceptBack =
         selectedAppIds.isNotEmpty || _searchExpanded || isFilterActive;
+
+    final PreferredSizeWidget? filterChipsBar = _buildFilterChipsRow();
 
     return PopScope(
       canPop: !shouldInterceptBack,
@@ -3672,155 +3822,211 @@ class AppsPageState extends State<AppsPage> {
                 child: Scrollbar(
                   interactive: true,
                   controller: scrollController,
-                  child: CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(
-                      parent: ClampingScrollPhysics(),
-                    ),
-                    controller: scrollController,
-                    cacheExtent: 900,
-                    slivers: <Widget>[
-                      CustomAppBar(
-                        leading: (widget.onDemandOnlyList ||
-                                widget.folderId != null)
-                            ? IconButton(
-                                icon: const Icon(Icons.arrow_back),
-                                onPressed: () =>
-                                    Navigator.of(context).maybePop(),
-                                tooltip: MaterialLocalizations.of(context)
-                                    .backButtonTooltip,
-                              )
-                            : null,
-                        title: widget.onDemandOnlyList
-                            ? tr('onDemandOnlyAppsTitle')
-                            : currentFolderName ?? tr('appsString'),
-                        titleStyle: _searchExpanded
-                            ? Theme.of(context).textTheme.titleSmall
-                            : null,
-                        actions: [
-                          if (!_searchExpanded)
-                            IconButton(
-                              icon: const Icon(Icons.search),
-                              onPressed: () {
-                                setState(() => _searchExpanded = true);
-                                _searchFocusNode.requestFocus();
-                              },
-                            )
-                          else
-                            IconButton(
-                              icon: const Icon(Icons.close),
-                              onPressed: () => setState(() {
-                                _searchExpanded = false;
-                                _searchController.clear();
-                                _searchFocusNode.unfocus();
-                              }),
-                            ),
-                        ],
-                        // Always use the compact layout so the action icon
-                        // and "Apps" title are always on the same toolbar row.
-                        searchWidget: _searchExpanded
-                            ? _buildSearchBar(
-                                colorScheme: Theme.of(context).colorScheme,
-                                showFilterSheet: showFilterSheet,
-                                neutralFilter: neutralFilter,
-                                settingsProvider: settingsProvider,
-                                focusNode: _searchFocusNode,
-                              )
-                            : const SizedBox.shrink(),
-                        bottom: _buildFilterChipsRow(),
-                      ),
-                      ...getLoadingWidgets(),
-                      getDisplayedList(),
-                      // Extra bottom space for folder / on-demand pages so the
-                      // last item isn't clipped by the phone's rounded corners.
-                      if (widget.onDemandOnlyList || widget.folderId != null)
-                        const SliverToBoxAdapter(
-                          child: SizedBox(height: 80),
-                        ),
-                      if (!widget.onDemandOnlyList && widget.folderId == null)
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                // Manage Folders button
-                                TextButton.icon(
-                                  onPressed: () =>
-                                      _showFolderManageDialog(context),
-                                  icon: const Icon(
-                                    Icons.folder_copy_outlined,
-                                    size: 18,
-                                  ),
-                                  label: Text(tr('manageFolders')),
-                                ),
-                                // User-defined folder buttons
-                                if (appFolders.isNotEmpty) ...[
-                                  const SizedBox(height: 8),
-                                  ...appFolders.map(
-                                    (folder) => Padding(
-                                      padding: const EdgeInsets.only(bottom: 8),
-                                      child: FilledButton.icon(
-                                        onPressed: () {
-                                          Navigator.push(
-                                            context,
-                                            slideUpPageRoute(
-                                              (_) => AppsPage(
-                                                folderId: folder.id,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        icon: () {
-                                          final int upd = folderUpdateCounts[folder.id] ?? 0;
-                                          if (upd > 0) {
-                                            return Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Badge(
-                                                  label: Text('$upd'),
-                                                  child: const SizedBox(width: 4, height: 16),
-                                                ),
-                                                const SizedBox(width: 6),
-                                                const Icon(Icons.folder_outlined),
-                                              ],
-                                            );
-                                          }
-                                          return const Icon(Icons.folder_outlined);
-                                        }(),
-                                        label: Text(
-                                          '${folder.name} '
-                                          '(${folderAppCounts[folder.id] ?? 0} ${tr('appsString').toLowerCase()})',
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (settingsProvider.useGradientBackground)
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                stops: const [0, 0.38, 0.72, 1],
+                                colors: [
+                                  Theme.of(context)
+                                      .colorScheme
+                                      .schemePageGradientTopColor,
+                                  Theme.of(context)
+                                      .colorScheme
+                                      .schemePageGradientMidColor,
+                                  Theme.of(context).colorScheme.surface,
+                                  Theme.of(context).colorScheme.surface,
                                 ],
-                                // On-Demand Only button (always last)
-                                FilledButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      slideUpPageRoute(
-                                        (_) => const AppsPage(
-                                          onDemandOnlyList: true,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.folder_special_outlined,
-                                  ),
-                                  label: Text(
-                                    '${tr('onDemandOnly')} '
-                                    '($onDemandOnlyAppCount ${tr('appsString').toLowerCase()})',
-                                  ),
-                                ),
-                                const SizedBox(height: 20),
-                              ],
+                              ),
                             ),
                           ),
                         ),
+                      CustomScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(
+                          parent: ClampingScrollPhysics(),
+                        ),
+                        controller: scrollController,
+                        cacheExtent: 1800,
+                        slivers: <Widget>[
+                          CustomAppBar(
+                            leading:
+                                (widget.onDemandOnlyList ||
+                                    widget.folderId != null)
+                                ? IconButton(
+                                    icon: const Icon(Icons.arrow_back),
+                                    onPressed: () =>
+                                        Navigator.of(context).maybePop(),
+                                    tooltip: MaterialLocalizations.of(
+                                      context,
+                                    ).backButtonTooltip,
+                                  )
+                                : null,
+                            title: widget.onDemandOnlyList
+                                ? tr('onDemandOnlyAppsTitle')
+                                : currentFolderName ?? tr('appsString'),
+                            titleStyle: _searchExpanded
+                                ? Theme.of(context).textTheme.titleSmall
+                                : null,
+                            actions: [
+                              if (!_searchExpanded)
+                                IconButton(
+                                  icon: const Icon(Icons.search),
+                                  onPressed: () {
+                                    setState(() => _searchExpanded = true);
+                                    _searchFocusNode.requestFocus();
+                                  },
+                                )
+                              else
+                                IconButton(
+                                  icon: const Icon(Icons.close),
+                                  onPressed: () => setState(() {
+                                    _searchExpanded = false;
+                                    _searchController.clear();
+                                    _searchFocusNode.unfocus();
+                                  }),
+                                ),
+                            ],
+                            // Always use the compact layout so the action icon
+                            // and "Apps" title are always on the same toolbar row.
+                            searchWidget: _searchExpanded
+                                ? _buildSearchBar(
+                                    colorScheme: Theme.of(context).colorScheme,
+                                    showFilterSheet: showFilterSheet,
+                                    neutralFilter: neutralFilter,
+                                    settingsProvider: settingsProvider,
+                                    focusNode: _searchFocusNode,
+                                  )
+                                : const SizedBox.shrink(),
+                            bottom: filterChipsBar,
+                          ),
+                          ...getLoadingWidgets(),
+                          getDisplayedList(),
+                          // Extra bottom space for folder / on-demand pages so the
+                          // last item isn't clipped by the phone's rounded corners.
+                          if (widget.onDemandOnlyList ||
+                              widget.folderId != null)
+                            const SliverToBoxAdapter(
+                              child: SizedBox(height: 80),
+                            ),
+                          if (!widget.onDemandOnlyList &&
+                              widget.folderId == null)
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  20,
+                                  16,
+                                  0,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    // Manage Folders button
+                                    TextButton.icon(
+                                      onPressed: () =>
+                                          _showFolderManageDialog(context),
+                                      icon: const Icon(
+                                        Icons.folder_copy_outlined,
+                                        size: 18,
+                                      ),
+                                      label: Text(tr('manageFolders')),
+                                    ),
+                                    // User-defined folder buttons
+                                    if (appFolders.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      ...appFolders.map(
+                                        (folder) => Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 8,
+                                          ),
+                                          child: FilledButton.icon(
+                                            onPressed: () {
+                                              Navigator.push(
+                                                context,
+                                                slideUpPageRoute(
+                                                  (_) => AppsPage(
+                                                    folderId: folder.id,
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                            icon: () {
+                                              final int upd =
+                                                  folderUpdateCounts[folder
+                                                      .id] ??
+                                                  0;
+                                              if (upd > 0) {
+                                                return Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Badge(
+                                                      label: Text('$upd'),
+                                                      child: const SizedBox(
+                                                        width: 4,
+                                                        height: 16,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    const Icon(
+                                                      Icons.folder_outlined,
+                                                    ),
+                                                  ],
+                                                );
+                                              }
+                                              return const Icon(
+                                                Icons.folder_outlined,
+                                              );
+                                            }(),
+                                            label: Text(
+                                              '${folder.name} '
+                                              '(${folderAppCounts[folder.id] ?? 0} ${tr('appsString').toLowerCase()})',
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                    // On-Demand Only button (always last)
+                                    FilledButton.icon(
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          slideUpPageRoute(
+                                            (_) => const AppsPage(
+                                              onDemandOnlyList: true,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.folder_special_outlined,
+                                      ),
+                                      label: Text(
+                                        '${tr('onDemandOnly')} '
+                                        '($onDemandOnlyAppCount ${tr('appsString').toLowerCase()})',
+                                      ),
+                                    ),
+                                    const SizedBox(height: 20),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (settingsProvider.progressiveBlurEnabled)
+                            SliverToBoxAdapter(
+                              child: SizedBox(
+                                height: MediaQuery.paddingOf(context).bottom,
+                              ),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -3831,11 +4037,9 @@ class AppsPageState extends State<AppsPage> {
                 scrollController: scrollController,
                 selectionActive: selectedAppIds.isNotEmpty,
                 footer: Material(
-                  elevation: 3,
-                  surfaceTintColor:
-                      Theme.of(context).colorScheme.surfaceTint,
-                  color:
-                      Theme.of(context).colorScheme.surfaceContainerLow,
+                  elevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  color: Theme.of(context).colorScheme.surface,
                   child: SafeArea(
                     top: false,
                     child: Padding(
@@ -3864,10 +4068,8 @@ class AppsPageState extends State<AppsPage> {
     Navigator.push(
       context,
       heroFriendlyAppPageRoute(
-        (_) => AppPage(
-          appId: app.app.id,
-          appsListHeroFolderId: widget.folderId,
-        ),
+        (_) =>
+            AppPage(appId: app.app.id, appsListHeroFolderId: widget.folderId),
       ),
     );
   }
@@ -3909,7 +4111,8 @@ class AppsPageState extends State<AppsPage> {
     final changed = <App>[];
     for (final appInMem in appsProvider.apps.values) {
       final app = appInMem.app;
-      final hadId = folderIdsForApp(app).contains(folderId) ||
+      final hadId =
+          folderIdsForApp(app).contains(folderId) ||
           excludedFolderIdsForApp(app).contains(folderId);
       if (hadId) {
         clearFolderFromApp(app, folderId);
@@ -3953,8 +4156,7 @@ class AppsPageState extends State<AppsPage> {
     var ruleEnabled = initialRule != null;
     var ruleField = initialRule?.field ?? FolderRuleField.name;
     var ruleMatch = initialRule?.matchType ?? FolderRuleMatchType.contains;
-    final ruleValueCtrl =
-        TextEditingController(text: initialRule?.value ?? '');
+    final ruleValueCtrl = TextEditingController(text: initialRule?.value ?? '');
 
     showDialog<void>(
       context: context,
@@ -3969,13 +4171,12 @@ class AppsPageState extends State<AppsPage> {
               : null;
           // Safe: countRuleMatches uses the pre-captured providers,
           // not context.read() inside build.
-          final matchCount =
-              currentRule != null ? countRuleMatches(currentRule) : null;
+          final matchCount = currentRule != null
+              ? countRuleMatches(currentRule)
+              : null;
 
           return AlertDialog(
-            title: Text(
-              existing == null ? tr('newFolder') : tr('editFolder'),
-            ),
+            title: Text(existing == null ? tr('newFolder') : tr('editFolder')),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -4025,7 +4226,12 @@ class AppsPageState extends State<AppsPage> {
                           labelText: tr('folderRuleField'),
                           border: const OutlineInputBorder(),
                           suffixIcon: const Icon(Icons.arrow_drop_down),
-                          contentPadding: const EdgeInsets.fromLTRB(12, 16, 4, 16),
+                          contentPadding: const EdgeInsets.fromLTRB(
+                            12,
+                            16,
+                            4,
+                            16,
+                          ),
                         ),
                         child: Text(_folderRuleFieldLabel(ruleField)),
                       ),
@@ -4047,7 +4253,12 @@ class AppsPageState extends State<AppsPage> {
                           labelText: tr('folderRuleMatch'),
                           border: const OutlineInputBorder(),
                           suffixIcon: const Icon(Icons.arrow_drop_down),
-                          contentPadding: const EdgeInsets.fromLTRB(12, 16, 4, 16),
+                          contentPadding: const EdgeInsets.fromLTRB(
+                            12,
+                            16,
+                            4,
+                            16,
+                          ),
                         ),
                         child: Text(_folderRuleMatchLabel(ruleMatch)),
                       ),
@@ -4088,8 +4299,9 @@ class AppsPageState extends State<AppsPage> {
                           value: ruleValueCtrl.text.trim(),
                         )
                       : null;
-                  final folders =
-                      List<AppFolder>.from(settingsProvider.appFolders);
+                  final folders = List<AppFolder>.from(
+                    settingsProvider.appFolders,
+                  );
                   final AppFolder folder;
                   if (existing == null) {
                     folder = AppFolder(
@@ -4104,8 +4316,7 @@ class AppsPageState extends State<AppsPage> {
                       rule: rule,
                       clearRule: rule == null,
                     );
-                    final idx =
-                        folders.indexWhere((f) => f.id == existing.id);
+                    final idx = folders.indexWhere((f) => f.id == existing.id);
                     if (idx >= 0) folders[idx] = folder;
                   }
                   settingsProvider.appFolders = folders;
@@ -4182,10 +4393,7 @@ class AppsPageState extends State<AppsPage> {
     }
     // Multiple fields or no fields → open edit dialog with no pre-filled rule;
     // the user can configure it manually.
-    _showFolderEditDialog(
-      context,
-      prefillRule: derivedRule,
-    );
+    _showFolderEditDialog(context, prefillRule: derivedRule);
   }
 
   // ── Folder assign dialog ────────────────────────────────────────────────────
@@ -4245,10 +4453,7 @@ class AppsPageState extends State<AppsPage> {
             );
             nameCtrl.dispose();
             if (name == null || name.isEmpty) return;
-            final newFolder = AppFolder(
-              id: AppFolder.generateId(),
-              name: name,
-            );
+            final newFolder = AppFolder(id: AppFolder.generateId(), name: name);
             final updatedFolders = [...settingsProvider.appFolders, newFolder];
             settingsProvider.appFolders = updatedFolders;
             setDState(() {
@@ -4364,8 +4569,7 @@ class AppsPageState extends State<AppsPage> {
         builder: (sheetCtx, setSheetState) {
           final settingsProvider = sheetCtx.watch<SettingsProvider>();
           final folders = settingsProvider.appFolders;
-          final bottomInset =
-              MediaQuery.viewPaddingOf(sheetCtx).bottom;
+          final bottomInset = MediaQuery.viewPaddingOf(sheetCtx).bottom;
 
           return Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
@@ -4428,22 +4632,18 @@ class AppsPageState extends State<AppsPage> {
                                     content: Text(
                                       tr(
                                         'deleteFolderConfirm',
-                                        namedArgs: {
-                                          'name': folder.name,
-                                        },
+                                        namedArgs: {'name': folder.name},
                                       ),
                                     ),
                                     actions: [
                                       TextButton(
-                                        onPressed: () => Navigator.of(
-                                          dCtx,
-                                        ).pop(false),
+                                        onPressed: () =>
+                                            Navigator.of(dCtx).pop(false),
                                         child: Text(tr('cancel')),
                                       ),
                                       FilledButton(
-                                        onPressed: () => Navigator.of(
-                                          dCtx,
-                                        ).pop(true),
+                                        onPressed: () =>
+                                            Navigator.of(dCtx).pop(true),
                                         child: Text(tr('delete')),
                                       ),
                                     ],
@@ -4452,8 +4652,7 @@ class AppsPageState extends State<AppsPage> {
                                 if (confirm != true) return;
                                 // ignore: use_build_context_synchronously
                                 if (!context.mounted) return;
-                                final sp =
-                                    context.read<SettingsProvider>();
+                                final sp = context.read<SettingsProvider>();
                                 final updated = sp.appFolders
                                     .where((f) => f.id != folder.id)
                                     .toList();

@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/version_regex_assist_dialog.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -436,9 +437,6 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         child: Scaffold(
         resizeToAvoidBottomInset: true,
         backgroundColor: scaffoldBackground,
-        appBar: AppBar(
-          title: Text(tr('additionalOptions')),
-        ),
         floatingActionButton: Padding(
           padding: EdgeInsets.only(bottom: fabBottomPadding),
           child: Column(
@@ -473,26 +471,41 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           ),
         ),
         floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        body: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
+        body: CustomScrollView(
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          child: GeneratedForm(
-            items: _items,
-            outlinedInputFields: true,
-            prominentSectionHeaders: true,
-            wrapFormSectionsInCards: true,
-            onValueChanges: (values, valid, isBuilding) {
-              if (isBuilding) {
-                _values = values;
-                _valid = valid;
-              } else {
-                setState(() {
-                  _values = values;
-                  _valid = valid;
-                });
-              }
-            },
-          ),
+          cacheExtent: 1600,
+          slivers: [
+            CustomAppBar(
+              title: tr('additionalOptions'),
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+            ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
+              sliver: SliverToBoxAdapter(
+                child: GeneratedForm(
+                  items: _items,
+                  outlinedInputFields: true,
+                  prominentSectionHeaders: true,
+                  wrapFormSectionsInCards: true,
+                  onValueChanges: (values, valid, isBuilding) {
+                    if (isBuilding) {
+                      _values = values;
+                      _valid = valid;
+                    } else {
+                      setState(() {
+                        _values = values;
+                        _valid = valid;
+                      });
+                    }
+                  },
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     ),

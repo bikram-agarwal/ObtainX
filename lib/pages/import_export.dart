@@ -12,6 +12,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -379,14 +380,43 @@ class _ImportExportPageState extends State<ImportExportPage> {
       sourceStrings[s.name] = [s.name];
     });
 
+    final ColorScheme impScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      body: CustomScrollView(
-        slivers: <Widget>[
-          CustomAppBar(title: tr('importExport')),
-          SliverFillRemaining(
+      backgroundColor: impScheme.surface,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (settingsProvider.useGradientBackground)
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0, 0.38, 0.72, 1],
+                    colors: [
+                      impScheme.schemePageGradientTopColor,
+                      impScheme.schemePageGradientMidColor,
+                      impScheme.surface,
+                      impScheme.surface,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          CustomScrollView(
+            cacheExtent: 1600,
+            slivers: <Widget>[
+              CustomAppBar(title: tr('importExport')),
+              SliverFillRemaining(
+            hasScrollBody: false,
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                8,
+                16,
+                8 + MediaQuery.paddingOf(context).bottom,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -446,6 +476,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                           ),
                           if (snapshot.data != null)
                             Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 const SizedBox(height: 16),
                                 GeneratedForm(
@@ -458,20 +489,6 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                             .autoExportOnChanges,
                                       ),
                                     ],
-                                    [
-                                      GeneratedFormDropdown(
-                                        'exportSettings',
-                                        [
-                                          MapEntry('0', tr('none')),
-                                          MapEntry('1', tr('excludeSecrets')),
-                                          MapEntry('2', tr('all')),
-                                        ],
-                                        label: tr('includeSettings'),
-                                        defaultValue: settingsProvider
-                                            .exportSettings
-                                            .toString(),
-                                      ),
-                                    ],
                                   ],
                                   onValueChanges: (value, valid, isBuilding) {
                                     if (valid && !isBuilding) {
@@ -481,12 +498,36 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                             value['autoExportOnChanges'] ==
                                             true;
                                       }
-                                      if (value['exportSettings'] != null) {
-                                        settingsProvider.exportSettings =
-                                            int.parse(value['exportSettings']);
-                                      }
                                     }
                                   },
+                                ),
+                                const SizedBox(height: 16),
+                                DropdownMenu<int>(
+                                  key: ValueKey(settingsProvider.exportSettings),
+                                  initialSelection:
+                                      settingsProvider.exportSettings,
+                                  label: Text(tr('includeSettings')),
+                                  expandedInsets: EdgeInsets.zero,
+                                  onSelected: (int? selected) {
+                                    if (selected != null) {
+                                      settingsProvider.exportSettings =
+                                          selected;
+                                    }
+                                  },
+                                  dropdownMenuEntries: [
+                                    DropdownMenuEntry<int>(
+                                      value: 0,
+                                      label: tr('none'),
+                                    ),
+                                    DropdownMenuEntry<int>(
+                                      value: 1,
+                                      label: tr('excludeSecrets'),
+                                    ),
+                                    DropdownMenuEntry<int>(
+                                      value: 2,
+                                      label: tr('all'),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -598,6 +639,8 @@ class _ImportExportPageState extends State<ImportExportPage> {
                 ],
               ),
             ),
+          ),
+            ],
           ),
         ],
       ),

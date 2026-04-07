@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/pages/home.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/native_provider.dart';
@@ -364,22 +365,22 @@ class _ObtainiumState extends State<Obtainium> {
       child: DynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
           // Decide on a colour/brightness scheme based on OS and user settings
-          ColorScheme lightColorScheme;
-          ColorScheme darkColorScheme;
-          if (lightDynamic != null &&
-              darkDynamic != null &&
-              settingsProvider.useMaterialYou) {
-            lightColorScheme = lightDynamic.harmonized();
-            darkColorScheme = darkDynamic.harmonized();
-          } else {
-            lightColorScheme = ColorScheme.fromSeed(
-              seedColor: settingsProvider.themeColor,
-            );
-            darkColorScheme = ColorScheme.fromSeed(
-              seedColor: settingsProvider.themeColor,
-              brightness: Brightness.dark,
-            );
-          }
+          ColorScheme lightColorScheme = colorSchemeForAccentSettings(
+            brightness: Brightness.light,
+            accentSource: settingsProvider.appAccentColorSource,
+            paletteStyle: settingsProvider.appThemePaletteStyle,
+            lightDynamic: lightDynamic,
+            darkDynamic: darkDynamic,
+            activeCustomSeedHex: settingsProvider.activeCustomSeedHex,
+          );
+          ColorScheme darkColorScheme = colorSchemeForAccentSettings(
+            brightness: Brightness.dark,
+            accentSource: settingsProvider.appAccentColorSource,
+            paletteStyle: settingsProvider.appThemePaletteStyle,
+            lightDynamic: lightDynamic,
+            darkDynamic: darkDynamic,
+            activeCustomSeedHex: settingsProvider.activeCustomSeedHex,
+          );
 
           // set the background and surface colors to pure black in the amoled theme
           if (settingsProvider.useBlackTheme) {
@@ -387,6 +388,18 @@ class _ObtainiumState extends State<Obtainium> {
                 .copyWith(surface: Colors.black)
                 .harmonized();
           }
+
+          // Boost surface containers toward primary — ports FilePipe's
+          // boostSurfaceContainersTowardPrimary* logic that makes surfaces vivid.
+          final bool useGradient = settingsProvider.useGradientBackground;
+          lightColorScheme = lightColorScheme.boostSurfaceContainersTowardPrimary(
+            darkTheme: false,
+            useGradient: useGradient,
+          );
+          darkColorScheme = darkColorScheme.boostSurfaceContainersTowardPrimary(
+            darkTheme: true,
+            useGradient: useGradient,
+          );
 
           if (settingsProvider.useSystemFont) NativeFeatures.loadSystemFont();
 
@@ -401,11 +414,27 @@ class _ObtainiumState extends State<Obtainium> {
 
           NavigationBarThemeData navigationBarThemeFor(ColorScheme scheme) {
             return NavigationBarThemeData(
+              backgroundColor: scheme.surface,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              shadowColor: Colors.transparent,
+              indicatorColor: scheme.primary.withValues(alpha: 0.14),
               iconTheme: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
                 if (states.contains(WidgetState.selected)) {
-                  return IconThemeData(color: scheme.onSecondaryContainer);
+                  return IconThemeData(color: scheme.primary);
                 }
-                return IconThemeData(color: scheme.primary);
+                return IconThemeData(color: scheme.onSurfaceVariant);
+              }),
+              labelTextStyle: WidgetStateProperty.resolveWith((
+                Set<WidgetState> states,
+              ) {
+                if (states.contains(WidgetState.selected)) {
+                  return TextStyle(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  );
+                }
+                return TextStyle(color: scheme.onSurfaceVariant);
               }),
             );
           }
@@ -421,17 +450,13 @@ class _ObtainiumState extends State<Obtainium> {
             theme: ThemeData(
               useMaterial3: true,
               colorScheme: themeColorScheme,
-              fontFamily: settingsProvider.useSystemFont
-                  ? 'SystemFont'
-                  : 'Montserrat',
+              fontFamily: settingsProvider.useSystemFont ? 'SystemFont' : 'Montserrat',
               navigationBarTheme: navigationBarThemeFor(themeColorScheme),
             ),
             darkTheme: ThemeData(
               useMaterial3: true,
               colorScheme: darkThemeColorScheme,
-              fontFamily: settingsProvider.useSystemFont
-                  ? 'SystemFont'
-                  : 'Montserrat',
+              fontFamily: settingsProvider.useSystemFont ? 'SystemFont' : 'Montserrat',
               navigationBarTheme: navigationBarThemeFor(darkThemeColorScheme),
             ),
             home: Shortcuts(

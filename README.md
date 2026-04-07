@@ -53,6 +53,8 @@ Features Obtainium has, extended or improved here.
 
 - **Material 3 Expressive throughout** — Full M3 Expressive treatment across every screen: cards, fluid animations, expressive sliders, FAB and controls that feel like one product.
 
+- **Total Customization** — Beyond Material You: 9 preset colors and 9 palette algorithms. Enter your own custom hex accents. Choice of gradient background and progressive blurs.
+
 - **Per-app color theming** — Each app's detail page derives its color scheme from the app's own icon. Deep, accurate, and dark-mode safe. Toggle *Match app page to icon colors* in Settings.
 
 - **Hero icon transition** — Tapping an app row animates its icon smoothly into the detail page. Swipe back and it returns the same way.

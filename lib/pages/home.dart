@@ -14,6 +14,8 @@ import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/widgets/progressive_top_edge_overlay.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -171,6 +173,7 @@ class _HomePageState extends State<HomePage> {
           WidgetsBinding.instance.addPostFrameCallback(check);
         }
       }
+
       WidgetsBinding.instance.addPostFrameCallback(check);
       return completer.future;
     }
@@ -178,7 +181,8 @@ class _HomePageState extends State<HomePage> {
     goToAddApp(String data) async {
       switchToPage(1);
       final state = await waitForState(
-          pages[1].widget.key as GlobalKey<AddAppPageState>);
+        pages[1].widget.key as GlobalKey<AddAppPageState>,
+      );
       state.linkFn(data);
     }
 
@@ -186,7 +190,8 @@ class _HomePageState extends State<HomePage> {
       // Go to Apps page
       switchToPage(0);
       final state = await waitForState(
-          pages[0].widget.key as GlobalKey<AppsPageState>);
+        pages[0].widget.key as GlobalKey<AppsPageState>,
+      );
       // Navigate to the app
       state.openAppById(appId);
     }
@@ -299,6 +304,25 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  NavigationBar _materialHomeNavigationBar({
+    required List<NavigationDestination> destinations,
+    required int selectedIndex,
+    required bool transparent,
+  }) {
+    return NavigationBar(
+      backgroundColor: transparent ? Colors.transparent : null,
+      surfaceTintColor: transparent ? Colors.transparent : null,
+      elevation: transparent ? 0 : null,
+      shadowColor: transparent ? Colors.transparent : null,
+      destinations: destinations,
+      onDestinationSelected: (int index) async {
+        HapticFeedback.selectionClick();
+        switchToPage(index);
+      },
+      selectedIndex: selectedIndex,
+    );
+  }
+
   Future<void> switchToPage(int index) async {
     setIsReversing(index);
     if (index == 0) {
@@ -328,20 +352,20 @@ class _HomePageState extends State<HomePage> {
     // Only the app-count, loading flag, and update count are needed here;
     // using select() avoids rebuilding the home scaffold on every
     // download-progress notification.
-    final (int appsCount, bool isLoading, int updateCount) =
-        context.select<AppsProvider, (int, bool, int)>(
-      (p) => (
-        p.apps.length,
-        p.loadingApps,
-        p
-            .findExistingUpdates(
-              installedOnly: true,
-              excludeOnDemandOnly: true,
-              includeVersionOrderUncertain: true,
-            )
-            .length,
-      ),
-    );
+    final (int appsCount, bool isLoading, int updateCount) = context
+        .select<AppsProvider, (int, bool, int)>(
+          (p) => (
+            p.apps.length,
+            p.loadingApps,
+            p
+                .findExistingUpdates(
+                  installedOnly: true,
+                  excludeOnDemandOnly: true,
+                  includeVersionOrderUncertain: true,
+                )
+                .length,
+          ),
+        );
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
 
     final AddAppPageState? addPageState =
@@ -359,7 +383,8 @@ class _HomePageState extends State<HomePage> {
     prevIsLoading = isLoading;
 
     return PopScope(
-      canPop: isLinkActivity &&
+      canPop:
+          isLinkActivity &&
           selectedIndexHistory.length == 1 &&
           selectedIndexHistory.last == 1,
       onPopInvokedWithResult: (bool didPop, dynamic result) {
@@ -395,40 +420,16 @@ class _HomePageState extends State<HomePage> {
           SystemNavigator.pop();
         }
       },
-      child: Scaffold(
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        body: PageTransitionSwitcher(
-          duration: Duration(
-            milliseconds: settingsProvider.disablePageTransitions ? 0 : 300,
-          ),
-          reverse: settingsProvider.reversePageTransitions
-              ? !isReversing
-              : isReversing,
-          transitionBuilder:
-              (
-                Widget child,
-                Animation<double> animation,
-                Animation<double> secondaryAnimation,
-              ) {
-                return SharedAxisTransition(
-                  animation: animation,
-                  secondaryAnimation: secondaryAnimation,
-                  transitionType: SharedAxisTransitionType.horizontal,
-                  child: child,
-                );
-              },
-          child: pages
-              .elementAt(
-                selectedIndexHistory.isEmpty ? 0 : selectedIndexHistory.last,
-              )
-              .widget,
-        ),
-        bottomNavigationBar: NavigationBar(
-          destinations: pages
+      child: Builder(
+        builder: (BuildContext context) {
+          final ColorScheme scheme = Theme.of(context).colorScheme;
+          final bool blurBottomNav = settingsProvider.progressiveBlurEnabled;
+          final List<NavigationDestination> homeNavDestinations = pages
               .asMap()
               .entries
               .map(
-                (entry) => NavigationDestination(
+                (MapEntry<int, NavigationPageItem> entry) =>
+                    NavigationDestination(
                   icon: entry.key == 0 && updateCount > 0
                       ? Badge(
                           label: Text(updateCount.toString()),
@@ -438,15 +439,78 @@ class _HomePageState extends State<HomePage> {
                   label: entry.value.title,
                 ),
               )
-              .toList(),
-          onDestinationSelected: (int index) async {
-            HapticFeedback.selectionClick();
-            switchToPage(index);
-          },
-          selectedIndex: selectedIndexHistory.isEmpty
+              .toList();
+          final int homeNavSelectedIndex = selectedIndexHistory.isEmpty
               ? 0
-              : selectedIndexHistory.last,
-        ),
+              : selectedIndexHistory.last;
+
+          return Scaffold(
+            backgroundColor: scheme.surface,
+            extendBody: blurBottomNav,
+            body: Stack(
+              fit: StackFit.expand,
+              children: [
+                SizedBox.expand(
+                  child: PageTransitionSwitcher(
+                    duration: Duration(
+                      milliseconds: settingsProvider.disablePageTransitions
+                          ? 0
+                          : 300,
+                    ),
+                    reverse: settingsProvider.reversePageTransitions
+                        ? !isReversing
+                        : isReversing,
+                    transitionBuilder:
+                        (
+                          Widget child,
+                          Animation<double> animation,
+                          Animation<double> secondaryAnimation,
+                        ) {
+                          return SharedAxisTransition(
+                            animation: animation,
+                            secondaryAnimation: secondaryAnimation,
+                            transitionType: SharedAxisTransitionType.horizontal,
+                            child: child,
+                          );
+                        },
+                    child: pages
+                        .elementAt(
+                          selectedIndexHistory.isEmpty
+                              ? 0
+                              : selectedIndexHistory.last,
+                        )
+                        .widget,
+                  ),
+                ),
+              ],
+            ),
+            bottomNavigationBar: blurBottomNav
+                ? ClipRect(
+                    child: Stack(
+                      alignment: Alignment.bottomCenter,
+                      fit: StackFit.loose,
+                      children: [
+                        Positioned.fill(
+                          child: ProgressiveBottomEdgeBlur(
+                            overlayColor:
+                                scheme.schemeProgressiveBlurOverlayTint,
+                          ),
+                        ),
+                        _materialHomeNavigationBar(
+                          destinations: homeNavDestinations,
+                          selectedIndex: homeNavSelectedIndex,
+                          transparent: true,
+                        ),
+                      ],
+                    ),
+                  )
+                : _materialHomeNavigationBar(
+                    destinations: homeNavDestinations,
+                    selectedIndex: homeNavSelectedIndex,
+                    transparent: false,
+                  ),
+          );
+        },
       ),
     );
   }

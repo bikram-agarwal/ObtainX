@@ -2,9 +2,9 @@ import 'dart:convert';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
-import 'package:flex_color_picker/flex_color_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
+import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -15,6 +15,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
@@ -43,6 +44,8 @@ class _SettingsPageState extends State<SettingsPage> {
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
 
+
+
   List<int> updateIntervalNodes = [
     15,
     30,
@@ -59,11 +62,6 @@ class _SettingsPageState extends State<SettingsPage> {
   ];
   int updateInterval = 0;
   String updateIntervalLabel = tr('neverManualOnly');
-
-  final Map<ColorSwatch<Object>, String> colorsNameMap =
-      <ColorSwatch<Object>, String>{
-        ColorTools.createPrimarySwatch(obtainiumThemeColor): 'Obtainium',
-      };
 
   void processIntervalSliderValue(double val) {
     final int index = val.round().clamp(0, updateIntervalNodes.length);
@@ -90,103 +88,14 @@ class _SettingsPageState extends State<SettingsPage> {
     if (settingsProvider.prefs == null) settingsProvider.initializeSettings();
     processIntervalSliderValue(settingsProvider.updateIntervalSliderVal);
 
-    Future<bool> colorPickerDialog() async {
-      return ColorPicker(
-        color: settingsProvider.themeColor,
-        onColorChanged: (Color color) =>
-            setState(() => settingsProvider.themeColor = color),
-        actionButtons: const ColorPickerActionButtons(
-          okButton: true,
-          closeButton: true,
-          dialogActionButtons: false,
-        ),
-        pickersEnabled: const <ColorPickerType, bool>{
-          ColorPickerType.both: false,
-          ColorPickerType.primary: false,
-          ColorPickerType.accent: false,
-          ColorPickerType.bw: false,
-          ColorPickerType.custom: true,
-          ColorPickerType.wheel: true,
-        },
-        pickerTypeLabels: <ColorPickerType, String>{
-          ColorPickerType.custom: tr('standard'),
-          ColorPickerType.wheel: tr('custom'),
-        },
-        title: Text(
-          tr('selectX', args: [tr('colour').toLowerCase()]),
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        wheelDiameter: 192,
-        wheelSquareBorderRadius: 32,
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        spacing: 8,
-        runSpacing: 8,
-        enableShadesSelection: false,
-        customColorSwatchesAndNames: colorsNameMap,
-        showMaterialName: true,
-        showColorName: true,
-        materialNameTextStyle: Theme.of(context).textTheme.bodySmall,
-        colorNameTextStyle: Theme.of(context).textTheme.bodySmall,
-        copyPasteBehavior: const ColorPickerCopyPasteBehavior(
-          longPressMenu: true,
-        ),
-      ).showPickerDialog(
-        context,
-        transitionBuilder:
-            (
-              BuildContext context,
-              Animation<double> a1,
-              Animation<double> a2,
-              Widget widget,
-            ) {
-              final double curvedValue = Curves.easeInCubic.transform(a1.value);
-              return Transform(
-                alignment: Alignment.center,
-                transform: Matrix4.diagonal3Values(curvedValue, curvedValue, 1),
-                child: Opacity(opacity: curvedValue, child: widget),
-              );
-            },
-        transitionDuration: const Duration(milliseconds: 250),
-      );
-    }
-
-    var colorPicker = ListTile(
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      title: Text(tr('selectX', args: [tr('colour').toLowerCase()])),
-      subtitle: Text(
-        "${ColorTools.nameThatColor(settingsProvider.themeColor)} "
-        "(${ColorTools.materialNameAndCode(settingsProvider.themeColor, colorSwatchNameMap: colorsNameMap)})",
+    final Widget localeMenu = DropdownMenu<Locale?>(
+      key: ValueKey(
+        settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
       ),
-      trailing: ColorIndicator(
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        color: settingsProvider.themeColor,
-        onSelectFocus: false,
-        onSelect: () async {
-          final Color colorBeforeDialog = settingsProvider.themeColor;
-          if (!(await colorPickerDialog())) {
-            setState(() {
-              settingsProvider.themeColor = colorBeforeDialog;
-            });
-          }
-        },
-      ),
-    );
-
-    var localeDropdown = DropdownButtonFormField(
-      decoration: InputDecoration(labelText: tr('language')),
-      initialValue: settingsProvider.forcedLocale,
-      items: [
-        DropdownMenuItem(value: null, child: Text(tr('followSystem'))),
-        ...supportedLocales.map(
-          (e) => DropdownMenuItem(value: e.key, child: Text(e.value)),
-        ),
-      ],
-      onChanged: (value) {
+      initialSelection: settingsProvider.forcedLocale,
+      label: Text(tr('language')),
+      expandedInsets: EdgeInsets.zero,
+      onSelected: (Locale? value) {
         settingsProvider.forcedLocale = value;
         if (value != null) {
           context.setLocale(value);
@@ -194,6 +103,19 @@ class _SettingsPageState extends State<SettingsPage> {
           settingsProvider.resetLocaleSafe(context);
         }
       },
+      dropdownMenuEntries: [
+        DropdownMenuEntry<Locale?>(
+          value: null,
+          label: tr('followSystem'),
+        ),
+        ...supportedLocales.map(
+          (MapEntry<Locale, String> localeEntry) =>
+              DropdownMenuEntry<Locale?>(
+            value: localeEntry.key,
+            label: localeEntry.value,
+          ),
+        ),
+      ],
     );
 
     var intervalSlider = SliderTheme(
@@ -227,81 +149,101 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
 
-    var sourceSpecificFields = sourceProvider.sources.map((e) {
-      if (e.sourceConfigSettingFormItems.isNotEmpty) {
-        return GeneratedForm(
-          items: e.sourceConfigSettingFormItems.map((e) {
-            if (e is GeneratedFormSwitch) {
-              e.defaultValue = settingsProvider.getSettingBool(e.key);
-            } else {
-              e.defaultValue = settingsProvider.getSettingString(e.key);
-            }
-            return [e];
-          }).toList(),
-          onValueChanges: (values, valid, isBuilding) {
-            if (valid && !isBuilding) {
-              values.forEach((key, value) {
-                var formItem = e.sourceConfigSettingFormItems
-                    .where((i) => i.key == key)
-                    .firstOrNull;
-                if (formItem is GeneratedFormSwitch) {
-                  settingsProvider.setSettingBool(key, value == true);
-                } else {
-                  settingsProvider.setSettingString(key, value ?? '');
-                }
-              });
-            }
-          },
-        );
-      } else {
-        return Container();
-      }
-    });
-
-    const height8 = SizedBox(height: 8);
+    final List<Widget> sourceSpecificForms = sourceProvider.sources
+        .where((s) => s.sourceConfigSettingFormItems.isNotEmpty)
+        .map((source) {
+          return GeneratedForm(
+            outlinedInputFields: true,
+            items: source.sourceConfigSettingFormItems.map((item) {
+              if (item is GeneratedFormSwitch) {
+                item.defaultValue = settingsProvider.getSettingBool(item.key);
+              } else {
+                item.defaultValue = settingsProvider.getSettingString(item.key);
+              }
+              return [item];
+            }).toList(),
+            onValueChanges: (values, valid, isBuilding) {
+              if (valid && !isBuilding) {
+                values.forEach((key, value) {
+                  final formItem = source.sourceConfigSettingFormItems
+                      .where((i) => i.key == key)
+                      .firstOrNull;
+                  if (formItem is GeneratedFormSwitch) {
+                    settingsProvider.setSettingBool(key, value == true);
+                  } else {
+                    settingsProvider.setSettingString(key, value ?? '');
+                  }
+                });
+              }
+            },
+          );
+        })
+        .toList();
 
     final cs = Theme.of(context).colorScheme;
 
-    Widget sectionHeader(String title, IconData icon) => Padding(
-      padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
-      child: Row(
-        children: [
-          Icon(icon, color: cs.primary, size: 16),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: cs.primary,
-              fontSize: 13,
-            ),
+    Widget sectionHeader(String title, IconData icon, String key) {
+      final bool expanded =
+          settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
+      return InkWell(
+        onTap: () =>
+            settingsProvider.setSettingBool('settingsSection_$key', !expanded),
+        borderRadius: BorderRadius.circular(8),
+        splashFactory: NoSplash.splashFactory,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        hoverColor: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
+          child: Row(
+            children: [
+              Icon(icon, color: cs.primary, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: cs.primary,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              AnimatedRotation(
+                turns: expanded ? 0 : -0.25,
+                duration: const Duration(milliseconds: 200),
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: cs.primary,
+                  size: 18,
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
 
     Widget settingsCard(List<Widget> children) {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      final double deepen = isDark ? 0.055 : 0.045;
-      final Color fill = isDark ? cs.surfaceContainerHighest : cs.surfaceContainer;
+      final bool isDark = Theme.of(context).brightness == Brightness.dark;
       return Container(
         decoration: BoxDecoration(
-          color: Color.lerp(fill, Colors.black, deepen) ?? fill,
+          color: cs.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: cs.outlineVariant, width: 1),
           boxShadow: [
             if (isDark)
               BoxShadow(
-                color: cs.shadow.withAlpha(180),
-                blurRadius: 16,
+                color: cs.shadow.withAlpha(50),
+                blurRadius: 6,
                 spreadRadius: 0,
-                offset: const Offset(0, 4),
+                offset: const Offset(0, 2),
               )
             else
               BoxShadow(
-                color: cs.shadow.withAlpha(40),
-                blurRadius: 12,
-                offset: const Offset(0, 2),
+                color: cs.shadow.withAlpha(18),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
               ),
           ],
         ),
@@ -310,10 +252,46 @@ class _SettingsPageState extends State<SettingsPage> {
       );
     }
 
+    Widget collapsibleCard(String key, List<Widget> children) {
+      final bool expanded =
+          settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
+      return ClipRect(
+        child: AnimatedAlign(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          alignment: Alignment.topCenter,
+          heightFactor: expanded ? 1.0 : 0.0,
+          child: settingsCard(children),
+        ),
+      );
+    }
+
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      body: CustomScrollView(
-        slivers: <Widget>[
+      backgroundColor: cs.surface,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (settingsProvider.useGradientBackground)
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0, 0.38, 0.72, 1],
+                    colors: [
+                      cs.schemePageGradientTopColor,
+                      cs.schemePageGradientMidColor,
+                      cs.surface,
+                      cs.surface,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          CustomScrollView(
+            cacheExtent: 1600,
+            slivers: <Widget>[
           CustomAppBar(title: tr('settings')),
           SliverToBoxAdapter(
             child: Padding(
@@ -324,8 +302,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // ── Updates ──────────────────────────────────────────
-                        sectionHeader(tr('updates'), Icons.update_rounded),
-                        settingsCard([
+                        sectionHeader(tr('updates'), Icons.update_rounded, 'updates'),
+                        collapsibleCard('updates', [
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                             child: Row(
@@ -483,12 +461,12 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ),
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(tr('installerMode')),
-                                height8,
+                                const SizedBox(height: 4),
                                 SizedBox(
                                   width: double.infinity,
                                   child: SegmentedButton<String>(
@@ -574,28 +552,39 @@ class _SettingsPageState extends State<SettingsPage> {
                         if (sourceProvider.sources.any(
                           (s) => s.sourceConfigSettingFormItems.isNotEmpty,
                         )) ...[
-                          sectionHeader(tr('sourceSpecific'), Icons.dns_rounded),
-                          settingsCard([
+                          sectionHeader(tr('sourceSpecific'), Icons.dns_rounded, 'sourceSpecific'),
+                          collapsibleCard('sourceSpecific', [
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                               child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [...sourceSpecificFields],
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (int i = 0;
+                                      i < sourceSpecificForms.length;
+                                      i++) ...[
+                                    if (i > 0) const SizedBox(height: 12),
+                                    sourceSpecificForms[i],
+                                  ],
+                                ],
                               ),
                             ),
                           ]),
                         ],
+                        // ── Themes ────────────────────────────────────────────
+                        sectionHeader(
+                          tr('settingsThemesSection'),
+                          Icons.palette_rounded,
+                          'themes',
+                        ),
+                        collapsibleCard('themes', [
+                          const ThemesSettingsSection(),
+                        ]),
                         // ── Appearance ────────────────────────────────────────
-                        sectionHeader(tr('appearance'), Icons.palette_rounded),
-                        settingsCard([
-                          if (!settingsProvider.useMaterialYou)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              child: colorPicker,
-                            ),
+                        sectionHeader(tr('appearance'), Icons.tune_rounded, 'appearance'),
+                        collapsibleCard('appearance', [
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                            child: localeDropdown,
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                            child: localeMenu,
                           ),
                           FutureBuilder(
                             builder: (ctx, val) {
@@ -674,8 +663,9 @@ class _SettingsPageState extends State<SettingsPage> {
                         sectionHeader(
                           '${tr('gestures')} · ${SwipeAction.values.length}',
                           Icons.swipe_rounded,
+                          'gestures',
                         ),
-                        settingsCard([
+                        collapsibleCard('gestures', [
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                             child: Column(
@@ -723,8 +713,8 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ]),
                         // ── Categories ────────────────────────────────────────
-                        sectionHeader(tr('categories'), Icons.label_rounded),
-                        settingsCard([
+                        sectionHeader(tr('categories'), Icons.label_rounded, 'categories'),
+                        collapsibleCard('categories', [
                           Padding(
                             padding: const EdgeInsets.all(16),
                             child: CategoryEditorSelector(
@@ -797,6 +787,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 const SizedBox(height: 16),
               ],
             ),
+          ),
+          if (settingsProvider.progressiveBlurEnabled)
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: MediaQuery.paddingOf(context).bottom,
+              ),
+            ),
+            ],
           ),
         ],
       ),
@@ -935,6 +933,9 @@ class CategoryEditorSelector extends StatefulWidget {
   final Set<String> preselected;
   final WrapAlignment alignment;
   final bool showLabelWhenNotEmpty;
+  /// When false, only chips are shown (toggle selection). Add / edit / remove
+  /// controls for the global category list are hidden.
+  final bool allowCategoryManagement;
   const CategoryEditorSelector({
     super.key,
     this.onSelected,
@@ -942,6 +943,7 @@ class CategoryEditorSelector extends StatefulWidget {
     this.preselected = const {},
     this.alignment = WrapAlignment.start,
     this.showLabelWhenNotEmpty = true,
+    this.allowCategoryManagement = true,
   });
 
   @override
@@ -980,6 +982,7 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
             ),
             singleSelect: widget.singleSelect,
             showLabelWhenNotEmpty: widget.showLabelWhenNotEmpty,
+            allowTagManagement: widget.allowCategoryManagement,
           ),
         ],
       ],
@@ -1126,38 +1129,38 @@ class _ThirdPartyInstallerSelectorState extends State<_ThirdPartyInstallerSelect
         .where((app) => app.packageName == selectedPkg)
         .firstOrNull;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_loading)
-            const Center(child: CircularProgressIndicator())
-          else
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: selectedApp?.icon != null && selectedApp!.icon!.isNotEmpty
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.memory(
-                        selectedApp.icon!,
-                        width: 36,
-                        height: 36,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, _, _) =>
-                            const Icon(Icons.android, size: 36),
-                      ),
-                    )
-                  : null,
-              title: Text(tr('thirdPartyInstallerSelect')),
-              subtitle: Text(
-                selectedApp?.label ?? selectedPkg ?? tr('thirdPartyInstallerNoneSelected'),
-              ),
-              trailing: const Icon(Icons.arrow_drop_down),
-              onTap: _showInstallerPicker,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_loading)
+          const Center(child: CircularProgressIndicator())
+        else
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            leading: selectedApp?.icon != null && selectedApp!.icon!.isNotEmpty
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      selectedApp.icon!,
+                      width: 36,
+                      height: 36,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) =>
+                          const Icon(Icons.android, size: 36),
+                    ),
+                  )
+                : null,
+            title: Text(tr('thirdPartyInstallerSelect')),
+            subtitle: Text(
+              selectedApp?.label ??
+                  selectedPkg ??
+                  tr('thirdPartyInstallerNoneSelected'),
             ),
-        ],
-      ),
+            trailing: const Icon(Icons.arrow_drop_down),
+            onTap: _showInstallerPicker,
+          ),
+      ],
     );
   }
 }

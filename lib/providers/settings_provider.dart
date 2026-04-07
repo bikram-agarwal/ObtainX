@@ -10,6 +10,7 @@ import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
@@ -76,7 +77,35 @@ class SettingsProvider with ChangeNotifier {
     _migrateShizukuSetting();
     _migrateSwipeActionPrefs();
     _syncSwipeActionNameStringsIfMissing();
+    _migrateThemeAccentPrefs();
     notifyListeners();
+  }
+
+  void _migrateThemeAccentPrefs() {
+    if (prefs == null) return;
+    if (prefs!.containsKey('appAccentColorSource')) return;
+    final bool oldMaterialYou = prefs!.getBool('useMaterialYou') ?? false;
+    if (oldMaterialYou) {
+      prefs!.setString(
+        'appAccentColorSource',
+        AppAccentColorSource.materialYou.name,
+      );
+    } else {
+      prefs!.setString(
+        'appAccentColorSource',
+        AppAccentColorSource.custom.name,
+      );
+      final int? colorCode = prefs!.getInt('themeColor');
+      final Color fromLegacy =
+          (colorCode != null) ? Color(colorCode) : obtainiumThemeColor;
+      final String hex = colorToCanonicalHex(fromLegacy);
+      prefs!.setString('activeCustomSeedHex', hex);
+      prefs!.setString('savedCustomSeedHexList', jsonEncode([hex]));
+    }
+    prefs!.setString(
+      'appThemePaletteStyle',
+      AppThemePaletteStyle.tonalSpot.name,
+    );
   }
 
   static const String _rightSwipeNameKey = 'rightSwipeActionName';
@@ -210,21 +239,172 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Color get themeColor {
-    int? colorCode = prefs?.getInt('themeColor');
+    final Color? fromHex =
+        colorFromNormalizedHex(normalizeCustomSeedHexOrNull(activeCustomSeedHex));
+    if (fromHex != null) return fromHex;
+    final int? colorCode = prefs?.getInt('themeColor');
     return (colorCode != null) ? Color(colorCode) : obtainiumThemeColor;
   }
 
   set themeColor(Color themeColor) {
     prefs?.setInt('themeColor', themeColor.toARGB32());
+    final String hex = colorToCanonicalHex(themeColor);
+    prefs?.setString('activeCustomSeedHex', hex);
+    prefs?.setString('appAccentColorSource', AppAccentColorSource.custom.name);
+    prefs?.setBool('useMaterialYou', false);
+    _ensureHexInSavedList(hex);
+    notifyListeners();
+  }
+
+  AppAccentColorSource get appAccentColorSource {
+    final AppAccentColorSource? parsed = AppAccentColorSourceX.tryParse(
+      prefs?.getString('appAccentColorSource'),
+    );
+    if (parsed != null) return parsed;
+    return (prefs?.getBool('useMaterialYou') ?? false)
+        ? AppAccentColorSource.materialYou
+        : AppAccentColorSource.custom;
+  }
+
+  set appAccentColorSource(AppAccentColorSource source) {
+    prefs?.setString('appAccentColorSource', source.name);
+    prefs?.setBool(
+      'useMaterialYou',
+      source == AppAccentColorSource.materialYou,
+    );
+    notifyListeners();
+  }
+
+  AppThemePaletteStyle get appThemePaletteStyle {
+    return AppThemePaletteStyleX.tryParse(prefs?.getString('appThemePaletteStyle')) ??
+        AppThemePaletteStyle.tonalSpot;
+  }
+
+  set appThemePaletteStyle(AppThemePaletteStyle style) {
+    prefs?.setString('appThemePaletteStyle', style.name);
+    notifyListeners();
+  }
+
+  String get activeCustomSeedHex {
+    final String? stored = prefs?.getString('activeCustomSeedHex');
+    final String? normalized =
+        stored != null ? normalizeCustomSeedHexOrNull(stored) : null;
+    if (normalized != null) return normalized;
+    final int? colorCode = prefs?.getInt('themeColor');
+    return colorToCanonicalHex(
+      (colorCode != null) ? Color(colorCode) : obtainiumThemeColor,
+    );
+  }
+
+  set activeCustomSeedHex(String value) {
+    final String? normalized = normalizeCustomSeedHexOrNull(value);
+    if (normalized == null) return;
+    prefs?.setString('activeCustomSeedHex', normalized);
+    final Color? c = colorFromNormalizedHex(normalized);
+    if (c != null) prefs?.setInt('themeColor', c.toARGB32());
+    notifyListeners();
+  }
+
+  List<String> get savedCustomSeedHexes {
+    final String? raw = prefs?.getString('savedCustomSeedHexList');
+    if (raw == null || raw.isEmpty) {
+      return [activeCustomSeedHex];
+    }
+    try {
+      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+      final List<String> out = decoded
+          .map((dynamic e) => normalizeCustomSeedHexOrNull(e.toString()))
+          .whereType<String>()
+          .toList();
+      if (out.isEmpty) return [activeCustomSeedHex];
+      return out;
+    } catch (_) {
+      return [activeCustomSeedHex];
+    }
+  }
+
+  void _persistSavedCustomSeedHexes(List<String> list) {
+    prefs?.setString('savedCustomSeedHexList', jsonEncode(list));
+  }
+
+  void _ensureHexInSavedList(String normalizedHex) {
+    final List<String> list = savedCustomSeedHexes.toList();
+    if (!list.contains(normalizedHex)) {
+      list.add(normalizedHex);
+      _persistSavedCustomSeedHexes(list);
+    }
+  }
+
+  void addCustomSeedHex(String raw) {
+    final String? normalized = normalizeCustomSeedHexOrNull(raw);
+    if (normalized == null) return;
+    final List<String> list = savedCustomSeedHexes.toList();
+    if (!list.contains(normalized)) list.add(normalized);
+    _persistSavedCustomSeedHexes(list);
+    activeCustomSeedHex = normalized;
+    appAccentColorSource = AppAccentColorSource.custom;
+  }
+
+  void removeCustomSeedHex(String raw) {
+    final String? normalized = normalizeCustomSeedHexOrNull(raw);
+    if (normalized == null) return;
+    final List<String> list =
+        savedCustomSeedHexes.where((String h) => h != normalized).toList();
+    if (list.isEmpty) {
+      list.add(colorToCanonicalHex(obtainiumThemeColor));
+    }
+    _persistSavedCustomSeedHexes(list);
+    if (activeCustomSeedHex == normalized) {
+      prefs?.setString('activeCustomSeedHex', list.first);
+      final Color? c = colorFromNormalizedHex(list.first);
+      if (c != null) prefs?.setInt('themeColor', c.toARGB32());
+    }
+    notifyListeners();
+  }
+
+  void selectSavedCustomSeedHex(String raw) {
+    final String? normalized = normalizeCustomSeedHexOrNull(raw);
+    if (normalized == null) return;
+    activeCustomSeedHex = normalized;
+    appAccentColorSource = AppAccentColorSource.custom;
+    notifyListeners();
+  }
+
+  bool get progressiveBlurEnabled {
+    return prefs?.getBool('progressiveBlurEnabled') ?? true;
+  }
+
+  set progressiveBlurEnabled(bool value) {
+    prefs?.setBool('progressiveBlurEnabled', value);
+    notifyListeners();
+  }
+
+  bool get useGradientBackground {
+    return prefs?.getBool('useGradientBackground') ?? true;
+  }
+
+  set useGradientBackground(bool value) {
+    prefs?.setBool('useGradientBackground', value);
     notifyListeners();
   }
 
   bool get useMaterialYou {
-    return prefs?.getBool('useMaterialYou') ?? false;
+    return appAccentColorSource == AppAccentColorSource.materialYou;
   }
 
   set useMaterialYou(bool useMaterialYou) {
     prefs?.setBool('useMaterialYou', useMaterialYou);
+    if (useMaterialYou) {
+      prefs?.setString(
+        'appAccentColorSource',
+        AppAccentColorSource.materialYou.name,
+      );
+    } else {
+      prefs?.setString(
+        'appAccentColorSource',
+        AppAccentColorSource.custom.name,
+      );
+    }
     notifyListeners();
   }
 

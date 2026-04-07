@@ -243,7 +243,10 @@ class BulkImportService {
     }
 
     // Same endpoint the APKPure app source uses — known to work.
+    // Sub-batches so [shouldAbort] is checked between groups (not only after
+    // an entire large [Future.wait] completes).
     const int concurrency = 10;
+    const int subBatchSize = 4;
     const headers = {
       'Ual-Access-Businessid': 'projecta',
       'Ual-Access-ProjectA': '{"device_info":{"os_ver":"30"}}',
@@ -253,43 +256,50 @@ class BulkImportService {
     for (int i = 0; i < toQuery.length; i += concurrency) {
       if (shouldAbort?.call() == true) return result;
       final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
-      await Future.wait(chunk.map((pkg) async {
-        try {
-          final response = await http
-              .get(
-                Uri.parse(
-                  'https://tapi.pureapk.com/v3/get_app_his_version'
-                  '?package_name=$pkg&hl=en',
-                ),
-                headers: headers,
-              )
-              .timeout(const Duration(seconds: 15));
+      for (int subStart = 0; subStart < chunk.length; subStart += subBatchSize) {
+        if (shouldAbort?.call() == true) return result;
+        final subChunk = chunk.sublist(
+          subStart,
+          min(subStart + subBatchSize, chunk.length),
+        );
+        await Future.wait(subChunk.map((pkg) async {
+          try {
+            final response = await http
+                .get(
+                  Uri.parse(
+                    'https://tapi.pureapk.com/v3/get_app_his_version'
+                    '?package_name=$pkg&hl=en',
+                  ),
+                  headers: headers,
+                )
+                .timeout(const Duration(seconds: 15));
 
-          if (response.statusCode == 200) {
-            final body = jsonDecode(response.body);
-            final List<dynamic> versions = body is Map
-                ? (body['version_list'] as List? ?? [])
-                : [];
-            if (versions.isNotEmpty) {
-              final first = versions.first;
-              final appName =
-                  first is Map ? (first['title'] as String? ?? '') : '';
-              result[pkg] = appName.isNotEmpty
-                  ? 'https://apkpure.net/${_slugify(appName)}/$pkg'
-                  : 'https://apkpure.net/$pkg';
+            if (response.statusCode == 200) {
+              final body = jsonDecode(response.body);
+              final List<dynamic> versions = body is Map
+                  ? (body['version_list'] as List? ?? [])
+                  : [];
+              if (versions.isNotEmpty) {
+                final first = versions.first;
+                final appName =
+                    first is Map ? (first['title'] as String? ?? '') : '';
+                result[pkg] = appName.isNotEmpty
+                    ? 'https://apkpure.net/${_slugify(appName)}/$pkg'
+                    : 'https://apkpure.net/$pkg';
+              } else {
+                result[pkg] = null;
+              }
             } else {
-              result[pkg] = null;
+              // Non-200 — don't cache; retry next scan.
             }
-          } else {
-            // Non-200 — don't cache; retry next scan.
+          } catch (e) {
+            debugPrint('APKPure check failed for $pkg: $e');
+            // Network error or timeout — don't cache; retry next scan.
           }
-        } catch (e) {
-          debugPrint('APKPure check failed for $pkg: $e');
-          // Network error or timeout — don't cache; retry next scan.
-        }
-        reportProgress();
-      }));
-      if (shouldAbort?.call() == true) return result;
+          reportProgress();
+        }));
+        if (shouldAbort?.call() == true) return result;
+      }
     }
     return result;
   }
@@ -328,28 +338,37 @@ class BulkImportService {
 
     // F-Droid has no batch API but no rate limits either — run concurrently.
     const int concurrency = 20;
+    const int subBatchSize = 5;
     for (int i = 0; i < toQuery.length; i += concurrency) {
       if (shouldAbort?.call() == true) return result;
       final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
-      await Future.wait(chunk.map((pkg) async {
-        try {
-          final response = await http
-              .get(
-                Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
-                headers: {'User-Agent': 'ObtainX/1.4.0'},
-              )
-              .timeout(const Duration(seconds: 10));
-          if (response.statusCode == 200) {
-            result[pkg] = 'https://f-droid.org/packages/$pkg/';
-          } else if (response.statusCode == 404) {
-            result[pkg] = null; // Definitive: not in F-Droid.
+      for (int subStart = 0; subStart < chunk.length; subStart += subBatchSize) {
+        if (shouldAbort?.call() == true) return result;
+        final subChunk = chunk.sublist(
+          subStart,
+          min(subStart + subBatchSize, chunk.length),
+        );
+        await Future.wait(subChunk.map((pkg) async {
+          try {
+            final response = await http
+                .get(
+                  Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
+                  headers: {'User-Agent': 'ObtainX/1.4.0'},
+                )
+                .timeout(const Duration(seconds: 10));
+            if (response.statusCode == 200) {
+              result[pkg] = 'https://f-droid.org/packages/$pkg/';
+            } else if (response.statusCode == 404) {
+              result[pkg] = null; // Definitive: not in F-Droid.
+            }
+            // Other non-200 (rate limit, server error) — don't cache; retry next scan.
+          } catch (_) {
+            // Network error or timeout — don't cache; retry next scan.
           }
-          // Other non-200 (rate limit, server error) — don't cache; retry next scan.
-        } catch (_) {
-          // Network error or timeout — don't cache; retry next scan.
-        }
-        reportProgress();
-      }));
+          reportProgress();
+        }));
+        if (shouldAbort?.call() == true) return result;
+      }
     }
     return result;
   }

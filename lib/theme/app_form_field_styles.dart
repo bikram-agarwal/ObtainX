@@ -6,9 +6,10 @@ InputDecoration appPageOutlinedInputDecoration(
   required String? labelText,
   String? hintText,
   bool isDense = false,
+  double borderRadius = 12,
 }) {
   final ColorScheme scheme = Theme.of(context).colorScheme;
-  final BorderRadius radius = BorderRadius.circular(12);
+  final BorderRadius radius = BorderRadius.circular(borderRadius);
   return InputDecoration(
     labelText: labelText,
     hintText: hintText,

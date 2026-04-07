@@ -170,6 +170,9 @@ class GeneratedFormTagInput extends GeneratedFormItem {
   late WrapAlignment alignment;
   late String emptyMessage;
   late bool showLabelWhenNotEmpty;
+  /// When false, only category chips are shown (toggle selection). Add / edit /
+  /// remove list controls are hidden.
+  late bool allowTagManagement;
   GeneratedFormTagInput(
     super.key, {
     super.label,
@@ -183,6 +186,7 @@ class GeneratedFormTagInput extends GeneratedFormItem {
     this.alignment = WrapAlignment.start,
     this.emptyMessage = 'Input',
     this.showLabelWhenNotEmpty = true,
+    this.allowTagManagement = true,
   });
 
   @override
@@ -203,6 +207,7 @@ class GeneratedFormTagInput extends GeneratedFormItem {
       alignment: alignment,
       emptyMessage: emptyMessage,
       showLabelWhenNotEmpty: showLabelWhenNotEmpty,
+      allowTagManagement: allowTagManagement,
     );
   }
 }
@@ -272,6 +277,7 @@ class GeneratedForm extends StatefulWidget {
     this.prominentSectionHeaders = false,
     this.outlinedFieldsExternalLabels = false,
     this.wrapFormSectionsInCards = false,
+    this.outlinedFieldBorderRadius,
   });
 
   final List<List<GeneratedFormItem>> items;
@@ -279,6 +285,9 @@ class GeneratedForm extends StatefulWidget {
 
   /// Rounded filled outline around text fields and dropdowns (e.g. full-screen editors).
   final bool outlinedInputFields;
+
+  /// Corner radius for outlined fields; defaults to 12 when null.
+  final double? outlinedFieldBorderRadius;
 
   /// Stronger section titles and a bar marker instead of a thin full-width divider.
   final bool prominentSectionHeaders;
@@ -298,6 +307,7 @@ InputDecoration _generatedFormTextFieldDecoration({
   required GeneratedFormTextField formItem,
   required bool outlined,
   required bool externalLabels,
+  double borderRadius = 12,
 }) {
   if (!outlined) {
     return InputDecoration(
@@ -310,12 +320,14 @@ InputDecoration _generatedFormTextFieldDecoration({
       context,
       labelText: null,
       hintText: formItem.hint,
+      borderRadius: borderRadius,
     );
   }
   return appPageOutlinedInputDecoration(
     context,
     labelText: formItem.label + (formItem.required ? ' *' : ''),
     hintText: formItem.hint,
+    borderRadius: borderRadius,
   );
 }
 
@@ -324,14 +336,23 @@ InputDecoration _generatedFormDropdownDecoration({
   required String labelText,
   required bool outlined,
   required bool externalLabels,
+  double borderRadius = 12,
 }) {
   if (!outlined) {
     return InputDecoration(labelText: labelText);
   }
   if (externalLabels) {
-    return appPageOutlinedInputDecoration(context, labelText: null);
+    return appPageOutlinedInputDecoration(
+      context,
+      labelText: null,
+      borderRadius: borderRadius,
+    );
   }
-  return appPageOutlinedInputDecoration(context, labelText: labelText);
+  return appPageOutlinedInputDecoration(
+    context,
+    labelText: labelText,
+    borderRadius: borderRadius,
+  );
 }
 
 List<List<GeneratedFormItem>> cloneFormItems(
@@ -692,6 +713,7 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
     required this.formItem,
     required this.outlinedInputFields,
     required this.outlinedFieldsExternalLabels,
+    required this.outlinedFieldBorderRadius,
     required this.value,
     required this.onChanged,
   });
@@ -699,6 +721,7 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   final GeneratedFormDropdown formItem;
   final bool outlinedInputFields;
   final bool outlinedFieldsExternalLabels;
+  final double outlinedFieldBorderRadius;
   final dynamic value;
   final void Function(dynamic newValue) onChanged;
 
@@ -717,9 +740,10 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         labelText: formItem.label,
         outlined: outlinedInputFields,
         externalLabels: showExternalFieldLabels,
+        borderRadius: outlinedFieldBorderRadius,
       ),
       dropdownColor: scheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(outlinedFieldBorderRadius),
       style: dropdownTextStyle,
       iconEnabledColor: scheme.onSurfaceVariant,
       iconDisabledColor: scheme.onSurface.withValues(alpha: 0.38),
@@ -842,6 +866,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
           }
           final bool showExternalFieldLabels = widget.outlinedInputFields &&
               widget.outlinedFieldsExternalLabels;
+          final double outlinedRadius =
+              widget.outlinedFieldBorderRadius ?? 12;
           final _GeneratedFormState formState = this;
           final Widget typeAhead = TypeAheadField<String>(
             controller: ctrl,
@@ -852,6 +878,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 formItem: formItem,
                 outlined: widget.outlinedInputFields,
                 externalLabels: showExternalFieldLabels,
+                borderRadius: outlinedRadius,
               );
               return TextFormField(
                 controller: ctrl,
@@ -945,6 +972,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
             formItem: formItem,
             outlinedInputFields: widget.outlinedInputFields,
             outlinedFieldsExternalLabels: widget.outlinedFieldsExternalLabels,
+            outlinedFieldBorderRadius:
+                widget.outlinedFieldBorderRadius ?? 12,
             value: values[formItem.key],
             onChanged: (dynamic newValue) {
               setState(() {
@@ -1195,114 +1224,117 @@ class _GeneratedFormState extends State<GeneratedForm> {
                             );
                           }) ??
                       [const SizedBox.shrink()],
-                  (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
-                              ?.values
-                              .where((e) => e.value)
-                              .length ==
-                          1
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: IconButton(
-                            onPressed: () async {
-                              final temp =
-                                  values[fieldKey]
-                                      as Map<String, MapEntry<int, bool>>;
-                              final oldEntry = temp.entries.firstWhere(
-                                (e) => e.value.value,
-                              );
-                              // ignore: use_build_context_synchronously
-                              final result = await _showCategorySheet(context,
-                                  initialColor: Color(oldEntry.value.key),
-                                  initialName: oldEntry.key);
-                              if (!context.mounted || result == null) return;
-                              setState(() {
-                                if (result.name != oldEntry.key) {
-                                  temp.remove(oldEntry.key);
-                                }
-                                temp[result.name] = MapEntry(
-                                  result.color.toARGB32(),
-                                  oldEntry.value.value,
+                  if (tagInput.allowTagManagement) ...[
+                    (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
+                                ?.values
+                                .where((e) => e.value)
+                                .length ==
+                            1
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: IconButton(
+                              onPressed: () async {
+                                final temp =
+                                    values[fieldKey]
+                                        as Map<String, MapEntry<int, bool>>;
+                                final oldEntry = temp.entries.firstWhere(
+                                  (e) => e.value.value,
                                 );
-                                values[fieldKey] = temp;
-                              });
-                              someValueChanged();
-                            },
-                            icon: const Icon(Icons.edit_outlined),
-                            visualDensity: VisualDensity.compact,
-                            tooltip: tr('edit'),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                  (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
-                              ?.values
-                              .where((e) => e.value)
-                              .isNotEmpty ==
-                          true
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: IconButton(
-                            onPressed: () {
-                              fn() {
+                                // ignore: use_build_context_synchronously
+                                final result = await _showCategorySheet(context,
+                                    initialColor: Color(oldEntry.value.key),
+                                    initialName: oldEntry.key);
+                                if (!context.mounted || result == null) return;
                                 setState(() {
-                                  var temp =
-                                      values[fieldKey]
-                                          as Map<String, MapEntry<int, bool>>;
-                                  temp.removeWhere((key, value) => value.value);
+                                  if (result.name != oldEntry.key) {
+                                    temp.remove(oldEntry.key);
+                                  }
+                                  temp[result.name] = MapEntry(
+                                    result.color.toARGB32(),
+                                    oldEntry.value.value,
+                                  );
                                   values[fieldKey] = temp;
                                 });
                                 someValueChanged();
-                              }
+                              },
+                              icon: const Icon(Icons.edit_outlined),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: tr('edit'),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                    (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
+                                ?.values
+                                .where((e) => e.value)
+                                .isNotEmpty ==
+                            true
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: IconButton(
+                              onPressed: () {
+                                fn() {
+                                  setState(() {
+                                    var temp =
+                                        values[fieldKey]
+                                            as Map<String, MapEntry<int, bool>>;
+                                    temp.removeWhere(
+                                        (key, value) => value.value);
+                                    values[fieldKey] = temp;
+                                  });
+                                  someValueChanged();
+                                }
 
-                              if (tagInput.deleteConfirmationMessage != null) {
-                                var message =
-                                    tagInput.deleteConfirmationMessage!;
-                                showDialog<Map<String, dynamic>?>(
-                                  context: context,
-                                  builder: (BuildContext ctx) {
-                                    return GeneratedFormModal(
-                                      title: message.key,
-                                      message: message.value,
-                                      items: const [],
-                                    );
-                                  },
-                                ).then((value) {
-                                  if (value != null) {
-                                    fn();
-                                  }
-                                });
-                              } else {
-                                fn();
-                              }
-                            },
-                            icon: const Icon(Icons.remove),
-                            visualDensity: VisualDensity.compact,
-                            tooltip: tr('remove'),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                  (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
-                              ?.isEmpty ==
-                          true
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: TextButton.icon(
-                            onPressed: onAddPressed,
-                            icon: const Icon(Icons.add),
-                            label: Text(
-                              (widget.items[r][e] as GeneratedFormTagInput)
-                                  .label,
+                                if (tagInput.deleteConfirmationMessage != null) {
+                                  var message =
+                                      tagInput.deleteConfirmationMessage!;
+                                  showDialog<Map<String, dynamic>?>(
+                                    context: context,
+                                    builder: (BuildContext ctx) {
+                                      return GeneratedFormModal(
+                                        title: message.key,
+                                        message: message.value,
+                                        items: const [],
+                                      );
+                                    },
+                                  ).then((value) {
+                                    if (value != null) {
+                                      fn();
+                                    }
+                                  });
+                                } else {
+                                  fn();
+                                }
+                              },
+                              icon: const Icon(Icons.remove),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: tr('remove'),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                    (values[fieldKey] as Map<String, MapEntry<int, bool>>?)
+                                ?.isEmpty ==
+                            true
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: TextButton.icon(
+                              onPressed: onAddPressed,
+                              icon: const Icon(Icons.add),
+                              label: Text(
+                                (widget.items[r][e] as GeneratedFormTagInput)
+                                    .label,
+                              ),
+                            ),
+                          )
+                        : Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: IconButton(
+                              onPressed: onAddPressed,
+                              icon: const Icon(Icons.add),
+                              visualDensity: VisualDensity.compact,
+                              tooltip: tr('add'),
                             ),
                           ),
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: IconButton(
-                            onPressed: onAddPressed,
-                            icon: const Icon(Icons.add),
-                            visualDensity: VisualDensity.compact,
-                            tooltip: tr('add'),
-                          ),
-                        ),
+                  ],
                 ],
               ),
             ],
@@ -1333,6 +1365,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                   GeneratedForm(
                     key: internalFormKey,
                     outlinedInputFields: widget.outlinedInputFields,
+                    outlinedFieldBorderRadius: widget.outlinedFieldBorderRadius,
                     prominentSectionHeaders: widget.prominentSectionHeaders,
                     outlinedFieldsExternalLabels:
                         widget.outlinedFieldsExternalLabels,
@@ -1424,12 +1457,13 @@ class _GeneratedFormState extends State<GeneratedForm> {
     rows.clear();
     formInputs.asMap().entries.forEach((rowInputs) {
       if (rowInputs.key > 0) {
+        final bool previousRowIsSwitch =
+            widget.items[rowInputs.key - 1][0] is GeneratedFormSwitch;
+        final double gapAfterPreviousRow = previousRowIsSwitch
+            ? 8
+            : (widget.outlinedInputFields ? 12 : 25);
         rows.add([
-          SizedBox(
-            height: widget.items[rowInputs.key - 1][0] is GeneratedFormSwitch
-                ? 8
-                : 25,
-          ),
+          SizedBox(height: gapAfterPreviousRow),
         ]);
       }
       List<Widget> rowItems = [];
@@ -1453,15 +1487,20 @@ class _GeneratedFormState extends State<GeneratedForm> {
       rows.add(rowItems);
     });
 
-    final List<Widget> rowBars = rows
-        .map(
-          (row) => Row(
-            mainAxisAlignment: MainAxisAlignment.start,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [...row.map((e) => e)],
-          ),
-        )
-        .toList();
+    final List<Widget> rowBars = rows.map((List<Widget> row) {
+      if (row.length == 1 && row.single is SizedBox) {
+        final SizedBox spacer = row.single as SizedBox;
+        return SizedBox(
+          width: double.infinity,
+          height: spacer.height,
+        );
+      }
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: row,
+      );
+    }).toList();
 
     Widget formBody;
     if (widget.wrapFormSectionsInCards) {
