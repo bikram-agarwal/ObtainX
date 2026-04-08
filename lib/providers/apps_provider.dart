@@ -1742,9 +1742,14 @@ class AppsProvider with ChangeNotifier {
         appsToInstall.map((id) => downloadFn(id, skipInstalls: true)),
       );
     }
+    bool needsLegacyInterInstallDelay = false;
     for (var res in downloadResults) {
       if (!errors.appIdNames.containsKey(res['id'])) {
         try {
+          if (settingsProvider.installerMode == 'legacy' &&
+              needsLegacyInterInstallDelay) {
+            await Future.delayed(const Duration(milliseconds: 200));
+          }
           await installFn(
             res['id'] as String,
             res['willBeSilent'] as bool,
@@ -1754,6 +1759,9 @@ class AppsProvider with ChangeNotifier {
         } catch (e) {
           var id = res['id'] as String;
           errors.add(id, e, appName: apps[id]?.name);
+        }
+        if (settingsProvider.installerMode == 'legacy') {
+          needsLegacyInterInstallDelay = true;
         }
       }
     }

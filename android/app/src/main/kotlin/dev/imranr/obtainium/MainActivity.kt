@@ -14,17 +14,21 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.system.Os
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.UUID
 
 private const val CHANNEL = "dev.imranr.obtainium/installer"
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
+/// Ignore focus regain cancel if we lost focus more recently than this (transition bounce).
+private const val FOCUS_REGAIN_CANCEL_MIN_MS = 200L
 
 class MainActivity : FlutterActivity() {
 
@@ -32,26 +36,56 @@ class MainActivity : FlutterActivity() {
         val methodResult: MethodChannel.Result,
         val handler: Handler,
         val receiver: BroadcastReceiver,
+        val releaseCacheFile: File,
         var responded: Boolean = false,
-        var focusLost: Boolean = false
+        var focusLost: Boolean = false,
+        var focusLostAtUptimeMs: Long = 0L,
+        /// Set when PACKAGE_ADDED/REPLACED matches; we still wait for focus or timeout so the next
+        /// batch install does not start while InstallerX "done" UI is on screen.
+        var packageInstallBroadcastReceived: Boolean = false,
     )
 
     private var installWatcher: InstallWatcher? = null
+
+    private fun completeThirdPartyInstallSession(watcher: InstallWatcher, installSucceeded: Boolean) {
+        if (watcher.responded) return
+        watcher.responded = true
+        if (installWatcher === watcher) {
+            installWatcher = null
+        }
+        watcher.handler.removeCallbacksAndMessages(null)
+        try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
+        try { watcher.releaseCacheFile.delete() } catch (_: Exception) { }
+        watcher.methodResult.success(installSucceeded)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val watcher = installWatcher ?: return
+        if (watcher.responded || !watcher.packageInstallBroadcastReceived) return
+        val sessionRef = watcher
+        sessionRef.handler.post {
+            if (sessionRef.responded) return@post
+            if (installWatcher !== sessionRef) return@post
+            if (!sessionRef.packageInstallBroadcastReceived) return@post
+            completeThirdPartyInstallSession(sessionRef, true)
+        }
+    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         val watcher = installWatcher ?: return
         if (!hasFocus) {
             watcher.focusLost = true
+            watcher.focusLostAtUptimeMs = SystemClock.uptimeMillis()
             return
         }
-        // We regained focus — installer was dismissed
+        // Regained focus — third-party installer overlay dismissed (or user cancelled without installing).
         if (!watcher.focusLost || watcher.responded) return
-        watcher.responded = true
-        installWatcher = null
-        watcher.handler.removeCallbacksAndMessages(null)
-        try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
-        watcher.methodResult.success(false)
+        if (SystemClock.uptimeMillis() - watcher.focusLostAtUptimeMs < FOCUS_REGAIN_CANCEL_MIN_MS) {
+            return
+        }
+        completeThirdPartyInstallSession(watcher, watcher.packageInstallBroadcastReceived)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -154,7 +188,7 @@ class MainActivity : FlutterActivity() {
         methodResult: MethodChannel.Result
     ) {
         val sourceFile = File(apkFilePath)
-        val releaseFile = copyToReleaseCache(sourceFile)
+        val releaseFile = copyToReleaseCacheUnique(sourceFile)
 
         val providerAuthority = findCacheProviderAuthority()
         val relativePath = releaseFile.path.drop(cacheDir.path.length)
@@ -179,24 +213,28 @@ class MainActivity : FlutterActivity() {
         }
 
         if (expectedPkgName.isNullOrEmpty()) {
-            startActivity(intent)
+            try {
+                startActivity(intent)
+            } catch (_: Exception) {
+                //
+            } finally {
+                try { releaseFile.delete() } catch (_: Exception) { }
+            }
             methodResult.success(false)
             return
         }
 
         val handler = Handler(Looper.getMainLooper())
+        var sessionWatcherOrNull: InstallWatcher? = null
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, broadcastIntent: Intent) {
+                val session = sessionWatcherOrNull ?: return
                 val changedPkg = broadcastIntent.data?.schemeSpecificPart ?: return
-                val watcher = installWatcher ?: return
-                if (changedPkg == expectedPkgName && !watcher.responded) {
-                    watcher.responded = true
-                    installWatcher = null
-                    handler.removeCallbacksAndMessages(null)
-                    try { unregisterReceiver(this) } catch (_: Exception) { }
-                    methodResult.success(true)
-                }
+                if (installWatcher !== session) return
+                if (changedPkg != expectedPkgName || session.responded) return
+                if (session.packageInstallBroadcastReceived) return
+                session.packageInstallBroadcastReceived = true
             }
         }
 
@@ -207,18 +245,31 @@ class MainActivity : FlutterActivity() {
         }
         registerReceiver(receiver, filter)
 
+        val sessionWatcher = InstallWatcher(methodResult, handler, receiver, releaseFile)
+        sessionWatcherOrNull = sessionWatcher
+        installWatcher = sessionWatcher
+
         handler.postDelayed({
-            val watcher = installWatcher
-            if (watcher != null && !watcher.responded) {
-                watcher.responded = true
-                installWatcher = null
-                try { unregisterReceiver(receiver) } catch (_: Exception) { }
-                methodResult.success(false)
-            }
+            if (installWatcher !== sessionWatcher || sessionWatcher.responded) return@postDelayed
+            completeThirdPartyInstallSession(
+                sessionWatcher,
+                sessionWatcher.packageInstallBroadcastReceived,
+            )
         }, INSTALL_TIMEOUT_MS)
 
-        installWatcher = InstallWatcher(methodResult, handler, receiver)
-        startActivity(intent)
+        handler.post {
+            try {
+                startActivity(intent)
+            } catch (ex: Exception) {
+                if (installWatcher !== sessionWatcher || sessionWatcher.responded) return@post
+                sessionWatcher.responded = true
+                installWatcher = null
+                sessionWatcher.handler.removeCallbacksAndMessages(null)
+                try { unregisterReceiver(receiver) } catch (_: Exception) { }
+                try { releaseFile.delete() } catch (_: Exception) { }
+                methodResult.error("INSTALL_ERROR", ex.message, null)
+            }
+        }
     }
 
     private fun findCacheProviderAuthority(): String {
@@ -229,9 +280,10 @@ class MainActivity : FlutterActivity() {
         return providerInfo.authority
     }
 
-    private fun copyToReleaseCache(sourceFile: File): File {
+    private fun copyToReleaseCacheUnique(sourceFile: File): File {
         val releasesDir = File(cacheDir, RELEASE_DIR).apply { mkdirs() }
-        val releaseFile = File(releasesDir, sourceFile.name)
+        val uniquePrefix = UUID.randomUUID().toString()
+        val releaseFile = File(releasesDir, "${uniquePrefix}_${sourceFile.name}")
         sourceFile.inputStream().use { input ->
             releaseFile.outputStream().use { output ->
                 input.copyTo(output)
