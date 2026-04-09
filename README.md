@@ -26,6 +26,8 @@ Features that don't exist in Obtainium at all.
 
 - **↩️ Undo after delete** — Swipe-to-delete and bulk-delete both show a 5-second **Undo** snackbar. Tap it and the app is fully restored.
 
+- **💾 Save assets** - Option to save update assets (e.g. APKs) to your chosen folder, during update process itself.
+
 ---
 
 ## 🔧 Enhanced Features

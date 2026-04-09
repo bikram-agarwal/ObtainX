@@ -102,7 +102,7 @@ Instead of one long wall of options, settings are grouped into **separate boxes*
 <img src="https://github.com/user-attachments/assets/6fff2569-44f5-4bdb-902f-ce5e1121d21b" alt="Obtainium add app options" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/1ac42b5c-2825-441d-b4ff-a73e8c455042" alt="ObtainX add app URL and options" width="300" /><br /><strong>ObtainX</strong>
+<img src="../assets/screenshots/Compare_Settings.webp" alt="ObtainX add app URL and options" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>
