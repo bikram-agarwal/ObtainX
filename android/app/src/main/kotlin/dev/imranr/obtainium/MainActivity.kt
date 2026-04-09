@@ -40,14 +40,21 @@ class MainActivity : FlutterActivity() {
         var responded: Boolean = false,
         var focusLost: Boolean = false,
         var focusLostAtUptimeMs: Long = 0L,
-        /// Set when PACKAGE_ADDED/REPLACED matches; we still wait for focus or timeout so the next
-        /// batch install does not start while InstallerX "done" UI is on screen.
+        /// Set when PACKAGE_ADDED/REPLACED matches expected package. We intentionally do not complete the
+        /// MethodChannel here: completing immediately would let Dart start the next batch install while
+        /// InstallerX (or similar) is still showing the previous app's Done UI, so later intents are dropped.
+        /// Session completes from [onResume], [onWindowFocusChanged], or timeout.
         var packageInstallBroadcastReceived: Boolean = false,
     )
 
+    private sealed class InstallSessionOutcome {
+        data class Success(val installSucceeded: Boolean) : InstallSessionOutcome()
+        data class Error(val code: String, val message: String?) : InstallSessionOutcome()
+    }
+
     private var installWatcher: InstallWatcher? = null
 
-    private fun completeThirdPartyInstallSession(watcher: InstallWatcher, installSucceeded: Boolean) {
+    private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
         if (watcher.responded) return
         watcher.responded = true
         if (installWatcher === watcher) {
@@ -56,7 +63,10 @@ class MainActivity : FlutterActivity() {
         watcher.handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
         try { watcher.releaseCacheFile.delete() } catch (_: Exception) { }
-        watcher.methodResult.success(installSucceeded)
+        when (outcome) {
+            is InstallSessionOutcome.Success -> watcher.methodResult.success(outcome.installSucceeded)
+            is InstallSessionOutcome.Error -> watcher.methodResult.error(outcome.code, outcome.message, null)
+        }
     }
 
     override fun onResume() {
@@ -68,7 +78,7 @@ class MainActivity : FlutterActivity() {
             if (sessionRef.responded) return@post
             if (installWatcher !== sessionRef) return@post
             if (!sessionRef.packageInstallBroadcastReceived) return@post
-            completeThirdPartyInstallSession(sessionRef, true)
+            completeThirdPartyInstallSession(sessionRef, InstallSessionOutcome.Success(true))
         }
     }
 
@@ -85,7 +95,10 @@ class MainActivity : FlutterActivity() {
         if (SystemClock.uptimeMillis() - watcher.focusLostAtUptimeMs < FOCUS_REGAIN_CANCEL_MIN_MS) {
             return
         }
-        completeThirdPartyInstallSession(watcher, watcher.packageInstallBroadcastReceived)
+        completeThirdPartyInstallSession(
+            watcher,
+            InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
+        )
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -225,13 +238,16 @@ class MainActivity : FlutterActivity() {
         }
 
         val handler = Handler(Looper.getMainLooper())
-        var sessionWatcherOrNull: InstallWatcher? = null
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, broadcastIntent: Intent) {
-                val session = sessionWatcherOrNull ?: return
+                // Use [installWatcher] only (one assignment before [registerReceiver]) so there is no
+                // window where a captured ref and [installWatcher] disagree. Tie this callback to the
+                // watcher instance via [InstallWatcher.receiver] so a stale registration after a new
+                // install does not mutate the wrong session.
+                val session = installWatcher ?: return
+                if (session.receiver !== this) return
                 val changedPkg = broadcastIntent.data?.schemeSpecificPart ?: return
-                if (installWatcher !== session) return
                 if (changedPkg != expectedPkgName || session.responded) return
                 if (session.packageInstallBroadcastReceived) return
                 session.packageInstallBroadcastReceived = true
@@ -243,17 +259,15 @@ class MainActivity : FlutterActivity() {
             addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         }
-        registerReceiver(receiver, filter)
-
         val sessionWatcher = InstallWatcher(methodResult, handler, receiver, releaseFile)
-        sessionWatcherOrNull = sessionWatcher
         installWatcher = sessionWatcher
+        registerReceiver(receiver, filter)
 
         handler.postDelayed({
             if (installWatcher !== sessionWatcher || sessionWatcher.responded) return@postDelayed
             completeThirdPartyInstallSession(
                 sessionWatcher,
-                sessionWatcher.packageInstallBroadcastReceived,
+                InstallSessionOutcome.Success(sessionWatcher.packageInstallBroadcastReceived),
             )
         }, INSTALL_TIMEOUT_MS)
 
@@ -261,13 +275,16 @@ class MainActivity : FlutterActivity() {
             try {
                 startActivity(intent)
             } catch (ex: Exception) {
-                if (installWatcher !== sessionWatcher || sessionWatcher.responded) return@post
-                sessionWatcher.responded = true
-                installWatcher = null
-                sessionWatcher.handler.removeCallbacksAndMessages(null)
-                try { unregisterReceiver(receiver) } catch (_: Exception) { }
-                try { releaseFile.delete() } catch (_: Exception) { }
-                methodResult.error("INSTALL_ERROR", ex.message, null)
+                if (installWatcher === sessionWatcher && !sessionWatcher.responded) {
+                    completeThirdPartyInstallSession(
+                        sessionWatcher,
+                        InstallSessionOutcome.Error("INSTALL_ERROR", ex.message),
+                    )
+                } else {
+                    // Guard failed: session already finished or replaced — still drop this cache file
+                    // (success path keeps the file until [completeThirdPartyInstallSession] runs).
+                    try { releaseFile.delete() } catch (_: Exception) { }
+                }
             }
         }
     }
