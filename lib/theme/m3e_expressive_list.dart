@@ -1,0 +1,138 @@
+import 'package:flutter/material.dart';
+
+/// Material 3 expressive grouped-list radii and gaps (matches apps tab list).
+const double kM3eOuterRadius = 14.0;
+const double kM3eInnerRadius = 4.0;
+const double kM3eItemGap = 3.0;
+
+/// Outer radius for elevated group cards (same as apps tab ExpansionTile Material).
+const double kM3eGroupCardRadius = 20.0;
+
+/// Gap between expansion group header and first row in apps list body.
+const double kM3eHeaderToFirstCardGap = 3.0;
+
+enum M3eListGroupPosition { first, middle, last, only }
+
+/// Corner radii for one row in a vertical stack. Use [flatListBody]: true for
+/// rows inside a settings/import-style card or ungrouped apps list runs.
+BorderRadius m3eListGroupItemRadius(
+  M3eListGroupPosition position, {
+  required bool flatListBody,
+}) {
+  if (flatListBody) {
+    return switch (position) {
+      M3eListGroupPosition.first => const BorderRadius.only(
+          topLeft: Radius.circular(kM3eOuterRadius),
+          topRight: Radius.circular(kM3eOuterRadius),
+          bottomLeft: Radius.circular(kM3eInnerRadius),
+          bottomRight: Radius.circular(kM3eInnerRadius),
+        ),
+      M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
+      M3eListGroupPosition.last => const BorderRadius.only(
+          topLeft: Radius.circular(kM3eInnerRadius),
+          topRight: Radius.circular(kM3eInnerRadius),
+          bottomLeft: Radius.circular(kM3eOuterRadius),
+          bottomRight: Radius.circular(kM3eOuterRadius),
+        ),
+      M3eListGroupPosition.only => const BorderRadius.only(
+          topLeft: Radius.circular(kM3eOuterRadius),
+          topRight: Radius.circular(kM3eOuterRadius),
+          bottomLeft: Radius.circular(kM3eOuterRadius),
+          bottomRight: Radius.circular(kM3eOuterRadius),
+        ),
+    };
+  }
+  return switch (position) {
+    M3eListGroupPosition.first => BorderRadius.circular(kM3eInnerRadius),
+    M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
+    M3eListGroupPosition.last => const BorderRadius.only(
+        topLeft: Radius.circular(kM3eInnerRadius),
+        topRight: Radius.circular(kM3eInnerRadius),
+        bottomLeft: Radius.circular(kM3eOuterRadius),
+        bottomRight: Radius.circular(kM3eOuterRadius),
+      ),
+    M3eListGroupPosition.only => const BorderRadius.only(
+        topLeft: Radius.circular(kM3eInnerRadius),
+        topRight: Radius.circular(kM3eInnerRadius),
+        bottomLeft: Radius.circular(kM3eOuterRadius),
+        bottomRight: Radius.circular(kM3eOuterRadius),
+      ),
+  };
+}
+
+M3eListGroupPosition m3eFlatStackSlotPosition(int index, int itemCount) {
+  if (itemCount <= 1) return M3eListGroupPosition.only;
+  if (index == 0) return M3eListGroupPosition.first;
+  if (index == itemCount - 1) return M3eListGroupPosition.last;
+  return M3eListGroupPosition.middle;
+}
+
+Color m3eGroupedListRowFill(ColorScheme scheme) => Color.lerp(
+      scheme.surfaceContainer,
+      scheme.primary,
+      0.08,
+    )!;
+
+Color m3eGroupedListBackdropFill(ColorScheme scheme) => scheme.surface;
+
+/// Tighter [DropdownMenu] anchor field (language, backup scope, etc.).
+ThemeData m3eCompactDropdownTheme(ThemeData base) {
+  return base.copyWith(
+    visualDensity: VisualDensity.compact,
+    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    inputDecorationTheme: base.inputDecorationTheme.copyWith(
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    ),
+  );
+}
+
+Widget m3eCompactDropdownScope({
+  required BuildContext context,
+  required Widget child,
+}) {
+  return Theme(
+    data: m3eCompactDropdownTheme(Theme.of(context)),
+    child: child,
+  );
+}
+
+/// Elevated group card matching apps tab [Material] (no outline border).
+Widget m3eExpressiveSettingsCard({
+  required BuildContext context,
+  required ColorScheme colorScheme,
+  required List<Widget> items,
+  double itemGap = kM3eItemGap,
+}) {
+  final ThemeData theme = Theme.of(context);
+  return Material(
+    elevation: 3,
+    shadowColor: colorScheme.shadow.withAlpha(100),
+    surfaceTintColor: colorScheme.surfaceTint,
+    borderRadius: BorderRadius.circular(kM3eGroupCardRadius),
+    color: m3eGroupedListBackdropFill(colorScheme),
+    clipBehavior: Clip.antiAlias,
+    child: Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (int i = 0; i < items.length; i++) ...[
+            if (i > 0) SizedBox(height: itemGap),
+            ClipRRect(
+              borderRadius: m3eListGroupItemRadius(
+                m3eFlatStackSlotPosition(i, items.length),
+                flatListBody: true,
+              ),
+              child: Material(
+                color: m3eGroupedListRowFill(colorScheme),
+                child: items[i],
+              ),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+}

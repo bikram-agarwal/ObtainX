@@ -27,7 +27,7 @@ class GitLab extends AppSource {
         required: false,
         suffixIcon: IconButton(
           visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.help_outline, size: 18),
+          icon: const Icon(Icons.open_in_new_rounded, size: 18),
           onPressed: () => launchUrlString(
             'https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html#create-a-personal-access-token',
             mode: LaunchMode.externalApplication,

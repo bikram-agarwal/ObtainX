@@ -1021,12 +1021,17 @@ class AppsProvider with ChangeNotifier {
     BuildContext? context, {
     NotificationsProvider? notificationsProvider,
     bool useExisting = true,
+    /// When true, successful completion leaves [AppInMemory.downloadProgress] at
+    /// `-1` so the app page stays on the installing UI until [installFn] clears
+    /// it. Avoids a flash of the normal button between download and install.
+    bool retainInstallPhaseProgressForHandoff = false,
   }) async {
     var notifId = DownloadNotification(app.finalName, 0).id;
     if (apps[app.id] != null) {
       apps[app.id]!.downloadProgress = 0;
       notifyListeners();
     }
+    bool downloadSucceeded = false;
     try {
       AppSource source = SourceProvider().getSource(
         app.url,
@@ -1181,8 +1186,10 @@ class AppsProvider with ChangeNotifier {
         }
       }
       if (isAPK) {
+        downloadSucceeded = true;
         return DownloadedApk(app.id, downloadedFile);
       } else {
+        downloadSucceeded = true;
         return DownloadedDir(
           app.id,
           downloadedFile,
@@ -1191,10 +1198,14 @@ class AppsProvider with ChangeNotifier {
         );
       }
     } finally {
+      _progressNotifyTimer?.cancel();
       notificationsProvider?.cancel(notifId);
       if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = null;
         apps[app.id]!.downloadTotalBytes = null;
+        if (!downloadSucceeded ||
+            !retainInstallPhaseProgressForHandoff) {
+          apps[app.id]!.downloadProgress = null;
+        }
         notifyListeners();
       }
     }
@@ -1420,9 +1431,8 @@ class AppsProvider with ChangeNotifier {
           appForSave != null &&
           apkSaveTreeUri != null &&
           dir.file.existsSync()) {
-        bool copiedOk = false;
         try {
-          copiedOk = await _chunkedCopyApkToSafTree(
+          await _chunkedCopyApkToSafTree(
             dir.file,
             apkSaveTreeUri,
             storeFacingDownloadDisplayNameForApp(appForSave),
@@ -1433,12 +1443,10 @@ class AppsProvider with ChangeNotifier {
           );
           Fluttertoast.showToast(msg: tr('apkSaveFolderCopyFailed'));
         }
-        if (copiedOk) {
-          try {
-            dir.file.deleteSync();
-          } catch (_) {}
-        }
-      } else if (somethingInstalled && dir.file.existsSync()) {
+      }
+      // Always drop the XAPK/ZIP container when it still exists so failed installs
+      // cannot leak the bundle (extracted dir is removed below).
+      if (dir.file.existsSync()) {
         try {
           dir.file.deleteSync();
         } catch (_) {}
@@ -1861,6 +1869,7 @@ class AppsProvider with ChangeNotifier {
               context,
               notificationsProvider: notificationsProvider,
               useExisting: useExisting,
+              retainInstallPhaseProgressForHandoff: true,
             );
         if (downloadedArtifact is DownloadedApk) {
           downloadedFile = downloadedArtifact;
@@ -1892,7 +1901,10 @@ class AppsProvider with ChangeNotifier {
           await waitForUserToReturnToForeground(context);
         }
       } catch (e) {
+        apps[id]?.downloadProgress = null;
+        apps[id]?.downloadTotalBytes = null;
         errors.add(id, e, appName: apps[id]?.name);
+        notifyListeners();
       }
       return {
         'id': id,

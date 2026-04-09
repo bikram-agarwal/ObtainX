@@ -22,26 +22,19 @@ import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:markdown/markdown.dart' as md;
 
-const double _appsListGroupCardRadius = 20;
-
-// M3E Expressive grouped-list item shape constants.
-const double _m3eOuterRadius = 14.0;
-const double _m3eInnerRadius = 4.0;
-const double _m3eItemGap = 3.0;
-
-/// Visible separation between group header and first app row (not only row gaps).
-const double _m3eHeaderToFirstCardGap = 3.0;
+const double _appsListGroupCardRadius = kM3eGroupCardRadius;
 
 /// Group header strip: stronger primary tint than rows; when luminance matches
 /// row fill (common with Material You), nudge toward [surfaceBright] so the
 /// header still reads as its own band.
 Color _appsListGroupHeaderColor(ColorScheme scheme) {
-  final Color rowFill = _appsListGroupedRowColor(scheme);
+  final Color rowFill = m3eGroupedListRowFill(scheme);
   Color header = Color.lerp(
     scheme.surfaceContainerHighest,
     scheme.primary,
@@ -58,69 +51,6 @@ Color _appsListGroupHeaderColor(ColorScheme scheme) {
   return header;
 }
 
-/// Backdrop behind grouped rows: page [surface] keeps visible gutters when
-/// Material You compresses container ramp (low vs highest nearly equal).
-Color _appsListGroupedSectionBackdropColor(ColorScheme scheme) => scheme.surface;
-
-/// Darker, slightly more saturated app row fill inside groups.
-Color _appsListGroupedRowColor(ColorScheme scheme) => Color.lerp(
-      scheme.surfaceContainer,
-      scheme.primary,
-      0.08,
-    )!;
-
-enum _GroupPosition { first, middle, last, only }
-
-/// [flatListBody]: ungrouped list — outer only on first card top and last card
-/// bottom (or all four on a single-card list). Grouped list body: outer only on
-/// last row bottom (and single row under header: inner top, outer bottom); rows
-/// under a header use inner tops. Group header chrome uses [_appsListGroupCardRadius]
-/// separately on the outer [Material].
-BorderRadius _groupItemRadius(
-  _GroupPosition pos, {
-  required bool flatListBody,
-}) {
-  if (flatListBody) {
-    return switch (pos) {
-      _GroupPosition.first => const BorderRadius.only(
-          topLeft: Radius.circular(_m3eOuterRadius),
-          topRight: Radius.circular(_m3eOuterRadius),
-          bottomLeft: Radius.circular(_m3eInnerRadius),
-          bottomRight: Radius.circular(_m3eInnerRadius),
-        ),
-      _GroupPosition.middle => BorderRadius.circular(_m3eInnerRadius),
-      _GroupPosition.last => const BorderRadius.only(
-          topLeft: Radius.circular(_m3eInnerRadius),
-          topRight: Radius.circular(_m3eInnerRadius),
-          bottomLeft: Radius.circular(_m3eOuterRadius),
-          bottomRight: Radius.circular(_m3eOuterRadius),
-        ),
-      _GroupPosition.only => const BorderRadius.only(
-          topLeft: Radius.circular(_m3eOuterRadius),
-          topRight: Radius.circular(_m3eOuterRadius),
-          bottomLeft: Radius.circular(_m3eOuterRadius),
-          bottomRight: Radius.circular(_m3eOuterRadius),
-        ),
-    };
-  }
-  return switch (pos) {
-    _GroupPosition.first => BorderRadius.circular(_m3eInnerRadius),
-    _GroupPosition.middle => BorderRadius.circular(_m3eInnerRadius),
-    _GroupPosition.last => const BorderRadius.only(
-        topLeft: Radius.circular(_m3eInnerRadius),
-        topRight: Radius.circular(_m3eInnerRadius),
-        bottomLeft: Radius.circular(_m3eOuterRadius),
-        bottomRight: Radius.circular(_m3eOuterRadius),
-      ),
-    _GroupPosition.only => const BorderRadius.only(
-        topLeft: Radius.circular(_m3eInnerRadius),
-        topRight: Radius.circular(_m3eInnerRadius),
-        bottomLeft: Radius.circular(_m3eOuterRadius),
-        bottomRight: Radius.circular(_m3eOuterRadius),
-      ),
-  };
-}
-
 /// Collapsed group card; expanded header row uses inner radius on bottom edge.
 const RoundedRectangleBorder _appsExpansionTileCollapsedShape =
     RoundedRectangleBorder(
@@ -132,8 +62,8 @@ const RoundedRectangleBorder _appsExpansionTileExpandedShape =
   borderRadius: BorderRadius.only(
     topLeft: Radius.circular(_appsListGroupCardRadius),
     topRight: Radius.circular(_appsListGroupCardRadius),
-    bottomLeft: Radius.circular(_m3eInnerRadius),
-    bottomRight: Radius.circular(_m3eInnerRadius),
+    bottomLeft: Radius.circular(kM3eInnerRadius),
+    bottomRight: Radius.circular(kM3eInnerRadius),
   ),
 );
 
@@ -143,14 +73,14 @@ Widget _appsGroupedExpansionListBody({
 }) {
   return ClipRRect(
     borderRadius: const BorderRadius.vertical(
-      top: Radius.circular(_m3eInnerRadius),
+      top: Radius.circular(kM3eInnerRadius),
     ),
     child: ColoredBox(
-      color: _appsListGroupedSectionBackdropColor(scheme),
+      color: m3eGroupedListBackdropFill(scheme),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox(height: _m3eHeaderToFirstCardGap),
+          const SizedBox(height: kM3eHeaderToFirstCardGap),
           ...tiles,
         ],
       ),
@@ -619,7 +549,7 @@ class _AppListItem extends StatelessWidget {
     if (itemBorderRadius != null) {
       return RepaintBoundary(
         child: Material(
-          color: _appsListGroupedRowColor(colorScheme),
+          color: m3eGroupedListRowFill(colorScheme),
           shape: RoundedRectangleBorder(borderRadius: itemBorderRadius!),
           clipBehavior: Clip.antiAlias,
           child: tile,
@@ -2478,7 +2408,7 @@ class AppsPageState extends State<AppsPage> {
 
     getSingleAppHorizTile(
       int index, {
-      _GroupPosition? groupPosition,
+      M3eListGroupPosition? groupPosition,
       bool flatListBody = false,
     }) {
       final app = listedApps[index];
@@ -2531,7 +2461,7 @@ class AppsPageState extends State<AppsPage> {
           highlightTouchTargets: settingsProvider.highlightTouchTargets,
           categoryColors: settingsProvider.categories,
           itemBorderRadius: groupPosition != null
-              ? _groupItemRadius(
+              ? m3eListGroupItemRadius(
                   groupPosition,
                   flatListBody: flatListBody,
                 )
@@ -2540,7 +2470,7 @@ class AppsPageState extends State<AppsPage> {
       );
       if (groupPosition != null) {
         return ClipRRect(
-          borderRadius: _groupItemRadius(
+          borderRadius: m3eListGroupItemRadius(
             groupPosition,
             flatListBody: flatListBody,
           ),
@@ -2566,23 +2496,23 @@ class AppsPageState extends State<AppsPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (gapBeforeTile) const SizedBox(height: _m3eItemGap),
+            if (gapBeforeTile) const SizedBox(height: kM3eItemGap),
             if (indexInRun == 0 && !spacerBeforeFirstRow)
               const SizedBox(height: 6),
             getSingleAppHorizTile(
               listedAppIndex,
               groupPosition: runLength == 1
-                  ? _GroupPosition.only
+                  ? M3eListGroupPosition.only
                   : indexInRun == 0
-                      ? _GroupPosition.first
+                      ? M3eListGroupPosition.first
                       : indexInRun == runLength - 1
-                          ? _GroupPosition.last
-                          : _GroupPosition.middle,
+                          ? M3eListGroupPosition.last
+                          : M3eListGroupPosition.middle,
               flatListBody: true,
             ),
             if (indexInRun == runLength - 1) ...[
               const SizedBox(height: 6),
-              if (spacerAfterLastRow) const SizedBox(height: _m3eItemGap),
+              if (spacerAfterLastRow) const SizedBox(height: kM3eItemGap),
             ],
           ],
         ),
@@ -2594,16 +2524,16 @@ class AppsPageState extends State<AppsPage> {
       final int n = indices.length;
       return [
         for (int i = 0; i < n; i++) ...[
-          if (i > 0) const SizedBox(height: _m3eItemGap),
+          if (i > 0) const SizedBox(height: kM3eItemGap),
           getSingleAppHorizTile(
             indices[i],
             groupPosition: n == 1
-                ? _GroupPosition.only
+                ? M3eListGroupPosition.only
                 : i == 0
-                    ? _GroupPosition.first
+                    ? M3eListGroupPosition.first
                     : i == n - 1
-                        ? _GroupPosition.last
-                        : _GroupPosition.middle,
+                        ? M3eListGroupPosition.last
+                        : M3eListGroupPosition.middle,
           ),
         ],
       ];

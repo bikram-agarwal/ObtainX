@@ -30,7 +30,7 @@ class GitHub extends AppSource {
         required: false,
         suffixIcon: IconButton(
           visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.help_outline, size: 18),
+          icon: const Icon(Icons.open_in_new_rounded, size: 18),
           onPressed: () => launchUrlString(
             'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token',
             mode: LaunchMode.externalApplication,
@@ -60,7 +60,7 @@ class GitHub extends AppSource {
         ],
         suffixIcon: IconButton(
           visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.help_outline, size: 18),
+          icon: const Icon(Icons.open_in_new_rounded, size: 18),
           onPressed: () => launchUrlString(
             'https://github.com/sky22333/hubproxy',
             mode: LaunchMode.externalApplication,

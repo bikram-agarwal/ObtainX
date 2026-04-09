@@ -1,15 +1,25 @@
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 
-/// FilePipe-style accent row: default, Material You, presets, saved hex, add.
-class ThemeAccentSettingsSection extends StatelessWidget {
-  const ThemeAccentSettingsSection({super.key});
+const double _kAccentSwatchSize = 52;
+const double _kAccentInnerSize = 44;
 
-  static const double _swatchSize = 52;
-  static const double _innerSize = 44;
+/// One M3E card row each (swatches with label, palette).
+List<Widget> buildThemeAccentSettingsCardItems(
+  Future<AndroidDeviceInfo> androidInfoFuture,
+) {
+  return <Widget>[
+    const _ThemeAccentSwatchesItem(),
+    _ThemeAccentPaletteItem(androidInfoFuture: androidInfoFuture),
+  ];
+}
+
+class _ThemeAccentSwatchesItem extends StatelessWidget {
+  const _ThemeAccentSwatchesItem();
 
   @override
   Widget build(BuildContext context) {
@@ -130,13 +140,11 @@ class ThemeAccentSettingsSection extends StatelessWidget {
       if (ok == true) settings.removeCustomSeedHex(hex);
     }
 
-    final bool paletteEnabled =
-        settings.appAccentColorSource != AppAccentColorSource.materialYou;
-
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             tr('settingsThemeColorsHint'),
@@ -144,50 +152,80 @@ class ThemeAccentSettingsSection extends StatelessWidget {
               color: scheme.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: 2),
-          Text(
-            tr('settingsCustomSeedRowHint'),
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           SizedBox(
-            height: _swatchSize,
+            height: _kAccentSwatchSize,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                for (final AppAccentColorSource source
-                    in AppAccentColorSourceX.accentPickerOrder)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: _AccentSourceSwatch(
-                      source: source,
-                      selected: settings.appAccentColorSource == source,
-                      onTap: () {
-                        settings.appAccentColorSource = source;
-                      },
-                    ),
-                  ),
-                for (final String storedHex in settings.savedCustomSeedHexes)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: _CustomHexSwatch(
-                      hex: storedHex,
-                      selected: _customHexSelected(settings, storedHex),
-                      onTap: () => settings.selectSavedCustomSeedHex(storedHex),
-                      onLongPress: () => confirmRemoveHex(storedHex),
-                    ),
-                  ),
-                _AddCustomHexSwatch(onTap: showAddHexDialog),
+            for (final AppAccentColorSource source
+                in AppAccentColorSourceX.accentPickerOrder)
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: _AccentSourceSwatch(
+                  source: source,
+                  selected: settings.appAccentColorSource == source,
+                  onTap: () {
+                    settings.appAccentColorSource = source;
+                  },
+                ),
+              ),
+            for (final String storedHex in settings.savedCustomSeedHexes)
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: _CustomHexSwatch(
+                  hex: storedHex,
+                  selected: _customHexSwatchSelected(settings, storedHex),
+                  onTap: () => settings.selectSavedCustomSeedHex(storedHex),
+                  onLongPress: () => confirmRemoveHex(storedHex),
+                ),
+              ),
+            _AddCustomHexSwatch(onTap: showAddHexDialog),
               ],
             ),
           ),
-          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+}
+
+bool _customHexSwatchSelected(SettingsProvider settings, String storedHex) {
+  if (settings.appAccentColorSource != AppAccentColorSource.custom) {
+    return false;
+  }
+  final String? activeNorm =
+      normalizeCustomSeedHexOrNull(settings.activeCustomSeedHex);
+  final String? storedNorm = normalizeCustomSeedHexOrNull(storedHex);
+  if (activeNorm != null && storedNorm != null) {
+    return activeNorm == storedNorm;
+  }
+  return settings.activeCustomSeedHex.trim() == storedHex.trim();
+}
+
+class _ThemeAccentPaletteItem extends StatelessWidget {
+  const _ThemeAccentPaletteItem({required this.androidInfoFuture});
+
+  final Future<AndroidDeviceInfo> androidInfoFuture;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    final SettingsProvider settings = context.watch<SettingsProvider>();
+    final bool paletteEnabled =
+        settings.appAccentColorSource != AppAccentColorSource.materialYou;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
           Text(
             tr('settingsPaletteStyle'),
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: scheme.onSurface,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 8),
@@ -224,22 +262,32 @@ class ThemeAccentSettingsSection extends StatelessWidget {
               ],
             ),
           ),
+          FutureBuilder<AndroidDeviceInfo>(
+            future: androidInfoFuture,
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<AndroidDeviceInfo> snapshot,
+            ) {
+              final int sdkInt = snapshot.data?.version.sdkInt ?? 0;
+              if (sdkInt >= 31) return const SizedBox.shrink();
+              if (settings.appAccentColorSource !=
+                  AppAccentColorSource.materialYou) {
+                return const SizedBox.shrink();
+              }
+              return Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  tr('settingsMaterialYouHint'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
-  }
-
-  bool _customHexSelected(SettingsProvider settings, String storedHex) {
-    if (settings.appAccentColorSource != AppAccentColorSource.custom) {
-      return false;
-    }
-    final String? activeNorm =
-        normalizeCustomSeedHexOrNull(settings.activeCustomSeedHex);
-    final String? storedNorm = normalizeCustomSeedHexOrNull(storedHex);
-    if (activeNorm != null && storedNorm != null) {
-      return activeNorm == storedNorm;
-    }
-    return settings.activeCustomSeedHex.trim() == storedHex.trim();
   }
 }
 
@@ -270,8 +318,8 @@ class _AccentSourceSwatch extends StatelessWidget {
           onTap: onTap,
           customBorder: const CircleBorder(),
           child: Container(
-            width: ThemeAccentSettingsSection._swatchSize,
-            height: ThemeAccentSettingsSection._swatchSize,
+            width: _kAccentSwatchSize,
+            height: _kAccentSwatchSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
@@ -295,7 +343,7 @@ class _AccentCircleContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const double inner = ThemeAccentSettingsSection._innerSize;
+    const double inner = _kAccentInnerSize;
     switch (source) {
       case AppAccentColorSource.appDefault:
         return ClipOval(
@@ -369,8 +417,8 @@ class _CustomHexSwatch extends StatelessWidget {
           onLongPress: onLongPress,
           customBorder: const CircleBorder(),
           child: Container(
-            width: ThemeAccentSettingsSection._swatchSize,
-            height: ThemeAccentSettingsSection._swatchSize,
+            width: _kAccentSwatchSize,
+            height: _kAccentSwatchSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
@@ -381,8 +429,8 @@ class _CustomHexSwatch extends StatelessWidget {
             alignment: Alignment.center,
             child: ClipOval(
               child: Container(
-                width: ThemeAccentSettingsSection._innerSize,
-                height: ThemeAccentSettingsSection._innerSize,
+                width: _kAccentInnerSize,
+                height: _kAccentInnerSize,
                 color: fill,
               ),
             ),
@@ -410,8 +458,8 @@ class _AddCustomHexSwatch extends StatelessWidget {
           onTap: onTap,
           customBorder: const CircleBorder(),
           child: Container(
-            width: ThemeAccentSettingsSection._swatchSize,
-            height: ThemeAccentSettingsSection._swatchSize,
+            width: _kAccentSwatchSize,
+            height: _kAccentSwatchSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(

@@ -13,6 +13,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -407,35 +408,22 @@ class _ImportExportPageState extends State<ImportExportPage> {
 
     final ColorScheme impScheme = Theme.of(context).colorScheme;
 
-    Widget importPageCard(List<Widget> cardChildren) {
-      final bool isDark = Theme.of(context).brightness == Brightness.dark;
-      return Container(
-        decoration: BoxDecoration(
-          color: impScheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: impScheme.outlineVariant, width: 1),
-          boxShadow: [
-            if (isDark)
-              BoxShadow(
-                color: impScheme.shadow.withAlpha(50),
-                blurRadius: 6,
-                spreadRadius: 0,
-                offset: const Offset(0, 2),
-              )
-            else
-              BoxShadow(
-                color: impScheme.shadow.withAlpha(18),
-                blurRadius: 4,
-                offset: const Offset(0, 1),
-              ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: cardChildren,
-        ),
+    /// Folder picker rows with a title + subtitle (more vertical air).
+    const EdgeInsets importPageCardFolderRowPadding =
+        EdgeInsets.fromLTRB(16, 12, 16, 12);
+    /// Other padded rows inside [importPageCard] (dropdowns, buttons, batch grid).
+    const EdgeInsets importPageCardRowPadding =
+        EdgeInsets.fromLTRB(16, 8, 16, 8);
+    const EdgeInsets importPageCardSwitchTilePadding =
+        EdgeInsets.fromLTRB(16, 0, 16, 4);
+    const double importPageCardRowItemGap = 12;
+    const double importPageBatchCellGap = 4;
+
+    Widget importPageCard(List<Widget> cardItems) {
+      return m3eExpressiveSettingsCard(
+        context: context,
+        colorScheme: impScheme,
+        items: cardItems,
       );
     }
 
@@ -458,6 +446,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                   fontWeight: FontWeight.w600,
                   color: impScheme.primary,
                   fontSize: 13,
+                  decoration: TextDecoration.none,
                 ),
               ),
             ),
@@ -625,102 +614,81 @@ class _ImportExportPageState extends State<ImportExportPage> {
                           tr('importExportCardUpdateAssets'),
                           Icons.system_update_rounded,
                         ),
-                        importPageCard([
-                          FutureBuilder<Uri?>(
-                            future: settingsProvider.getApkSaveDir(),
-                            builder: (context, apkSaveSnapshot) {
-                              final String apkFolderTitle =
-                                  apkSaveSnapshot.data == null
-                                  ? tr('pickApkSaveDir')
-                                  : folderDisplayPathFromTreeUri(
-                                      apkSaveSnapshot.data!,
-                                    );
-                              return Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      16,
-                                      12,
-                                      16,
-                                      12,
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                apkFolderTitle,
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .titleSmall,
-                                                maxLines: 3,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                tr('apkSaveFolderDescription'),
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodySmall
-                                                    ?.copyWith(
-                                                      color: impScheme
-                                                          .onSurfaceVariant,
-                                                    ),
-                                              ),
-                                            ],
+                        FutureBuilder<Uri?>(
+                          future: settingsProvider.getApkSaveDir(),
+                          builder: (context, apkSaveSnapshot) {
+                            final String apkFolderTitle =
+                                apkSaveSnapshot.data == null
+                                ? tr('pickApkSaveDir')
+                                : folderDisplayPathFromTreeUri(
+                                    apkSaveSnapshot.data!,
+                                  );
+                            return importPageCard([
+                              Padding(
+                                padding: importPageCardFolderRowPadding,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            apkFolderTitle,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleSmall,
+                                            maxLines: 3,
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                        ),
-                                        folderOutlineIconButton(
-                                          tooltipMessage: tr('pickApkSaveDir'),
-                                          onPressed: importInProgress
-                                              ? null
-                                              : () async {
-                                                  await settingsProvider
-                                                      .pickApkSaveDir();
-                                                  if (context.mounted) {
-                                                    setState(() {});
-                                                  }
-                                                },
-                                        ),
-                                      ],
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            tr('apkSaveFolderDescription'),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(
+                                                  color: impScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                  Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: impScheme.outlineVariant,
-                                  ),
-                                  SwitchListTile(
-                                    contentPadding: const EdgeInsets.fromLTRB(
-                                      16,
-                                      4,
-                                      16,
-                                      12,
+                                    folderOutlineIconButton(
+                                      tooltipMessage: tr('pickApkSaveDir'),
+                                      onPressed: importInProgress
+                                          ? null
+                                          : () async {
+                                              await settingsProvider
+                                                  .pickApkSaveDir();
+                                              if (context.mounted) {
+                                                setState(() {});
+                                              }
+                                            },
                                     ),
-                                    title: Text(tr('saveDownloadedApkCopies')),
-                                    value: settingsProvider
-                                        .saveDownloadedApkCopies,
-                                    onChanged: importInProgress
-                                        ? null
-                                        : (bool enabled) {
-                                            settingsProvider
-                                                    .saveDownloadedApkCopies =
-                                                enabled;
-                                          },
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ]),
+                                  ],
+                                ),
+                              ),
+                              SwitchListTile(
+                                visualDensity: VisualDensity.compact,
+                                contentPadding: importPageCardSwitchTilePadding,
+                                title: Text(tr('saveDownloadedApkCopies')),
+                                value:
+                                    settingsProvider.saveDownloadedApkCopies,
+                                onChanged: importInProgress
+                                    ? null
+                                    : (bool enabled) {
+                                        settingsProvider
+                                                .saveDownloadedApkCopies =
+                                            enabled;
+                                      },
+                              ),
+                            ]);
+                          },
+                        ),
                       ],
                       importPageSectionTitle(
                         tr('importExportCardObtainxBackup'),
@@ -731,12 +699,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                         builder: (context, exportSnapshot) {
                           return importPageCard([
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                16,
-                                12,
-                                16,
-                                12,
-                              ),
+                              padding: importPageCardFolderRowPadding,
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -744,6 +707,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Text(
                                           exportSnapshot.data == null
@@ -782,71 +746,62 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                 ],
                               ),
                             ),
-                            Divider(
-                              height: 1,
-                              thickness: 1,
-                              color: impScheme.outlineVariant,
-                            ),
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                              padding: importPageCardRowPadding,
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   Padding(
-                                    padding: const EdgeInsets.only(right: 12),
+                                    padding: const EdgeInsets.only(
+                                      right: importPageCardRowItemGap,
+                                    ),
                                     child: Text(tr('importExportIncludeInBackup')),
                                   ),
                                   Expanded(
-                                    child: DropdownMenu<int>(
-                                      key: ValueKey(
-                                        settingsProvider.exportSettings,
-                                      ),
-                                      initialSelection:
+                                    child: m3eCompactDropdownScope(
+                                      context: context,
+                                      child: DropdownMenu<int>(
+                                        key: ValueKey(
                                           settingsProvider.exportSettings,
-                                      expandedInsets: EdgeInsets.zero,
-                                      onSelected: (int? selected) {
-                                        if (selected != null) {
-                                          settingsProvider.exportSettings =
-                                              selected;
-                                        }
-                                      },
-                                      dropdownMenuEntries: [
-                                        DropdownMenuEntry<int>(
-                                          value: 0,
-                                          label: tr(
-                                            'importExportBackupScopeOnlyApps',
-                                          ),
                                         ),
-                                        DropdownMenuEntry<int>(
-                                          value: 1,
-                                          label: tr(
-                                            'importExportBackupScopeAppsSettingsNoSecrets',
+                                        initialSelection:
+                                            settingsProvider.exportSettings,
+                                        expandedInsets: EdgeInsets.zero,
+                                        onSelected: (int? selected) {
+                                          if (selected != null) {
+                                            settingsProvider.exportSettings =
+                                                selected;
+                                          }
+                                        },
+                                        dropdownMenuEntries: [
+                                          DropdownMenuEntry<int>(
+                                            value: 0,
+                                            label: tr(
+                                              'importExportBackupScopeOnlyApps',
+                                            ),
                                           ),
-                                        ),
-                                        DropdownMenuEntry<int>(
-                                          value: 2,
-                                          label: tr(
-                                            'importExportBackupScopeAllAppsAndSettings',
+                                          DropdownMenuEntry<int>(
+                                            value: 1,
+                                            label: tr(
+                                              'importExportBackupScopeAppsSettingsNoSecrets',
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                          DropdownMenuEntry<int>(
+                                            value: 2,
+                                            label: tr(
+                                              'importExportBackupScopeAllAppsAndSettings',
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                            Divider(
-                              height: 1,
-                              thickness: 1,
-                              color: impScheme.outlineVariant,
-                            ),
                             SwitchListTile(
-                              contentPadding: const EdgeInsets.fromLTRB(
-                                16,
-                                0,
-                                16,
-                                4,
-                              ),
+                              visualDensity: VisualDensity.compact,
+                              contentPadding: importPageCardSwitchTilePadding,
                               title: Text(tr('autoExportOnChanges')),
                               value: settingsProvider.autoExportOnChanges,
                               onChanged: importInProgress
@@ -856,13 +811,8 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                           value;
                                     },
                             ),
-                            Divider(
-                              height: 1,
-                              thickness: 1,
-                              color: impScheme.outlineVariant,
-                            ),
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                              padding: importPageCardRowPadding,
                               child: Row(
                                 children: [
                                   Expanded(
@@ -874,7 +824,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                       child: Text(tr('obtainiumImport')),
                                     ),
                                   ),
-                                  const SizedBox(width: 12),
+                                  const SizedBox(
+                                    width: importPageCardRowItemGap,
+                                  ),
                                   Expanded(
                                     child: TextButton(
                                       style: outlineButtonStyle,
@@ -899,12 +851,10 @@ class _ImportExportPageState extends State<ImportExportPage> {
                       importPageSectionTitle(
                         tr('importExportCardBatchImports'),
                         Icons.playlist_add_rounded,
-                        topPadding: 12,
-                        bottomPadding: 0,
                       ),
                       importPageCard([
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                          padding: importPageCardRowPadding,
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -914,12 +864,13 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                 rowStart < batchImportCells.length;
                                 rowStart += 2
                               ) ...[
-                                if (rowStart > 0) const SizedBox(height: 4),
+                                if (rowStart > 0)
+                                  const SizedBox(height: importPageBatchCellGap),
                                 Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Expanded(child: batchImportCells[rowStart]),
-                                    const SizedBox(width: 4),
+                                    SizedBox(width: importPageBatchCellGap),
                                     Expanded(
                                       child: rowStart + 1 < batchImportCells.length
                                           ? batchImportCells[rowStart + 1]

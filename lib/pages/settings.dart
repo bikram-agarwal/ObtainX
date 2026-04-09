@@ -16,6 +16,7 @@ import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
@@ -81,6 +82,257 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  List<Widget> _updatesCardItemList(
+    BuildContext context,
+    ColorScheme cs,
+    SettingsProvider settingsProvider,
+    AsyncSnapshot<AndroidDeviceInfo> snapshot,
+    Widget updatesIntervalHead,
+  ) {
+    final List<Widget> rows = <Widget>[updatesIntervalHead];
+    final bool showBgControls = (settingsProvider.updateInterval > 0) &&
+        (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
+            settingsProvider.useShizuku);
+    if (showBgControls) {
+      rows.add(
+        SwitchListTile(
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(tr('foregroundServiceForUpdateChecking')),
+              ),
+              Tooltip(
+                message: tr('foregroundServiceReliabilityNote'),
+                triggerMode: TooltipTriggerMode.tap,
+                waitDuration: Duration.zero,
+                showDuration: const Duration(seconds: 5),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Icon(
+                    Icons.help_outline,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          value: settingsProvider.useFGService,
+          onChanged: (bool value) {
+            settingsProvider.useFGService = value;
+          },
+        ),
+      );
+      rows.add(
+        SwitchListTile(
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(tr('enableBackgroundUpdates')),
+              ),
+              Tooltip(
+                message:
+                    '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
+                triggerMode: TooltipTriggerMode.tap,
+                waitDuration: Duration.zero,
+                showDuration: const Duration(seconds: 5),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Icon(
+                    Icons.help_outline,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          value: settingsProvider.enableBackgroundUpdates,
+          onChanged: (bool value) {
+            settingsProvider.enableBackgroundUpdates = value;
+          },
+        ),
+      );
+      if (settingsProvider.enableBackgroundUpdates) {
+        rows.add(
+          SwitchListTile(
+            title: Text(tr('bgUpdatesOnWiFiOnly')),
+            value: settingsProvider.bgUpdatesOnWiFiOnly,
+            onChanged: (bool value) {
+              settingsProvider.bgUpdatesOnWiFiOnly = value;
+            },
+          ),
+        );
+        rows.add(
+          SwitchListTile(
+            title: Text(tr('bgUpdatesWhileChargingOnly')),
+            value: settingsProvider.bgUpdatesWhileChargingOnly,
+            onChanged: (bool value) {
+              settingsProvider.bgUpdatesWhileChargingOnly = value;
+            },
+          ),
+        );
+      }
+    }
+    rows.addAll(<Widget>[
+      SwitchListTile(
+        title: Text(tr('checkOnStart')),
+        value: settingsProvider.checkOnStart,
+        onChanged: (bool value) {
+          settingsProvider.checkOnStart = value;
+        },
+      ),
+      SwitchListTile(
+        title: Text(tr('checkUpdateOnDetailPage')),
+        value: settingsProvider.checkUpdateOnDetailPage,
+        onChanged: (bool value) {
+          settingsProvider.checkUpdateOnDetailPage = value;
+        },
+      ),
+      SwitchListTile(
+        title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
+        value: settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
+        onChanged: (bool value) {
+          settingsProvider.onlyCheckInstalledOrTrackOnlyApps = value;
+        },
+      ),
+      SwitchListTile(
+        title: Text(tr('removeOnExternalUninstall')),
+        value: settingsProvider.removeOnExternalUninstall,
+        onChanged: (bool value) {
+          settingsProvider.removeOnExternalUninstall = value;
+        },
+      ),
+      SwitchListTile(
+        title: Text(tr('parallelDownloads')),
+        value: settingsProvider.parallelDownloads,
+        onChanged: (bool value) {
+          settingsProvider.parallelDownloads = value;
+        },
+      ),
+      ListTile(
+        title: Text(tr('beforeNewInstallsShareToAppVerifier')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: tr('about'),
+              onPressed: () {
+                launchUrlString(
+                  'https://github.com/soupslurpr/AppVerifier',
+                  mode: LaunchMode.externalApplication,
+                );
+              },
+              style: IconButton.styleFrom(
+                foregroundColor: cs.onSurfaceVariant,
+                iconSize: 20,
+                padding: const EdgeInsets.all(4),
+                minimumSize: const Size(32, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+              icon: const Icon(Icons.open_in_new_rounded),
+            ),
+            Switch(
+              value: settingsProvider.beforeNewInstallsShareToAppVerifier,
+              onChanged: (bool value) {
+                settingsProvider.beforeNewInstallsShareToAppVerifier = value;
+              },
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(tr('installerMode')),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                segments: [
+                  ButtonSegment<String>(
+                    value: 'stock',
+                    label: Text(tr('installerModeStock')),
+                  ),
+                  ButtonSegment<String>(
+                    value: 'shizuku',
+                    label: Text(tr('installerModeShizuku')),
+                  ),
+                  ButtonSegment<String>(
+                    value: 'legacy',
+                    label: Text(tr('installerModeThirdParty')),
+                  ),
+                ],
+                selected: {settingsProvider.installerMode},
+                onSelectionChanged: (Set<String> selected) {
+                  final String mode = selected.first;
+                  if (mode == 'shizuku') {
+                    ShizukuApkInstaller().checkPermission().then((
+                      String? resCode,
+                    ) {
+                      if (!context.mounted) return;
+                      if (resCode!.startsWith('granted')) {
+                        settingsProvider.installerMode = 'shizuku';
+                      } else {
+                        switch (resCode) {
+                          case 'services_not_found':
+                            showError(
+                              ObtainiumError(tr('shizukuBinderNotFound')),
+                              context,
+                            );
+                          case 'old_shizuku':
+                            showError(
+                              ObtainiumError(tr('shizukuOld')),
+                              context,
+                            );
+                          case 'old_android_with_adb':
+                            showError(
+                              ObtainiumError(tr('shizukuOldAndroidWithADB')),
+                              context,
+                            );
+                          case 'denied':
+                            showError(
+                              ObtainiumError(tr('cancelled')),
+                              context,
+                            );
+                        }
+                      }
+                    });
+                  } else {
+                    settingsProvider.installerMode = mode;
+                  }
+                },
+              ),
+            ),
+            if (settingsProvider.installerMode == 'shizuku')
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(tr('shizukuPretendToBeGooglePlay')),
+                value: settingsProvider.shizukuPretendToBeGooglePlay,
+                onChanged: (bool value) {
+                  settingsProvider.shizukuPretendToBeGooglePlay = value;
+                },
+              ),
+            if (settingsProvider.installerMode == 'legacy')
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _ThirdPartyInstallerSelector(
+                  settingsProvider: settingsProvider,
+                ),
+              ),
+          ],
+        ),
+      ),
+    ]);
+    return rows;
+  }
+
   @override
   Widget build(BuildContext context) {
     SettingsProvider settingsProvider = context.watch<SettingsProvider>();
@@ -88,34 +340,37 @@ class _SettingsPageState extends State<SettingsPage> {
     if (settingsProvider.prefs == null) settingsProvider.initializeSettings();
     processIntervalSliderValue(settingsProvider.updateIntervalSliderVal);
 
-    final Widget localeMenu = DropdownMenu<Locale?>(
-      key: ValueKey(
-        settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
-      ),
-      initialSelection: settingsProvider.forcedLocale,
-      label: Text(tr('language')),
-      expandedInsets: EdgeInsets.zero,
-      onSelected: (Locale? value) {
-        settingsProvider.forcedLocale = value;
-        if (value != null) {
-          context.setLocale(value);
-        } else {
-          settingsProvider.resetLocaleSafe(context);
-        }
-      },
-      dropdownMenuEntries: [
-        DropdownMenuEntry<Locale?>(
-          value: null,
-          label: tr('followSystem'),
+    final Widget localeMenu = m3eCompactDropdownScope(
+      context: context,
+      child: DropdownMenu<Locale?>(
+        key: ValueKey(
+          settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
         ),
-        ...supportedLocales.map(
-          (MapEntry<Locale, String> localeEntry) =>
-              DropdownMenuEntry<Locale?>(
-            value: localeEntry.key,
-            label: localeEntry.value,
+        initialSelection: settingsProvider.forcedLocale,
+        label: Text(tr('language')),
+        expandedInsets: EdgeInsets.zero,
+        onSelected: (Locale? value) {
+          settingsProvider.forcedLocale = value;
+          if (value != null) {
+            context.setLocale(value);
+          } else {
+            settingsProvider.resetLocaleSafe(context);
+          }
+        },
+        dropdownMenuEntries: [
+          DropdownMenuEntry<Locale?>(
+            value: null,
+            label: tr('followSystem'),
           ),
-        ),
-      ],
+          ...supportedLocales.map(
+            (MapEntry<Locale, String> localeEntry) =>
+                DropdownMenuEntry<Locale?>(
+              value: localeEntry.key,
+              label: localeEntry.value,
+            ),
+          ),
+        ],
+      ),
     );
 
     var intervalSlider = SliderTheme(
@@ -182,6 +437,39 @@ class _SettingsPageState extends State<SettingsPage> {
 
     final cs = Theme.of(context).colorScheme;
 
+    final Widget updatesIntervalHead = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.update_rounded,
+            color: cs.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(tr('bgUpdateCheckInterval')),
+                      ),
+                      Text(updateIntervalLabel),
+                    ],
+                  ),
+                ),
+                intervalSlider,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
     Widget sectionHeader(String title, IconData icon, String key) {
       final bool expanded =
           settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
@@ -206,6 +494,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     fontWeight: FontWeight.w600,
                     color: cs.primary,
                     fontSize: 13,
+                    decoration: TextDecoration.none,
                   ),
                 ),
               ),
@@ -225,30 +514,10 @@ class _SettingsPageState extends State<SettingsPage> {
     }
 
     Widget settingsCard(List<Widget> children) {
-      final bool isDark = Theme.of(context).brightness == Brightness.dark;
-      return Container(
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: cs.outlineVariant, width: 1),
-          boxShadow: [
-            if (isDark)
-              BoxShadow(
-                color: cs.shadow.withAlpha(50),
-                blurRadius: 6,
-                spreadRadius: 0,
-                offset: const Offset(0, 2),
-              )
-            else
-              BoxShadow(
-                color: cs.shadow.withAlpha(18),
-                blurRadius: 4,
-                offset: const Offset(0, 1),
-              ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(children: children),
+      return m3eExpressiveSettingsCard(
+        context: context,
+        colorScheme: cs,
+        items: children,
       );
     }
 
@@ -303,251 +572,24 @@ class _SettingsPageState extends State<SettingsPage> {
                       children: [
                         // ── Updates ──────────────────────────────────────────
                         sectionHeader(tr('updates'), Icons.update_rounded, 'updates'),
-                        collapsibleCard('updates', [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.update_rounded,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                tr('bgUpdateCheckInterval'),
-                                              ),
-                                            ),
-                                            Text(updateIntervalLabel),
-                                          ],
-                                        ),
-                                      ),
-                                      intervalSlider,
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          FutureBuilder(
-                            builder: (ctx, val) {
-                              return (settingsProvider.updateInterval > 0) &&
-                                      (((val.data?.version.sdkInt ?? 0) >= 30) ||
-                                          settingsProvider.useShizuku)
-                                  ? Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        SwitchListTile(
-                                          title: Text(tr('foregroundServiceExplanation')),
-                                          value: settingsProvider.useFGService,
-                                          onChanged: (value) {
-                                            settingsProvider.useFGService = value;
-                                          },
-                                        ),
-                                        SwitchListTile(
-                                          title: Text(tr('enableBackgroundUpdates')),
-                                          value: settingsProvider.enableBackgroundUpdates,
-                                          onChanged: (value) {
-                                            settingsProvider.enableBackgroundUpdates = value;
-                                          },
-                                        ),
-                                        Padding(
-                                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                tr('backgroundUpdateReqsExplanation'),
-                                                style: Theme.of(context).textTheme.labelSmall,
-                                              ),
-                                              Text(
-                                                tr('backgroundUpdateLimitsExplanation'),
-                                                style: Theme.of(context).textTheme.labelSmall,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (settingsProvider.enableBackgroundUpdates) ...[
-                                          SwitchListTile(
-                                            title: Text(tr('bgUpdatesOnWiFiOnly')),
-                                            value: settingsProvider.bgUpdatesOnWiFiOnly,
-                                            onChanged: (value) {
-                                              settingsProvider.bgUpdatesOnWiFiOnly = value;
-                                            },
-                                          ),
-                                          SwitchListTile(
-                                            title: Text(tr('bgUpdatesWhileChargingOnly')),
-                                            value: settingsProvider.bgUpdatesWhileChargingOnly,
-                                            onChanged: (value) {
-                                              settingsProvider.bgUpdatesWhileChargingOnly = value;
-                                            },
-                                          ),
-                                        ],
-                                      ],
-                                    )
-                                  : const SizedBox.shrink();
-                            },
-                            future: _androidInfo,
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('checkOnStart')),
-                            value: settingsProvider.checkOnStart,
-                            onChanged: (value) {
-                              settingsProvider.checkOnStart = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('checkUpdateOnDetailPage')),
-                            value: settingsProvider.checkUpdateOnDetailPage,
-                            onChanged: (value) {
-                              settingsProvider.checkUpdateOnDetailPage = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
-                            value: settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
-                            onChanged: (value) {
-                              settingsProvider.onlyCheckInstalledOrTrackOnlyApps = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('removeOnExternalUninstall')),
-                            value: settingsProvider.removeOnExternalUninstall,
-                            onChanged: (value) {
-                              settingsProvider.removeOnExternalUninstall = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('parallelDownloads')),
-                            value: settingsProvider.parallelDownloads,
-                            onChanged: (value) {
-                              settingsProvider.parallelDownloads = value;
-                            },
-                          ),
-                          ListTile(
-                            title: Text(tr('beforeNewInstallsShareToAppVerifier')),
-                            subtitle: GestureDetector(
-                              onTap: () {
-                                launchUrlString(
-                                  'https://github.com/soupslurpr/AppVerifier',
-                                  mode: LaunchMode.externalApplication,
-                                );
-                              },
-                              child: Text(
-                                tr('about'),
-                                style: const TextStyle(
-                                  decoration: TextDecoration.underline,
-                                  fontSize: 12,
-                                ),
+                        FutureBuilder<AndroidDeviceInfo>(
+                          future: _androidInfo,
+                          builder: (
+                            BuildContext context,
+                            AsyncSnapshot<AndroidDeviceInfo> snapshot,
+                          ) {
+                            return collapsibleCard(
+                              'updates',
+                              _updatesCardItemList(
+                                context,
+                                cs,
+                                settingsProvider,
+                                snapshot,
+                                updatesIntervalHead,
                               ),
-                            ),
-                            trailing: Switch(
-                              value: settingsProvider.beforeNewInstallsShareToAppVerifier,
-                              onChanged: (value) {
-                                settingsProvider.beforeNewInstallsShareToAppVerifier = value;
-                              },
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(tr('installerMode')),
-                                const SizedBox(height: 4),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: SegmentedButton<String>(
-                                    segments: [
-                                      ButtonSegment(
-                                        value: 'stock',
-                                        label: Text(tr('installerModeStock')),
-                                      ),
-                                      ButtonSegment(
-                                        value: 'shizuku',
-                                        label: Text(tr('installerModeShizuku')),
-                                      ),
-                                      ButtonSegment(
-                                        value: 'legacy',
-                                        label: Text(tr('installerModeThirdParty')),
-                                      ),
-                                    ],
-                                    selected: {settingsProvider.installerMode},
-                                    onSelectionChanged: (selected) {
-                                      final mode = selected.first;
-                                      if (mode == 'shizuku') {
-                                        ShizukuApkInstaller().checkPermission().then((
-                                          resCode,
-                                        ) {
-                                          if (!context.mounted) return;
-                                          if (resCode!.startsWith('granted')) {
-                                            settingsProvider.installerMode = 'shizuku';
-                                          } else {
-                                            switch (resCode) {
-                                              case 'services_not_found':
-                                                showError(
-                                                  ObtainiumError(
-                                                    tr('shizukuBinderNotFound'),
-                                                  ),
-                                                  context,
-                                                );
-                                              case 'old_shizuku':
-                                                showError(
-                                                  ObtainiumError(tr('shizukuOld')),
-                                                  context,
-                                                );
-                                              case 'old_android_with_adb':
-                                                showError(
-                                                  ObtainiumError(
-                                                    tr('shizukuOldAndroidWithADB'),
-                                                  ),
-                                                  context,
-                                                );
-                                              case 'denied':
-                                                showError(
-                                                  ObtainiumError(tr('cancelled')),
-                                                  context,
-                                                );
-                                            }
-                                          }
-                                        });
-                                      } else {
-                                        settingsProvider.installerMode = mode;
-                                      }
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (settingsProvider.installerMode == 'shizuku')
-                            SwitchListTile(
-                              title: Text(tr('shizukuPretendToBeGooglePlay')),
-                              value: settingsProvider.shizukuPretendToBeGooglePlay,
-                              onChanged: (value) {
-                                settingsProvider.shizukuPretendToBeGooglePlay = value;
-                              },
-                            ),
-                          if (settingsProvider.installerMode == 'legacy')
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                              child: _ThirdPartyInstallerSelector(
-                                settingsProvider: settingsProvider,
-                              ),
-                            ),
-                        ]),
+                            );
+                          },
+                        ),
                         // ── Source-specific ──────────────────────────────────
                         if (sourceProvider.sources.any(
                           (s) => s.sourceConfigSettingFormItems.isNotEmpty,
@@ -576,9 +618,10 @@ class _SettingsPageState extends State<SettingsPage> {
                           Icons.palette_rounded,
                           'themes',
                         ),
-                        collapsibleCard('themes', [
-                          const ThemesSettingsSection(),
-                        ]),
+                        collapsibleCard(
+                          'themes',
+                          buildThemesSettingsCardItems(context, _androidInfo),
+                        ),
                         // ── Appearance ────────────────────────────────────────
                         sectionHeader(tr('appearance'), Icons.tune_rounded, 'appearance'),
                         collapsibleCard('appearance', [
@@ -668,47 +711,74 @@ class _SettingsPageState extends State<SettingsPage> {
                         collapsibleCard('gestures', [
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                DropdownMenu<SwipeAction>(
-                                  key: ValueKey(settingsProvider.rightSwipeAction),
-                                  initialSelection: settingsProvider.rightSwipeAction,
-                                  label: Text(tr('rightSwipeAction')),
-                                  expandedInsets: EdgeInsets.zero,
-                                  onSelected: (value) {
-                                    if (value != null) {
-                                      settingsProvider.rightSwipeAction = value;
-                                    }
-                                  },
-                                  dropdownMenuEntries: swipeActionsSortedByLocalizedLabel()
-                                      .map((action) => DropdownMenuEntry(
-                                            value: action,
-                                            label: tr('swipeAction_${action.name}'),
-                                            leadingIcon: Icon(_swipeActionIcon(action), size: 18),
-                                          ))
-                                      .toList(),
-                                ),
-                                const SizedBox(height: 16),
-                                DropdownMenu<SwipeAction>(
-                                  key: ValueKey(settingsProvider.leftSwipeAction),
-                                  initialSelection: settingsProvider.leftSwipeAction,
-                                  label: Text(tr('leftSwipeAction')),
-                                  expandedInsets: EdgeInsets.zero,
-                                  onSelected: (value) {
-                                    if (value != null) {
-                                      settingsProvider.leftSwipeAction = value;
-                                    }
-                                  },
-                                  dropdownMenuEntries: swipeActionsSortedByLocalizedLabel()
-                                      .map((action) => DropdownMenuEntry(
-                                            value: action,
-                                            label: tr('swipeAction_${action.name}'),
-                                            leadingIcon: Icon(_swipeActionIcon(action), size: 18),
-                                          ))
-                                      .toList(),
-                                ),
-                              ],
+                            child: m3eCompactDropdownScope(
+                              context: context,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  DropdownMenu<SwipeAction>(
+                                    key: ValueKey(
+                                      settingsProvider.rightSwipeAction,
+                                    ),
+                                    initialSelection:
+                                        settingsProvider.rightSwipeAction,
+                                    label: Text(tr('rightSwipeAction')),
+                                    expandedInsets: EdgeInsets.zero,
+                                    onSelected: (SwipeAction? value) {
+                                      if (value != null) {
+                                        settingsProvider.rightSwipeAction = value;
+                                      }
+                                    },
+                                    dropdownMenuEntries:
+                                        swipeActionsSortedByLocalizedLabel()
+                                            .map(
+                                              (SwipeAction action) =>
+                                                  DropdownMenuEntry<SwipeAction>(
+                                                value: action,
+                                                label: tr(
+                                                  'swipeAction_${action.name}',
+                                                ),
+                                                leadingIcon: Icon(
+                                                  _swipeActionIcon(action),
+                                                  size: 18,
+                                                ),
+                                              ),
+                                            )
+                                            .toList(),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  DropdownMenu<SwipeAction>(
+                                    key: ValueKey(
+                                      settingsProvider.leftSwipeAction,
+                                    ),
+                                    initialSelection:
+                                        settingsProvider.leftSwipeAction,
+                                    label: Text(tr('leftSwipeAction')),
+                                    expandedInsets: EdgeInsets.zero,
+                                    onSelected: (SwipeAction? value) {
+                                      if (value != null) {
+                                        settingsProvider.leftSwipeAction = value;
+                                      }
+                                    },
+                                    dropdownMenuEntries:
+                                        swipeActionsSortedByLocalizedLabel()
+                                            .map(
+                                              (SwipeAction action) =>
+                                                  DropdownMenuEntry<SwipeAction>(
+                                                value: action,
+                                                label: tr(
+                                                  'swipeAction_${action.name}',
+                                                ),
+                                                leadingIcon: Icon(
+                                                  _swipeActionIcon(action),
+                                                  size: 18,
+                                                ),
+                                              ),
+                                            )
+                                            .toList(),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ]),
@@ -750,7 +820,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           mode: LaunchMode.externalApplication,
                         );
                       },
-                      icon: const Icon(Icons.help_outline_rounded),
+                      icon: const Icon(Icons.open_in_new_rounded),
                       tooltip: tr('wiki'),
                     ),
                     IconButton(
