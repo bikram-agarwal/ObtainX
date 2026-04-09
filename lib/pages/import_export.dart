@@ -17,6 +17,30 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+/// Human-readable label for a SAF tree [Uri] (Android document tree).
+String apkSaveTreeUriDisplayLabel(Uri uri) {
+  final String path = uri.path;
+  if (path.startsWith('/tree/')) {
+    return Uri.decodeComponent(path.substring('/tree/'.length));
+  }
+  if (path.isNotEmpty) {
+    final String withoutLeadingSlash =
+        path.startsWith('/') ? path.substring(1) : path;
+    return Uri.decodeComponent(withoutLeadingSlash);
+  }
+  return uri.toString();
+}
+
+/// Display path for SAF tree URIs, with `primary:` storage prefix removed.
+String folderDisplayPathFromTreeUri(Uri uri) {
+  String label = apkSaveTreeUriDisplayLabel(uri);
+  const String primaryPrefix = 'primary:';
+  if (label.startsWith(primaryPrefix)) {
+    return label.substring(primaryPrefix.length);
+  }
+  return label;
+}
+
 class ImportExportPage extends StatefulWidget {
   const ImportExportPage({super.key});
 
@@ -134,6 +158,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
             if (result != null) {
               showMessage(tr('exportedTo', args: [result]), context);
             }
+            setState(() {});
           })
           .catchError((e) {
             if (!context.mounted) return;
@@ -381,6 +406,181 @@ class _ImportExportPageState extends State<ImportExportPage> {
     });
 
     final ColorScheme impScheme = Theme.of(context).colorScheme;
+
+    Widget importPageCard(List<Widget> cardChildren) {
+      final bool isDark = Theme.of(context).brightness == Brightness.dark;
+      return Container(
+        decoration: BoxDecoration(
+          color: impScheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: impScheme.outlineVariant, width: 1),
+          boxShadow: [
+            if (isDark)
+              BoxShadow(
+                color: impScheme.shadow.withAlpha(50),
+                blurRadius: 6,
+                spreadRadius: 0,
+                offset: const Offset(0, 2),
+              )
+            else
+              BoxShadow(
+                color: impScheme.shadow.withAlpha(18),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: cardChildren,
+        ),
+      );
+    }
+
+    Widget importPageSectionTitle(
+      String title,
+      IconData icon, {
+      double topPadding = 20,
+      double bottomPadding = 8,
+    }) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(4, topPadding, 4, bottomPadding),
+        child: Row(
+          children: [
+            Icon(icon, color: impScheme.primary, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: impScheme.primary,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final ButtonStyle folderPickOutlineStyle = outlineButtonStyle.merge(
+      ButtonStyle(
+        padding: WidgetStateProperty.all(const EdgeInsets.all(10)),
+        minimumSize: WidgetStateProperty.all(Size.zero),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+
+    Widget folderOutlineIconButton({
+      required String tooltipMessage,
+      required VoidCallback? onPressed,
+    }) {
+      return Tooltip(
+        message: tooltipMessage,
+        child: TextButton(
+          style: folderPickOutlineStyle,
+          onPressed: onPressed,
+          child: Icon(
+            Icons.folder_open_rounded,
+            color: impScheme.primary,
+          ),
+        ),
+      );
+    }
+
+    final List<Widget> batchImportCells = [
+      TextButton(
+        style: outlineButtonStyle,
+        onPressed: importInProgress
+            ? null
+            : () async {
+                var searchSourceName =
+                    await showDialog<List<String>?>(
+                          context: context,
+                          builder: (BuildContext ctx) {
+                            return SelectionModal(
+                              title: tr(
+                                'selectX',
+                                args: [
+                                  tr(
+                                    'source',
+                                  ).toLowerCase(),
+                                ],
+                              ),
+                              entries: sourceStrings,
+                              selectedByDefault: false,
+                              onlyOneSelectionAllowed: true,
+                              titlesAreLinks: false,
+                            );
+                          },
+                        ) ??
+                        [];
+                var searchSource = sourceProvider.sources
+                    .where(
+                      (e) => searchSourceName.contains(e.name),
+                    )
+                    .toList();
+                if (searchSource.isNotEmpty) {
+                  runSourceSearch(searchSource[0]);
+                }
+              },
+        child: Text(
+          tr(
+            'searchX',
+            args: [
+              lowerCaseIfEnglish(tr('source')),
+            ],
+          ),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13),
+        ),
+      ),
+      TextButton(
+        style: outlineButtonStyle,
+        onPressed: importInProgress ? null : urlListImport,
+        child: Text(
+          tr('importFromURLList'),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13),
+        ),
+      ),
+      TextButton(
+        style: outlineButtonStyle,
+        onPressed: importInProgress ? null : runUrlImport,
+        child: Text(
+          tr('importFromURLsInFile'),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13),
+        ),
+      ),
+      ...sourceProvider.massUrlSources.map(
+        (source) => TextButton(
+          style: outlineButtonStyle,
+          onPressed: importInProgress
+              ? null
+              : () {
+                  runMassSourceImport(source);
+                },
+          child: Text(
+            tr('importX', args: [source.name]),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13),
+          ),
+        ),
+      ),
+    ];
+
     return Scaffold(
       backgroundColor: impScheme.surface,
       body: Stack(
@@ -408,238 +608,344 @@ class _ImportExportPageState extends State<ImportExportPage> {
             cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(title: tr('importExport')),
-              SliverFillRemaining(
-            hasScrollBody: false,
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                8,
-                16,
-                8 + MediaQuery.paddingOf(context).bottom,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  FutureBuilder(
-                    future: settingsProvider.getExportDir(),
-                    builder: (context, snapshot) {
-                      return Column(
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextButton(
-                                  style: outlineButtonStyle,
-                                  onPressed: importInProgress
-                                      ? null
-                                      : () {
-                                          runObtainiumExport(pickOnly: true);
-                                        },
-                                  child: Text(
-                                    tr('pickExportDir'),
-                                    textAlign: TextAlign.center,
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  8,
+                  16,
+                  8 + MediaQuery.paddingOf(context).bottom,
+                ),
+                sliver: SliverToBoxAdapter(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (Platform.isAndroid) ...[
+                        importPageSectionTitle(
+                          tr('importExportCardUpdateAssets'),
+                          Icons.system_update_rounded,
+                        ),
+                        importPageCard([
+                          FutureBuilder<Uri?>(
+                            future: settingsProvider.getApkSaveDir(),
+                            builder: (context, apkSaveSnapshot) {
+                              final String apkFolderTitle =
+                                  apkSaveSnapshot.data == null
+                                  ? tr('pickApkSaveDir')
+                                  : folderDisplayPathFromTreeUri(
+                                      apkSaveSnapshot.data!,
+                                    );
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      12,
+                                      16,
+                                      12,
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                apkFolderTitle,
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .titleSmall,
+                                                maxLines: 3,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                tr('apkSaveFolderDescription'),
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodySmall
+                                                    ?.copyWith(
+                                                      color: impScheme
+                                                          .onSurfaceVariant,
+                                                    ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        folderOutlineIconButton(
+                                          tooltipMessage: tr('pickApkSaveDir'),
+                                          onPressed: importInProgress
+                                              ? null
+                                              : () async {
+                                                  await settingsProvider
+                                                      .pickApkSaveDir();
+                                                  if (context.mounted) {
+                                                    setState(() {});
+                                                  }
+                                                },
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: TextButton(
-                                  style: outlineButtonStyle,
-                                  onPressed:
-                                      importInProgress || snapshot.data == null
-                                      ? null
-                                      : runObtainiumExport,
-                                  child: Text(
-                                    tr('obtainiumExport'),
-                                    textAlign: TextAlign.center,
+                                  Divider(
+                                    height: 1,
+                                    thickness: 1,
+                                    color: impScheme.outlineVariant,
                                   ),
-                                ),
-                              ),
-                            ],
+                                  SwitchListTile(
+                                    contentPadding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      4,
+                                      16,
+                                      12,
+                                    ),
+                                    title: Text(tr('saveDownloadedApkCopies')),
+                                    value: settingsProvider
+                                        .saveDownloadedApkCopies,
+                                    onChanged: importInProgress
+                                        ? null
+                                        : (bool enabled) {
+                                            settingsProvider
+                                                    .saveDownloadedApkCopies =
+                                                enabled;
+                                          },
+                                  ),
+                                ],
+                              );
+                            },
                           ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextButton(
-                                  style: outlineButtonStyle,
-                                  onPressed: importInProgress
-                                      ? null
-                                      : runObtainiumImport,
-                                  child: Text(
-                                    tr('obtainiumImport'),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
+                        ]),
+                      ],
+                      importPageSectionTitle(
+                        tr('importExportCardObtainxBackup'),
+                        Icons.save_as_rounded,
+                      ),
+                      FutureBuilder<Uri?>(
+                        future: settingsProvider.getExportDir(),
+                        builder: (context, exportSnapshot) {
+                          return importPageCard([
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                12,
+                                16,
+                                12,
                               ),
-                            ],
-                          ),
-                          if (snapshot.data != null)
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                const SizedBox(height: 16),
-                                GeneratedForm(
-                                  items: [
-                                    [
-                                      GeneratedFormSwitch(
-                                        'autoExportOnChanges',
-                                        label: tr('autoExportOnChanges'),
-                                        defaultValue: settingsProvider
-                                            .autoExportOnChanges,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          exportSnapshot.data == null
+                                              ? tr('pickConfigExportFolder')
+                                              : folderDisplayPathFromTreeUri(
+                                                  exportSnapshot.data!,
+                                                ),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall,
+                                          maxLines: 3,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          tr('configExportFolderDescription'),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: impScheme
+                                                    .onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  folderOutlineIconButton(
+                                    tooltipMessage: tr('pickExportDir'),
+                                    onPressed: importInProgress
+                                        ? null
+                                        : () {
+                                            runObtainiumExport(pickOnly: true);
+                                          },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Divider(
+                              height: 1,
+                              thickness: 1,
+                              color: impScheme.outlineVariant,
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 12),
+                                    child: Text(tr('importExportIncludeInBackup')),
+                                  ),
+                                  Expanded(
+                                    child: DropdownMenu<int>(
+                                      key: ValueKey(
+                                        settingsProvider.exportSettings,
                                       ),
-                                    ],
-                                  ],
-                                  onValueChanges: (value, valid, isBuilding) {
-                                    if (valid && !isBuilding) {
-                                      if (value['autoExportOnChanges'] !=
-                                          null) {
-                                        settingsProvider.autoExportOnChanges =
-                                            value['autoExportOnChanges'] ==
-                                            true;
-                                      }
-                                    }
-                                  },
-                                ),
-                                const SizedBox(height: 16),
-                                DropdownMenu<int>(
-                                  key: ValueKey(settingsProvider.exportSettings),
-                                  initialSelection:
-                                      settingsProvider.exportSettings,
-                                  label: Text(tr('includeSettings')),
-                                  expandedInsets: EdgeInsets.zero,
-                                  onSelected: (int? selected) {
-                                    if (selected != null) {
-                                      settingsProvider.exportSettings =
-                                          selected;
-                                    }
-                                  },
-                                  dropdownMenuEntries: [
-                                    DropdownMenuEntry<int>(
-                                      value: 0,
-                                      label: tr('none'),
+                                      initialSelection:
+                                          settingsProvider.exportSettings,
+                                      expandedInsets: EdgeInsets.zero,
+                                      onSelected: (int? selected) {
+                                        if (selected != null) {
+                                          settingsProvider.exportSettings =
+                                              selected;
+                                        }
+                                      },
+                                      dropdownMenuEntries: [
+                                        DropdownMenuEntry<int>(
+                                          value: 0,
+                                          label: tr(
+                                            'importExportBackupScopeOnlyApps',
+                                          ),
+                                        ),
+                                        DropdownMenuEntry<int>(
+                                          value: 1,
+                                          label: tr(
+                                            'importExportBackupScopeAppsSettingsNoSecrets',
+                                          ),
+                                        ),
+                                        DropdownMenuEntry<int>(
+                                          value: 2,
+                                          label: tr(
+                                            'importExportBackupScopeAllAppsAndSettings',
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    DropdownMenuEntry<int>(
-                                      value: 1,
-                                      label: tr('excludeSecrets'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Divider(
+                              height: 1,
+                              thickness: 1,
+                              color: impScheme.outlineVariant,
+                            ),
+                            SwitchListTile(
+                              contentPadding: const EdgeInsets.fromLTRB(
+                                16,
+                                0,
+                                16,
+                                4,
+                              ),
+                              title: Text(tr('autoExportOnChanges')),
+                              value: settingsProvider.autoExportOnChanges,
+                              onChanged: importInProgress
+                                  ? null
+                                  : (bool value) {
+                                      settingsProvider.autoExportOnChanges =
+                                          value;
+                                    },
+                            ),
+                            Divider(
+                              height: 1,
+                              thickness: 1,
+                              color: impScheme.outlineVariant,
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: TextButton(
+                                      style: outlineButtonStyle,
+                                      onPressed: importInProgress
+                                          ? null
+                                          : runObtainiumImport,
+                                      child: Text(tr('obtainiumImport')),
                                     ),
-                                    DropdownMenuEntry<int>(
-                                      value: 2,
-                                      label: tr('all'),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: TextButton(
+                                      style: outlineButtonStyle,
+                                      onPressed: importInProgress ||
+                                              exportSnapshot.data == null
+                                          ? null
+                                          : runObtainiumExport,
+                                      child: Text(tr('obtainiumExport')),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ]);
+                        },
+                      ),
+                      if (importInProgress) ...[
+                        const SizedBox(height: 14),
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 14),
+                      ],
+                      importPageSectionTitle(
+                        tr('importExportCardBatchImports'),
+                        Icons.playlist_add_rounded,
+                        topPadding: 12,
+                        bottomPadding: 0,
+                      ),
+                      importPageCard([
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (
+                                int rowStart = 0;
+                                rowStart < batchImportCells.length;
+                                rowStart += 2
+                              ) ...[
+                                if (rowStart > 0) const SizedBox(height: 4),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(child: batchImportCells[rowStart]),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: rowStart + 1 < batchImportCells.length
+                                          ? batchImportCells[rowStart + 1]
+                                          : const SizedBox.shrink(),
                                     ),
                                   ],
                                 ),
                               ],
-                            ),
-                        ],
-                      );
-                    },
+                            ],
+                          ),
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+                      Text(
+                        tr('importedAppsIdDisclaimer'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontStyle: FontStyle.italic,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                   ),
-                  if (importInProgress)
-                    const Column(
-                      children: [
-                        SizedBox(height: 14),
-                        LinearProgressIndicator(),
-                        SizedBox(height: 14),
-                      ],
-                    )
-                  else
-                    Column(
-                      children: [
-                        SizedBox(height: 32),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: importInProgress
-                                    ? null
-                                    : () async {
-                                        var searchSourceName =
-                                            await showDialog<List<String>?>(
-                                              context: context,
-                                              builder: (BuildContext ctx) {
-                                                return SelectionModal(
-                                                  title: tr(
-                                                    'selectX',
-                                                    args: [
-                                                      tr(
-                                                        'source',
-                                                      ).toLowerCase(),
-                                                    ],
-                                                  ),
-                                                  entries: sourceStrings,
-                                                  selectedByDefault: false,
-                                                  onlyOneSelectionAllowed: true,
-                                                  titlesAreLinks: false,
-                                                );
-                                              },
-                                            ) ??
-                                            [];
-                                        var searchSource = sourceProvider
-                                            .sources
-                                            .where(
-                                              (e) => searchSourceName.contains(
-                                                e.name,
-                                              ),
-                                            )
-                                            .toList();
-                                        if (searchSource.isNotEmpty) {
-                                          runSourceSearch(searchSource[0]);
-                                        }
-                                      },
-                                child: Text(
-                                  tr(
-                                    'searchX',
-                                    args: [lowerCaseIfEnglish(tr('source'))],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: importInProgress ? null : urlListImport,
-                          child: Text(tr('importFromURLList')),
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: importInProgress ? null : runUrlImport,
-                          child: Text(tr('importFromURLsInFile')),
-                        ),
-                      ],
-                    ),
-                  ...sourceProvider.massUrlSources.map(
-                    (source) => Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: importInProgress
-                              ? null
-                              : () {
-                                  runMassSourceImport(source);
-                                },
-                          child: Text(tr('importX', args: [source.name])),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Spacer(),
-                  const Divider(height: 32),
-                  Text(
-                    tr('importedAppsIdDisclaimer'),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontStyle: FontStyle.italic,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
+                ),
               ),
-            ),
-          ),
             ],
           ),
         ],

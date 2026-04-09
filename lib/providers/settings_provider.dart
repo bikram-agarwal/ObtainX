@@ -998,6 +998,80 @@ class SettingsProvider with ChangeNotifier {
     }
   }
 
+  Future<Uri?> getApkSaveDir() async {
+    final String? uriString = prefs?.getString('apkSaveDir');
+    if (uriString == null) {
+      return null;
+    }
+    final Uri uri = Uri.parse(uriString);
+    Future<bool> canAccessApkSaveTree(Uri treeUri) async {
+      final bool readable = await saf.canRead(treeUri) ?? false;
+      final bool writable = await saf.canWrite(treeUri) ?? false;
+      return readable && writable;
+    }
+    if (!await canAccessApkSaveTree(uri)) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!await canAccessApkSaveTree(uri)) {
+        prefs?.remove('apkSaveDir');
+        notifyListeners();
+        return null;
+      }
+    }
+    return uri;
+  }
+
+  /// Lets the user pick a folder for saved APK copies. Cancelling leaves the
+  /// previous folder and persisted URI permission unchanged.
+  Future<void> pickApkSaveDir({bool remove = false}) async {
+    if (remove) {
+      final String? saved = prefs?.getString('apkSaveDir');
+      prefs?.remove('apkSaveDir');
+      notifyListeners();
+      if (saved != null && saved.isNotEmpty) {
+        try {
+          await saf.releasePersistableUriPermission(Uri.parse(saved));
+        } catch (_) {}
+      }
+      return;
+    }
+
+    final String? previousApkSaveDirString = prefs?.getString('apkSaveDir');
+    final Uri? newUri = await saf.openDocumentTree();
+
+    if (newUri == null) {
+      return;
+    }
+
+    final String newUriString = newUri.toString();
+    if (previousApkSaveDirString == newUriString) {
+      return;
+    }
+
+    prefs?.setString('apkSaveDir', newUriString);
+    notifyListeners();
+
+    if (previousApkSaveDirString != null &&
+        previousApkSaveDirString.isNotEmpty) {
+      try {
+        await saf.releasePersistableUriPermission(
+          Uri.parse(previousApkSaveDirString),
+        );
+      } catch (_) {}
+    }
+  }
+
+  /// When true (and an APK save folder is set), copies of downloaded APKs are
+  /// persisted under the SAF tree. Default false so picking a folder alone does
+  /// not enable copying until the user turns this on.
+  bool get saveDownloadedApkCopies {
+    return prefs?.getBool('saveDownloadedApkCopies') ?? false;
+  }
+
+  set saveDownloadedApkCopies(bool value) {
+    prefs?.setBool('saveDownloadedApkCopies', value);
+    notifyListeners();
+  }
+
   bool get autoExportOnChanges {
     return prefs?.getBool('autoExportOnChanges') ?? false;
   }

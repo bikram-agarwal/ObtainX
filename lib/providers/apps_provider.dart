@@ -618,6 +618,40 @@ void deleteFile(File file) {
   }
 }
 
+String sanitizeApkSaveDisplayName(String raw) {
+  var name = raw.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+  if (name.isEmpty) {
+    return 'download.apk';
+  }
+  return name;
+}
+
+/// Same label as release assets (e.g. GitHub attachment filename) when possible.
+String storeFacingDownloadDisplayNameForApp(App app) {
+  if (app.apkUrls.isEmpty) {
+    return 'download.apk';
+  }
+  final int preferredIdx = app.preferredApkIndex >= 0 &&
+          app.preferredApkIndex < app.apkUrls.length
+      ? app.preferredApkIndex
+      : 0;
+  String key = app.apkUrls[preferredIdx].key.trim();
+  if (key.isEmpty) {
+    try {
+      final Uri uri = Uri.parse(app.apkUrls[preferredIdx].value);
+      if (uri.pathSegments.isNotEmpty) {
+        key = uri.pathSegments.last;
+      }
+    } catch (_) {
+      key = 'download.apk';
+    }
+  }
+  if (key.isEmpty) {
+    key = 'download.apk';
+  }
+  return sanitizeApkSaveDisplayName(key);
+}
+
 Future<File> downloadFile(
   String url,
   String fileName,
@@ -1253,6 +1287,70 @@ class AppsProvider with ChangeNotifier {
     );
   }
 
+  Uri? _documentUriFromSafPluginResult(dynamic pluginResult) {
+    if (pluginResult == null) return null;
+    if (pluginResult is Map) {
+      return Uri.parse(
+        Map<String, dynamic>.from(pluginResult)['uri'] as String,
+      );
+    }
+    return (pluginResult as dynamic).uri as Uri?;
+  }
+
+  /// Writes [source] into the SAF tree as [displayName] without loading the
+  /// whole file into memory. Replaces an existing document with the same name.
+  Future<bool> _chunkedCopyApkToSafTree(
+    File source,
+    Uri treeUri,
+    String displayName,
+  ) async {
+    final dynamic existing = await saf.findFile(treeUri, displayName);
+    if (existing != null) {
+      final Uri? existingUri = existing is Map
+          ? Uri.parse(
+              Map<String, dynamic>.from(existing)['uri'] as String,
+            )
+          : (existing as dynamic).uri as Uri?;
+      if (existingUri != null) {
+        await saf.delete(existingUri);
+      }
+    }
+    Uri? documentUri;
+    var isFirstChunk = true;
+    await for (final List<int> chunk in source.openRead()) {
+      final Uint8List bytes = Uint8List.fromList(chunk);
+      if (isFirstChunk) {
+        final dynamic created = await saf.createFile(
+          treeUri,
+          mimeType: 'application/vnd.android.package-archive',
+          displayName: displayName,
+          bytes: bytes,
+        );
+        isFirstChunk = false;
+        documentUri = _documentUriFromSafPluginResult(created);
+        if (documentUri == null) {
+          return false;
+        }
+      } else {
+        await saf.writeToFile(
+          documentUri!,
+          bytes: bytes,
+          mode: FileMode.append,
+        );
+      }
+    }
+    if (isFirstChunk) {
+      final dynamic created = await saf.createFile(
+        treeUri,
+        mimeType: 'application/vnd.android.package-archive',
+        displayName: displayName,
+        bytes: Uint8List(0),
+      );
+      return _documentUriFromSafPluginResult(created) != null;
+    }
+    return true;
+  }
+
   Future<bool> installApkDir(
     DownloadedDir dir,
     BuildContext? firstTimeWithContext, {
@@ -1302,9 +1400,9 @@ class AppsProvider with ChangeNotifier {
           additionalAPKs: apkFiles.sublist(
             1,
           ).map((a) => DownloadedApk(dir.appId, a)).toList(),
+          skipApkSaveFolderPersistForPrimaryApk: true,
         );
         somethingInstalled = somethingInstalled || wasInstalled;
-        dir.file.delete(recursive: true);
       } catch (e) {
         logs.add('Could not install APKs from ${dir.type}: ${e.toString()}');
         errors.add(dir.appId, e, appName: apps[dir.appId]?.name);
@@ -1313,6 +1411,38 @@ class AppsProvider with ChangeNotifier {
         throw errors;
       }
     } finally {
+      final App? appForSave = apps[dir.appId]?.app;
+      final Uri? resolvedApkSaveUri = await settingsProvider.getApkSaveDir();
+      final Uri? apkSaveTreeUri = settingsProvider.saveDownloadedApkCopies
+          ? resolvedApkSaveUri
+          : null;
+      if (Platform.isAndroid &&
+          appForSave != null &&
+          apkSaveTreeUri != null &&
+          dir.file.existsSync()) {
+        bool copiedOk = false;
+        try {
+          copiedOk = await _chunkedCopyApkToSafTree(
+            dir.file,
+            apkSaveTreeUri,
+            storeFacingDownloadDisplayNameForApp(appForSave),
+          );
+        } catch (exception, stackTrace) {
+          logs.add(
+            'APK save folder copy failed: ${exception.toString()}\n$stackTrace',
+          );
+          Fluttertoast.showToast(msg: tr('apkSaveFolderCopyFailed'));
+        }
+        if (copiedOk) {
+          try {
+            dir.file.deleteSync();
+          } catch (_) {}
+        }
+      } else if (somethingInstalled && dir.file.existsSync()) {
+        try {
+          dir.file.deleteSync();
+        } catch (_) {}
+      }
       dir.extracted.delete(recursive: true);
     }
     return somethingInstalled;
@@ -1324,106 +1454,146 @@ class AppsProvider with ChangeNotifier {
     bool needsBGWorkaround = false,
     bool shizukuPretendToBeGooglePlay = false,
     List<DownloadedApk> additionalAPKs = const [],
+    /// When true, the outer bundle ([installApkDir]) persists the container; do
+    /// not copy this extracted APK under the same release asset name.
+    bool skipApkSaveFolderPersistForPrimaryApk = false,
   }) async {
-    if (firstTimeWithContext != null &&
-        settingsProvider.beforeNewInstallsShareToAppVerifier &&
-        (await getInstalledInfo('dev.soupslurpr.appverifier')) != null) {
-      XFile f = XFile.fromData(
-        file.file.readAsBytesSync(),
-        mimeType: 'application/vnd.android.package-archive',
+    final Uri? apkSaveTreeUri = skipApkSaveFolderPersistForPrimaryApk
+        ? null
+        : (settingsProvider.saveDownloadedApkCopies
+              ? await settingsProvider.getApkSaveDir()
+              : null);
+    try {
+      if (firstTimeWithContext != null &&
+          settingsProvider.beforeNewInstallsShareToAppVerifier &&
+          (await getInstalledInfo('dev.soupslurpr.appverifier')) != null) {
+        XFile f = XFile.fromData(
+          file.file.readAsBytesSync(),
+          mimeType: 'application/vnd.android.package-archive',
+        );
+        Fluttertoast.showToast(
+          msg: tr('appVerifierInstructionToast'),
+          toastLength: Toast.LENGTH_LONG,
+        );
+        await SharePlus.instance.share(ShareParams(files: [f]));
+      }
+      var newInfo = await pm.getPackageArchiveInfo(
+        archiveFilePath: file.file.path,
       );
-      Fluttertoast.showToast(
-        msg: tr('appVerifierInstructionToast'),
-        toastLength: Toast.LENGTH_LONG,
-      );
-      await SharePlus.instance.share(ShareParams(files: [f]));
-    }
-    var newInfo = await pm.getPackageArchiveInfo(
-      archiveFilePath: file.file.path,
-    );
-    if (newInfo == null) {
-      try {
-        deleteFile(file.file);
-        for (var a in additionalAPKs) {
-          deleteFile(a.file);
+      if (newInfo == null) {
+        try {
+          deleteFile(file.file);
+          for (var a in additionalAPKs) {
+            deleteFile(a.file);
+          }
+        } catch (e) {
+          //
+        } finally {
+          throw ObtainiumError(tr('badDownload'));
         }
-      } catch (e) {
-        //
-      } finally {
-        throw ObtainiumError(tr('badDownload'));
       }
-    }
-    PackageInfo? appInfo = await getInstalledInfo(apps[file.appId]!.app.id);
-    logs.add(
-      'Installing "${newInfo.packageName}" version "${newInfo.versionName}" versionCode "${newInfo.versionCode}"${appInfo != null ? ' (from existing version "${appInfo.versionName}" versionCode "${appInfo.versionCode}")' : ''}',
-    );
-    if (appInfo != null &&
-        newInfo.versionCode! < appInfo.versionCode! &&
-        !(await canDowngradeApps())) {
-      throw DowngradeError(appInfo.versionCode!, newInfo.versionCode!);
-    }
-    if (needsBGWorkaround) {
-      // The below 'await' will never return if we are in a background process
-      // To work around this, we should assume the install will be successful
-      // So we update the app's installed version first as we will never get to the later code
-      // We can't conditionally get rid of the 'await' as this causes install fails (BG process times out) - see #896
-      // TODO: When fixed, update this function and the calls to it accordingly
-      apps[file.appId]!.app.installedVersion =
-          apps[file.appId]!.app.latestVersion;
-      await saveApps([
-        apps[file.appId]!.app,
-      ], attemptToCorrectInstallStatus: false);
-    }
-    if (settingsProvider.installerMode == 'legacy') {
-      final targetPkg = settingsProvider.legacyInstallerPackage;
-      final targetAct = settingsProvider.legacyInstallerActivity;
-      if (targetPkg == null || targetAct == null) {
-        throw ObtainiumError(tr('thirdPartyInstallerNotSelected'));
-      }
-      bool thirdPartyInstallSucceeded = await installer.installApkViaThirdParty(
-        file.file.path,
-        targetPackage: targetPkg,
-        targetActivity: targetAct,
-        expectedPackageName: apps[file.appId]!.app.id,
+      PackageInfo? appInfo = await getInstalledInfo(apps[file.appId]!.app.id);
+      logs.add(
+        'Installing "${newInfo.packageName}" version "${newInfo.versionName}" versionCode "${newInfo.versionCode}"${appInfo != null ? ' (from existing version "${appInfo.versionName}" versionCode "${appInfo.versionCode}")' : ''}',
       );
-      if (thirdPartyInstallSucceeded) {
+      if (appInfo != null &&
+          newInfo.versionCode! < appInfo.versionCode! &&
+          !(await canDowngradeApps())) {
+        throw DowngradeError(appInfo.versionCode!, newInfo.versionCode!);
+      }
+      if (needsBGWorkaround) {
+        // The below 'await' will never return if we are in a background process
+        // To work around this, we should assume the install will be successful
+        // So we update the app's installed version first as we will never get to the later code
+        // We can't conditionally get rid of the 'await' as this causes install fails (BG process times out) - see #896
+        // TODO: When fixed, update this function and the calls to it accordingly
         apps[file.appId]!.app.installedVersion =
             apps[file.appId]!.app.latestVersion;
-        file.file.delete(recursive: true);
+        await saveApps([
+          apps[file.appId]!.app,
+        ], attemptToCorrectInstallStatus: false);
+      }
+      if (settingsProvider.installerMode == 'legacy') {
+        final targetPkg = settingsProvider.legacyInstallerPackage;
+        final targetAct = settingsProvider.legacyInstallerActivity;
+        if (targetPkg == null || targetAct == null) {
+          throw ObtainiumError(tr('thirdPartyInstallerNotSelected'));
+        }
+        bool thirdPartyInstallSucceeded =
+            await installer.installApkViaThirdParty(
+          file.file.path,
+          targetPackage: targetPkg,
+          targetActivity: targetAct,
+          expectedPackageName: apps[file.appId]!.app.id,
+        );
+        if (thirdPartyInstallSucceeded) {
+          apps[file.appId]!.app.installedVersion =
+              apps[file.appId]!.app.latestVersion;
+          if (apkSaveTreeUri == null) {
+            file.file.delete(recursive: true);
+          }
+        }
+        await saveApps([apps[file.appId]!.app]);
+        return thirdPartyInstallSucceeded;
+      }
+      int? code;
+      if (!settingsProvider.useShizuku) {
+        var allAPKs = [file.file.path];
+        allAPKs.addAll(additionalAPKs.map((a) => a.file.path));
+        code = await AndroidPackageInstaller.installApk(
+          apkFilePath: allAPKs.join(','),
+        );
+      } else {
+        code = await ShizukuApkInstaller().installAPK(
+          file.file.uri.toString(),
+          shizukuPretendToBeGooglePlay ? "com.android.vending" : "",
+        );
+      }
+      bool installed = false;
+      if (code != null && code != 0 && code != 3) {
+        if (apkSaveTreeUri == null) {
+          try {
+            deleteFile(file.file);
+          } catch (e) {
+            //
+          }
+        }
+        throw InstallError(code);
+      } else if (code == 0) {
+        installed = true;
+        apps[file.appId]!.app.installedVersion =
+            apps[file.appId]!.app.latestVersion;
+        if (apkSaveTreeUri == null) {
+          file.file.delete(recursive: true);
+        }
       }
       await saveApps([apps[file.appId]!.app]);
-      return thirdPartyInstallSucceeded;
-    }
-    int? code;
-    if (!settingsProvider.useShizuku) {
-      var allAPKs = [file.file.path];
-      allAPKs.addAll(additionalAPKs.map((a) => a.file.path));
-      code = await AndroidPackageInstaller.installApk(
-        apkFilePath: allAPKs.join(','),
-      );
-    } else {
-      code = await ShizukuApkInstaller().installAPK(
-        file.file.uri.toString(),
-        shizukuPretendToBeGooglePlay ? "com.android.vending" : "",
-      );
-    }
-    bool installed = false;
-    if (code != null && code != 0 && code != 3) {
-      try {
-        deleteFile(file.file);
-      } catch (e) {
-        //
-      } finally {
-        throw InstallError(code);
+      return installed;
+    } finally {
+      if (Platform.isAndroid &&
+          apkSaveTreeUri != null &&
+          apps[file.appId] != null &&
+          file.file.existsSync()) {
+        bool copiedOk = false;
+        try {
+          copiedOk = await _chunkedCopyApkToSafTree(
+            file.file,
+            apkSaveTreeUri,
+            storeFacingDownloadDisplayNameForApp(apps[file.appId]!.app),
+          );
+        } catch (exception, stackTrace) {
+          logs.add(
+            'APK save folder copy failed: ${exception.toString()}\n$stackTrace',
+          );
+          Fluttertoast.showToast(msg: tr('apkSaveFolderCopyFailed'));
+        }
+        if (copiedOk) {
+          try {
+            file.file.deleteSync();
+          } catch (_) {}
+        }
       }
-    } else if (code == 0) {
-      installed = true;
-      apps[file.appId]!.app.installedVersion =
-          apps[file.appId]!.app.latestVersion;
-      file.file.delete(recursive: true);
     }
-    await saveApps([apps[file.appId]!.app]);
-    return installed;
   }
 
   Future<String> getStorageRootPath() async {
@@ -1841,7 +2011,7 @@ class AppsProvider with ChangeNotifier {
         String downloadPath = '${await getStorageRootPath()}/Download';
         await downloadFile(
           fileUrl.value,
-          fileUrl.key,
+          sanitizeApkSaveDisplayName(fileUrl.key),
           true,
           (double? progress) {
             notificationsProvider.notify(
