@@ -86,14 +86,19 @@ bool versionsEffectivelyEqual(String installed, String latest) {
   return false;
 }
 
-bool _isDigit(int codeUnit) =>
-    codeUnit >= 0x30 && codeUnit <= 0x39; // '0'..'9'
+bool _isDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39; // '0'..'9'
 
 /// True when [needle] appears in [longer] as a contiguous substring with
 /// boundaries so we do not treat [2.0] as inside [12.0] or [.0] as inside [8.0].
-bool _boundedVersionSubstringInHaystack(String longer, String needle, int startIndex) {
+bool _boundedVersionSubstringInHaystack(
+  String longer,
+  String needle,
+  int startIndex,
+) {
   final int needleLen = needle.length;
-  if (needleLen == 0 || startIndex < 0 || startIndex + needleLen > longer.length) {
+  if (needleLen == 0 ||
+      startIndex < 0 ||
+      startIndex + needleLen > longer.length) {
     return false;
   }
   if (longer.substring(startIndex, startIndex + needleLen) != needle) {
@@ -161,18 +166,20 @@ bool isPlausibleVersionDateTokenYYYYMMDD(String token) {
   return true;
 }
 
+final RegExp _digitsOnlySegmentPattern = RegExp(r'^\d+$');
+
 Set<String> _commitHashLikeTokensFromVersion(String version) {
   final hexPattern = RegExp(r'[0-9a-fA-F]{6,}');
   final result = <String>{};
   for (final Match match in hexPattern.allMatches(version)) {
     final String token = match.group(0)!.toLowerCase();
     if (isPlausibleVersionDateTokenYYYYMMDD(token)) continue;
+    // Decimal-only runs are Android versionCode / build numbers, not git hex.
+    if (_digitsOnlySegmentPattern.hasMatch(token)) continue;
     result.add(token);
   }
   return result;
 }
-
-final RegExp _digitsOnlySegmentPattern = RegExp(r'^\d+$');
 
 /// True when dot-separated segments match numerically through the shared prefix,
 /// and the first differing part involves commit-hash-like material on at least
@@ -191,9 +198,12 @@ bool _dotSeparatedNumericPrefixThenIncomparableHashRemainder(
     final String installedSegment = installedParts[index];
     final String latestSegment = latestParts[index];
     if (installedSegment == latestSegment) continue;
-    final bool installedNumeric =
-        _digitsOnlySegmentPattern.hasMatch(installedSegment);
-    final bool latestNumeric = _digitsOnlySegmentPattern.hasMatch(latestSegment);
+    final bool installedNumeric = _digitsOnlySegmentPattern.hasMatch(
+      installedSegment,
+    );
+    final bool latestNumeric = _digitsOnlySegmentPattern.hasMatch(
+      latestSegment,
+    );
     if (installedNumeric && latestNumeric) {
       if (int.parse(installedSegment) != int.parse(latestSegment)) {
         return false;
@@ -201,17 +211,21 @@ bool _dotSeparatedNumericPrefixThenIncomparableHashRemainder(
       continue;
     }
     if (installedNumeric != latestNumeric) {
-      final bool hashInstalled =
-          _commitHashLikeTokensFromVersion(installedSegment).isNotEmpty;
-      final bool hashLatest =
-          _commitHashLikeTokensFromVersion(latestSegment).isNotEmpty;
+      final bool hashInstalled = _commitHashLikeTokensFromVersion(
+        installedSegment,
+      ).isNotEmpty;
+      final bool hashLatest = _commitHashLikeTokensFromVersion(
+        latestSegment,
+      ).isNotEmpty;
       if (hashInstalled || hashLatest) return true;
       return false;
     }
-    final bool hashInstalled =
-        _commitHashLikeTokensFromVersion(installedSegment).isNotEmpty;
-    final bool hashLatest =
-        _commitHashLikeTokensFromVersion(latestSegment).isNotEmpty;
+    final bool hashInstalled = _commitHashLikeTokensFromVersion(
+      installedSegment,
+    ).isNotEmpty;
+    final bool hashLatest = _commitHashLikeTokensFromVersion(
+      latestSegment,
+    ).isNotEmpty;
     if (hashInstalled || hashLatest) return true;
     return false;
   }
@@ -234,8 +248,9 @@ bool _dotSeparatedNumericPrefixThenIncomparableHashRemainder(
   return false;
 }
 
-/// True when numeric segment comparison ties but [installed] and [latest] differ
-/// and are not [versionsEffectivelyEqual] (user cannot tell order from strings).
+/// True when ordering is ambiguous: [compareVersionsByNumericSegments] ties on
+/// digit groups, or dot segments disagree in a hash-like way that overrides
+/// that compare. Not [versionsEffectivelyEqual].
 bool versionOrderIsUnclear(String installed, String latest) {
   if (installed.isEmpty || latest.isEmpty) return false;
   if (installed == latest) return false;
@@ -313,14 +328,12 @@ bool versionOrderUncertainUpdate(App app) {
 /// Compare version strings by numeric segments (e.g. 2.0.0 vs 1.9.9).
 /// Returns -1 if [installed] < [latest], 0 if equal, 1 if [installed] > [latest], null if not comparable.
 int? compareVersionsByNumericSegments(String installed, String latest) {
-  final installedSegments = RegExp(r'\d+')
-      .allMatches(installed)
-      .map((m) => int.tryParse(m.group(0)!) ?? 0)
-      .toList();
-  final latestSegments = RegExp(r'\d+')
-      .allMatches(latest)
-      .map((m) => int.tryParse(m.group(0)!) ?? 0)
-      .toList();
+  final installedSegments = RegExp(
+    r'\d+',
+  ).allMatches(installed).map((m) => int.tryParse(m.group(0)!) ?? 0).toList();
+  final latestSegments = RegExp(
+    r'\d+',
+  ).allMatches(latest).map((m) => int.tryParse(m.group(0)!) ?? 0).toList();
   if (installedSegments.isEmpty || latestSegments.isEmpty) return null;
   final maxLen = installedSegments.length > latestSegments.length
       ? installedSegments.length
@@ -337,7 +350,9 @@ int? compareVersionsByNumericSegments(String installed, String latest) {
 /// True if we should not show "update available" because installed is newer than or equal to latest by version math.
 bool installedVersionIsNewerOrEqual(String? installed, String latest) {
   if (installed == null || installed.isEmpty || latest.isEmpty) return false;
-  if (installed == latest || versionsEffectivelyEqual(installed, latest)) return true;
+  if (installed == latest || versionsEffectivelyEqual(installed, latest)) {
+    return true;
+  }
   final cmp = compareVersionsByNumericSegments(installed, latest);
   return cmp == null ? false : cmp >= 0;
 }
@@ -356,6 +371,7 @@ String trackOnlyDownloadPageUrl(App app) {
 class AppInMemory {
   late App app;
   double? downloadProgress;
+
   /// Total download size in bytes, available once the HTTP Content-Length header
   /// is received (may remain null if the server doesn't report it).
   int? downloadTotalBytes;
@@ -380,12 +396,12 @@ class AppInMemory {
         : installedInfo?.signingInfo?.signingCertificateHistory;
 
     return signatures?.map((signature) {
-      final digest = sha256.convert(signature);
-      return digest.bytes
-        .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
-        .join(':');
-      }).toList() ??
-      [];
+          final digest = sha256.convert(signature);
+          return digest.bytes
+              .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
+              .join(':');
+        }).toList() ??
+        [];
   }
 }
 
@@ -631,8 +647,8 @@ String storeFacingDownloadDisplayNameForApp(App app) {
   if (app.apkUrls.isEmpty) {
     return 'download.apk';
   }
-  final int preferredIdx = app.preferredApkIndex >= 0 &&
-          app.preferredApkIndex < app.apkUrls.length
+  final int preferredIdx =
+      app.preferredApkIndex >= 0 && app.preferredApkIndex < app.apkUrls.length
       ? app.preferredApkIndex
       : 0;
   String key = app.apkUrls[preferredIdx].key.trim();
@@ -860,8 +876,8 @@ Future<PackageInfo?> getInstalledInfo(
   if (packageName != null) {
     try {
       return await pm.getPackageInfo(
-          packageName: packageName,
-          flags: packageInfoFlags
+        packageName: packageName,
+        flags: packageInfoFlags,
       );
     } catch (e) {
       if (printErr) {
@@ -886,16 +902,18 @@ class RemoveAppsWithModalResult {
   });
 
   /// User dismissed the dialog with Cancel, or left both toggles off.
-  static const RemoveAppsWithModalResult cancelled = RemoveAppsWithModalResult._(
-    confirmed: false,
-  );
+  static const RemoveAppsWithModalResult cancelled =
+      RemoveAppsWithModalResult._(confirmed: false);
 
   final bool confirmed;
+
   /// When non-empty, those apps were removed from the UI and Obtainium data is
   /// deleted after 5 seconds unless [AppsProvider.undoDeferredObtainiumRemovals] runs.
   final Set<String> deferredUndoAppIds;
+
   /// True when [removeApps] ran in the same step (remove from Obtainium + uninstall).
   final bool removedFromObtainiumImmediately;
+
   /// True when the app should disappear from the list (deferred or immediate).
   final bool obtainiumEntryRemovedOrScheduled;
 
@@ -926,6 +944,7 @@ class AppsProvider with ChangeNotifier {
   late StreamSubscription<FGBGType>? foregroundSubscription;
   late Directory apkDir;
   late Directory iconsCacheDir;
+
   /// User-chosen PNG overrides; under app storage, not [iconsCacheDir], so they
   /// survive Android "clear cache".
   late Directory userAppIconsDir;
@@ -975,7 +994,8 @@ class AppsProvider with ChangeNotifier {
         await loadApps();
         // Delete any partial APKs (if safe to do so)
         var cutoff = DateTime.now().subtract(const Duration(days: 7));
-        apkDir.listSync()
+        apkDir
+            .listSync()
             .where((element) => element.statSync().modified.isBefore(cutoff))
             .forEach((partialApk) {
               if (!areDownloadsRunning()) {
@@ -1021,6 +1041,7 @@ class AppsProvider with ChangeNotifier {
     BuildContext? context, {
     NotificationsProvider? notificationsProvider,
     bool useExisting = true,
+
     /// When true, successful completion leaves [AppInMemory.downloadProgress] at
     /// `-1` so the app page stays on the installing UI until [installFn] clears
     /// it. Avoids a flash of the normal button between download and install.
@@ -1118,10 +1139,7 @@ class AppsProvider with ChangeNotifier {
         String apkDirPath = '${downloadedFile.path}-dir';
         await unzipFile(downloadedFile.path, '${downloadedFile.path}-dir');
         extractedDir = Directory(apkDirPath);
-        var apks = extractedDir
-            .listSync()
-            .where((e) => isApk(e.path))
-            .toList();
+        var apks = extractedDir.listSync().where((e) => isApk(e.path)).toList();
 
         FileSystemEntity? temp;
         apks.removeWhere((element) {
@@ -1202,8 +1220,7 @@ class AppsProvider with ChangeNotifier {
       notificationsProvider?.cancel(notifId);
       if (apps[app.id] != null) {
         apps[app.id]!.downloadTotalBytes = null;
-        if (!downloadSucceeded ||
-            !retainInstallPhaseProgressForHandoff) {
+        if (!downloadSucceeded || !retainInstallPhaseProgressForHandoff) {
           apps[app.id]!.downloadProgress = null;
         }
         notifyListeners();
@@ -1318,9 +1335,7 @@ class AppsProvider with ChangeNotifier {
     final dynamic existing = await saf.findFile(treeUri, displayName);
     if (existing != null) {
       final Uri? existingUri = existing is Map
-          ? Uri.parse(
-              Map<String, dynamic>.from(existing)['uri'] as String,
-            )
+          ? Uri.parse(Map<String, dynamic>.from(existing)['uri'] as String)
           : (existing as dynamic).uri as Uri?;
       if (existingUri != null) {
         await saf.delete(existingUri);
@@ -1408,10 +1423,16 @@ class AppsProvider with ChangeNotifier {
           firstTimeWithContext, // ignore: use_build_context_synchronously
           needsBGWorkaround: needsBGWorkaround,
           shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
-          additionalAPKs: apkFiles.sublist(
-            1,
-          ).map((a) => DownloadedApk(dir.appId, a)).toList(),
+          additionalAPKs: apkFiles
+              .sublist(1)
+              .map((a) => DownloadedApk(dir.appId, a))
+              .toList(),
           skipApkSaveFolderPersistForPrimaryApk: true,
+          thirdPartyHandoffContainerPath:
+              settingsProvider.installerMode == 'legacy' &&
+                  dir.file.existsSync()
+              ? dir.file.path
+              : null,
         );
         somethingInstalled = somethingInstalled || wasInstalled;
       } catch (e) {
@@ -1422,19 +1443,30 @@ class AppsProvider with ChangeNotifier {
         throw errors;
       }
     } finally {
+      unawaited(_finalizeDownloadedDirDisposition(dir, somethingInstalled));
+    }
+    return somethingInstalled;
+  }
+
+  /// Bundle SAF copy + temp dir cleanup for XAPK/ZIP installs (off critical path).
+  Future<void> _finalizeDownloadedDirDisposition(
+    DownloadedDir dir,
+    bool somethingInstalled,
+  ) async {
+    try {
       final App? appForSave = apps[dir.appId]?.app;
+      final bool saveApkCopies = settingsProvider.saveDownloadedApkCopies;
       final Uri? resolvedApkSaveUri = await settingsProvider.getApkSaveDir();
-      final Uri? apkSaveTreeUri = settingsProvider.saveDownloadedApkCopies
-          ? resolvedApkSaveUri
-          : null;
+      var bundleCopiedOk = false;
       if (Platform.isAndroid &&
+          saveApkCopies &&
           appForSave != null &&
-          apkSaveTreeUri != null &&
+          resolvedApkSaveUri != null &&
           dir.file.existsSync()) {
         try {
-          await _chunkedCopyApkToSafTree(
+          bundleCopiedOk = await _chunkedCopyApkToSafTree(
             dir.file,
-            apkSaveTreeUri,
+            resolvedApkSaveUri,
             storeFacingDownloadDisplayNameForApp(appForSave),
           );
         } catch (exception, stackTrace) {
@@ -1444,16 +1476,40 @@ class AppsProvider with ChangeNotifier {
           Fluttertoast.showToast(msg: tr('apkSaveFolderCopyFailed'));
         }
       }
-      // Always drop the XAPK/ZIP container when it still exists so failed installs
-      // cannot leak the bundle (extracted dir is removed below).
-      if (dir.file.existsSync()) {
+      final bool skipLatest =
+          appForSave != null && isSkipActiveForCurrentLatest(appForSave);
+      final bool hasSaveFolder = saveApkCopies && resolvedApkSaveUri != null;
+      final bool shouldDeleteBundle;
+      if (hasSaveFolder && appForSave != null && dir.file.existsSync()) {
+        shouldDeleteBundle =
+            bundleCopiedOk && (somethingInstalled || skipLatest);
+      } else if (!saveApkCopies) {
+        if (somethingInstalled) {
+          shouldDeleteBundle = true;
+        } else {
+          shouldDeleteBundle = skipLatest;
+        }
+      } else if (resolvedApkSaveUri == null) {
+        if (somethingInstalled) {
+          shouldDeleteBundle = false;
+        } else {
+          shouldDeleteBundle = skipLatest;
+        }
+      } else {
+        shouldDeleteBundle =
+            somethingInstalled || (!somethingInstalled && skipLatest);
+      }
+      if (shouldDeleteBundle && dir.file.existsSync()) {
         try {
           dir.file.deleteSync();
         } catch (_) {}
       }
       dir.extracted.delete(recursive: true);
+    } catch (exception, stackTrace) {
+      logs.add(
+        'Post-install bundle disposition failed: ${exception.toString()}\n$stackTrace',
+      );
     }
-    return somethingInstalled;
   }
 
   Future<bool> installApk(
@@ -1462,15 +1518,23 @@ class AppsProvider with ChangeNotifier {
     bool needsBGWorkaround = false,
     bool shizukuPretendToBeGooglePlay = false,
     List<DownloadedApk> additionalAPKs = const [],
+
     /// When true, the outer bundle ([installApkDir]) persists the container; do
     /// not copy this extracted APK under the same release asset name.
     bool skipApkSaveFolderPersistForPrimaryApk = false,
+
+    /// Third-party installer: hand off this file (XAPK/ZIP download) instead of
+    /// extracted split APK paths so installers like InstallerX see the same bundle
+    /// as when opening the file from a file manager.
+    String? thirdPartyHandoffContainerPath,
   }) async {
-    final Uri? apkSaveTreeUri = skipApkSaveFolderPersistForPrimaryApk
-        ? null
-        : (settingsProvider.saveDownloadedApkCopies
-              ? await settingsProvider.getApkSaveDir()
-              : null);
+    final bool saveApkCopiesRequested =
+        settingsProvider.saveDownloadedApkCopies &&
+        !skipApkSaveFolderPersistForPrimaryApk;
+    final Uri? apkSaveTreeUri = saveApkCopiesRequested
+        ? await settingsProvider.getApkSaveDir()
+        : null;
+    var installReportedOk = false;
     try {
       if (firstTimeWithContext != null &&
           settingsProvider.beforeNewInstallsShareToAppVerifier &&
@@ -1510,6 +1574,7 @@ class AppsProvider with ChangeNotifier {
         throw DowngradeError(appInfo.versionCode!, newInfo.versionCode!);
       }
       if (needsBGWorkaround) {
+        installReportedOk = true;
         // The below 'await' will never return if we are in a background process
         // To work around this, we should assume the install will be successful
         // So we update the app's installed version first as we will never get to the later code
@@ -1527,19 +1592,27 @@ class AppsProvider with ChangeNotifier {
         if (targetPkg == null || targetAct == null) {
           throw ObtainiumError(tr('thirdPartyInstallerNotSelected'));
         }
-        bool thirdPartyInstallSucceeded =
-            await installer.installApkViaThirdParty(
-          file.file.path,
-          targetPackage: targetPkg,
-          targetActivity: targetAct,
-          expectedPackageName: apps[file.appId]!.app.id,
-        );
+        final String thirdPartyPathsArg;
+        if (thirdPartyHandoffContainerPath != null &&
+            File(thirdPartyHandoffContainerPath).existsSync()) {
+          thirdPartyPathsArg = thirdPartyHandoffContainerPath;
+        } else {
+          thirdPartyPathsArg = [
+            file.file.path,
+            ...additionalAPKs.map((a) => a.file.path),
+          ].join(',');
+        }
+        bool thirdPartyInstallSucceeded = await installer
+            .installApkViaThirdParty(
+              thirdPartyPathsArg,
+              targetPackage: targetPkg,
+              targetActivity: targetAct,
+              expectedPackageName: apps[file.appId]!.app.id,
+            );
         if (thirdPartyInstallSucceeded) {
+          installReportedOk = true;
           apps[file.appId]!.app.installedVersion =
               apps[file.appId]!.app.latestVersion;
-          if (apkSaveTreeUri == null) {
-            file.file.delete(recursive: true);
-          }
         }
         await saveApps([apps[file.appId]!.app]);
         return thirdPartyInstallSucceeded;
@@ -1559,35 +1632,55 @@ class AppsProvider with ChangeNotifier {
       }
       bool installed = false;
       if (code != null && code != 0 && code != 3) {
-        if (apkSaveTreeUri == null) {
-          try {
-            deleteFile(file.file);
-          } catch (e) {
-            //
-          }
-        }
         throw InstallError(code);
       } else if (code == 0) {
+        installReportedOk = true;
         installed = true;
         apps[file.appId]!.app.installedVersion =
             apps[file.appId]!.app.latestVersion;
-        if (apkSaveTreeUri == null) {
-          file.file.delete(recursive: true);
-        }
       }
       await saveApps([apps[file.appId]!.app]);
       return installed;
     } finally {
-      if (Platform.isAndroid &&
-          apkSaveTreeUri != null &&
-          apps[file.appId] != null &&
-          file.file.existsSync()) {
-        bool copiedOk = false;
+      if (Platform.isAndroid) {
+        unawaited(
+          _disposeInstalledApkFilesAfterSession(
+            appId: file.appId,
+            primaryFile: file.file,
+            additionalAPKs: additionalAPKs,
+            installReportedOk: installReportedOk,
+            saveApkCopiesRequested: saveApkCopiesRequested,
+            apkSaveTreeUri: apkSaveTreeUri,
+          ),
+        );
+      }
+    }
+  }
+
+  /// SAF copy + temp APK cleanup after install. Runs off the critical path so
+  /// [downloadProgress] can clear as soon as the installer returns.
+  Future<void> _disposeInstalledApkFilesAfterSession({
+    required String appId,
+    required File primaryFile,
+    required List<DownloadedApk> additionalAPKs,
+    required bool installReportedOk,
+    required bool saveApkCopiesRequested,
+    required Uri? apkSaveTreeUri,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final App? appRef = apps[appId]?.app;
+      final bool skipLatest =
+          appRef != null && isSkipActiveForCurrentLatest(appRef);
+      final bool hasSaveFolder = apkSaveTreeUri != null;
+
+      var copiedOk = false;
+      if (hasSaveFolder && appRef != null && primaryFile.existsSync()) {
         try {
           copiedOk = await _chunkedCopyApkToSafTree(
-            file.file,
+            primaryFile,
             apkSaveTreeUri,
-            storeFacingDownloadDisplayNameForApp(apps[file.appId]!.app),
+            storeFacingDownloadDisplayNameForApp(appRef),
           );
         } catch (exception, stackTrace) {
           logs.add(
@@ -1595,12 +1688,35 @@ class AppsProvider with ChangeNotifier {
           );
           Fluttertoast.showToast(msg: tr('apkSaveFolderCopyFailed'));
         }
-        if (copiedOk) {
+      }
+
+      final bool deletePrimary;
+      if (hasSaveFolder) {
+        deletePrimary = copiedOk && (installReportedOk || skipLatest);
+      } else if (!saveApkCopiesRequested) {
+        deletePrimary = installReportedOk || (!installReportedOk && skipLatest);
+      } else {
+        deletePrimary = !installReportedOk && skipLatest;
+      }
+
+      if (deletePrimary && primaryFile.existsSync()) {
+        try {
+          primaryFile.deleteSync();
+        } catch (_) {}
+      }
+      if (deletePrimary) {
+        for (final suppliedApk in additionalAPKs) {
           try {
-            file.file.deleteSync();
+            if (suppliedApk.file.existsSync()) {
+              suppliedApk.file.deleteSync();
+            }
           } catch (_) {}
         }
       }
+    } catch (exception, stackTrace) {
+      logs.add(
+        'Post-install APK disposition failed: ${exception.toString()}\n$stackTrace',
+      );
     }
   }
 
@@ -2148,8 +2264,7 @@ class AppsProvider with ChangeNotifier {
       // App says it's not installed but really is - set to installed and use real package versionName (or versionCode if chosen)
       app.installedVersion = realInstalledVersion;
       if (trackOnly) {
-        app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
-            false;
+        app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = false;
       }
       modded = true;
     }
@@ -2565,8 +2680,8 @@ class AppsProvider with ChangeNotifier {
         logs.add('loadIconPreviewExcludingUserOverride cache: $e');
       }
     }
-    Uint8List? icon =
-        await apps[appId]!.installedInfo?.applicationInfo?.getAppIcon();
+    Uint8List? icon = await apps[appId]!.installedInfo?.applicationInfo
+        ?.getAppIcon();
     if (icon == null) {
       final String? url = apps[appId]!.app.iconUrl;
       if (url != null && url.isNotEmpty) {
@@ -2578,7 +2693,10 @@ class AppsProvider with ChangeNotifier {
 
   /// Writes validated PNG bytes to [userAppIconsDir] and updates in-memory icon.
   /// Returns null on success, or a translated error string.
-  Future<String?> applyUserAppIconPngBytes(String appId, Uint8List bytes) async {
+  Future<String?> applyUserAppIconPngBytes(
+    String appId,
+    Uint8List bytes,
+  ) async {
     if (apps[appId] == null) {
       return tr('unexpectedError');
     }
@@ -2607,7 +2725,10 @@ class AppsProvider with ChangeNotifier {
 
   /// Copies a user-selected PNG into app storage ([userAppIconsDir]) and updates memory.
   /// Returns null on success, or a translated error string.
-  Future<String?> setUserAppIconFromPngPath(String appId, String filePath) async {
+  Future<String?> setUserAppIconFromPngPath(
+    String appId,
+    String filePath,
+  ) async {
     try {
       final File sourceFile = File(filePath);
       if (!sourceFile.existsSync()) {
@@ -2707,8 +2828,9 @@ class AppsProvider with ChangeNotifier {
         if (userIconStored.existsSync()) {
           deleteFile(userIconStored);
         }
-        final File legacyUserIconInCache =
-            File('${iconsCacheDir.path}/$appId.user.png');
+        final File legacyUserIconInCache = File(
+          '${iconsCacheDir.path}/$appId.user.png',
+        );
         if (legacyUserIconInCache.existsSync()) {
           deleteFile(legacyUserIconInCache);
         }
@@ -2729,8 +2851,9 @@ class AppsProvider with ChangeNotifier {
 
   Future<void> _moveAppJsonToPendingRemoval(String appId) async {
     final Directory appsDirectory = await getAppsDir();
-    final Directory pendingDir =
-        Directory('${appsDirectory.path}/pending_removal');
+    final Directory pendingDir = Directory(
+      '${appsDirectory.path}/pending_removal',
+    );
     if (!pendingDir.existsSync()) {
       pendingDir.createSync(recursive: true);
     }
@@ -2747,8 +2870,9 @@ class AppsProvider with ChangeNotifier {
 
   Future<void> _restoreAppJsonFromPendingRemoval(String appId) async {
     final Directory appsDirectory = await getAppsDir();
-    final File pendingJson =
-        File('${appsDirectory.path}/pending_removal/$appId.json');
+    final File pendingJson = File(
+      '${appsDirectory.path}/pending_removal/$appId.json',
+    );
     final File mainJson = File('${appsDirectory.path}/$appId.json');
     if (!pendingJson.existsSync()) {
       return;
@@ -2763,8 +2887,9 @@ class AppsProvider with ChangeNotifier {
   /// Drops pending-removal JSON that no longer has an in-memory deferral (e.g. after process restart).
   Future<void> _purgeStalePendingRemovalFilesWithoutLiveDeferral() async {
     final Directory appsDirectory = await getAppsDir();
-    final Directory pendingDir =
-        Directory('${appsDirectory.path}/pending_removal');
+    final Directory pendingDir = Directory(
+      '${appsDirectory.path}/pending_removal',
+    );
     if (!pendingDir.existsSync()) {
       return;
     }
@@ -2821,15 +2946,17 @@ class AppsProvider with ChangeNotifier {
     final Directory appsDirectory = await getAppsDir();
     final File mainJson = File('${appsDirectory.path}/$appId.json');
     if (mainJson.existsSync()) {
-      final File stalePending =
-          File('${appsDirectory.path}/pending_removal/$appId.json');
+      final File stalePending = File(
+        '${appsDirectory.path}/pending_removal/$appId.json',
+      );
       if (stalePending.existsSync()) {
         deleteFile(stalePending);
       }
       return;
     }
-    final File pendingJson =
-        File('${appsDirectory.path}/pending_removal/$appId.json');
+    final File pendingJson = File(
+      '${appsDirectory.path}/pending_removal/$appId.json',
+    );
     if (pendingJson.existsSync()) {
       deleteFile(pendingJson);
     }
@@ -3010,9 +3137,7 @@ class AppsProvider with ChangeNotifier {
                 app.app.additionalSettings['trackOnly'] == true;
           }
         })
-        .where(
-          (app) => app.app.additionalSettings['onDemandOnly'] != true,
-        )
+        .where((app) => app.app.additionalSettings['onDemandOnly'] != true)
         .map((e) => e.app.id)
         .toList();
     appIds.sort(
@@ -3113,7 +3238,8 @@ class AppsProvider with ChangeNotifier {
     final List<String> updateAppIds = [];
     for (final appInMemory in apps.values) {
       final app = appInMemory.app;
-      if (excludeOnDemandOnly && app.additionalSettings['onDemandOnly'] == true) {
+      if (excludeOnDemandOnly &&
+          app.additionalSettings['onDemandOnly'] == true) {
         continue;
       }
       final installed = app.installedVersion;
@@ -3230,13 +3356,15 @@ class AppsProvider with ChangeNotifier {
             .map((e) => App.fromJson(e))
             .toList();
     await _loadingCompleter?.future;
-    await Future.wait(importedApps.map((a) async {
-      var installedInfo = await getInstalledInfo(a.id, printErr: false);
-      a.installedVersion =
-          a.additionalSettings['useVersionCodeAsOSVersion'] == true
-          ? installedInfo?.versionCode.toString()
-          : installedInfo?.versionName;
-    }));
+    await Future.wait(
+      importedApps.map((a) async {
+        var installedInfo = await getInstalledInfo(a.id, printErr: false);
+        a.installedVersion =
+            a.additionalSettings['useVersionCodeAsOSVersion'] == true
+            ? installedInfo?.versionCode.toString()
+            : installedInfo?.versionName;
+      }),
+    );
     await saveApps(importedApps, onlyIfExists: false);
     notifyListeners();
     if (newFormat && decodedJSON['settings'] != null) {
@@ -3383,10 +3511,12 @@ class _AppFilePickerState extends State<AppFilePicker> {
             },
             child: Column(
               children: urlsToSelectFrom
-                  .map((u) => RadioListTile<String>(
-                        title: Text(u.key),
-                        value: u.value,
-                      ))
+                  .map(
+                    (u) => RadioListTile<String>(
+                      title: Text(u.key),
+                      value: u.value,
+                    ),
+                  )
                   .toList(),
             ),
           ),

@@ -21,7 +21,7 @@ class CacheContentProvider : ContentProvider() {
         val firstSegment = uri.pathSegments?.firstOrNull()
         if (firstSegment == RELEASE_DIR) {
             val file = File(context!!.cacheDir, uri.encodedPath!!)
-            return Pair(file, "application/vnd.android.package-archive")
+            return Pair(file, mimeTypeForInstallableFile(file))
         }
         throw SecurityException("Invalid URI: $uri")
     }

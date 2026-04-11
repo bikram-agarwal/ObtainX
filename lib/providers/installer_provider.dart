@@ -38,11 +38,13 @@ Future<List<InstallerAppInfo>> getApkInstallerApps() async {
   }).toList();
 }
 
-/// Sends the APK to a user-chosen third-party installer app (Settings: Third-Party mode).
+/// Sends one or more APK paths to a user-chosen third-party installer (Settings: Third-Party mode).
+/// Multiple paths use the same comma-separated convention as [AndroidPackageInstaller.installApk]
+/// so split / multi-APK installs are handed off whole (not only the base split).
 /// Returns true if the system broadcast confirms the package was installed.
 /// Times out after 2 minutes and returns false.
 Future<bool> installApkViaThirdParty(
-  String apkFilePath, {
+  String apkFilePathsCommaSeparated, {
   required String targetPackage,
   required String targetActivity,
   required String expectedPackageName,
@@ -50,7 +52,7 @@ Future<bool> installApkViaThirdParty(
   if (!Platform.isAndroid) return false;
   final result =
       await _channel.invokeMethod<bool>('launchInstallIntent', <String, dynamic>{
-    'path': apkFilePath,
+    'path': apkFilePathsCommaSeparated,
     'package': targetPackage,
     'activity': targetActivity,
     'expectedPackageName': expectedPackageName,

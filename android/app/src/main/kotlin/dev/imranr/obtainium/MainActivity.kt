@@ -1,6 +1,7 @@
 package dev.imranr.obtainium
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -36,7 +37,7 @@ class MainActivity : FlutterActivity() {
         val methodResult: MethodChannel.Result,
         val handler: Handler,
         val receiver: BroadcastReceiver,
-        val releaseCacheFile: File,
+        val releaseCacheFiles: List<File>,
         var responded: Boolean = false,
         var focusLost: Boolean = false,
         var focusLostAtUptimeMs: Long = 0L,
@@ -62,7 +63,9 @@ class MainActivity : FlutterActivity() {
         }
         watcher.handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
-        try { watcher.releaseCacheFile.delete() } catch (_: Exception) { }
+        for (cacheFile in watcher.releaseCacheFiles) {
+            try { cacheFile.delete() } catch (_: Exception) { }
+        }
         when (outcome) {
             is InstallSessionOutcome.Success -> watcher.methodResult.success(outcome.installSucceeded)
             is InstallSessionOutcome.Error -> watcher.methodResult.error(outcome.code, outcome.message, null)
@@ -73,13 +76,8 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         val watcher = installWatcher ?: return
         if (watcher.responded || !watcher.packageInstallBroadcastReceived) return
-        val sessionRef = watcher
-        sessionRef.handler.post {
-            if (sessionRef.responded) return@post
-            if (installWatcher !== sessionRef) return@post
-            if (!sessionRef.packageInstallBroadcastReceived) return@post
-            completeThirdPartyInstallSession(sessionRef, InstallSessionOutcome.Success(true))
-        }
+        // Complete immediately so Flutter can clear installing UI without an extra frame delay.
+        completeThirdPartyInstallSession(watcher, InstallSessionOutcome.Success(true))
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -114,11 +112,14 @@ class MainActivity : FlutterActivity() {
                 }
                 "launchInstallIntent" -> {
                     try {
-                        val apkFilePath = call.argument<String>("path")!!
+                        val pathArg = call.argument<String>("path")!!
+                        val apkSourcePaths = pathArg.split(',')
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
                         val targetPackage = call.argument<String>("package")
                         val targetActivity = call.argument<String>("activity")
                         val expectedPkgName = call.argument<String>("expectedPackageName")
-                        launchInstallIntent(apkFilePath, targetPackage, targetActivity, expectedPkgName, result)
+                        launchInstallIntent(apkSourcePaths, targetPackage, targetActivity, expectedPkgName, result)
                     } catch (ex: Exception) {
                         result.error("INSTALL_ERROR", ex.message, null)
                     }
@@ -194,22 +195,25 @@ class MainActivity : FlutterActivity() {
 
     @Suppress("DEPRECATION")
     private fun launchInstallIntent(
-        apkFilePath: String,
+        apkSourcePaths: List<String>,
         targetPackage: String?,
         targetActivity: String?,
         expectedPkgName: String?,
         methodResult: MethodChannel.Result
     ) {
-        val sourceFile = File(apkFilePath)
-        val releaseFile = copyToReleaseCacheUnique(sourceFile)
-
-        val providerAuthority = findCacheProviderAuthority()
-        val relativePath = releaseFile.path.drop(cacheDir.path.length)
-        val contentUri = Uri.Builder()
-            .scheme("content")
-            .authority(providerAuthority)
-            .encodedPath(relativePath)
-            .build()
+        if (apkSourcePaths.isEmpty()) {
+            methodResult.error("INSTALL_ERROR", "No APK paths", null)
+            return
+        }
+        val sourceFiles = apkSourcePaths.map { path -> File(path) }
+        for (source in sourceFiles) {
+            if (!source.isFile) {
+                methodResult.error("INSTALL_ERROR", "Not a readable file: ${source.path}", null)
+                return
+            }
+        }
+        val releaseFiles = sourceFiles.map { copyToReleaseCacheUnique(it) }
+        val contentUris = releaseFiles.map { releaseFileToContentUri(it) }
 
         val installFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -217,8 +221,30 @@ class MainActivity : FlutterActivity() {
             0
         }
 
-        val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
-            setDataAndType(contentUri, APK_MIME)
+        val primaryMime = if (releaseFiles.size == 1) {
+            mimeTypeForInstallableFile(releaseFiles[0])
+        } else {
+            APK_MIME
+        }
+        // XAPK/APKM/ZIP bundles: use ACTION_VIEW so targets that only handle "open file"
+        // (e.g. InstallerX from a file manager) receive the same intent shape.
+        val intentAction =
+            if (releaseFiles.size == 1 && primaryMime == "application/zip") {
+                Intent.ACTION_VIEW
+            } else {
+                Intent.ACTION_INSTALL_PACKAGE
+            }
+        val intent = Intent(intentAction).apply {
+            if (contentUris.size == 1) {
+                setDataAndType(contentUris[0], primaryMime)
+            } else {
+                clipData = ClipData.newUri(contentResolver, "apk", contentUris[0]).apply {
+                    for (idx in 1 until contentUris.size) {
+                        addItem(ClipData.Item(contentUris[idx]))
+                    }
+                }
+                setDataAndType(contentUris[0], primaryMime)
+            }
             flags = installFlag or Intent.FLAG_ACTIVITY_NEW_TASK
             if (!targetPackage.isNullOrEmpty() && !targetActivity.isNullOrEmpty()) {
                 component = ComponentName(targetPackage, targetActivity)
@@ -231,7 +257,9 @@ class MainActivity : FlutterActivity() {
             } catch (_: Exception) {
                 //
             } finally {
-                try { releaseFile.delete() } catch (_: Exception) { }
+                for (releaseFile in releaseFiles) {
+                    try { releaseFile.delete() } catch (_: Exception) { }
+                }
             }
             methodResult.success(false)
             return
@@ -259,7 +287,7 @@ class MainActivity : FlutterActivity() {
             addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         }
-        val sessionWatcher = InstallWatcher(methodResult, handler, receiver, releaseFile)
+        val sessionWatcher = InstallWatcher(methodResult, handler, receiver, releaseFiles)
         installWatcher = sessionWatcher
         registerReceiver(receiver, filter)
 
@@ -281,12 +309,24 @@ class MainActivity : FlutterActivity() {
                         InstallSessionOutcome.Error("INSTALL_ERROR", ex.message),
                     )
                 } else {
-                    // Guard failed: session already finished or replaced — still drop this cache file
-                    // (success path keeps the file until [completeThirdPartyInstallSession] runs).
-                    try { releaseFile.delete() } catch (_: Exception) { }
+                    // Guard failed: session already finished or replaced — still drop cache copies
+                    // (success path keeps files until [completeThirdPartyInstallSession] runs).
+                    for (releaseFile in releaseFiles) {
+                        try { releaseFile.delete() } catch (_: Exception) { }
+                    }
                 }
             }
         }
+    }
+
+    private fun releaseFileToContentUri(releaseFile: File): Uri {
+        val providerAuthority = findCacheProviderAuthority()
+        val relativePath = releaseFile.path.drop(cacheDir.path.length)
+        return Uri.Builder()
+            .scheme("content")
+            .authority(providerAuthority)
+            .encodedPath(relativePath)
+            .build()
     }
 
     private fun findCacheProviderAuthority(): String {
