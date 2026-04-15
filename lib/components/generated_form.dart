@@ -6,10 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
+import 'package:provider/provider.dart';
 
 abstract class GeneratedFormItem {
   late String key;
@@ -785,6 +787,78 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   }
 }
 
+class _TVTextFieldFocus extends StatefulWidget {
+  final Widget child;
+  final FocusNode textFocusNode;
+
+  const _TVTextFieldFocus({
+    required this.child,
+    required this.textFocusNode,
+  });
+
+  @override
+  State<_TVTextFieldFocus> createState() => _TVTextFieldFocusState();
+}
+
+class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
+  final FocusNode _outerFocus = FocusNode();
+  bool _activated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.textFocusNode.addListener(_onTextFocusChange);
+  }
+
+  void _onTextFocusChange() {
+    if (!widget.textFocusNode.hasFocus && _activated) {
+      setState(() => _activated = false);
+      _outerFocus.requestFocus();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.textFocusNode.removeListener(_onTextFocusChange);
+    _outerFocus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _outerFocus,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.enter)) {
+          setState(() => _activated = true);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            widget.textFocusNode.requestFocus();
+          });
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: ListenableBuilder(
+        listenable: _outerFocus,
+        builder: (context, child) => Container(
+          decoration: _outerFocus.hasFocus && !_activated
+              ? BoxDecoration(
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.primary,
+                    width: 2,
+                  ),
+                  borderRadius: BorderRadius.circular(4),
+                )
+              : null,
+          child: ExcludeFocus(excluding: !_activated, child: widget.child),
+        ),
+      ),
+    );
+  }
+}
+
 class _GeneratedFormState extends State<GeneratedForm> {
   final _formKey = GlobalKey<FormState>();
   Map<String, dynamic> values = {};
@@ -880,7 +954,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 externalLabels: showExternalFieldLabels,
                 borderRadius: outlinedRadius,
               );
-              return TextFormField(
+              final Widget textField = TextFormField(
                 controller: ctrl,
                 focusNode: focusNode,
                 keyboardType: formItem.textInputType,
@@ -926,6 +1000,13 @@ class _GeneratedFormState extends State<GeneratedForm> {
                   return null;
                 },
               );
+              if (context.read<SettingsProvider>().isTV) {
+                return _TVTextFieldFocus(
+                  textFocusNode: focusNode,
+                  child: textField,
+                );
+              }
+              return textField;
             },
             itemBuilder: (context, value) {
               return ListTile(title: Text(value));

@@ -838,7 +838,7 @@ void showChangeLogDialog(
         message: app.latestVersion,
         additionalWidgets: [
           changesUrl != null
-              ? GestureDetector(
+              ? InkWell(
                   child: Text(
                     changesUrl,
                     style: const TextStyle(
@@ -2059,7 +2059,7 @@ class AppsPageState extends State<AppsPage> {
       _listedAppsCache = [...tempPinned, ...tempNotPinned];
     }
     // ── Use cached results ──────────────────────────────────────────────────
-    final listedApps = _listedAppsCache;
+    var listedApps = _listedAppsCache;
     final existingUpdates = _existingUpdatesCache;
     final newInstalls = _newInstallsCache;
     final int onDemandOnlyAppCount = appsProvider.apps.values
@@ -2142,6 +2142,20 @@ class AppsPageState extends State<AppsPage> {
         separateUpdates &&
         _existingUpdatesCache.contains(e.app.id) &&
         e.app.additionalSettings['onDemandOnly'] != true;
+
+    var tempRenamed = <AppInMemory>[];
+    var tempPinned = <AppInMemory>[];
+    var tempNotPinned = <AppInMemory>[];
+    for (final AppInMemory listedApp in listedApps) {
+      if (listedApp.app.hasPendingRepoRename) {
+        tempRenamed.add(listedApp);
+      } else if (listedApp.app.pinned) {
+        tempPinned.add(listedApp);
+      } else {
+        tempNotPinned.add(listedApp);
+      }
+    }
+    listedApps = [...tempRenamed, ...tempPinned, ...tempNotPinned];
 
     // Apps that go into normal category/source/appType groups (excluding
     // segregated non-installed and the updates group when those features are on).

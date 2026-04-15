@@ -12,6 +12,7 @@ import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
@@ -63,6 +64,7 @@ class SettingsProvider with ChangeNotifier {
   SharedPreferences? prefs;
   String? defaultAppDir;
   bool justStarted = true;
+  bool isTV = false;
 
   /// Mirrors last [setCategories] write; [getString] can lag [setString] briefly.
   Map<String, int>? _categoriesMemory;
@@ -78,6 +80,9 @@ class SettingsProvider with ChangeNotifier {
     _migrateSwipeActionPrefs();
     _syncSwipeActionNameStringsIfMissing();
     _migrateThemeAccentPrefs();
+    final info = await DeviceInfoPlugin().androidInfo;
+    isTV = info.systemFeatures.contains('android.hardware.type.television') ||
+        info.systemFeatures.contains('android.software.leanback');
     notifyListeners();
   }
 

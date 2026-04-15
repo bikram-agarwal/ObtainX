@@ -349,6 +349,7 @@ class App {
   String? iconUrl;
   /// Size of the preferred APK in bytes, if known at update-check time.
   int? apkSizeBytes;
+  String? pendingRepoRenameUrl;
   App(
     this.id,
     this.url,
@@ -372,12 +373,16 @@ class App {
     this.rawApkNamesFromSource,
     this.rawReleaseTitlesFromSource,
     this.apkSizeBytes,
+    this.pendingRepoRenameUrl,
   });
 
   @override
   String toString() {
     return 'ID: $id URL: $url INSTALLED: $installedVersion LATEST: $latestVersion APK: $apkUrls PREFERREDAPK: $preferredApkIndex ADDITIONALSETTINGS: ${additionalSettings.toString()} LASTCHECK: ${lastUpdateCheck.toString()} PINNED $pinned';
   }
+
+  bool get hasPendingRepoRename =>
+      pendingRepoRenameUrl != null && pendingRepoRenameUrl!.isNotEmpty;
 
   String? get overrideName =>
       additionalSettings['appName']?.toString().trim().isNotEmpty == true
@@ -420,6 +425,7 @@ class App {
     rawApkNamesFromSource: rawApkNamesFromSource,
     rawReleaseTitlesFromSource: rawReleaseTitlesFromSource,
     apkSizeBytes: apkSizeBytes,
+    pendingRepoRenameUrl: pendingRepoRenameUrl,
   );
 
   factory App.fromJson(Map<String, dynamic> json) {
@@ -473,6 +479,7 @@ class App {
       rawReleaseTitlesFromSource:
           json['rawReleaseTitlesFromSource'] as String?,
       apkSizeBytes: json['apkSizeBytes'] as int?,
+      pendingRepoRenameUrl: json['pendingRepoRenameUrl'] as String?,
     );
   }
 
@@ -502,6 +509,7 @@ class App {
     if (rawReleaseTitlesFromSource != null)
       'rawReleaseTitlesFromSource': rawReleaseTitlesFromSource,
     if (apkSizeBytes != null) 'apkSizeBytes': apkSizeBytes,
+    'pendingRepoRenameUrl': pendingRepoRenameUrl,
   };
 }
 
@@ -600,7 +608,10 @@ Future<List<MapEntry<String, String>>> filterApksByArch(
     var abis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
     for (var abi in abis) {
       var urls2 = apkUrls
-          .where((element) => RegExp('.*$abi.*', caseSensitive: false).hasMatch(element.key))
+          .where(
+            (element) =>
+                RegExp('.*$abi.*', caseSensitive: false).hasMatch(element.key),
+          )
           .toList();
       if (urls2.isNotEmpty && urls2.length < apkUrls.length) {
         apkUrls = urls2;
@@ -719,26 +730,6 @@ abstract class AppSource {
 
   AppSource() {
     name = runtimeType.toString();
-  }
-
-  void overrideAdditionalAppSpecificSourceAgnosticSettingSwitch(
-    String key, {
-    bool disabled = true,
-    bool defaultValue = true,
-  }) {
-    additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly =
-        additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly.map(
-          (e) {
-            return e.map((e2) {
-              if (e2.key == key) {
-                var item = e2 as GeneratedFormSwitch;
-                item.disabled = disabled;
-                item.defaultValue = defaultValue;
-              }
-              return e2;
-            }).toList();
-          },
-        ).toList();
   }
 
   String standardizeUrl(String url) {
@@ -953,64 +944,38 @@ abstract class AppSource {
 
   // Previous 2 variables combined into one at runtime for convenient usage + additional processing
   List<List<GeneratedFormItem>> get combinedAppSpecificSettingFormItems {
-    if (showReleaseDateAsVersionToggle == true) {
-      if (additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-              .indexWhere(
-                (List<GeneratedFormItem> e) =>
-                    e.indexWhere(
-                      (GeneratedFormItem i) => i.key == 'releaseDateAsVersion',
-                    ) >=
-                    0,
-              ) <
-          0) {
-        final int versionMainHeaderIndex =
-            additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-                .indexWhere(
-          (List<GeneratedFormItem> row) =>
-              row.length == 1 &&
-              row.first is GeneratedFormSectionHeader &&
-              (row.first as GeneratedFormSectionHeader).key ==
-                  '__formSectionVersion',
-        );
-        final int insertReleaseRowAfter = versionMainHeaderIndex >= 0
-            ? versionMainHeaderIndex
-            : additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-                .indexWhere(
-                  (List<GeneratedFormItem> row) =>
-                      row.indexWhere(
-                        (GeneratedFormItem item) =>
-                            item.key == 'versionExtractionRegEx',
-                      ) >=
-                      0,
-                );
-        additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-            .insert(
-          insertReleaseRowAfter >= 0 ? insertReleaseRowAfter + 1 : 0,
-          [
-            GeneratedFormSwitch(
-              'releaseDateAsVersion',
-              label:
-                  '${tr('releaseDateAsVersion')} (${tr('pseudoVersion')})',
-              defaultValue: false,
-            ),
-          ],
-        );
-      }
+    var agnosticItems = cloneFormItems(
+      additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly,
+    );
+
+    final versionDetectionIdx = agnosticItems.indexWhere(
+      (row) => row.any((item) => item.key == 'versionDetection'),
+    );
+    if (showReleaseDateAsVersionToggle &&
+        versionDetectionIdx >= 0 &&
+        !agnosticItems.any(
+          (row) => row.any((item) => item.key == 'releaseDateAsVersion'),
+        )) {
+      agnosticItems.insert(versionDetectionIdx + 1, [
+        GeneratedFormSwitch(
+          'releaseDateAsVersion',
+          label: '${tr('releaseDateAsVersion')} (${tr('pseudoVersion')})',
+          defaultValue: false,
+        ),
+      ]);
     }
-    if (showReleaseTitleAsVersionToggle == true) {
-      if (additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-              .indexWhere(
-                (List<GeneratedFormItem> row) =>
-                    row.indexWhere(
-                      (GeneratedFormItem item) =>
-                          item.key == 'releaseTitleAsVersion',
-                    ) >=
-                    0,
-              ) <
+
+    if (showReleaseTitleAsVersionToggle) {
+      if (agnosticItems.indexWhere(
+            (List<GeneratedFormItem> row) =>
+                row.indexWhere(
+                  (GeneratedFormItem item) =>
+                      item.key == 'releaseTitleAsVersion',
+                ) >=
+                0,
+          ) <
           0) {
-        final int trimRowIndex =
-            additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-                .indexWhere(
+        final int trimRowIndex = agnosticItems.indexWhere(
           (List<GeneratedFormItem> row) =>
               row.indexWhere(
                 (GeneratedFormItem item) =>
@@ -1019,8 +984,7 @@ abstract class AppSource {
               0,
         );
         if (trimRowIndex >= 0) {
-          additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-              .insert(
+          agnosticItems.insert(
             trimRowIndex,
             [
               GeneratedFormSwitch(
@@ -1033,17 +997,17 @@ abstract class AppSource {
         }
       }
     }
-    additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly =
-        additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly
-            .map(
-              (e) => e
-                  .where((ee) => !excludeCommonSettingKeys.contains(ee.key))
-                  .toList(),
-            )
-            .where((e) => e.isNotEmpty)
-            .toList();
 
-    var moreConditionalItems = [];
+    agnosticItems = agnosticItems
+        .map(
+          (e) => e
+              .where((ee) => !excludeCommonSettingKeys.contains(ee.key))
+              .toList(),
+        )
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    var moreConditionalItems = <List<GeneratedFormItem>>[];
     if (allowIncludeZips) {
       moreConditionalItems.addAll([
         [
@@ -1069,20 +1033,20 @@ abstract class AppSource {
     }
 
     if (versionDetectionDisallowed) {
-      overrideAdditionalAppSpecificSourceAgnosticSettingSwitch(
-        'versionDetection',
-        disabled: true,
-        defaultValue: false,
-      );
-      overrideAdditionalAppSpecificSourceAgnosticSettingSwitch(
-        'useVersionCodeAsOSVersion',
-        disabled: true,
-        defaultValue: false,
-      );
+      for (final GeneratedFormItem item in agnosticItems.expand((row) => row)) {
+        if (item.key == 'versionDetection' ||
+            item.key == 'useVersionCodeAsOSVersion') {
+          if (item is GeneratedFormSwitch) {
+            item.disabled = true;
+            item.defaultValue = false;
+          }
+        }
+      }
     }
+
     return [
       ...additionalSourceAppSpecificSettingFormItems,
-      ...additionalAppSpecificSourceAgnosticSettingFormItemsNeverUseDirectly,
+      ...agnosticItems,
       ...moreConditionalItems,
     ];
   }
@@ -1099,7 +1063,9 @@ abstract class AppSource {
       var val = hostChanged && !hostIdenticalDespiteAnyChange
           ? additionalSettings[e.key]
           : additionalSettings[e.key] ??
-                settingsProvider.getSettingString(e.key);
+                (e.runtimeType == GeneratedFormSwitch
+                    ? settingsProvider.getSettingBool(e.key).toString()
+                    : settingsProvider.getSettingString(e.key));
       if (val != null) {
         results[e.key] = val;
       }
@@ -1291,7 +1257,7 @@ class SourceProvider {
     Tencent(),
     VivoAppStore(),
     RuStore(),
-	Apk4Free(),
+    Apk4Free(),
     Farsroid(),
     CoolApk(),
     RockMods(),

@@ -80,7 +80,7 @@ class _HomePageState extends State<HomePage> {
                 spacing: 20,
                 children: [
                   Text(tr('documentationLinksNote')),
-                  GestureDetector(
+                  InkWell(
                     onTap: () {
                       launchUrlString(
                         'https://github.com/bikram-agarwal/ObtainX/blob/main/README.md',
@@ -99,6 +99,7 @@ class _HomePageState extends State<HomePage> {
               ),
               actions: [
                 TextButton(
+                  autofocus: sp.isTV,
                   onPressed: () {
                     sp.welcomeShown = true;
                     Navigator.of(context).pop(null);
@@ -124,7 +125,7 @@ class _HomePageState extends State<HomePage> {
                 spacing: 20,
                 children: [
                   Text(tr('googleVerificationWarningP1')),
-                  GestureDetector(
+                  InkWell(
                     onTap: () {
                       launchUrlString(
                         'https://keepandroidopen.org/',
@@ -144,6 +145,7 @@ class _HomePageState extends State<HomePage> {
               ),
               actions: [
                 TextButton(
+                  autofocus: sp.isTV,
                   onPressed: () {
                     sp.googleVerificationWarningShown = true;
                     Navigator.of(context).pop(null);
@@ -389,12 +391,10 @@ class _HomePageState extends State<HomePage> {
           selectedIndexHistory.last == 1,
       onPopInvokedWithResult: (bool didPop, dynamic result) {
         if (didPop) return;
-        // Give the active tab a chance to handle back internally (e.g. bulk
-        // import stepping back through its own flow before navigating tabs).
-        final int currentIndex = selectedIndexHistory.isEmpty
+        final int activeIndex = selectedIndexHistory.isEmpty
             ? 0
             : selectedIndexHistory.last;
-        final currentKey = pages[currentIndex].widget.key;
+        final currentKey = pages[activeIndex].widget.key;
         if (currentKey is GlobalKey<AddAppPageState>) {
           if (currentKey.currentState?.handleBack() == true) return;
         }

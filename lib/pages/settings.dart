@@ -716,6 +716,25 @@ class _SettingsPageState extends State<SettingsPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
+                                  Text(
+                                    tr('beforeNewInstallsShareToAppVerifier'),
+                                  ),
+                                  InkWell(
+                                    onTap: () {
+                                      launchUrlString(
+                                        'https://github.com/soupslurpr/AppVerifier',
+                                        mode: LaunchMode.externalApplication,
+                                      );
+                                    },
+                                    child: Text(
+                                      tr('about'),
+                                      style: const TextStyle(
+                                        decoration: TextDecoration.underline,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
                                   DropdownMenu<SwipeAction>(
                                     key: ValueKey(
                                       settingsProvider.rightSwipeAction,
