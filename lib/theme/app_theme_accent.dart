@@ -1,4 +1,3 @@
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 
 /// Mirrors FilePipe [AppColorSource] for accent / seed selection.
@@ -281,7 +280,7 @@ ColorScheme colorSchemeForAccentSettings({
       brightness == Brightness.light ? lightDynamic : darkDynamic;
   final bool dynamicAvailable = dynamicScheme != null;
   if (accentSource == AppAccentColorSource.materialYou && dynamicAvailable) {
-    return dynamicScheme.harmonized();
+    return dynamicScheme;
   }
 
   final Color fallbackSeed = const Color(0xFF1B5EA8);
