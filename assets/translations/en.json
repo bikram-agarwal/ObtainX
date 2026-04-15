@@ -214,7 +214,6 @@
     "storagePermissionDenied": "Storage permission denied",
     "selectedCategorizeWarning": "This will replace any existing category settings for the selected apps.",
     "filterAPKsByRegEx": "Filter APKs by regular expression",
-    "removeFromObtainium": "Remove from ObtainX",
     "uninstallFromDevice": "Uninstall from device",
     "onlyWorksWithNonVersionDetectApps": "Only works for apps with version detection disabled.",
     "releaseDateAsVersion": "Use release date as version string",
