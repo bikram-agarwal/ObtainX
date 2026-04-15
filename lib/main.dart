@@ -413,6 +413,9 @@ class _ObtainiumState extends State<Obtainium> {
                   : darkColorScheme;
 
           NavigationBarThemeData navigationBarThemeFor(ColorScheme scheme) {
+            // Use labelMedium as base so nav labels keep M3 size (bare color-only TextStyle inherits body scale and can wrap).
+            final TextStyle navLabelBase =
+                Theme.of(context).textTheme.labelMedium!;
             return NavigationBarThemeData(
               backgroundColor: scheme.surface,
               surfaceTintColor: Colors.transparent,
@@ -428,13 +431,20 @@ class _ObtainiumState extends State<Obtainium> {
               labelTextStyle: WidgetStateProperty.resolveWith((
                 Set<WidgetState> states,
               ) {
+                if (states.contains(WidgetState.disabled)) {
+                  return navLabelBase.copyWith(
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.38),
+                  );
+                }
                 if (states.contains(WidgetState.selected)) {
-                  return TextStyle(
+                  return navLabelBase.copyWith(
                     color: scheme.primary,
                     fontWeight: FontWeight.w600,
                   );
                 }
-                return TextStyle(color: scheme.onSurfaceVariant);
+                return navLabelBase.copyWith(
+                  color: scheme.onSurfaceVariant,
+                );
               }),
             );
           }
