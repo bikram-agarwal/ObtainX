@@ -97,6 +97,8 @@ class StoreSourceIconPaths {
   static const String apkmirror = 'assets/graphics/ic_apkmirror.png';
   static const String apkpure = 'assets/graphics/ic_apkpure.png';
   static const String github = 'assets/graphics/ic_github.png';
+  /// IzzyOnDroid logo from https://codeberg.org/IzzyOnDroid/assets (IzzyOnDroidLogo.png).
+  static const String izzydroid = 'assets/graphics/ic_izzydroid.png';
 }
 
 /// Maps a source [host] (e.g. from [SourceProvider]) to a bundled icon, or null.
@@ -117,6 +119,9 @@ String? storeSourceAssetPathForHost(String host) {
   if (normalized.contains('github.com')) {
     return StoreSourceIconPaths.github;
   }
+  if (normalized.contains('izzysoft.de')) {
+    return StoreSourceIconPaths.izzydroid;
+  }
   return null;
 }
 
@@ -135,6 +140,7 @@ String? storeSourceAssetPathForClassName(String className) {
     case 'FDroid':    return StoreSourceIconPaths.fdroid;
     case 'APKMirror': return StoreSourceIconPaths.apkmirror;
     case 'APKPure':   return StoreSourceIconPaths.apkpure;
+    case 'IzzyOnDroid': return StoreSourceIconPaths.izzydroid;
     default:          return null;
   }
 }

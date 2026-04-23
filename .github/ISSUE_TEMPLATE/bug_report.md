@@ -28,7 +28,7 @@ assignees: ''
 **Please complete the following information:**
  - Device: <!-- [e.g. Pixel 7] -->
  - OS: <!-- [e.g. GrapheneOS] -->
- - Obtainium Version: <!-- [e.g. 0.14.6-beta] -->
+ - ObtainX Version: <!-- [e.g. 0.14.6-beta] -->
 
 **Additional context**
 <!-- Add any other context about the problem here. -->

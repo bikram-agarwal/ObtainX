@@ -65,6 +65,13 @@ class AddAppPageState extends State<AddAppPage> {
     if (_mode == _AddMode.fromDevice) {
       return _bulkWidgetKey.currentState?.handleBack() ?? false;
     }
+    if (_mode == _AddMode.byUrl && _byUrlOpenedFromSearchPick) {
+      setState(() {
+        _byUrlOpenedFromSearchPick = false;
+        _mode = _AddMode.search;
+      });
+      return true;
+    }
     return false;
   }
 
@@ -77,6 +84,7 @@ class AddAppPageState extends State<AddAppPage> {
   Map<String, MapEntry<String, List<String>>> _searchResults = {};
   bool _searchHasSearched = false;
   String _searchResultFilter = '';
+  bool _byUrlOpenedFromSearchPick = false;
   late final TextEditingController _searchSomeSourcesController;
   late final TextEditingController _searchResultFilterController;
   late final FocusNode _searchSomeSourcesFocusNode;
@@ -733,6 +741,7 @@ class AddAppPageState extends State<AddAppPage> {
       _searchResultFilterController.clear();
       setState(() {
         searching = true;
+        _byUrlOpenedFromSearchPick = false;
         _searchHasSearched = false;
         _searchResults = {};
         _searchResultFilter = '';
@@ -1106,7 +1115,10 @@ class AddAppPageState extends State<AddAppPage> {
                     updateUrlInput: true,
                     overrideSource: sourceName,
                   );
-                  setState(() => _mode = _AddMode.byUrl);
+                  setState(() {
+                    _byUrlOpenedFromSearchPick = true;
+                    _mode = _AddMode.byUrl;
+                  });
                 },
               ),
             );
@@ -1139,7 +1151,12 @@ class AddAppPageState extends State<AddAppPage> {
             ),
           ],
           selected: {_mode},
-          onSelectionChanged: (v) => setState(() => _mode = v.first),
+          onSelectionChanged: (Set<_AddMode> selection) {
+            setState(() {
+              _byUrlOpenedFromSearchPick = false;
+              _mode = selection.first;
+            });
+          },
           style: const ButtonStyle(
             visualDensity: VisualDensity.compact,
           ),
@@ -1171,7 +1188,10 @@ class AddAppPageState extends State<AddAppPage> {
             Expanded(
               child: BulkAddWidget(
                 key: _bulkWidgetKey,
-                onComplete: () => setState(() => _mode = _AddMode.byUrl),
+                onComplete: () => setState(() {
+                  _byUrlOpenedFromSearchPick = false;
+                  _mode = _AddMode.byUrl;
+                }),
               ),
             ),
           ],

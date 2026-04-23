@@ -181,6 +181,7 @@
     "remove": "删除",
     "yesMarkUpdated": "是，标记为已更新",
     "fdroid": "F-Droid 官方存储库",
+    "izzyOnDroid": "IzzyOnDroid",
     "appIdOrName": "应用 ID 或名称",
     "appId": "应用 ID",
     "appWithIdOrNameNotFound": "未找到符合此 ID 或名称的应用",

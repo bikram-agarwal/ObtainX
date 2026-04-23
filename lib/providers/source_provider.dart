@@ -774,6 +774,11 @@ abstract class AppSource {
       additionalSettingsPlusSourceConfig,
       url,
     );
+    requestHeaders ??= <String, String>{};
+    if (!requestHeaders.containsKey(HttpHeaders.userAgentHeader)) {
+      requestHeaders = Map<String, String>.from(requestHeaders)
+        ..[HttpHeaders.userAgentHeader] = 'Obtainium';
+    }
     var streamedResponseUrlWithResponseAndClient =
         await sourceRequestStreamResponse(
           method,

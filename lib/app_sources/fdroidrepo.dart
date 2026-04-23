@@ -5,6 +5,36 @@ import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
+/// Loads a third-party F-Droid repo [index.xml] by trying common URL shapes.
+/// [doSourceRequest] should be the owning [AppSource.sourceRequest] so TLS,
+/// headers, and any host-specific behavior match that source (for example
+/// [IzzyOnDroid] must not use a bare [FDroidRepo] instance for network calls).
+Future<Response> fdroidRepoRequestIndexWithVariants(
+  Future<Response> Function(String url, Map<String, dynamic> settings)
+      doSourceRequest,
+  String normalizedRepoBaseUrl,
+  Map<String, dynamic> additionalSettings,
+) async {
+  String url = normalizedRepoBaseUrl;
+  Response res = await doSourceRequest(
+    '$url${url.endsWith('/index.xml') ? '' : '/index.xml'}',
+    additionalSettings,
+  );
+  if (res.statusCode != 200) {
+    final String base = url.endsWith('/index.xml')
+        ? url.split('/').reversed.toList().sublist(1).reversed.join('/')
+        : url;
+    res = await doSourceRequest('$base/repo/index.xml', additionalSettings);
+    if (res.statusCode != 200) {
+      res = await doSourceRequest(
+        '$base/fdroid/repo/index.xml',
+        additionalSettings,
+      );
+    }
+  }
+  return res;
+}
+
 class FDroidRepo extends AppSource {
   FDroidRepo() {
     name = tr('fdroidThirdPartyRepo');
@@ -65,6 +95,134 @@ class FDroidRepo extends AppSource {
     return removeQueryParamsFromUrl(standardUri.toString(), keep: ['appId']);
   }
 
+  /// Parses a successful [index.xml] [Response] into search result entries.
+  static Map<String, List<String>> parseIndexXmlSearchResults(
+    Response res,
+    String query,
+  ) {
+    final body = parse(res.body);
+    final Map<String, List<String>> results = <String, List<String>>{};
+    body.querySelectorAll('application').toList().forEach((app) {
+      final String appId = app.attributes['id']!;
+      final String appName = app.querySelector('name')?.innerHtml ?? appId;
+      final String appDesc = app.querySelector('desc')?.innerHtml ?? '';
+      if (query.isEmpty ||
+          appId.contains(query) ||
+          appName.contains(query) ||
+          appDesc.contains(query)) {
+        results['${res.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/')}?appId=$appId'] =
+            [appName, appDesc];
+      }
+    });
+    return results;
+  }
+
+  /// [indexXmlResponse] must have status 200 and a valid F-Droid index body.
+  /// [authorFallback] is used when the index has no repo or per-app author
+  /// (typically the Obtanium source display name).
+  static APKDetails apkDetailsFromIndexXmlResponse(
+    Response indexXmlResponse,
+    String appIdOrName,
+    Map<String, dynamic> additionalSettings,
+    String authorFallback,
+  ) {
+    var body = parse(indexXmlResponse.body);
+    var foundApps = body.querySelectorAll('application').where((element) {
+      return element.attributes['id'] == appIdOrName;
+    }).toList();
+    if (foundApps.isEmpty) {
+      foundApps = body.querySelectorAll('application').where((element) {
+        return element.querySelector('name')?.innerHtml.toLowerCase() ==
+            appIdOrName.toLowerCase();
+      }).toList();
+    }
+    if (foundApps.isEmpty) {
+      foundApps = body.querySelectorAll('application').where((element) {
+        return element
+                .querySelector('name')
+                ?.innerHtml
+                .toLowerCase()
+                .contains(appIdOrName.toLowerCase()) ??
+            false;
+      }).toList();
+    }
+    if (foundApps.isEmpty) {
+      throw ObtainiumError(tr('appWithIdOrNameNotFound'));
+    }
+    var authorName = body.querySelector('repo')?.attributes['name'] ?? authorFallback;
+    String appId = foundApps[0].attributes['id']!;
+    foundApps[0].querySelector('name')?.innerHtml ?? appId;
+    var appName = foundApps[0].querySelector('name')?.innerHtml ?? appId;
+    var releases = foundApps[0].querySelectorAll('package');
+    if (releases.isEmpty) {
+      throw NoReleasesError();
+    }
+    String? changeLog = foundApps[0].querySelector('changelog')?.innerHtml;
+    String? latestVersion = releases[0].querySelector('version')?.innerHtml;
+    if (latestVersion == null) {
+      throw NoVersionError();
+    }
+    String? marketvercodeStr = foundApps[0].querySelector('marketvercode')?.innerHtml;
+    int? marketvercode = int.tryParse(marketvercodeStr ?? '');
+    List selectedReleases = [];
+    final bool trySelectingSuggestedVersionCode =
+        additionalSettings['trySelectingSuggestedVersionCode'] != false;
+    final bool pickHighestVersionCode =
+        additionalSettings['pickHighestVersionCode'] == true ||
+        additionalSettings['autoSelectHighestVersionCode'] == true;
+    if (trySelectingSuggestedVersionCode && marketvercode != null) {
+      selectedReleases = releases.where((e) =>
+        int.tryParse(e.querySelector('versioncode')?.innerHtml ?? '') == marketvercode &&
+        e.querySelector('apkname') != null
+      ).toList();
+    }
+    String? appAuthorName = foundApps[0].querySelector('author')?.innerHtml;
+    if (appAuthorName != null) {
+      authorName = appAuthorName;
+    }
+    if (selectedReleases.isEmpty) {
+      selectedReleases = releases.where((e) =>
+        e.querySelector('version')?.innerHtml == latestVersion &&
+        e.querySelector('apkname') != null
+      ).toList();
+      if (selectedReleases.length > 1 && pickHighestVersionCode) {
+        selectedReleases.sort((e1, e2) {
+          return int.parse(e2.querySelector('versioncode')!.innerHtml).compareTo(
+            int.parse(e1.querySelector('versioncode')!.innerHtml),
+          );
+        });
+        selectedReleases = [selectedReleases[0]];
+      }
+    }
+    String? selectedVersion = selectedReleases[0].querySelector('version')?.innerHtml;
+    if (selectedVersion == null) {
+      throw NoVersionError();
+    }
+    String? added = selectedReleases[0].querySelector('added')?.innerHtml;
+    DateTime? releaseDate = added != null ? DateTime.parse(added) : null;
+    final repoBase =
+        indexXmlResponse.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/');
+    List<String> apkUrls = selectedReleases
+        .map(
+          (e) =>
+              '$repoBase/${e.querySelector('apkname')!.innerHtml}',
+        )
+        .toList();
+    String? iconFile = foundApps[0].querySelector('icon')?.innerHtml.trim();
+    String? iconUrl;
+    if (iconFile != null && iconFile.isNotEmpty) {
+      iconUrl = '$repoBase/icons/$iconFile';
+    }
+    return APKDetails(
+      selectedVersion,
+      getApkUrlsFromUrls(apkUrls),
+      AppNames(authorName, appName),
+      releaseDate: releaseDate,
+      changeLog: changeLog,
+      iconUrl: iconUrl,
+    );
+  }
+
   @override
   Future<Map<String, List<String>>> search(
     String query, {
@@ -75,23 +233,13 @@ class FDroidRepo extends AppSource {
       throw NoReleasesError();
     }
     url = removeQueryParamsFromUrl(standardizeUrl(url));
-    var res = await sourceRequestWithURLVariants(url, {});
+    final Response res = await fdroidRepoRequestIndexWithVariants(
+      sourceRequest,
+      url,
+      querySettings,
+    );
     if (res.statusCode == 200) {
-      var body = parse(res.body);
-      Map<String, List<String>> results = {};
-      body.querySelectorAll('application').toList().forEach((app) {
-        String appId = app.attributes['id']!;
-        String appName = app.querySelector('name')?.innerHtml ?? appId;
-        String appDesc = app.querySelector('desc')?.innerHtml ?? '';
-        if (query.isEmpty ||
-            appId.contains(query) ||
-            appName.contains(query) ||
-            appDesc.contains(query)) {
-          results['${res.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/')}?appId=$appId'] =
-              [appName, appDesc];
-        }
-      });
-      return results;
+      return FDroidRepo.parseIndexXmlSearchResults(res, query);
     } else {
       throw getObtainiumHttpError(res);
     }
@@ -145,24 +293,12 @@ class FDroidRepo extends AppSource {
   Future<Response> sourceRequestWithURLVariants(
     String url,
     Map<String, dynamic> additionalSettings,
-  ) async {
-    var res = await sourceRequest(
-      '$url${url.endsWith('/index.xml') ? '' : '/index.xml'}',
+  ) {
+    return fdroidRepoRequestIndexWithVariants(
+      sourceRequest,
+      url,
       additionalSettings,
     );
-    if (res.statusCode != 200) {
-      var base = url.endsWith('/index.xml')
-          ? url.split('/').reversed.toList().sublist(1).reversed.join('/')
-          : url;
-      res = await sourceRequest('$base/repo/index.xml', additionalSettings);
-      if (res.statusCode != 200) {
-        res = await sourceRequest(
-          '$base/fdroid/repo/index.xml',
-          additionalSettings,
-        );
-      }
-    }
-    return res;
   }
 
   @override
@@ -176,8 +312,6 @@ class FDroidRepo extends AppSource {
       appIdOrName = standardUri.queryParameters['appId'];
     }
     standardUrl = removeQueryParamsFromUrl(standardUrl);
-    bool pickHighestVersionCode = additionalSettings['pickHighestVersionCode'];
-    bool trySelectingSuggestedVersionCode = additionalSettings['trySelectingSuggestedVersionCode'];
     if (appIdOrName == null) {
       throw NoReleasesError();
     }
@@ -186,98 +320,14 @@ class FDroidRepo extends AppSource {
       standardUrl,
       additionalSettings,
     );
-    if (res.statusCode == 200) {
-      var body = parse(res.body);
-      var foundApps = body.querySelectorAll('application').where((element) {
-        return element.attributes['id'] == appIdOrName;
-      }).toList();
-      if (foundApps.isEmpty) {
-        foundApps = body.querySelectorAll('application').where((element) {
-          return element.querySelector('name')?.innerHtml.toLowerCase() ==
-              appIdOrName!.toLowerCase();
-        }).toList();
-      }
-      if (foundApps.isEmpty) {
-        foundApps = body.querySelectorAll('application').where((element) {
-          return element
-                  .querySelector('name')
-                  ?.innerHtml
-                  .toLowerCase()
-                  .contains(appIdOrName!.toLowerCase()) ??
-              false;
-        }).toList();
-      }
-      if (foundApps.isEmpty) {
-        throw ObtainiumError(tr('appWithIdOrNameNotFound'));
-      }
-      var authorName = body.querySelector('repo')?.attributes['name'] ?? name;
-      String appId = foundApps[0].attributes['id']!;
-      foundApps[0].querySelector('name')?.innerHtml ?? appId;
-      var appName = foundApps[0].querySelector('name')?.innerHtml ?? appId;
-      var releases = foundApps[0].querySelectorAll('package');
-      if (releases.isEmpty) {
-        throw NoReleasesError();
-      }
-      String? changeLog = foundApps[0].querySelector('changelog')?.innerHtml;
-      String? latestVersion = releases[0].querySelector('version')?.innerHtml;
-      if (latestVersion == null) {
-        throw NoVersionError();
-      }
-      String? marketvercodeStr = foundApps[0].querySelector('marketvercode')?.innerHtml;
-      int? marketvercode = int.tryParse(marketvercodeStr ?? '');
-      List selectedReleases = [];
-      if (trySelectingSuggestedVersionCode && marketvercode != null) {
-        selectedReleases = releases.where((e) =>
-          int.tryParse(e.querySelector('versioncode')?.innerHtml ?? '') == marketvercode &&
-          e.querySelector('apkname') != null
-        ).toList();
-      }
-      String? appAuthorName = foundApps[0].querySelector('author')?.innerHtml;
-      if (appAuthorName != null) {
-        authorName = appAuthorName;
-      }
-      if (selectedReleases.isEmpty) {
-        selectedReleases = releases.where((e) =>
-          e.querySelector('version')?.innerHtml == latestVersion &&
-          e.querySelector('apkname') != null
-        ).toList();
-        if (selectedReleases.length > 1 && pickHighestVersionCode) {
-          selectedReleases.sort((e1, e2) {
-            return int.parse(e2.querySelector('versioncode')!.innerHtml)
-              .compareTo(int.parse(e1.querySelector('versioncode')!.innerHtml));
-        });
-          selectedReleases = [selectedReleases[0]];
-        }
-      }
-      String? selectedVersion = selectedReleases[0].querySelector('version')?.innerHtml;
-      if (selectedVersion == null) {
-        throw NoVersionError();
-      }
-      String? added = selectedReleases[0].querySelector('added')?.innerHtml;
-      DateTime? releaseDate = added != null ? DateTime.parse(added) : null;
-      final repoBase =
-          res.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/');
-      List<String> apkUrls = selectedReleases
-          .map(
-            (e) =>
-                '$repoBase/${e.querySelector('apkname')!.innerHtml}',
-          )
-          .toList();
-      String? iconFile = foundApps[0].querySelector('icon')?.innerHtml.trim();
-      String? iconUrl;
-      if (iconFile != null && iconFile.isNotEmpty) {
-        iconUrl = '$repoBase/icons/$iconFile';
-      }
-      return APKDetails(
-        selectedVersion,
-        getApkUrlsFromUrls(apkUrls),
-        AppNames(authorName, appName),
-        releaseDate: releaseDate,
-        changeLog: changeLog,
-        iconUrl: iconUrl,
-      );
-    } else {
+    if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
+    return apkDetailsFromIndexXmlResponse(
+      res,
+      appIdOrName,
+      additionalSettings,
+      name,
+    );
   }
 }

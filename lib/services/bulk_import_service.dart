@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HttpClient;
 import 'dart:math';
 
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:flutter/foundation.dart';
+import 'package:html/dom.dart' as html_dom;
+import 'package:html/parser.dart' show parse;
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 
@@ -304,6 +309,73 @@ class BulkImportService {
     return result;
   }
 
+  /// F-Droid-style APIs have no batch endpoint; we fire one GET per package.
+  /// The global [http.get] client caps connections per host (~6), so bulk scans
+  /// share this [IOClient] with a raised [HttpClient.maxConnectionsPerHost] and
+  /// one [Future.wait] per chunk of [_bulkPackageApiChunkSize] packages.
+  static const int _bulkPackageApiChunkSize = 20;
+  static const int _bulkPackageApiMaxConnectionsPerHost = _bulkPackageApiChunkSize;
+
+  /// Ensures [recordStoreCoverage] sees every package (null means not in store).
+  static void _putMissingPackageKeysAsNull(
+    Map<String, String?> result,
+    Iterable<String> packageNames,
+  ) {
+    for (final String packageName in packageNames) {
+      result.putIfAbsent(packageName, () => null);
+    }
+  }
+
+  static Future<void> _runBulkPerPackageApiLookups({
+    required List<String> toQuery,
+    required List<String> allPackageNames,
+    required Map<String, String?> result,
+    void Function(int done, int total)? onProgress,
+    bool Function()? shouldAbort,
+    required Future<void> Function(http.Client client, String packageName)
+        runLookup,
+  }) async {
+    int finishedAttempts = result.length;
+    void reportAttemptProgress() {
+      onProgress?.call(finishedAttempts, allPackageNames.length);
+    }
+
+    reportAttemptProgress();
+
+    final HttpClient rawHttpClient = HttpClient()
+      ..maxConnectionsPerHost = _bulkPackageApiMaxConnectionsPerHost;
+    final http.Client client = IOClient(rawHttpClient);
+    try {
+      for (int chunkStart = 0;
+          chunkStart < toQuery.length;
+          chunkStart += _bulkPackageApiChunkSize) {
+        if (shouldAbort?.call() == true) {
+          return;
+        }
+        final List<String> chunk = toQuery.sublist(
+          chunkStart,
+          min(chunkStart + _bulkPackageApiChunkSize, toQuery.length),
+        );
+        await Future.wait(chunk.map((String pkg) async {
+          try {
+            await runLookup(client, pkg);
+          } catch (_) {
+            //
+          } finally {
+            finishedAttempts++;
+            reportAttemptProgress();
+          }
+        }));
+        if (shouldAbort?.call() == true) {
+          return;
+        }
+      }
+    } finally {
+      _putMissingPackageKeysAsNull(result, toQuery);
+      client.close();
+    }
+  }
+
   /// Checks F-Droid for a list of package names using their REST API.
   /// Returns a map of packageName -> fdroid URL (null if not found).
   static Future<Map<String, String?>> checkFDroid(
@@ -320,57 +392,254 @@ class BulkImportService {
         }
       }
     }
-    void reportProgress() {
-      int resolved = 0;
-      for (final String packageName in packageNames) {
-        if (result.containsKey(packageName)) resolved++;
-      }
-      onProgress?.call(resolved, packageNames.length);
-    }
 
-    reportProgress();
     final List<String> toQuery = packageNames
         .where((String packageName) => !result.containsKey(packageName))
         .toList();
     if (toQuery.isEmpty) {
+      onProgress?.call(result.length, packageNames.length);
+      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
-    // F-Droid has no batch API but no rate limits either — run concurrently.
-    const int concurrency = 20;
-    const int subBatchSize = 5;
-    for (int i = 0; i < toQuery.length; i += concurrency) {
-      if (shouldAbort?.call() == true) return result;
-      final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
-      for (int subStart = 0; subStart < chunk.length; subStart += subBatchSize) {
-        if (shouldAbort?.call() == true) return result;
-        final subChunk = chunk.sublist(
-          subStart,
-          min(subStart + subBatchSize, chunk.length),
-        );
-        await Future.wait(subChunk.map((pkg) async {
-          try {
-            final response = await http
-                .get(
-                  Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
-                  headers: {'User-Agent': 'ObtainX/1.4.0'},
-                )
-                .timeout(const Duration(seconds: 10));
-            if (response.statusCode == 200) {
-              result[pkg] = 'https://f-droid.org/packages/$pkg/';
-            } else if (response.statusCode == 404) {
-              result[pkg] = null; // Definitive: not in F-Droid.
-            }
-            // Other non-200 (rate limit, server error) — don't cache; retry next scan.
-          } catch (_) {
-            // Network error or timeout — don't cache; retry next scan.
-          }
-          reportProgress();
-        }));
-        if (shouldAbort?.call() == true) return result;
+    await _runBulkPerPackageApiLookups(
+      toQuery: toQuery,
+      allPackageNames: packageNames,
+      result: result,
+      onProgress: onProgress,
+      shouldAbort: shouldAbort,
+      runLookup: (http.Client client, String pkg) async {
+        final http.Response response = await client
+            .get(
+              Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
+              headers: {'User-Agent': 'ObtainX/1.4.0'},
+            )
+            .timeout(const Duration(seconds: 10));
+        if (response.statusCode == 200) {
+          result[pkg] = 'https://f-droid.org/packages/$pkg/';
+        } else if (response.statusCode == 404) {
+          result[pkg] = null;
+        }
+      },
+    );
+    _putMissingPackageKeysAsNull(result, packageNames);
+    return result;
+  }
+
+  static const String _izzyOnDroidRepoIndexUrl =
+      'https://apt.izzysoft.de/fdroid/repo/index.xml';
+  static const String _izzyOnDroidRepoApkUrlPrefix =
+      'https://apt.izzysoft.de/fdroid/repo/';
+
+  /// Picks the suggested APK filename for an `<application>` from [index.xml].
+  static String? _izzyApkStoreUrlFromIndexApplication(html_dom.Element app) {
+    final List<html_dom.Element> packageElements =
+        app.getElementsByTagName('package');
+    if (packageElements.isEmpty) {
+      return null;
+    }
+    final String? marketVerCodeText =
+        app.querySelector('marketvercode')?.innerHtml.trim();
+    final int? marketVerCode = int.tryParse(marketVerCodeText ?? '');
+    html_dom.Element? selectedPackage;
+    if (marketVerCode != null) {
+      for (final html_dom.Element packageElement in packageElements) {
+        final String? versionCodeText = packageElement
+            .querySelector('versioncode')
+            ?.innerHtml
+            .trim();
+        final int? versionCode = int.tryParse(versionCodeText ?? '');
+        final String? apkName =
+            packageElement.querySelector('apkname')?.innerHtml.trim();
+        if (versionCode == marketVerCode &&
+            apkName != null &&
+            apkName.isNotEmpty) {
+          selectedPackage = packageElement;
+          break;
+        }
       }
     }
-    return result;
+    if (selectedPackage == null) {
+      int bestVersionCode = -1;
+      for (final html_dom.Element packageElement in packageElements) {
+        final String? versionCodeText = packageElement
+            .querySelector('versioncode')
+            ?.innerHtml
+            .trim();
+        final int versionCode =
+            int.tryParse(versionCodeText ?? '') ?? -1;
+        final String? apkName =
+            packageElement.querySelector('apkname')?.innerHtml.trim();
+        if (apkName != null &&
+            apkName.isNotEmpty &&
+            versionCode > bestVersionCode) {
+          bestVersionCode = versionCode;
+          selectedPackage = packageElement;
+        }
+      }
+    }
+    final String? apkName =
+        selectedPackage?.querySelector('apkname')?.innerHtml.trim();
+    if (apkName == null || !apkName.toLowerCase().endsWith('.apk')) {
+      return null;
+    }
+    return '$_izzyOnDroidRepoApkUrlPrefix$apkName';
+  }
+
+  /// Isolate entry for [compute]; must stay in sync with [_izzyApkStoreUrlFromIndexApplication].
+  static Map<String, String> _izzyIndexBodyToPackageStoreUrls(String indexBody) {
+    final html_dom.Document document = parse(indexBody);
+    final Map<String, String> packageIdToStoreUrl = <String, String>{};
+    for (final html_dom.Element applicationElement
+        in document.querySelectorAll('application')) {
+      final String? applicationId = applicationElement.attributes['id'];
+      if (applicationId == null || applicationId.isEmpty) {
+        continue;
+      }
+      final String? storeUrl =
+          _izzyApkStoreUrlFromIndexApplication(applicationElement);
+      if (storeUrl != null) {
+        packageIdToStoreUrl[applicationId] = storeUrl;
+      }
+    }
+    return packageIdToStoreUrl;
+  }
+
+  /// One [index.xml] fetch and in-memory lookups (fast). Parsing runs in an
+  /// isolate via [compute]. Progress updates are throttled so the UI stays
+  /// responsive. Falls back to the per-package API if the index path fails.
+  static Future<Map<String, String?>> checkIzzyOnDroid(
+    List<String> packageNames, {
+    void Function(int done, int total)? onProgress,
+    Map<String, String?>? alreadyKnown,
+    bool Function()? shouldAbort,
+  }) async {
+    final result = <String, String?>{};
+    if (alreadyKnown != null) {
+      for (final String packageName in packageNames) {
+        if (alreadyKnown.containsKey(packageName)) {
+          result[packageName] = alreadyKnown[packageName];
+        }
+      }
+    }
+
+    final List<String> toQuery = packageNames
+        .where((String packageName) => !result.containsKey(packageName))
+        .toList();
+    if (toQuery.isEmpty) {
+      onProgress?.call(result.length, packageNames.length);
+      _putMissingPackageKeysAsNull(result, packageNames);
+      return result;
+    }
+
+    onProgress?.call(result.length, packageNames.length);
+
+    if (shouldAbort?.call() == true) {
+      _putMissingPackageKeysAsNull(result, packageNames);
+      return result;
+    }
+
+    const Map<String, String> requestHeaders = <String, String>{
+      'User-Agent': 'F-Droid/1.0 (+https://f-droid.org)',
+    };
+    final Uri indexUri = Uri.parse(_izzyOnDroidRepoIndexUrl);
+
+    final HttpClient indexRawClient = HttpClient();
+    final http.Client indexClient = IOClient(indexRawClient);
+
+    try {
+      http.Response indexResponse = await indexClient
+          .get(indexUri, headers: requestHeaders)
+          .timeout(const Duration(seconds: 120));
+      if (indexResponse.statusCode == 429) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        indexResponse = await indexClient
+            .get(indexUri, headers: requestHeaders)
+            .timeout(const Duration(seconds: 120));
+      }
+      if (indexResponse.statusCode != 200) {
+        throw StateError('Izzy index HTTP ${indexResponse.statusCode}');
+      }
+      onProgress?.call(result.length, packageNames.length);
+
+      final Map<String, String> packageIdToStoreUrl =
+          await compute(_izzyIndexBodyToPackageStoreUrls, indexResponse.body);
+
+      onProgress?.call(result.length, packageNames.length);
+
+      final int lookupTotal = toQuery.length;
+      int lookupDone = 0;
+      const int progressEvery = 48;
+      for (final String packageName in toQuery) {
+        if (shouldAbort?.call() == true) {
+          return result;
+        }
+        result[packageName] = packageIdToStoreUrl[packageName];
+        lookupDone++;
+        if (lookupDone == 1 ||
+            lookupDone == lookupTotal ||
+            lookupDone % progressEvery == 0) {
+          onProgress?.call(result.length, packageNames.length);
+        }
+      }
+      return result;
+    } catch (error, stackTrace) {
+      debugPrint(
+        'IzzyOnDroid index bulk check failed, falling back to API per package: $error\n$stackTrace',
+      );
+      await _runBulkPerPackageApiLookups(
+        toQuery: toQuery,
+        allPackageNames: packageNames,
+        result: result,
+        onProgress: onProgress,
+        shouldAbort: shouldAbort,
+        runLookup: (http.Client client, String pkg) async {
+          final Uri uri = Uri.parse(
+            'https://apt.izzysoft.de/fdroid/api/v1/packages/$pkg',
+          );
+          http.Response response = await client
+              .get(uri, headers: requestHeaders)
+              .timeout(const Duration(seconds: 15));
+          if (response.statusCode == 429) {
+            await Future<void>.delayed(const Duration(seconds: 1));
+            response = await client
+                .get(uri, headers: requestHeaders)
+                .timeout(const Duration(seconds: 15));
+          }
+          if (response.statusCode == 200) {
+            try {
+              final dynamic decoded = jsonDecode(response.body);
+              String? versionCodeStr =
+                  decoded['suggestedVersionCode']?.toString();
+              if (versionCodeStr == null || versionCodeStr.isEmpty) {
+                final List<dynamic>? packages =
+                    decoded['packages'] as List<dynamic>?;
+                if (packages != null && packages.isNotEmpty) {
+                  final first = packages.first;
+                  if (first is Map) {
+                    versionCodeStr = first['versionCode']?.toString();
+                  }
+                }
+              }
+              if (versionCodeStr != null && versionCodeStr.isNotEmpty) {
+                result[pkg] =
+                    'https://apt.izzysoft.de/fdroid/repo/${pkg}_$versionCodeStr.apk';
+              } else {
+                result[pkg] = null;
+              }
+            } catch (_) {
+              result[pkg] = null;
+            }
+          } else if (response.statusCode == 404) {
+            result[pkg] = null;
+          }
+        },
+      );
+      return result;
+    } finally {
+      _putMissingPackageKeysAsNull(result, packageNames);
+      indexClient.close();
+    }
   }
 
   /// GitHub code search by package id. Results are best-effort: many repos match

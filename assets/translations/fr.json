@@ -181,6 +181,7 @@
     "remove": "Supprimer",
     "yesMarkUpdated": "Oui, marquer comme étant à jour",
     "fdroid": "F-Droid officiel",
+    "izzyOnDroid": "IzzyOnDroid",
     "appIdOrName": "ID ou nom de l'application",
     "appId": "ID de l'application",
     "appWithIdOrNameNotFound": "Aucune application trouvée avec cet identifiant ou ce nom",

@@ -223,13 +223,15 @@ class FDroid extends AppSource {
       if (trySelectingSuggestedVersionCode &&
           response['suggestedVersionCode'] != null &&
           filterVersionsByRegEx == null) {
+        final String suggestedVersionCodeText =
+            response['suggestedVersionCode'].toString();
         var suggestedReleases = releases.where(
           (element) =>
-              element['versionCode'] == response['suggestedVersionCode'],
+              element['versionCode'].toString() == suggestedVersionCodeText,
         );
         if (suggestedReleases.isNotEmpty) {
           releaseChoices = suggestedReleases;
-          version = suggestedReleases.first['versionName'];
+          version = suggestedReleases.first['versionName']?.toString();
         }
       }
       // Apply the release filter if any
@@ -239,8 +241,8 @@ class FDroid extends AppSource {
         for (var i = 0; i < releases.length; i++) {
           if (RegExp(
             filterVersionsByRegEx!,
-          ).hasMatch(releases[i]['versionName'])) {
-            version = releases[i]['versionName'];
+          ).hasMatch(releases[i]['versionName']?.toString() ?? '')) {
+            version = releases[i]['versionName']?.toString();
           }
         }
         if (version == null) {
@@ -248,14 +250,14 @@ class FDroid extends AppSource {
         }
       }
       // Default to the highest version
-      version ??= releases[0]['versionName'];
+      version ??= releases[0]['versionName']?.toString();
       if (version == null) {
         throw NoVersionError();
       }
       // If a suggested release was not already picked, pick all those with the selected version
       if (releaseChoices.isEmpty) {
         releaseChoices = releases.where(
-          (element) => element['versionName'] == version,
+          (element) => element['versionName']?.toString() == version,
         );
       }
       // For the remaining releases, use the toggles to auto-select one if possible
@@ -264,9 +266,11 @@ class FDroid extends AppSource {
           releaseChoices = [releaseChoices.first];
         } else if (trySelectingSuggestedVersionCode &&
             response['suggestedVersionCode'] != null) {
+          final String suggestedVersionCodeText =
+              response['suggestedVersionCode'].toString();
           var suggestedReleases = releaseChoices.where(
             (element) =>
-                element['versionCode'] == response['suggestedVersionCode'],
+                element['versionCode'].toString() == suggestedVersionCodeText,
           );
           if (suggestedReleases.isNotEmpty) {
             releaseChoices = suggestedReleases;
@@ -280,11 +284,24 @@ class FDroid extends AppSource {
           .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
           .toList();
       String? iconUrl;
+      final String packageLabel = () {
+        final Object? rawPackageName = response['packageName'];
+        if (rawPackageName is String) {
+          final String trimmedPackageName = rawPackageName.trim();
+          if (trimmedPackageName.isNotEmpty) {
+            return trimmedPackageName;
+          }
+        }
+        final String? queryAppId =
+            Uri.parse(standardUrl).queryParameters['appId']?.trim();
+        if (queryAppId != null && queryAppId.isNotEmpty) {
+          return queryAppId;
+        }
+        return Uri.parse(standardUrl).pathSegments.last;
+      }();
       if (!hostChanged) {
         try {
-          final pkgName =
-              response['packageName'] as String? ??
-              Uri.parse(standardUrl).pathSegments.last;
+          final pkgName = packageLabel;
           final pageHost = Uri.parse(standardUrl).host;
           if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {
             final pageRes = await sourceRequest(
@@ -307,7 +324,7 @@ class FDroid extends AppSource {
       return APKDetails(
         version,
         getApkUrlsFromUrls(apkUrls.toSet().toList()),
-        AppNames(sourceName, Uri.parse(standardUrl).pathSegments.last),
+        AppNames(sourceName, packageLabel),
         iconUrl: iconUrl,
       );
     } else {

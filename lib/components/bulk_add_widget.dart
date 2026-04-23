@@ -7,6 +7,7 @@ import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
@@ -27,16 +28,28 @@ class BulkFoundApp {
 
   BulkFoundApp({required this.info, required this.sources});
 
-  /// Best URL to add: F-Droid > APKPure > APKMirror > GitHub.
+  /// Best URL to add: F-Droid > IzzyOnDroid > APKPure > APKMirror > GitHub.
   String get bestUrl {
-    for (final store in ['F-Droid', 'APKPure', 'APKMirror', 'GitHub']) {
+    for (final store in [
+      'F-Droid',
+      'IzzyOnDroid',
+      'APKPure',
+      'APKMirror',
+      'GitHub',
+    ]) {
       if (sources.containsKey(store)) return sources[store]!;
     }
     return sources.values.first;
   }
 
   String get bestStore {
-    for (final store in ['F-Droid', 'APKPure', 'APKMirror', 'GitHub']) {
+    for (final store in [
+      'F-Droid',
+      'IzzyOnDroid',
+      'APKPure',
+      'APKMirror',
+      'GitHub',
+    ]) {
       if (sources.containsKey(store)) return store;
     }
     return sources.keys.first;
@@ -94,6 +107,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   int _apkPureTotal = 0;
   int _fdroidDone = 0;
   int _fdroidTotal = 0;
+  int _izzyOnDroidDone = 0;
+  int _izzyOnDroidTotal = 0;
   int _githubDone = 0;
   int _githubTotal = 0;
 
@@ -129,6 +144,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   late AppsProvider _appsProvider;
   static const List<String> _storeIconPriority = [
     'F-Droid',
+    'IzzyOnDroid',
     'APKPure',
     'APKMirror',
     'GitHub',
@@ -138,6 +154,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     'APKMirror',
     'APKPure',
     'F-Droid',
+    'IzzyOnDroid',
     'GitHub',
   ];
 
@@ -307,6 +324,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       'APKMirror' => 'www.apkmirror.com',
       'APKPure' => 'apkpure.net',
       'F-Droid' => 'f-droid.org',
+      'IzzyOnDroid' => 'apt.izzysoft.de',
       'GitHub' => 'github.com',
       _ => '',
     };
@@ -908,6 +926,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       _apkPureTotal = 0;
       _fdroidDone = 0;
       _fdroidTotal = 0;
+      _izzyOnDroidDone = 0;
+      _izzyOnDroidTotal = 0;
       _githubDone = 0;
       _githubTotal = 0;
       _foundApps = [];
@@ -1076,6 +1096,53 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   .putIfAbsent(pkg, () => <String, String>{})['F-Droid'] = url;
             }
           });
+        case 'IzzyOnDroid':
+          if (!mounted || _bulkScanResultsCommitted) return;
+          if (_scanCancelRequested) break;
+          if (mounted) {
+            setState(() {
+              _scanStatus = tr('scanningStore', args: ['IzzyOnDroid']);
+              _izzyOnDroidTotal = _bulkScanPackageNames.length;
+              _izzyOnDroidDone = 0;
+            });
+          }
+          final Map<String, String?> izzyKnown = _persistedStoreColumn(
+            persistedScanCache,
+            _bulkScanPackageNames,
+            'IzzyOnDroid',
+          );
+          final Map<String, String?> izzyResults =
+              await BulkImportService.checkIzzyOnDroid(
+                _bulkScanPackageNames,
+                alreadyKnown: izzyKnown.isEmpty ? null : izzyKnown,
+                shouldAbort: shouldAbortScan,
+                onProgress: (int done, int total) {
+                  if (mounted) {
+                    setState(() {
+                      _izzyOnDroidDone = done;
+                      _izzyOnDroidTotal = total;
+                    });
+                  }
+                },
+              );
+          if (!mounted || _bulkScanResultsCommitted) return;
+          recordStoreCoverage('IzzyOnDroid', izzyResults);
+          await BulkScanCache.mergeStoreAndSave(
+            persistedScanCache,
+            'IzzyOnDroid',
+            izzyResults,
+          );
+          if (!mounted || _bulkScanResultsCommitted) return;
+          if (mounted) {
+            setState(() => _izzyOnDroidDone = _izzyOnDroidTotal);
+          }
+          izzyResults.forEach((String pkg, String? url) {
+            if (url != null) {
+              _bulkScanCombined
+                  .putIfAbsent(pkg, () => <String, String>{})['IzzyOnDroid'] =
+                  url;
+            }
+          });
         case 'GitHub':
           if (!mounted || _bulkScanResultsCommitted) return;
           if (_scanCancelRequested) break;
@@ -1123,7 +1190,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             }
           });
         default:
-          break;
+          throw UnsupportedError('Unknown bulk store: $storeName');
       }
     }
 
@@ -1157,6 +1224,12 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             _buildStoreCard('APKPure', _apkPureDone, _apkPureTotal),
           if (_selectedStores.contains('F-Droid'))
             _buildStoreCard('F-Droid', _fdroidDone, _fdroidTotal),
+          if (_selectedStores.contains('IzzyOnDroid'))
+            _buildStoreCard(
+              'IzzyOnDroid',
+              _izzyOnDroidDone,
+              _izzyOnDroidTotal,
+            ),
           if (_selectedStores.contains('GitHub'))
             _buildStoreCard('GitHub', _githubDone, _githubTotal),
           const SizedBox(height: 24),
@@ -1733,7 +1806,13 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       final String selectedStore =
           _selectedSources[app.info.packageName] ??
           (() {
-            for (final s in ['F-Droid', 'APKPure', 'APKMirror', 'GitHub']) {
+            for (final s in [
+              'F-Droid',
+              'IzzyOnDroid',
+              'APKPure',
+              'APKMirror',
+              'GitHub',
+            ]) {
               if (app.sources.containsKey(s)) return s;
             }
             return app.sources.keys.first;
@@ -1904,6 +1983,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     final apkMirrorSource = APKMirror();
     final apkPureSource = APKPure();
     final fdroidSource = FDroid();
+    final izzyOnDroidSource = IzzyOnDroid();
     final githubSource = GitHub();
 
     AppSource sourceFor(String storeName) {
@@ -1914,10 +1994,12 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           return apkPureSource;
         case 'F-Droid':
           return fdroidSource;
+        case 'IzzyOnDroid':
+          return izzyOnDroidSource;
         case 'GitHub':
           return githubSource;
         default:
-          return fdroidSource;
+          throw UnsupportedError('Unknown bulk store: $storeName');
       }
     }
 
