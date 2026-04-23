@@ -90,9 +90,9 @@ Future<void> loadTranslations() async {
 }
 
 @pragma('vm:entry-point')
-void backgroundFetchHeadlessTask(HeadlessTask task) async {
-  String taskId = task.taskId;
-  bool isTimeout = task.timeout;
+void backgroundFetchHeadlessTask(HeadlessEvent headlessEvent) async {
+  String taskId = headlessEvent.taskId;
+  bool isTimeout = headlessEvent.timeout;
   if (isTimeout) {
     debugPrint('BG update task timed out.');
     BackgroundFetch.finish(taskId);

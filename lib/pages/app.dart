@@ -2374,8 +2374,7 @@ class _AppPageState extends State<AppPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: 12),
-          if (trackOnlyInstalledErrorCard != null)
-            trackOnlyInstalledErrorCard,
+          ?trackOnlyInstalledErrorCard,
           versionCard,
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&

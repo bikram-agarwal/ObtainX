@@ -22,7 +22,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
-import 'package:obtainium/app_sources/directAPKLink.dart';
+import 'package:obtainium/app_sources/direct_apk_link.dart';
 import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';

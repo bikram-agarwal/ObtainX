@@ -3086,6 +3086,17 @@ class AppsPageState extends State<AppsPage> {
                   const Divider(),
                   TextButton(
                     onPressed: () {
+                      Navigator.of(context).pop();
+                      _showFolderAssignDialog(context, selectedApps);
+                    },
+                    child: Text(
+                      tr('addToFolder'),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const Divider(),
+                  TextButton(
+                    onPressed: () {
                       String urls = '';
                       for (var a in selectedApps) {
                         urls += '${a.url}\n';
@@ -3529,10 +3540,9 @@ class AppsPageState extends State<AppsPage> {
                   visualDensity: VisualDensity.compact,
                   iconSize: 24,
                   color: colorScheme.primary,
-                  onPressed: () =>
-                      _showFolderAssignDialog(context, selectedApps),
-                  tooltip: tr('addToFolder'),
-                  icon: const Icon(Icons.folder_copy_outlined),
+                  onPressed: getMassObtainFunction(),
+                  tooltip: tr('installUpdateSelectedApps'),
+                  icon: const Icon(Icons.file_download_outlined),
                 ),
               ),
             ),

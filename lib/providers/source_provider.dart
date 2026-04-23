@@ -16,7 +16,7 @@ import 'package:obtainium/app_sources/aptoide.dart';
 import 'package:obtainium/app_sources/apk4free.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/coolapk.dart';
-import 'package:obtainium/app_sources/directAPKLink.dart';
+import 'package:obtainium/app_sources/direct_apk_link.dart';
 import 'package:obtainium/app_sources/farsroid.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';

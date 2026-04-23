@@ -1242,7 +1242,7 @@ class _SelectionModalState extends State<SelectionModal> {
       }).toList();
 
     final List<Widget> sheetColumnChildren = [
-      if (filterFormWidget != null) filterFormWidget,
+      ?filterFormWidget,
       ...entryTileWidgets,
     ];
 
