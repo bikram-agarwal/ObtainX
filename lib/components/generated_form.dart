@@ -120,6 +120,7 @@ class GeneratedFormDropdown extends GeneratedFormItem {
 class GeneratedFormSwitch extends GeneratedFormItem {
   bool disabled = false;
   String? labelTooltip;
+  List<String> turnsOffKeys;
 
   GeneratedFormSwitch(
     super.key, {
@@ -128,6 +129,7 @@ class GeneratedFormSwitch extends GeneratedFormItem {
     bool super.defaultValue = false,
     bool disabled = false,
     this.labelTooltip,
+    this.turnsOffKeys = const [],
     List<String? Function(bool value)> super.additionalValidators = const [],
   });
 
@@ -145,6 +147,7 @@ class GeneratedFormSwitch extends GeneratedFormItem {
       defaultValue: defaultValue,
       disabled: false,
       labelTooltip: labelTooltip,
+      turnsOffKeys: List.from(turnsOffKeys),
       additionalValidators: List.from(additionalValidators),
     );
   }
@@ -152,10 +155,8 @@ class GeneratedFormSwitch extends GeneratedFormItem {
 
 /// Visual group title for long forms; not written to [values] or app settings.
 class GeneratedFormSectionHeader extends GeneratedFormItem {
-  GeneratedFormSectionHeader(
-    super.key, {
-    required super.label,
-  }) : super(defaultValue: null, belowWidgets: const []);
+  GeneratedFormSectionHeader(super.key, {required super.label})
+    : super(defaultValue: null, belowWidgets: const []);
 
   @override
   dynamic ensureType(dynamic val) => null;
@@ -172,6 +173,7 @@ class GeneratedFormTagInput extends GeneratedFormItem {
   late WrapAlignment alignment;
   late String emptyMessage;
   late bool showLabelWhenNotEmpty;
+
   /// When false, only category chips are shown (toggle selection). Add / edit /
   /// remove list controls are hidden.
   late bool allowTagManagement;
@@ -223,10 +225,8 @@ Map<String, MapEntry<int, bool>> cloneCategoryTagInputValueMap(
   }
   return Map<String, MapEntry<int, bool>>.fromEntries(
     source.entries.map(
-      (MapEntry<String, MapEntry<int, bool>> entry) => MapEntry(
-        entry.key,
-        MapEntry(entry.value.key, entry.value.value),
-      ),
+      (MapEntry<String, MapEntry<int, bool>> entry) =>
+          MapEntry(entry.key, MapEntry(entry.value.key, entry.value.value)),
     ),
   );
 }
@@ -236,10 +236,12 @@ typedef OnValueChanges =
 
 typedef FormValuesTextPatch = void Function(Map<String, String> patches);
 
-typedef GeneratedFormTextFieldAssist = Future<void> Function(
-  BuildContext context,
-  FormValuesTextPatch patch,
-);
+typedef GeneratedFormTextFieldAssist =
+    Future<void> Function(
+      BuildContext context,
+      FormValuesTextPatch patch,
+      Map<String, dynamic> values,
+    );
 
 /// Row indices of [items] grouped by [GeneratedFormSectionHeader] starts.
 List<List<int>> generatedFormSectionRowIndices(
@@ -420,7 +422,20 @@ Color generateRandomLightColor() {
 /// Each row decreases saturation and increases lightness uniformly across all hues,
 /// so brightness fades gradually rather than in a perceptual-cliff jump.
 List<Color> _buildCategoryColorPalette() {
-  const hues = [0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0, 300.0, 330.0];
+  const hues = [
+    0.0,
+    30.0,
+    60.0,
+    90.0,
+    120.0,
+    150.0,
+    180.0,
+    210.0,
+    240.0,
+    270.0,
+    300.0,
+    330.0,
+  ];
   // (saturation, lightness) pairs — vivid at top, pastel at bottom
   const rows = [
     (1.00, 0.50), // vivid/pure
@@ -520,7 +535,9 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          16, 20, 16,
+          16,
+          20,
+          16,
           MediaQuery.of(context).viewInsets.bottom + 8,
         ),
         child: Column(
@@ -637,8 +654,9 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
                         if (text.length > 7) return old;
                         return updated.copyWith(
                           text: text,
-                          selection:
-                              TextSelection.collapsed(offset: text.length),
+                          selection: TextSelection.collapsed(
+                            offset: text.length,
+                          ),
                         );
                       }),
                     ],
@@ -654,10 +672,10 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
                 FilledButton(
                   onPressed: name.isEmpty
                       ? null
-                      : () => Navigator.pop(
-                            context,
-                            (color: _staged, name: name),
-                          ),
+                      : () => Navigator.pop(context, (
+                          color: _staged,
+                          name: name,
+                        )),
                   child: Text(tr('save')),
                 ),
               ],
@@ -756,10 +774,7 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         return DropdownMenuItem<dynamic>(
           value: option.key,
           enabled: enabled,
-          child: Opacity(
-            opacity: enabled ? 1 : 0.5,
-            child: Text(option.value),
-          ),
+          child: Opacity(opacity: enabled ? 1 : 0.5, child: Text(option.value)),
         );
       }).toList(),
       onChanged: onChanged,
@@ -791,10 +806,7 @@ class _TVTextFieldFocus extends StatefulWidget {
   final Widget child;
   final FocusNode textFocusNode;
 
-  const _TVTextFieldFocus({
-    required this.child,
-    required this.textFocusNode,
-  });
+  const _TVTextFieldFocus({required this.child, required this.textFocusNode});
 
   @override
   State<_TVTextFieldFocus> createState() => _TVTextFieldFocusState();
@@ -868,7 +880,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
   final Map<String, TextEditingController> _textFieldControllers = {};
 
   void _disposeTextFieldControllers() {
-    for (final TextEditingController controller in _textFieldControllers.values) {
+    for (final TextEditingController controller
+        in _textFieldControllers.values) {
       controller.dispose();
     }
     _textFieldControllers.clear();
@@ -930,30 +943,28 @@ class _GeneratedFormState extends State<GeneratedForm> {
         } else if (formItem is GeneratedFormTextField) {
           final formFieldKey = GlobalKey<FormFieldState>();
           final String initialText = values[formItem.key]?.toString() ?? '';
-          final TextEditingController ctrl =
-              _textFieldControllers.putIfAbsent(
+          final TextEditingController ctrl = _textFieldControllers.putIfAbsent(
             formItem.key,
             () => TextEditingController(text: initialText),
           );
           if (ctrl.text != initialText) {
             ctrl.text = initialText;
           }
-          final bool showExternalFieldLabels = widget.outlinedInputFields &&
-              widget.outlinedFieldsExternalLabels;
-          final double outlinedRadius =
-              widget.outlinedFieldBorderRadius ?? 12;
+          final bool showExternalFieldLabels =
+              widget.outlinedInputFields && widget.outlinedFieldsExternalLabels;
+          final double outlinedRadius = widget.outlinedFieldBorderRadius ?? 12;
           final _GeneratedFormState formState = this;
           final Widget typeAhead = TypeAheadField<String>(
             controller: ctrl,
             builder: (context, controller, focusNode) {
               final InputDecoration baseDecoration =
                   _generatedFormTextFieldDecoration(
-                context: context,
-                formItem: formItem,
-                outlined: widget.outlinedInputFields,
-                externalLabels: showExternalFieldLabels,
-                borderRadius: outlinedRadius,
-              );
+                    context: context,
+                    formItem: formItem,
+                    outlined: widget.outlinedInputFields,
+                    externalLabels: showExternalFieldLabels,
+                    borderRadius: outlinedRadius,
+                  );
               final Widget textField = TextFormField(
                 controller: ctrl,
                 focusNode: focusNode,
@@ -970,7 +981,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
                   });
                 },
                 decoration: baseDecoration.copyWith(
-                  suffixIcon: formItem.suffixIcon ??
+                  suffixIcon:
+                      formItem.suffixIcon ??
                       (formItem.assistAction == null
                           ? null
                           : IconButton(
@@ -980,6 +992,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                 await formItem.assistAction!(
                                   context,
                                   formState.applyTextFieldPatches,
+                                  formState.values,
                                 );
                               },
                             )),
@@ -1035,9 +1048,9 @@ class _GeneratedFormState extends State<GeneratedForm> {
                   child: Text(
                     formItem.label + (formItem.required ? ' *' : ''),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 typeAhead,
@@ -1053,8 +1066,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
             formItem: formItem,
             outlinedInputFields: widget.outlinedInputFields,
             outlinedFieldsExternalLabels: widget.outlinedFieldsExternalLabels,
-            outlinedFieldBorderRadius:
-                widget.outlinedFieldBorderRadius ?? 12,
+            outlinedFieldBorderRadius: widget.outlinedFieldBorderRadius ?? 12,
             value: values[formItem.key],
             onChanged: (dynamic newValue) {
               setState(() {
@@ -1119,9 +1131,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
           formInputs[r][e] = Padding(
             padding: EdgeInsets.only(
               top: showDivider
-                  ? (prominent
-                      ? (inSectionCard ? 2 : 20)
-                      : 16)
+                  ? (prominent ? (inSectionCard ? 2 : 20) : 16)
                   : (prominent ? (inSectionCard ? 0 : 8) : 4),
               bottom: prominent ? (inSectionCard ? 6 : 10) : 6,
             ),
@@ -1159,22 +1169,22 @@ class _GeneratedFormState extends State<GeneratedForm> {
           final ColorScheme switchScheme = Theme.of(context).colorScheme;
           final Widget? switchHelpIcon =
               switchItem.labelTooltip != null &&
-                      switchItem.labelTooltip!.isNotEmpty
-                  ? Tooltip(
-                      message: switchItem.labelTooltip!,
-                      triggerMode: TooltipTriggerMode.tap,
-                      waitDuration: Duration.zero,
-                      showDuration: const Duration(seconds: 5),
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: Icon(
-                          Icons.help_outline,
-                          size: 20,
-                          color: switchScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    )
-                  : null;
+                  switchItem.labelTooltip!.isNotEmpty
+              ? Tooltip(
+                  message: switchItem.labelTooltip!,
+                  triggerMode: TooltipTriggerMode.tap,
+                  waitDuration: Duration.zero,
+                  showDuration: const Duration(seconds: 5),
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: Icon(
+                      Icons.help_outline,
+                      size: 20,
+                      color: switchScheme.onSurfaceVariant,
+                    ),
+                  ),
+                )
+              : null;
           formInputs[r][e] = Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -1182,9 +1192,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Flexible(
-                      child: Text(switchItem.label),
-                    ),
+                    Flexible(child: Text(switchItem.label)),
                     ...[?switchHelpIcon],
                   ],
                 ),
@@ -1197,6 +1205,12 @@ class _GeneratedFormState extends State<GeneratedForm> {
                     : (value) {
                         setState(() {
                           values[fieldKey] = value;
+                          if (value) {
+                            for (final String targetKey
+                                in switchItem.turnsOffKeys) {
+                              values[targetKey] = false;
+                            }
+                          }
                           someValueChanged();
                         });
                       },
@@ -1210,8 +1224,11 @@ class _GeneratedFormState extends State<GeneratedForm> {
           final tagInput = widget.items[r][e] as GeneratedFormTagInput;
           onAddPressed() async {
             // ignore: use_build_context_synchronously
-            final result = await _showCategorySheet(context,
-                initialColor: generateRandomLightColor(), initialName: '');
+            final result = await _showCategorySheet(
+              context,
+              initialColor: generateRandomLightColor(),
+              initialName: '',
+            );
             if (!context.mounted || result == null) return;
             var temp = values[fieldKey] as Map<String, MapEntry<int, bool>>?;
             temp ??= {};
@@ -1267,10 +1284,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                 if (tagInput.singleSelect && newValue) {
                                   for (final String key in map.keys) {
                                     if (key != e2.key) {
-                                      map[key] = MapEntry(
-                                        map[key]!.key,
-                                        false,
-                                      );
+                                      map[key] = MapEntry(map[key]!.key, false);
                                     }
                                   }
                                 }
@@ -1284,8 +1298,9 @@ class _GeneratedFormState extends State<GeneratedForm> {
                             final TextStyle chipLabelStyle = TextStyle(
                               color: lightChip ? Colors.black87 : Colors.white,
                             );
-                            final Color checkColor =
-                                lightChip ? Colors.black87 : Colors.white;
+                            final Color checkColor = lightChip
+                                ? Colors.black87
+                                : Colors.white;
                             return Padding(
                               key: ValueKey<String>('category_chip_${e2.key}'),
                               padding: const EdgeInsets.symmetric(
@@ -1322,9 +1337,11 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                   (e) => e.value.value,
                                 );
                                 // ignore: use_build_context_synchronously
-                                final result = await _showCategorySheet(context,
-                                    initialColor: Color(oldEntry.value.key),
-                                    initialName: oldEntry.key);
+                                final result = await _showCategorySheet(
+                                  context,
+                                  initialColor: Color(oldEntry.value.key),
+                                  initialName: oldEntry.key,
+                                );
                                 if (!context.mounted || result == null) return;
                                 setState(() {
                                   if (result.name != oldEntry.key) {
@@ -1359,13 +1376,15 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                         values[fieldKey]
                                             as Map<String, MapEntry<int, bool>>;
                                     temp.removeWhere(
-                                        (key, value) => value.value);
+                                      (key, value) => value.value,
+                                    );
                                     values[fieldKey] = temp;
                                   });
                                   someValueChanged();
                                 }
 
-                                if (tagInput.deleteConfirmationMessage != null) {
+                                if (tagInput.deleteConfirmationMessage !=
+                                    null) {
                                   var message =
                                       tagInput.deleteConfirmationMessage!;
                                   showDialog<Map<String, dynamic>?>(
@@ -1543,9 +1562,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
         final double gapAfterPreviousRow = previousRowIsSwitch
             ? 8
             : (widget.outlinedInputFields ? 12 : 25);
-        rows.add([
-          SizedBox(height: gapAfterPreviousRow),
-        ]);
+        rows.add([SizedBox(height: gapAfterPreviousRow)]);
       }
       List<Widget> rowItems = [];
       rowInputs.value.asMap().entries.forEach((rowInput) {
@@ -1571,10 +1588,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
     final List<Widget> rowBars = rows.map((List<Widget> row) {
       if (row.length == 1 && row.single is SizedBox) {
         final SizedBox spacer = row.single as SizedBox;
-        return SizedBox(
-          width: double.infinity,
-          height: spacer.height,
-        );
+        return SizedBox(width: double.infinity, height: spacer.height);
       }
       return Row(
         mainAxisAlignment: MainAxisAlignment.start,
@@ -1585,8 +1599,9 @@ class _GeneratedFormState extends State<GeneratedForm> {
 
     Widget formBody;
     if (widget.wrapFormSectionsInCards) {
-      final List<List<int>> sections =
-          generatedFormSectionRowIndices(widget.items);
+      final List<List<int>> sections = generatedFormSectionRowIndices(
+        widget.items,
+      );
       final List<Widget> sectionCards = <Widget>[];
       for (final List<int> sectionRows in sections) {
         final List<Widget> sectionChildren = <Widget>[];
@@ -1623,9 +1638,6 @@ class _GeneratedFormState extends State<GeneratedForm> {
       );
     }
 
-    return Form(
-      key: _formKey,
-      child: formBody,
-    );
+    return Form(key: _formKey, child: formBody);
   }
 }

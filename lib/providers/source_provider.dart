@@ -56,6 +56,7 @@ class APKDetails {
   late DateTime? releaseDate;
   late String? changeLog;
   late List<MapEntry<String, String>> allAssetUrls;
+
   /// Optional absolute URL to a raster app icon from the source (for non-installed apps).
   String? iconUrl;
 
@@ -328,11 +329,14 @@ class App {
   late String name;
   String? installedVersion;
   late String latestVersion;
+
   /// Version string from the source before [extractVersion] / release-date replacement.
   /// Not shown on the app page; used for helpers and diagnostics. Omitted from JSON when null.
   String? rawLatestVersionFromSource;
+
   /// APK row keys (e.g. filenames) before [filterApks], newline-separated. RegEx assist.
   String? rawApkNamesFromSource;
+
   /// Release title candidates before title filter, newline-separated. RegEx assist.
   String? rawReleaseTitlesFromSource;
   List<MapEntry<String, String>> apkUrls = []; // Key is name, value is URL
@@ -347,6 +351,7 @@ class App {
   late String? overrideSource;
   bool allowIdChange = false;
   String? iconUrl;
+
   /// Size of the preferred APK in bytes, if known at update-check time.
   int? apkSizeBytes;
   String? pendingRepoRenameUrl;
@@ -473,11 +478,9 @@ class App {
         jsonDecode((json['otherAssetUrls'] ?? '[]')),
       ),
       iconUrl: json['iconUrl'] as String?,
-      rawLatestVersionFromSource:
-          json['rawLatestVersionFromSource'] as String?,
+      rawLatestVersionFromSource: json['rawLatestVersionFromSource'] as String?,
       rawApkNamesFromSource: json['rawApkNamesFromSource'] as String?,
-      rawReleaseTitlesFromSource:
-          json['rawReleaseTitlesFromSource'] as String?,
+      rawReleaseTitlesFromSource: json['rawReleaseTitlesFromSource'] as String?,
       apkSizeBytes: json['apkSizeBytes'] as int?,
       pendingRepoRenameUrl: json['pendingRepoRenameUrl'] as String?,
     );
@@ -723,6 +726,7 @@ abstract class AppSource {
   bool neverAutoSelect = false;
   bool showReleaseDateAsVersionToggle = false;
   bool showReleaseTitleAsVersionToggle = false;
+  bool showExtractVersionFromAssetNameToggle = false;
   bool versionDetectionDisallowed = false;
   List<String> excludeCommonSettingKeys = [];
   bool urlsAlwaysHaveExtension = false;
@@ -989,16 +993,55 @@ abstract class AppSource {
               0,
         );
         if (trimRowIndex >= 0) {
-          agnosticItems.insert(
-            trimRowIndex,
-            [
-              GeneratedFormSwitch(
-                'releaseTitleAsVersion',
-                label: tr('releaseTitleAsVersion'),
-                defaultValue: false,
-              ),
-            ],
-          );
+          agnosticItems.insert(trimRowIndex, [
+            GeneratedFormSwitch(
+              'releaseTitleAsVersion',
+              label: tr('releaseTitleAsVersion'),
+              defaultValue: false,
+              turnsOffKeys: const ['extractVersionFromAssetName'],
+            ),
+          ]);
+        }
+      }
+    }
+
+    if (showExtractVersionFromAssetNameToggle) {
+      if (agnosticItems.indexWhere(
+            (List<GeneratedFormItem> row) =>
+                row.indexWhere(
+                  (GeneratedFormItem item) =>
+                      item.key == 'extractVersionFromAssetName',
+                ) >=
+                0,
+          ) <
+          0) {
+        final int releaseTitleRowIndex = agnosticItems.indexWhere(
+          (List<GeneratedFormItem> row) =>
+              row.indexWhere(
+                (GeneratedFormItem item) => item.key == 'releaseTitleAsVersion',
+              ) >=
+              0,
+        );
+        final int trimRowIndex = agnosticItems.indexWhere(
+          (List<GeneratedFormItem> row) =>
+              row.indexWhere(
+                (GeneratedFormItem item) =>
+                    item.key == 'versionExtractionRegEx',
+              ) >=
+              0,
+        );
+        final int insertRowIndex = releaseTitleRowIndex >= 0
+            ? releaseTitleRowIndex + 1
+            : trimRowIndex;
+        if (insertRowIndex >= 0) {
+          agnosticItems.insert(insertRowIndex, [
+            GeneratedFormSwitch(
+              'extractVersionFromAssetName',
+              label: tr('extractVersionFromAssetName'),
+              defaultValue: false,
+              turnsOffKeys: const ['releaseTitleAsVersion'],
+            ),
+          ]);
         }
       }
     }
@@ -1300,12 +1343,10 @@ class SourceProvider {
     AppSource? source;
     for (var s in sources.where((element) => element.hosts.isNotEmpty)) {
       try {
-        final cacheKey =
-            '${s.allowSubDomains}:${s.hosts.join(',')}';
-        final regex = SourceProvider._sourceRegexCache[cacheKey] ??=
-            RegExp(
-              '^${s.allowSubDomains ? '([^\\.]+\\.)*' : '(www\\.)?'}(${getSourceRegex(s.hosts)})\$',
-            );
+        final cacheKey = '${s.allowSubDomains}:${s.hosts.join(',')}';
+        final regex = SourceProvider._sourceRegexCache[cacheKey] ??= RegExp(
+          '^${s.allowSubDomains ? '([^\\.]+\\.)*' : '(www\\.)?'}(${getSourceRegex(s.hosts)})\$',
+        );
         if (regex.hasMatch(Uri.parse(url).host)) {
           source = s;
           break;
@@ -1411,7 +1452,7 @@ class SourceProvider {
               ? additionalSettings['appId']
               : null) ??
           ((!source.appIdInferIsOptional ||
-                      (source.appIdInferIsOptional && inferAppIdIfOptional))
+                  (source.appIdInferIsOptional && inferAppIdIfOptional))
               ? await source.tryInferringAppId(
                   standardUrl,
                   additionalSettings: additionalSettings,

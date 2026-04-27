@@ -11,10 +11,7 @@ String stripLetterOnlySegmentsFromVersionRaw(String raw) {
       .where((String segment) => segment.isNotEmpty)
       .toList();
   final List<String> kept = parts
-      .where(
-        (String segment) =>
-            !RegExp(r'^[a-zA-Z]+$').hasMatch(segment),
-      )
+      .where((String segment) => !RegExp(r'^[a-zA-Z]+$').hasMatch(segment))
       .toList();
   return kept.join('.');
 }
@@ -111,8 +108,7 @@ List<String> candidateVersionStringsFromRaw(String raw) {
   if (strippedWords.isNotEmpty && strippedWords != trimmed) {
     add(strippedWords);
   }
-  final RegExp semverLike =
-      RegExp(r'\d+\.\d+\.\d+(?:[.\w\-+/][\w\-+/]*)?');
+  final RegExp semverLike = RegExp(r'\d+\.\d+\.\d+(?:[.\w\-+/][\w\-+/]*)?');
   for (final Match match in semverLike.allMatches(trimmed)) {
     final String? group = match.group(0);
     if (group != null) {
@@ -133,7 +129,10 @@ Map<String, String>? tryBuildRegexForExtractedVersion({
 
   final String? wildcardPattern = _digitWildcardCapturePattern(trimmedDesired);
   if (wildcardPattern != null) {
-    for (final String pattern in <String>[wildcardPattern, '.*$wildcardPattern']) {
+    for (final String pattern in <String>[
+      wildcardPattern,
+      '.*$wildcardPattern',
+    ]) {
       try {
         final String? out = extractVersion(pattern, r'$1', raw);
         if (out == trimmedDesired) {
@@ -244,40 +243,66 @@ List<List<GeneratedFormItem>> attachRegexAssistToItems(
       }
       if (element.key == 'versionExtractionRegEx') {
         element.assistAction =
-            (BuildContext context, FormValuesTextPatch patch) {
-          return showRegexAssistDialog(
-            context: context,
-            kind: RegexAssistKind.versionExtraction,
-            initialRaw: rawLatestVersionFromSource,
-            rawLineSuggestions: const <String>[],
-            filterFieldKey: null,
-            patch: patch,
-          );
-        };
+            (
+              BuildContext context,
+              FormValuesTextPatch patch,
+              Map<String, dynamic> currentValues,
+            ) {
+              final bool useAssetName =
+                  currentValues['extractVersionFromAssetName'] == true;
+              final bool useReleaseTitle =
+                  currentValues['releaseTitleAsVersion'] == true;
+              final List<String> versionRawLines = useAssetName
+                  ? apkRawLines
+                  : useReleaseTitle
+                  ? titleRawLines
+                  : const <String>[];
+              final String? versionInitialRaw = versionRawLines.isNotEmpty
+                  ? versionRawLines.first
+                  : rawLatestVersionFromSource;
+              return showRegexAssistDialog(
+                context: context,
+                kind: RegexAssistKind.versionExtraction,
+                initialRaw: versionInitialRaw,
+                rawLineSuggestions: versionRawLines,
+                filterFieldKey: null,
+                patch: patch,
+              );
+            };
       } else if (element.key == 'apkFilterRegEx') {
         element.assistAction =
-            (BuildContext context, FormValuesTextPatch patch) {
-          return showRegexAssistDialog(
-            context: context,
-            kind: RegexAssistKind.apkFilter,
-            initialRaw: apkRawLines.isNotEmpty ? apkRawLines.first : null,
-            rawLineSuggestions: apkRawLines,
-            filterFieldKey: 'apkFilterRegEx',
-            patch: patch,
-          );
-        };
+            (
+              BuildContext context,
+              FormValuesTextPatch patch,
+              Map<String, dynamic> currentValues,
+            ) {
+              return showRegexAssistDialog(
+                context: context,
+                kind: RegexAssistKind.apkFilter,
+                initialRaw: apkRawLines.isNotEmpty ? apkRawLines.first : null,
+                rawLineSuggestions: apkRawLines,
+                filterFieldKey: 'apkFilterRegEx',
+                patch: patch,
+              );
+            };
       } else if (element.key == 'filterReleaseTitlesByRegEx') {
         element.assistAction =
-            (BuildContext context, FormValuesTextPatch patch) {
-          return showRegexAssistDialog(
-            context: context,
-            kind: RegexAssistKind.releaseTitleFilter,
-            initialRaw: titleRawLines.isNotEmpty ? titleRawLines.first : null,
-            rawLineSuggestions: titleRawLines,
-            filterFieldKey: 'filterReleaseTitlesByRegEx',
-            patch: patch,
-          );
-        };
+            (
+              BuildContext context,
+              FormValuesTextPatch patch,
+              Map<String, dynamic> currentValues,
+            ) {
+              return showRegexAssistDialog(
+                context: context,
+                kind: RegexAssistKind.releaseTitleFilter,
+                initialRaw: titleRawLines.isNotEmpty
+                    ? titleRawLines.first
+                    : null,
+                rawLineSuggestions: titleRawLines,
+                filterFieldKey: 'filterReleaseTitlesByRegEx',
+                patch: patch,
+              );
+            };
       }
     }
   }
@@ -441,9 +466,9 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
   void _applySelection() {
     final String raw = _rawController.text.trim();
     if (raw.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr('versionRegexAssistNeedRaw'))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(tr('versionRegexAssistNeedRaw'))));
       return;
     }
     final String desired = _customController.text.trim().isNotEmpty
@@ -520,15 +545,14 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
                 },
                 child: Column(
                   children: widget.rawLineSuggestions
-                      .map((String line) => RadioListTile<String>(
-                            value: line,
-                            title: Text(
-                              line,
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ))
+                      .map(
+                        (String line) => RadioListTile<String>(
+                          value: line,
+                          title: Text(line, style: theme.textTheme.bodyMedium),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      )
                       .toList(),
                 ),
               ),
@@ -566,15 +590,17 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
                 },
                 child: Column(
                   children: _candidates
-                      .map((String candidate) => RadioListTile<String>(
-                            value: candidate,
-                            title: Text(
-                              candidate,
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ))
+                      .map(
+                        (String candidate) => RadioListTile<String>(
+                          value: candidate,
+                          title: Text(
+                            candidate,
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      )
                       .toList(),
                 ),
               ),

@@ -35,8 +35,9 @@ Future<bool> persistAdditionalOptionsForm({
     overrideSource: app.overrideSource,
   );
 
-  final Map<String, dynamic> originalSettings =
-      Map<String, dynamic>.from(app.additionalSettings);
+  final Map<String, dynamic> originalSettings = Map<String, dynamic>.from(
+    app.additionalSettings,
+  );
   app.additionalSettings = {...originalSettings, ...formValues};
 
   if (source.enforceTrackOnly) {
@@ -48,21 +49,34 @@ Future<bool> persistAdditionalOptionsForm({
 
   final bool versionDetectionEnabled =
       app.additionalSettings['versionDetection'] == true &&
-          originalSettings['versionDetection'] != true;
+      originalSettings['versionDetection'] != true;
   final bool releaseDateVersionEnabled =
       app.additionalSettings['releaseDateAsVersion'] == true &&
-          originalSettings['releaseDateAsVersion'] != true;
+      originalSettings['releaseDateAsVersion'] != true;
   final bool releaseDateVersionDisabled =
       app.additionalSettings['releaseDateAsVersion'] != true &&
-          originalSettings['releaseDateAsVersion'] == true;
+      originalSettings['releaseDateAsVersion'] == true;
+  final bool releaseTitleVersionEnabled =
+      app.additionalSettings['releaseTitleAsVersion'] == true &&
+      originalSettings['releaseTitleAsVersion'] != true;
+  final bool assetNameVersionEnabled =
+      app.additionalSettings['extractVersionFromAssetName'] == true &&
+      originalSettings['extractVersionFromAssetName'] != true;
+
+  if (assetNameVersionEnabled) {
+    app.additionalSettings['releaseTitleAsVersion'] = false;
+  } else if (releaseTitleVersionEnabled ||
+      (app.additionalSettings['releaseTitleAsVersion'] == true &&
+          app.additionalSettings['extractVersionFromAssetName'] == true)) {
+    app.additionalSettings['extractVersionFromAssetName'] = false;
+  }
 
   if (releaseDateVersionEnabled && app.releaseDate != null) {
-    final bool isUpdated = app.installedVersion == app.latestVersion ||
+    final bool isUpdated =
+        app.installedVersion == app.latestVersion ||
         (app.installedVersion != null &&
-            versionsEffectivelyEqual(
-                app.installedVersion!, app.latestVersion));
-    app.latestVersion =
-        app.releaseDate!.microsecondsSinceEpoch.toString();
+            versionsEffectivelyEqual(app.installedVersion!, app.latestVersion));
+    app.latestVersion = app.releaseDate!.microsecondsSinceEpoch.toString();
     if (isUpdated) app.installedVersion = app.latestVersion;
   } else if (releaseDateVersionDisabled) {
     app.installedVersion =
@@ -89,10 +103,8 @@ class AdditionalOptionsPage extends StatefulWidget {
   final String appId;
 
   /// Optional follow-up after a successful save (e.g. metadata refresh on [AppPage]).
-  final Future<void> Function(
-    String appId,
-    bool versionDetectionJustEnabled,
-  )? onAfterSave;
+  final Future<void> Function(String appId, bool versionDetectionJustEnabled)?
+  onAfterSave;
 
   @override
   State<AdditionalOptionsPage> createState() => _AdditionalOptionsPageState();
@@ -140,8 +152,9 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         }
       }
     }
-    _baselineValues =
-        Map<String, dynamic>.from(getDefaultValuesFromFormItems(_items));
+    _baselineValues = Map<String, dynamic>.from(
+      getDefaultValuesFromFormItems(_items),
+    );
     _baselineReady = _items.isNotEmpty;
     attachRegexAssistToItems(
       _items,
@@ -213,10 +226,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       );
       if (!mounted) return;
       if (widget.onAfterSave != null) {
-        await widget.onAfterSave!(
-          widget.appId,
-          versionDetectionEnabled,
-        );
+        await widget.onAfterSave!(widget.appId, versionDetectionEnabled);
       }
       if (mounted) Navigator.of(context).pop();
     } catch (err) {
@@ -326,15 +336,13 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     context.select<SettingsProvider, bool>(
       (SettingsProvider settings) => settings.matchAppPageToIconColors,
     );
-    context.select<AppsProvider, int>(
-      (AppsProvider provider) {
-        final AppInMemory? inMemory = provider.apps[widget.appId];
-        return Object.hash(
-          identityHashCode(inMemory?.icon),
-          inMemory?.icon?.length,
-        );
-      },
-    );
+    context.select<AppsProvider, int>((AppsProvider provider) {
+      final AppInMemory? inMemory = provider.apps[widget.appId];
+      return Object.hash(
+        identityHashCode(inMemory?.icon),
+        inMemory?.icon?.length,
+      );
+    });
 
     final ThemeData parentTheme = Theme.of(context);
     final Brightness themeBrightness = parentTheme.brightness;
@@ -418,8 +426,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       );
     }
 
-    final double fabBottomPadding =
-        MediaQuery.of(context).padding.bottom + 16;
+    final double fabBottomPadding = MediaQuery.of(context).padding.bottom + 16;
 
     return Theme(
       data: pageThemeForPage,
@@ -435,80 +442,80 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           await _handleLeaveRequest(context, pageThemeForPage);
         },
         child: Scaffold(
-        resizeToAvoidBottomInset: true,
-        backgroundColor: scaffoldBackground,
-        floatingActionButton: Padding(
-          padding: EdgeInsets.only(bottom: fabBottomPadding),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              FloatingActionButton.small(
-                heroTag: 'additional_options_cancel',
-                tooltip: tr('cancel'),
-                onPressed: _saving
-                    ? null
-                    : () => _handleLeaveRequest(context, pageThemeForPage),
-                child: const Icon(Icons.close),
+          resizeToAvoidBottomInset: true,
+          backgroundColor: scaffoldBackground,
+          floatingActionButton: Padding(
+            padding: EdgeInsets.only(bottom: fabBottomPadding),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'additional_options_cancel',
+                  tooltip: tr('cancel'),
+                  onPressed: _saving
+                      ? null
+                      : () => _handleLeaveRequest(context, pageThemeForPage),
+                  child: const Icon(Icons.close),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'additional_options_save',
+                  tooltip: tr('continue'),
+                  onPressed: (!_valid || _saving) ? null : _onSave,
+                  child: _saving
+                      ? SizedBox(
+                          width: 26,
+                          height: 26,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: pageThemeForPage.colorScheme.onPrimary,
+                          ),
+                        )
+                      : const Icon(Icons.check),
+                ),
+              ],
+            ),
+          ),
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+          body: CustomScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            cacheExtent: 1600,
+            slivers: [
+              CustomAppBar(
+                title: tr('additionalOptions'),
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
               ),
-              const SizedBox(height: 12),
-              FloatingActionButton(
-                heroTag: 'additional_options_save',
-                tooltip: tr('continue'),
-                onPressed: (!_valid || _saving) ? null : _onSave,
-                child: _saving
-                    ? SizedBox(
-                        width: 26,
-                        height: 26,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: pageThemeForPage.colorScheme.onPrimary,
-                        ),
-                      )
-                    : const Icon(Icons.check),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
+                sliver: SliverToBoxAdapter(
+                  child: GeneratedForm(
+                    items: _items,
+                    outlinedInputFields: true,
+                    prominentSectionHeaders: true,
+                    wrapFormSectionsInCards: true,
+                    onValueChanges: (values, valid, isBuilding) {
+                      if (isBuilding) {
+                        _values = values;
+                        _valid = valid;
+                      } else {
+                        setState(() {
+                          _values = values;
+                          _valid = valid;
+                        });
+                      }
+                    },
+                  ),
+                ),
               ),
             ],
           ),
         ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        body: CustomScrollView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          cacheExtent: 1600,
-          slivers: [
-            CustomAppBar(
-              title: tr('additionalOptions'),
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                onPressed: () => Navigator.of(context).maybePop(),
-              ),
-            ),
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
-              sliver: SliverToBoxAdapter(
-                child: GeneratedForm(
-                  items: _items,
-                  outlinedInputFields: true,
-                  prominentSectionHeaders: true,
-                  wrapFormSectionsInCards: true,
-                  onValueChanges: (values, valid, isBuilding) {
-                    if (isBuilding) {
-                      _values = values;
-                      _valid = valid;
-                    } else {
-                      setState(() {
-                        _values = values;
-                        _valid = valid;
-                      });
-                    }
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
-    ),
     );
   }
 }

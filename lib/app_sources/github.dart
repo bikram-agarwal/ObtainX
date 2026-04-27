@@ -19,6 +19,7 @@ class GitHub extends AppSource {
     appIdInferIsOptional = true;
     showReleaseDateAsVersionToggle = true;
     showReleaseTitleAsVersionToggle = true;
+    showExtractVersionFromAssetNameToggle = true;
     this.hostChanged = hostChanged;
     allowIncludeZips = true;
 
@@ -443,8 +444,7 @@ class GitHub extends AppSource {
       findReleaseAssetUrls(dynamic release) =>
           (release['assets'] as List<dynamic>?)?.map((e) {
             var ext = e['name'].toString().toLowerCase().split('.').last;
-            var url =
-                !isInstallableExt(ext, includeZips: includeZips)
+            var url = !isInstallableExt(ext, includeZips: includeZips)
                 ? (e['browser_download_url'] ?? e['url'])
                 : (e['url'] ?? e['browser_download_url']);
             url = undoGHProxyMod(url, sourceConfigSettingValues);
@@ -554,15 +554,15 @@ class GitHub extends AppSource {
       }
       releases = releases.reversed.toList();
       final List<String> rawReleaseTitleCandidates = <String>[];
-      for (int titleIndex = 0;
-          titleIndex < releases.length &&
-              rawReleaseTitleCandidates.length < 40;
-          titleIndex++) {
+      for (
+        int titleIndex = 0;
+        titleIndex < releases.length && rawReleaseTitleCandidates.length < 40;
+        titleIndex++
+      ) {
         if (releases[titleIndex]['draft'] == true) {
           continue;
         }
-        if (!includePrereleases &&
-            releases[titleIndex]['prerelease'] == true) {
+        if (!includePrereleases && releases[titleIndex]['prerelease'] == true) {
           continue;
         }
         var candidateTitle = releases[titleIndex]['name'] as String?;
@@ -644,10 +644,18 @@ class GitHub extends AppSource {
         targetRelease = releases[i];
         targetRelease['apkUrls'] = filteredApkUrls;
         targetRelease['filteredAssets'] = filteredApks;
+        String? assetNameVersionSource;
+        if (additionalSettings['extractVersionFromAssetName'] == true) {
+          if (filteredApkUrls.isEmpty) {
+            throw NoVersionError();
+          }
+          assetNameVersionSource = filteredApkUrls.last.key;
+        }
         targetRelease['version'] =
-            additionalSettings['releaseTitleAsVersion'] == true
-            ? nameToFilter
-            : targetRelease['tag_name'] ?? targetRelease['name'];
+            assetNameVersionSource ??
+            (additionalSettings['releaseTitleAsVersion'] == true
+                ? nameToFilter
+                : targetRelease['tag_name'] ?? targetRelease['name']);
         if (targetRelease['tarball_url'] != null) {
           allAssetUrls.add(
             MapEntry(
@@ -698,8 +706,7 @@ class GitHub extends AppSource {
             e['name'] as String: (e['size'] as num).toInt(),
       };
       // Default preferred index is the last APK (mirrors getApp() behaviour).
-      final int? apkSizeBytes =
-          apkUrls.isNotEmpty
+      final int? apkSizeBytes = apkUrls.isNotEmpty
           ? sizeByName[apkUrls.last.key]
           : null;
       return APKDetails(

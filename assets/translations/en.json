@@ -219,6 +219,7 @@
     "onlyWorksWithNonVersionDetectApps": "Only works for apps with version detection disabled.",
     "releaseDateAsVersion": "Use release date as version string",
     "releaseTitleAsVersion": "Use release title as version string",
+    "extractVersionFromAssetName": "Extract version string from asset name",
     "releaseDateAsVersionExplanation": "This option should only be used for apps where version detection does not work correctly, but a release date is available.",
     "changes": "Changes",
     "releaseDate": "Release date",
