@@ -223,8 +223,8 @@ class FDroid extends AppSource {
       if (trySelectingSuggestedVersionCode &&
           response['suggestedVersionCode'] != null &&
           filterVersionsByRegEx == null) {
-        final String suggestedVersionCodeText =
-            response['suggestedVersionCode'].toString();
+        final String suggestedVersionCodeText = response['suggestedVersionCode']
+            .toString();
         var suggestedReleases = releases.where(
           (element) =>
               element['versionCode'].toString() == suggestedVersionCodeText,
@@ -283,6 +283,33 @@ class FDroid extends AppSource {
       List<String> apkUrls = releaseChoices
           .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
           .toList();
+      final uniqueApkUrls = apkUrls.toSet().toList();
+      int? apkSizeBytes;
+      if (uniqueApkUrls.isNotEmpty) {
+        try {
+          final headers = await getRequestHeaders(
+            additionalSettings,
+            uniqueApkUrls.last,
+            forAPKDownload: true,
+          );
+          final responseWithClient = await sourceRequestStreamResponse(
+            'HEAD',
+            uniqueApkUrls.last,
+            headers,
+            additionalSettings,
+          );
+          final headResponse = responseWithClient.value.value;
+          final contentLength = headResponse.contentLength;
+          if (headResponse.statusCode >= 200 &&
+              headResponse.statusCode < 300 &&
+              contentLength >= 0) {
+            apkSizeBytes = contentLength;
+          }
+          responseWithClient.value.key.close();
+        } catch (_) {
+          // File size is optional; update detection should still succeed.
+        }
+      }
       String? iconUrl;
       final String packageLabel = () {
         final Object? rawPackageName = response['packageName'];
@@ -292,8 +319,9 @@ class FDroid extends AppSource {
             return trimmedPackageName;
           }
         }
-        final String? queryAppId =
-            Uri.parse(standardUrl).queryParameters['appId']?.trim();
+        final String? queryAppId = Uri.parse(
+          standardUrl,
+        ).queryParameters['appId']?.trim();
         if (queryAppId != null && queryAppId.isNotEmpty) {
           return queryAppId;
         }
@@ -323,9 +351,10 @@ class FDroid extends AppSource {
       }
       return APKDetails(
         version,
-        getApkUrlsFromUrls(apkUrls.toSet().toList()),
+        getApkUrlsFromUrls(uniqueApkUrls),
         AppNames(sourceName, packageLabel),
         iconUrl: iconUrl,
+        apkSizeBytes: apkSizeBytes,
       );
     } else {
       throw getObtainiumHttpError(res);

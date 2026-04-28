@@ -13,7 +13,8 @@ import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 
 const int _flagSystem = 1; // ApplicationInfo.FLAG_SYSTEM = 0x1
-const int _flagUpdatedSystemApp = 128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP = 0x80
+const int _flagUpdatedSystemApp =
+    128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP = 0x80
 
 class InstalledAppInfo {
   final String packageName;
@@ -49,6 +50,12 @@ class InstalledAppInfo {
 
 class BulkImportService {
   static final _pm = AndroidPackageManager();
+  static const Map<String, String> _apkMirrorPreferredPackageUrls = {
+    // APKMirror's app_exists endpoint can return Wear OS / Android Automotive
+    // sibling listings for this shared package ID. Prefer the phone listing.
+    'com.google.android.apps.youtube.music':
+        'https://www.apkmirror.com/apk/google-inc/youtube-music/',
+  };
 
   /// Returns all installed apps, filtered by system/user.
   static Future<List<InstalledAppInfo>> getInstalledApps({
@@ -77,10 +84,12 @@ class BulkImportService {
 
     // Fetch all app labels concurrently instead of sequentially.
     final names = await Future.wait(
-      filtered.map((pkg) async =>
-          await pkg.applicationInfo?.getAppLabel() ??
-          pkg.applicationInfo?.processName ??
-          (pkg.packageName as String)),
+      filtered.map(
+        (pkg) async =>
+            await pkg.applicationInfo?.getAppLabel() ??
+            pkg.applicationInfo?.processName ??
+            (pkg.packageName as String),
+      ),
     );
 
     final result = <InstalledAppInfo>[
@@ -128,7 +137,9 @@ class BulkImportService {
     if (alreadyKnown != null) {
       for (final String packageName in packageNames) {
         if (alreadyKnown.containsKey(packageName)) {
-          result[packageName] = alreadyKnown[packageName];
+          result[packageName] =
+              _apkMirrorPreferredPackageUrls[packageName] ??
+              alreadyKnown[packageName];
         }
       }
     }
@@ -156,10 +167,7 @@ class BulkImportService {
       if (shouldAbort?.call() == true) {
         return result;
       }
-      final batch = toQuery.sublist(
-        i,
-        min(i + batchSize, toQuery.length),
-      );
+      final batch = toQuery.sublist(i, min(i + batchSize, toQuery.length));
       try {
         final response = await http
             .post(
@@ -187,7 +195,9 @@ class BulkImportService {
             // app.link is a relative path like /apk/google-inc/google-maps/
             final appLink = item['app']?['link'] as String?;
             if (pname != null && exists && appLink != null) {
-              result[pname] = 'https://www.apkmirror.com$appLink';
+              result[pname] =
+                  _apkMirrorPreferredPackageUrls[pname] ??
+                  'https://www.apkmirror.com$appLink';
             } else if (pname != null) {
               result[pname] = null;
             }
@@ -261,48 +271,55 @@ class BulkImportService {
     for (int i = 0; i < toQuery.length; i += concurrency) {
       if (shouldAbort?.call() == true) return result;
       final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
-      for (int subStart = 0; subStart < chunk.length; subStart += subBatchSize) {
+      for (
+        int subStart = 0;
+        subStart < chunk.length;
+        subStart += subBatchSize
+      ) {
         if (shouldAbort?.call() == true) return result;
         final subChunk = chunk.sublist(
           subStart,
           min(subStart + subBatchSize, chunk.length),
         );
-        await Future.wait(subChunk.map((pkg) async {
-          try {
-            final response = await http
-                .get(
-                  Uri.parse(
-                    'https://tapi.pureapk.com/v3/get_app_his_version'
-                    '?package_name=$pkg&hl=en',
-                  ),
-                  headers: headers,
-                )
-                .timeout(const Duration(seconds: 15));
+        await Future.wait(
+          subChunk.map((pkg) async {
+            try {
+              final response = await http
+                  .get(
+                    Uri.parse(
+                      'https://tapi.pureapk.com/v3/get_app_his_version'
+                      '?package_name=$pkg&hl=en',
+                    ),
+                    headers: headers,
+                  )
+                  .timeout(const Duration(seconds: 15));
 
-            if (response.statusCode == 200) {
-              final body = jsonDecode(response.body);
-              final List<dynamic> versions = body is Map
-                  ? (body['version_list'] as List? ?? [])
-                  : [];
-              if (versions.isNotEmpty) {
-                final first = versions.first;
-                final appName =
-                    first is Map ? (first['title'] as String? ?? '') : '';
-                result[pkg] = appName.isNotEmpty
-                    ? 'https://apkpure.net/${_slugify(appName)}/$pkg'
-                    : 'https://apkpure.net/$pkg';
+              if (response.statusCode == 200) {
+                final body = jsonDecode(response.body);
+                final List<dynamic> versions = body is Map
+                    ? (body['version_list'] as List? ?? [])
+                    : [];
+                if (versions.isNotEmpty) {
+                  final first = versions.first;
+                  final appName = first is Map
+                      ? (first['title'] as String? ?? '')
+                      : '';
+                  result[pkg] = appName.isNotEmpty
+                      ? 'https://apkpure.net/${_slugify(appName)}/$pkg'
+                      : 'https://apkpure.net/$pkg';
+                } else {
+                  result[pkg] = null;
+                }
               } else {
-                result[pkg] = null;
+                // Non-200 — don't cache; retry next scan.
               }
-            } else {
-              // Non-200 — don't cache; retry next scan.
+            } catch (e) {
+              debugPrint('APKPure check failed for $pkg: $e');
+              // Network error or timeout — don't cache; retry next scan.
             }
-          } catch (e) {
-            debugPrint('APKPure check failed for $pkg: $e');
-            // Network error or timeout — don't cache; retry next scan.
-          }
-          reportProgress();
-        }));
+            reportProgress();
+          }),
+        );
         if (shouldAbort?.call() == true) return result;
       }
     }
@@ -314,7 +331,8 @@ class BulkImportService {
   /// share this [IOClient] with a raised [HttpClient.maxConnectionsPerHost] and
   /// one [Future.wait] per chunk of [_bulkPackageApiChunkSize] packages.
   static const int _bulkPackageApiChunkSize = 20;
-  static const int _bulkPackageApiMaxConnectionsPerHost = _bulkPackageApiChunkSize;
+  static const int _bulkPackageApiMaxConnectionsPerHost =
+      _bulkPackageApiChunkSize;
 
   /// Ensures [recordStoreCoverage] sees every package (null means not in store).
   static void _putMissingPackageKeysAsNull(
@@ -333,7 +351,7 @@ class BulkImportService {
     void Function(int done, int total)? onProgress,
     bool Function()? shouldAbort,
     required Future<void> Function(http.Client client, String packageName)
-        runLookup,
+    runLookup,
   }) async {
     int finishedAttempts = result.length;
     void reportAttemptProgress() {
@@ -346,9 +364,11 @@ class BulkImportService {
       ..maxConnectionsPerHost = _bulkPackageApiMaxConnectionsPerHost;
     final http.Client client = IOClient(rawHttpClient);
     try {
-      for (int chunkStart = 0;
-          chunkStart < toQuery.length;
-          chunkStart += _bulkPackageApiChunkSize) {
+      for (
+        int chunkStart = 0;
+        chunkStart < toQuery.length;
+        chunkStart += _bulkPackageApiChunkSize
+      ) {
         if (shouldAbort?.call() == true) {
           return;
         }
@@ -356,16 +376,18 @@ class BulkImportService {
           chunkStart,
           min(chunkStart + _bulkPackageApiChunkSize, toQuery.length),
         );
-        await Future.wait(chunk.map((String pkg) async {
-          try {
-            await runLookup(client, pkg);
-          } catch (_) {
-            //
-          } finally {
-            finishedAttempts++;
-            reportAttemptProgress();
-          }
-        }));
+        await Future.wait(
+          chunk.map((String pkg) async {
+            try {
+              await runLookup(client, pkg);
+            } catch (_) {
+              //
+            } finally {
+              finishedAttempts++;
+              reportAttemptProgress();
+            }
+          }),
+        );
         if (shouldAbort?.call() == true) {
           return;
         }
@@ -433,13 +455,16 @@ class BulkImportService {
 
   /// Picks the suggested APK filename for an `<application>` from [index.xml].
   static String? _izzyApkStoreUrlFromIndexApplication(html_dom.Element app) {
-    final List<html_dom.Element> packageElements =
-        app.getElementsByTagName('package');
+    final List<html_dom.Element> packageElements = app.getElementsByTagName(
+      'package',
+    );
     if (packageElements.isEmpty) {
       return null;
     }
-    final String? marketVerCodeText =
-        app.querySelector('marketvercode')?.innerHtml.trim();
+    final String? marketVerCodeText = app
+        .querySelector('marketvercode')
+        ?.innerHtml
+        .trim();
     final int? marketVerCode = int.tryParse(marketVerCodeText ?? '');
     html_dom.Element? selectedPackage;
     if (marketVerCode != null) {
@@ -449,8 +474,10 @@ class BulkImportService {
             ?.innerHtml
             .trim();
         final int? versionCode = int.tryParse(versionCodeText ?? '');
-        final String? apkName =
-            packageElement.querySelector('apkname')?.innerHtml.trim();
+        final String? apkName = packageElement
+            .querySelector('apkname')
+            ?.innerHtml
+            .trim();
         if (versionCode == marketVerCode &&
             apkName != null &&
             apkName.isNotEmpty) {
@@ -466,10 +493,11 @@ class BulkImportService {
             .querySelector('versioncode')
             ?.innerHtml
             .trim();
-        final int versionCode =
-            int.tryParse(versionCodeText ?? '') ?? -1;
-        final String? apkName =
-            packageElement.querySelector('apkname')?.innerHtml.trim();
+        final int versionCode = int.tryParse(versionCodeText ?? '') ?? -1;
+        final String? apkName = packageElement
+            .querySelector('apkname')
+            ?.innerHtml
+            .trim();
         if (apkName != null &&
             apkName.isNotEmpty &&
             versionCode > bestVersionCode) {
@@ -478,8 +506,10 @@ class BulkImportService {
         }
       }
     }
-    final String? apkName =
-        selectedPackage?.querySelector('apkname')?.innerHtml.trim();
+    final String? apkName = selectedPackage
+        ?.querySelector('apkname')
+        ?.innerHtml
+        .trim();
     if (apkName == null || !apkName.toLowerCase().endsWith('.apk')) {
       return null;
     }
@@ -487,17 +517,21 @@ class BulkImportService {
   }
 
   /// Isolate entry for [compute]; must stay in sync with [_izzyApkStoreUrlFromIndexApplication].
-  static Map<String, String> _izzyIndexBodyToPackageStoreUrls(String indexBody) {
+  static Map<String, String> _izzyIndexBodyToPackageStoreUrls(
+    String indexBody,
+  ) {
     final html_dom.Document document = parse(indexBody);
     final Map<String, String> packageIdToStoreUrl = <String, String>{};
-    for (final html_dom.Element applicationElement
-        in document.querySelectorAll('application')) {
+    for (final html_dom.Element applicationElement in document.querySelectorAll(
+      'application',
+    )) {
       final String? applicationId = applicationElement.attributes['id'];
       if (applicationId == null || applicationId.isEmpty) {
         continue;
       }
-      final String? storeUrl =
-          _izzyApkStoreUrlFromIndexApplication(applicationElement);
+      final String? storeUrl = _izzyApkStoreUrlFromIndexApplication(
+        applicationElement,
+      );
       if (storeUrl != null) {
         packageIdToStoreUrl[applicationId] = storeUrl;
       }
@@ -562,8 +596,10 @@ class BulkImportService {
       }
       onProgress?.call(result.length, packageNames.length);
 
-      final Map<String, String> packageIdToStoreUrl =
-          await compute(_izzyIndexBodyToPackageStoreUrls, indexResponse.body);
+      final Map<String, String> packageIdToStoreUrl = await compute(
+        _izzyIndexBodyToPackageStoreUrls,
+        indexResponse.body,
+      );
 
       onProgress?.call(result.length, packageNames.length);
 
@@ -609,8 +645,8 @@ class BulkImportService {
           if (response.statusCode == 200) {
             try {
               final dynamic decoded = jsonDecode(response.body);
-              String? versionCodeStr =
-                  decoded['suggestedVersionCode']?.toString();
+              String? versionCodeStr = decoded['suggestedVersionCode']
+                  ?.toString();
               if (versionCodeStr == null || versionCodeStr.isEmpty) {
                 final List<dynamic>? packages =
                     decoded['packages'] as List<dynamic>?;
@@ -681,15 +717,17 @@ class BulkImportService {
       'Accept': 'application/vnd.github.v3+json',
       'User-Agent': 'ObtainX-BulkImport',
     };
-    final Map<String, String>? authHeaders = await githubSource.getRequestHeaders(
-      <String, dynamic>{},
-      'https://api.github.com/search/code',
-    );
+    final Map<String, String>? authHeaders = await githubSource
+        .getRequestHeaders(
+          <String, dynamic>{},
+          'https://api.github.com/search/code',
+        );
     if (authHeaders != null) {
       headers.addAll(authHeaders);
     }
     final bool hasAuthToken =
-        headers.containsKey('Authorization') || headers.containsKey('authorization');
+        headers.containsKey('Authorization') ||
+        headers.containsKey('authorization');
 
     for (final String pkg in toQuery) {
       if (shouldAbort?.call() == true) {
@@ -706,10 +744,9 @@ class BulkImportService {
             'per_page': '15',
           },
         );
-        final http.Response response =
-            await http.get(uri, headers: headers).timeout(
-                  const Duration(seconds: 25),
-                );
+        final http.Response response = await http
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 25));
         if (response.statusCode == 200) {
           final Object? decoded = jsonDecode(response.body);
           if (decoded is Map<String, dynamic>) {
@@ -718,8 +755,7 @@ class BulkImportService {
             String? chosenUrl;
             for (final dynamic raw in items) {
               if (raw is! Map<String, dynamic>) continue;
-              final String path =
-                  (raw['path'] as String? ?? '').toLowerCase();
+              final String path = (raw['path'] as String? ?? '').toLowerCase();
               final Object? repo = raw['repository'];
               if (repo is! Map<String, dynamic>) continue;
               final String? htmlUrl = repo['html_url'] as String?;

@@ -11,7 +11,7 @@ import 'package:obtainium/providers/source_provider.dart';
 /// [IzzyOnDroid] must not use a bare [FDroidRepo] instance for network calls).
 Future<Response> fdroidRepoRequestIndexWithVariants(
   Future<Response> Function(String url, Map<String, dynamic> settings)
-      doSourceRequest,
+  doSourceRequest,
   String normalizedRepoBaseUrl,
   Map<String, dynamic> additionalSettings,
 ) async {
@@ -149,7 +149,8 @@ class FDroidRepo extends AppSource {
     if (foundApps.isEmpty) {
       throw ObtainiumError(tr('appWithIdOrNameNotFound'));
     }
-    var authorName = body.querySelector('repo')?.attributes['name'] ?? authorFallback;
+    var authorName =
+        body.querySelector('repo')?.attributes['name'] ?? authorFallback;
     String appId = foundApps[0].attributes['id']!;
     foundApps[0].querySelector('name')?.innerHtml ?? appId;
     var appName = foundApps[0].querySelector('name')?.innerHtml ?? appId;
@@ -162,7 +163,9 @@ class FDroidRepo extends AppSource {
     if (latestVersion == null) {
       throw NoVersionError();
     }
-    String? marketvercodeStr = foundApps[0].querySelector('marketvercode')?.innerHtml;
+    String? marketvercodeStr = foundApps[0]
+        .querySelector('marketvercode')
+        ?.innerHtml;
     int? marketvercode = int.tryParse(marketvercodeStr ?? '');
     List selectedReleases = [];
     final bool trySelectingSuggestedVersionCode =
@@ -171,43 +174,59 @@ class FDroidRepo extends AppSource {
         additionalSettings['pickHighestVersionCode'] == true ||
         additionalSettings['autoSelectHighestVersionCode'] == true;
     if (trySelectingSuggestedVersionCode && marketvercode != null) {
-      selectedReleases = releases.where((e) =>
-        int.tryParse(e.querySelector('versioncode')?.innerHtml ?? '') == marketvercode &&
-        e.querySelector('apkname') != null
-      ).toList();
+      selectedReleases = releases
+          .where(
+            (e) =>
+                int.tryParse(e.querySelector('versioncode')?.innerHtml ?? '') ==
+                    marketvercode &&
+                e.querySelector('apkname') != null,
+          )
+          .toList();
     }
     String? appAuthorName = foundApps[0].querySelector('author')?.innerHtml;
     if (appAuthorName != null) {
       authorName = appAuthorName;
     }
     if (selectedReleases.isEmpty) {
-      selectedReleases = releases.where((e) =>
-        e.querySelector('version')?.innerHtml == latestVersion &&
-        e.querySelector('apkname') != null
-      ).toList();
+      selectedReleases = releases
+          .where(
+            (e) =>
+                e.querySelector('version')?.innerHtml == latestVersion &&
+                e.querySelector('apkname') != null,
+          )
+          .toList();
       if (selectedReleases.length > 1 && pickHighestVersionCode) {
         selectedReleases.sort((e1, e2) {
-          return int.parse(e2.querySelector('versioncode')!.innerHtml).compareTo(
-            int.parse(e1.querySelector('versioncode')!.innerHtml),
-          );
+          return int.parse(
+            e2.querySelector('versioncode')!.innerHtml,
+          ).compareTo(int.parse(e1.querySelector('versioncode')!.innerHtml));
         });
         selectedReleases = [selectedReleases[0]];
       }
     }
-    String? selectedVersion = selectedReleases[0].querySelector('version')?.innerHtml;
+    String? selectedVersion = selectedReleases[0]
+        .querySelector('version')
+        ?.innerHtml;
     if (selectedVersion == null) {
       throw NoVersionError();
     }
     String? added = selectedReleases[0].querySelector('added')?.innerHtml;
     DateTime? releaseDate = added != null ? DateTime.parse(added) : null;
-    final repoBase =
-        indexXmlResponse.request!.url.toString().split('/').reversed.toList().sublist(1).reversed.join('/');
+    final repoBase = indexXmlResponse.request!.url
+        .toString()
+        .split('/')
+        .reversed
+        .toList()
+        .sublist(1)
+        .reversed
+        .join('/');
     List<String> apkUrls = selectedReleases
-        .map(
-          (e) =>
-              '$repoBase/${e.querySelector('apkname')!.innerHtml}',
-        )
+        .map((e) => '$repoBase/${e.querySelector('apkname')!.innerHtml}')
         .toList();
+    final String? apkSizeText = selectedReleases.isNotEmpty
+        ? selectedReleases.last.querySelector('size')?.innerHtml
+        : null;
+    final int? apkSizeBytes = int.tryParse(apkSizeText ?? '');
     String? iconFile = foundApps[0].querySelector('icon')?.innerHtml.trim();
     String? iconUrl;
     if (iconFile != null && iconFile.isNotEmpty) {
@@ -220,6 +239,7 @@ class FDroidRepo extends AppSource {
       releaseDate: releaseDate,
       changeLog: changeLog,
       iconUrl: iconUrl,
+      apkSizeBytes: apkSizeBytes,
     );
   }
 

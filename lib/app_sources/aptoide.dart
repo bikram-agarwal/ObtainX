@@ -73,6 +73,10 @@ class Aptoide extends AppSource {
     String? dateStr = appDetails['updated'];
     String? version = appDetails['file']?['vername'];
     String? apkUrl = appDetails['file']?['path'];
+    final rawSize = appDetails['file']?['filesize'] ?? appDetails['size'];
+    final int? apkSizeBytes = rawSize is num
+        ? rawSize.toInt()
+        : int.tryParse(rawSize?.toString() ?? '');
     if (version == null) {
       throw NoVersionError();
     }
@@ -89,6 +93,7 @@ class Aptoide extends AppSource {
       getApkUrlsFromUrls([apkUrl]),
       AppNames(author, appName),
       releaseDate: relDate,
+      apkSizeBytes: apkSizeBytes,
     );
   }
 }

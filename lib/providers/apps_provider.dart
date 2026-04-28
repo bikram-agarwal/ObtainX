@@ -363,6 +363,17 @@ String trackOnlyDownloadPageUrl(App app) {
   if (changeLogValue != null &&
       (changeLogValue.startsWith('http://') ||
           changeLogValue.startsWith('https://'))) {
+    final appUrl = Uri.tryParse(app.url);
+    final changeLogUrl = Uri.tryParse(changeLogValue);
+    if (appUrl?.host.contains('apkmirror.com') == true &&
+        changeLogUrl?.host.contains('apkmirror.com') == true) {
+      final trackedPath = appUrl!.path.endsWith('/')
+          ? appUrl.path
+          : '${appUrl.path}/';
+      if (!changeLogUrl!.path.startsWith(trackedPath)) {
+        return app.url;
+      }
+    }
     return changeLogValue;
   }
   return app.url;
@@ -501,6 +512,43 @@ List<MapEntry<String, int>> moveStrToEndMapEntryWithCount(
   return arr;
 }
 
+class DownloadCancelToken {
+  bool _isCancelled = false;
+  final Set<HttpClient> _activeClients = <HttpClient>{};
+
+  bool get isCancelled {
+    return _isCancelled;
+  }
+
+  void attachClient(HttpClient client) {
+    if (_isCancelled) {
+      client.close(force: true);
+      return;
+    }
+    _activeClients.add(client);
+  }
+
+  void detachClient(HttpClient client) {
+    _activeClients.remove(client);
+  }
+
+  void cancel() {
+    _isCancelled = true;
+    final activeClientsSnapshot = _activeClients.toList();
+    _activeClients.clear();
+    for (final client in activeClientsSnapshot) {
+      client.close(force: true);
+    }
+  }
+
+  void throwIfCancelled() {
+    if (!_isCancelled) {
+      return;
+    }
+    throw ObtainiumError(tr('cancelled'));
+  }
+}
+
 Future<File> downloadFileWithRetry(
   String url,
   String fileName,
@@ -513,6 +561,7 @@ Future<File> downloadFileWithRetry(
   int retries = 3,
   bool allowInsecure = false,
   LogsProvider? logs,
+  DownloadCancelToken? cancelToken,
 }) async {
   try {
     return await downloadFile(
@@ -526,8 +575,12 @@ Future<File> downloadFileWithRetry(
       headers: headers,
       allowInsecure: allowInsecure,
       logs: logs,
+      cancelToken: cancelToken,
     );
   } catch (e) {
+    if (cancelToken?.isCancelled == true) {
+      throw ObtainiumError(tr('cancelled'));
+    }
     if (retries > 0 && e is ClientException) {
       await Future.delayed(const Duration(seconds: 5));
       return await downloadFileWithRetry(
@@ -542,6 +595,7 @@ Future<File> downloadFileWithRetry(
         retries: (retries - 1),
         allowInsecure: allowInsecure,
         logs: logs,
+        cancelToken: cancelToken,
       );
     } else {
       rethrow;
@@ -679,13 +733,19 @@ Future<File> downloadFile(
   Map<String, String>? headers,
   bool allowInsecure = false,
   LogsProvider? logs,
+  DownloadCancelToken? cancelToken,
 }) async {
   // Send the initial request but cancel it as soon as you have the headers
+  cancelToken?.throwIfCancelled();
   var reqHeaders = headers ?? {};
   var req = Request('GET', Uri.parse(url));
   req.headers.addAll(reqHeaders);
-  var headersClient = IOClient(createHttpClient(allowInsecure));
+  final headersHttpClient = createHttpClient(allowInsecure);
+  cancelToken?.attachClient(headersHttpClient);
+  var headersClient = IOClient(headersHttpClient);
   StreamedResponse headersResponse = await headersClient.send(req);
+  cancelToken?.detachClient(headersHttpClient);
+  cancelToken?.throwIfCancelled();
   var resHeaders = headersResponse.headers;
 
   // Use the headers to decide what the file extension is, and
@@ -749,7 +809,9 @@ Future<File> downloadFile(
     int currentTempFileSize = await tempDownloadedFile.length();
     bool shouldReturn = false;
     while (isDownloading) {
+      cancelToken?.throwIfCancelled();
       await Future.delayed(Duration(seconds: 7));
+      cancelToken?.throwIfCancelled();
       if (tempDownloadedFile.existsSync()) {
         int newTempFileSize = await tempDownloadedFile.length();
         if (newTempFileSize > currentTempFileSize) {
@@ -803,6 +865,8 @@ Future<File> downloadFile(
   );
   HttpClient responseClient = responseWithClient.value.key;
   HttpClientResponse response = responseWithClient.value.value;
+  cancelToken?.attachClient(responseClient);
+  cancelToken?.throwIfCancelled();
   sink ??= tempDownloadedFile.openWrite(mode: FileMode.writeOnly);
 
   // Perform the download
@@ -815,40 +879,54 @@ Future<File> downloadFile(
   const downloadUIUpdateInterval = Duration(milliseconds: 500);
   const downloadBufferSize = 32 * 1024; // 32KB
   final downloadBuffer = BytesBuilder();
-  await response
-      .asBroadcastStream()
-      .map((chunk) {
-        received += chunk.length;
-        final now = DateTime.now();
-        if (onProgress != null &&
-            (lastProgressUpdate == null ||
-                now.difference(lastProgressUpdate!) >=
-                    downloadUIUpdateInterval)) {
-          progress = fullContentLength != null
-              ? clampDouble((received / fullContentLength) * 100, 0, 100)
-              : 30;
-          onProgress(progress);
-          lastProgressUpdate = now;
-        }
-        return chunk;
-      })
-      .transform(
-        StreamTransformer<List<int>, List<int>>.fromHandlers(
-          handleData: (List<int> data, EventSink<List<int>> s) {
-            downloadBuffer.add(data);
-            if (downloadBuffer.length >= downloadBufferSize) {
-              s.add(downloadBuffer.takeBytes());
-            }
-          },
-          handleDone: (EventSink<List<int>> s) {
-            if (downloadBuffer.isNotEmpty) {
-              s.add(downloadBuffer.takeBytes());
-            }
-            s.close();
-          },
-        ),
-      )
-      .pipe(sink);
+  try {
+    await response
+        .asBroadcastStream()
+        .map((chunk) {
+          cancelToken?.throwIfCancelled();
+          received += chunk.length;
+          final now = DateTime.now();
+          if (onProgress != null &&
+              (lastProgressUpdate == null ||
+                  now.difference(lastProgressUpdate!) >=
+                      downloadUIUpdateInterval)) {
+            progress = fullContentLength != null
+                ? clampDouble((received / fullContentLength) * 100, 0, 100)
+                : 30;
+            onProgress(progress);
+            lastProgressUpdate = now;
+          }
+          return chunk;
+        })
+        .transform(
+          StreamTransformer<List<int>, List<int>>.fromHandlers(
+            handleData: (List<int> data, EventSink<List<int>> sink) {
+              downloadBuffer.add(data);
+              if (downloadBuffer.length >= downloadBufferSize) {
+                sink.add(downloadBuffer.takeBytes());
+              }
+            },
+            handleDone: (EventSink<List<int>> sink) {
+              if (downloadBuffer.isNotEmpty) {
+                sink.add(downloadBuffer.takeBytes());
+              }
+              sink.close();
+            },
+          ),
+        )
+        .pipe(sink);
+  } catch (_) {
+    responseClient.close(force: true);
+    if (cancelToken?.isCancelled == true) {
+      if (tempDownloadedFile.existsSync()) {
+        deleteFile(tempDownloadedFile);
+      }
+      throw ObtainiumError(tr('cancelled'));
+    }
+    rethrow;
+  } finally {
+    cancelToken?.detachClient(responseClient);
+  }
   await sink.close();
   progress = null;
   if (onProgress != null) {
@@ -932,6 +1010,7 @@ class AppsProvider with ChangeNotifier {
   // Debounce timer for download-progress notifications so widgets that watch
   // the whole provider (e.g. AppPage) don't get hammered on every byte chunk.
   Timer? _progressNotifyTimer;
+  final Map<String, DownloadCancelToken> _downloadCancelTokens = {};
 
   /// Remove-from-Obtainium was confirmed without uninstall: JSON is stashed, UI updates,
   /// and disk is purged after 5s unless the user undoes.
@@ -951,6 +1030,10 @@ class AppsProvider with ChangeNotifier {
   late SettingsProvider settingsProvider;
 
   Iterable<AppInMemory> getAppValues() => apps.values.map((a) => a.deepCopy());
+
+  void cancelDownload(String appId) {
+    _downloadCancelTokens[appId]?.cancel();
+  }
 
   AppsProvider({bool isBg = false, SettingsProvider? sharedSettings}) {
     settingsProvider = sharedSettings ?? SettingsProvider();
@@ -1068,6 +1151,9 @@ class AppsProvider with ChangeNotifier {
       notifyListeners();
     }
     bool downloadSucceeded = false;
+    final cancelToken = DownloadCancelToken();
+    _downloadCancelTokens[app.id]?.cancel();
+    _downloadCancelTokens[app.id] = cancelToken;
     try {
       AppSource source = SourceProvider().getSource(
         app.url,
@@ -1133,6 +1219,7 @@ class AppsProvider with ChangeNotifier {
         useExisting: useExisting,
         allowInsecure: app.additionalSettings['allowInsecure'] == true,
         logs: logs,
+        cancelToken: cancelToken,
       );
       // Set to 90 for remaining steps, will make null in 'finally'
       if (apps[app.id] != null) {
@@ -1231,6 +1318,9 @@ class AppsProvider with ChangeNotifier {
         );
       }
     } finally {
+      if (identical(_downloadCancelTokens[app.id], cancelToken)) {
+        _downloadCancelTokens.remove(app.id);
+      }
       _progressNotifyTimer?.cancel();
       notificationsProvider?.cancel(notifId);
       if (apps[app.id] != null) {
@@ -3417,6 +3507,10 @@ class AppsProvider with ChangeNotifier {
 
   @override
   void dispose() {
+    for (final cancelToken in _downloadCancelTokens.values) {
+      cancelToken.cancel();
+    }
+    _downloadCancelTokens.clear();
     _progressNotifyTimer?.cancel();
     for (final Timer timer in _deferredObtainiumTimers.values) {
       timer.cancel();

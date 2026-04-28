@@ -81,12 +81,14 @@ class APKPure extends AppSource {
     List<String> supportedArchs,
     Map<String, dynamic> additionalSettings,
   ) async {
+    final Map<String, int> sizeByName = {};
     var apkUrls = versionVariants
-        .map((e) {
-          String appId = e['package_name'];
-          String versionCode = e['version_code'];
+        .map((versionVariant) {
+          String appId = versionVariant['package_name'];
+          String versionCode = versionVariant['version_code'];
 
-          List<String> architectures = e['native_code']?.cast<String>();
+          List<String> architectures = versionVariant['native_code']
+              ?.cast<String>();
           String architectureString = architectures.join(',');
           if (architectures.contains("universal") ||
               architectures.contains("unlimited")) {
@@ -98,13 +100,20 @@ class APKPure extends AppSource {
             return null;
           }
 
-          String type = e['asset']['type'];
-          String downloadUri = e['asset']['url'];
+          final asset = versionVariant['asset'];
+          String type = asset['type'];
+          String downloadUri = asset['url'];
+          final apkName =
+              '$appId-$versionCode-$architectureString.${type.toLowerCase()}';
+          final rawSize = asset['size'];
+          final int? parsedSize = rawSize is num
+              ? rawSize.toInt()
+              : int.tryParse(rawSize?.toString() ?? '');
+          if (parsedSize != null) {
+            sizeByName[apkName] = parsedSize;
+          }
 
-          return MapEntry(
-            '$appId-$versionCode-$architectureString.${type.toLowerCase()}',
-            downloadUri,
-          );
+          return MapEntry(apkName, downloadUri);
         })
         .nonNulls
         .toList()
@@ -128,6 +137,29 @@ class APKPure extends AppSource {
     if (additionalSettings['useFirstApkOfVersion'] == true) {
       apkUrls = [apkUrls.first];
     }
+    int? apkSizeBytes = apkUrls.isNotEmpty
+        ? sizeByName[apkUrls.last.key]
+        : null;
+    if (apkUrls.isNotEmpty) {
+      try {
+        final responseWithClient = await sourceRequestStreamResponse(
+          'HEAD',
+          apkUrls.last.value,
+          null,
+          additionalSettings,
+        );
+        final headResponse = responseWithClient.value.value;
+        final contentLength = headResponse.contentLength;
+        if (headResponse.statusCode >= 200 &&
+            headResponse.statusCode < 300 &&
+            contentLength >= 0) {
+          apkSizeBytes = contentLength;
+        }
+        responseWithClient.value.key.close();
+      } catch (_) {
+        // APKPure's API size is a fallback when the CDN does not report length.
+      }
+    }
 
     return APKDetails(
       version,
@@ -135,6 +167,7 @@ class APKPure extends AppSource {
       AppNames(author, appName),
       releaseDate: releaseDate,
       changeLog: changeLog,
+      apkSizeBytes: apkSizeBytes,
     );
   }
 

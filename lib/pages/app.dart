@@ -75,7 +75,8 @@ String? _resolveStoreUrl({
   // Key absent means this store was never explicitly checked for this app
   // (either no scan at all, or a different store's check ran first).
   // In both cases show the fallback URL — don't suppress unverified stores.
-  if (storeData == null || !storeData.containsKey(storeName)) return fallbackUrl;
+  if (storeData == null || !storeData.containsKey(storeName))
+    return fallbackUrl;
   final entry = storeData[storeName]!;
   if (entry.isEmpty) return null; // confirmed absent (empty string sentinel)
   return entry; // confirmed present
@@ -96,10 +97,11 @@ Future<String?> _checkPlayStoreAvailability(String packageId) async {
     );
     final request = await client.headUrl(uri);
     request.followRedirects = false;
-    request.headers.set(HttpHeaders.userAgentHeader,
-        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36');
-    final response =
-        await request.close().timeout(const Duration(seconds: 10));
+    request.headers.set(
+      HttpHeaders.userAgentHeader,
+      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+    );
+    final response = await request.close().timeout(const Duration(seconds: 10));
     await response.drain<void>();
     client.close();
     if (response.statusCode == 200) {
@@ -201,8 +203,10 @@ class AppPage extends StatefulWidget {
 
   final String appId;
   final bool showOppositeOfPreferredView;
+
   /// Folder id when opened from [AppsPage] with [AppsPage.folderId]; matches list [Hero] tags.
   final String? appsListHeroFolderId;
+
   /// When true (e.g. swipe-to-edit), enter inline edit mode once the app is loaded.
   final bool openInEditMode;
 
@@ -277,8 +281,9 @@ class _AppPageState extends State<AppPage> {
       _lastWebViewSurfaceColorApplied = null;
       _scheduledOpenInEditMode = false;
       _clearEditIconStaging();
-      _storeAvailabilityCacheFuture =
-          BulkScanCache.load().then((cache) => cache[widget.appId]);
+      _storeAvailabilityCacheFuture = BulkScanCache.load().then(
+        (cache) => cache[widget.appId],
+      );
     } else if (oldWidget.openInEditMode != widget.openInEditMode) {
       _scheduledOpenInEditMode = false;
     }
@@ -314,7 +319,9 @@ class _AppPageState extends State<AppPage> {
     _editBaselinePackage = _packageController.text;
     _editBaselineNotes = _notesController.text;
     _editBaselineCategories = List<String>.from(_editCategories);
-    _editBaselineIconFingerprint = _iconFingerprintForEditBaseline(appData.icon);
+    _editBaselineIconFingerprint = _iconFingerprintForEditBaseline(
+      appData.icon,
+    );
   }
 
   void _clearEditIconStaging() {
@@ -401,8 +408,10 @@ class _AppPageState extends State<AppPage> {
       _exitEditWithoutSaving();
       return;
     }
-    final _UnsavedAction? action =
-        await _showUnsavedChangesDialog(actionContext, dialogTheme);
+    final _UnsavedAction? action = await _showUnsavedChangesDialog(
+      actionContext,
+      dialogTheme,
+    );
 
     if (!actionContext.mounted || appData == null) return;
 
@@ -411,8 +420,10 @@ class _AppPageState extends State<AppPage> {
         _exitEditWithoutSaving();
         break;
       case _UnsavedAction.saveAndExit:
-        final appsProvider =
-            Provider.of<AppsProvider>(actionContext, listen: false);
+        final appsProvider = Provider.of<AppsProvider>(
+          actionContext,
+          listen: false,
+        );
         await _saveEdit(appData, appsProvider);
         break;
       case _UnsavedAction.keepEditing:
@@ -442,10 +453,10 @@ class _AppPageState extends State<AppPage> {
             onPressed: updating
                 ? null
                 : () => _onCancelEditPressed(
-                      themeContext,
-                      appData,
-                      pageThemeForDialogs,
-                    ),
+                    themeContext,
+                    appData,
+                    pageThemeForDialogs,
+                  ),
             child: const Icon(Icons.close),
           ),
           const SizedBox(height: 12),
@@ -467,21 +478,22 @@ class _AppPageState extends State<AppPage> {
     _nameController.text = appData.name;
     _authorController.text = appData.author;
     final dynamic aboutRaw = appData.app.additionalSettings['about'];
-    _notesController.text =
-        aboutRaw is String ? aboutRaw : (aboutRaw?.toString() ?? '');
+    _notesController.text = aboutRaw is String
+        ? aboutRaw
+        : (aboutRaw?.toString() ?? '');
     _urlController.text = appData.app.url;
     _packageController.text = appData.app.id;
     _editCategories = List<String>.from(appData.app.categories);
-    _editBaselineHadUserOverride =
-        appsProvider.hasUserAppIconOverride(widget.appId);
+    _editBaselineHadUserOverride = appsProvider.hasUserAppIconOverride(
+      widget.appId,
+    );
     _captureEditBaseline(appData);
     setState(() => _editMode = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       void placeCaretAtEnd(TextEditingController controller) {
         final String text = controller.text;
-        controller.selection =
-            TextSelection.collapsed(offset: text.length);
+        controller.selection = TextSelection.collapsed(offset: text.length);
       }
 
       placeCaretAtEnd(_nameController);
@@ -582,8 +594,9 @@ class _AppPageState extends State<AppPage> {
     // session, all we need to do is null out the staged icon bytes.
     if (appsProvider.hasUserAppIconOverride(widget.appId)) {
       shouldClearOverride = true;
-      preview =
-          await appsProvider.loadIconPreviewExcludingUserOverride(widget.appId);
+      preview = await appsProvider.loadIconPreviewExcludingUserOverride(
+        widget.appId,
+      );
     }
 
     if (!mounted) return;
@@ -596,7 +609,8 @@ class _AppPageState extends State<AppPage> {
   }
 
   void _openIconWebSearch(AppInMemory appData) {
-    final String query = '${appData.name} square app icon transparent background';
+    final String query =
+        '${appData.name} square app icon transparent background';
     launchUrlString(
       'https://images.google.com/search?tbm=isch&q=${Uri.encodeComponent(query)}',
       mode: LaunchMode.externalApplication,
@@ -638,11 +652,7 @@ class _AppPageState extends State<AppPage> {
               clipBehavior: Clip.none,
               children: [
                 bodyColumn,
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: cardWatermark,
-                ),
+                Positioned(bottom: 0, right: 0, child: cardWatermark),
               ],
             )
           : bodyColumn,
@@ -672,121 +682,104 @@ class _AppPageState extends State<AppPage> {
   ) {
     final bool showResetIconButton =
         appsProvider.hasUserAppIconOverride(widget.appId) ||
-            _editStagedIconBytes != null;
+        _editStagedIconBytes != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _materialAppPageSectionCard(
-          ctx,
-          tr('nameAndLinks'),
-          [
-            TextField(
-              controller: _nameController,
-              decoration: appPageOutlinedInputDecoration(
-                ctx,
-                labelText: tr('appName'),
-                isDense: true,
-              ),
-              textCapitalization: TextCapitalization.words,
+        _materialAppPageSectionCard(ctx, tr('nameAndLinks'), [
+          TextField(
+            controller: _nameController,
+            decoration: appPageOutlinedInputDecoration(
+              ctx,
+              labelText: tr('appName'),
+              isDense: true,
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _authorController,
-              decoration: appPageOutlinedInputDecoration(
-                ctx,
-                labelText: tr('author'),
-                isDense: true,
-              ),
-              textCapitalization: TextCapitalization.words,
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _authorController,
+            decoration: appPageOutlinedInputDecoration(
+              ctx,
+              labelText: tr('author'),
+              isDense: true,
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _packageController,
-              decoration: appPageOutlinedInputDecoration(
-                ctx,
-                labelText: tr('package'),
-                isDense: true,
-              ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _packageController,
+            decoration: appPageOutlinedInputDecoration(
+              ctx,
+              labelText: tr('package'),
+              isDense: true,
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _urlController,
-              decoration: appPageOutlinedInputDecoration(
-                ctx,
-                labelText: tr('trackedSource'),
-                isDense: true,
-              ),
-              keyboardType: TextInputType.url,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _urlController,
+            decoration: appPageOutlinedInputDecoration(
+              ctx,
+              labelText: tr('trackedSource'),
+              isDense: true,
             ),
-          ],
-        ),
-        _materialAppPageSectionCard(
-          ctx,
-          tr('appIconActionsTitle'),
-          [
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                FilledButton.tonal(
-                  onPressed: () => _pickEditIcon(appsProvider),
-                  child: Text(tr('changeAppIcon')),
-                ),
+            keyboardType: TextInputType.url,
+          ),
+        ]),
+        _materialAppPageSectionCard(ctx, tr('appIconActionsTitle'), [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.tonal(
+                onPressed: () => _pickEditIcon(appsProvider),
+                child: Text(tr('changeAppIcon')),
+              ),
+              OutlinedButton(
+                onPressed: () => _openIconWebSearch(appData),
+                child: Text(tr('searchWebForAppIcon')),
+              ),
+              if (showResetIconButton)
                 OutlinedButton(
-                  onPressed: () => _openIconWebSearch(appData),
-                  child: Text(tr('searchWebForAppIcon')),
+                  onPressed: updating
+                      ? null
+                      : () => _onResetEditIconPressed(appsProvider),
+                  child: Text(tr('resetAppIcon')),
                 ),
-                if (showResetIconButton)
-                  OutlinedButton(
-                    onPressed: updating
-                        ? null
-                        : () => _onResetEditIconPressed(appsProvider),
-                    child: Text(tr('resetAppIcon')),
-                  ),
-              ],
-            ),
-          ],
-        ),
-        _materialAppPageSectionCard(
-          ctx,
-          tr('categories'),
-          [
-            CategoryEditorSelector(
-              key: ValueKey<String>('app_categories_${widget.appId}'),
-              preselected: _editCategories.toSet(),
-              alignment: WrapAlignment.start,
-              showLabelWhenNotEmpty: false,
-              onSelected: (cats) =>
-                  setState(() => _editCategories = cats),
-            ),
-          ],
-        ),
-        KeyedSubtree(
-          key: _notesEditSectionKey,
-          child: _materialAppPageSectionCard(
-            ctx,
-            tr('notes'),
-            [
-              TextField(
-                controller: _notesController,
-                focusNode: _notesEditFocusNode,
-                scrollPadding: const EdgeInsets.only(bottom: 160),
-                decoration: appPageOutlinedInputDecoration(
-                  ctx,
-                  labelText: null,
-                  hintText: tr('notes'),
-                  isDense: true,
-                ),
-                keyboardType: TextInputType.multiline,
-                textInputAction: TextInputAction.newline,
-                minLines: 3,
-                maxLines: 8,
-                textCapitalization: TextCapitalization.sentences,
-              ),
             ],
           ),
+        ]),
+        _materialAppPageSectionCard(ctx, tr('categories'), [
+          CategoryEditorSelector(
+            key: ValueKey<String>('app_categories_${widget.appId}'),
+            preselected: _editCategories.toSet(),
+            alignment: WrapAlignment.start,
+            showLabelWhenNotEmpty: false,
+            onSelected: (cats) => setState(() => _editCategories = cats),
+          ),
+        ]),
+        KeyedSubtree(
+          key: _notesEditSectionKey,
+          child: _materialAppPageSectionCard(ctx, tr('notes'), [
+            TextField(
+              controller: _notesController,
+              focusNode: _notesEditFocusNode,
+              scrollPadding: const EdgeInsets.only(bottom: 160),
+              decoration: appPageOutlinedInputDecoration(
+                ctx,
+                labelText: null,
+                hintText: tr('notes'),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              minLines: 3,
+              maxLines: 8,
+              textCapitalization: TextCapitalization.sentences,
+            ),
+          ]),
         ),
       ],
     );
@@ -1025,36 +1018,34 @@ class _AppPageState extends State<AppPage> {
         ),
       );
     } else {
-      iconChild = GestureDetector(
-        onTap: onTap,
-        child: emptyPlaceholder,
-      );
+      iconChild = GestureDetector(onTap: onTap, child: emptyPlaceholder);
     }
     if (heroTag != null) {
       return Hero(
         tag: heroTag,
-        flightShuttleBuilder: (
-          BuildContext flightContext,
-          Animation<double> animation,
-          HeroFlightDirection flightDirection,
-          BuildContext fromHeroContext,
-          BuildContext toHeroContext,
-        ) {
-          final Uint8List? shuttleBytes = bytesForImage;
-          if (shuttleBytes != null) {
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(borderRadius),
-              child: Image.memory(
-                shuttleBytes,
-                height: size,
-                width: size,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              ),
-            );
-          }
-          return emptyPlaceholder;
-        },
+        flightShuttleBuilder:
+            (
+              BuildContext flightContext,
+              Animation<double> animation,
+              HeroFlightDirection flightDirection,
+              BuildContext fromHeroContext,
+              BuildContext toHeroContext,
+            ) {
+              final Uint8List? shuttleBytes = bytesForImage;
+              if (shuttleBytes != null) {
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(borderRadius),
+                  child: Image.memory(
+                    shuttleBytes,
+                    height: size,
+                    width: size,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                );
+              }
+              return emptyPlaceholder;
+            },
         child: iconChild,
       );
     }
@@ -1110,8 +1101,9 @@ class _AppPageState extends State<AppPage> {
   @override
   void initState() {
     super.initState();
-    _storeAvailabilityCacheFuture =
-        BulkScanCache.load().then((cache) => cache[widget.appId]);
+    _storeAvailabilityCacheFuture = BulkScanCache.load().then(
+      (cache) => cache[widget.appId],
+    );
     _notesEditFocusNode.addListener(() {
       if (!_notesEditFocusNode.hasFocus || !mounted) return;
       void scrollNotesIntoView() {
@@ -1129,7 +1121,10 @@ class _AppPageState extends State<AppPage> {
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         scrollNotesIntoView();
-        Future<void>.delayed(const Duration(milliseconds: 120), scrollNotesIntoView);
+        Future<void>.delayed(
+          const Duration(milliseconds: 120),
+          scrollNotesIntoView,
+        );
       });
     });
     _webViewController = WebViewController()
@@ -1163,8 +1158,10 @@ class _AppPageState extends State<AppPage> {
     final pid = widget.appId;
     if (pid.isEmpty) return;
 
-    final trackedUrl =
-        Provider.of<AppsProvider>(context, listen: false).apps[pid]?.app.url;
+    final trackedUrl = Provider.of<AppsProvider>(
+      context,
+      listen: false,
+    ).apps[pid]?.app.url;
 
     final cache = await BulkScanCache.load();
     final storeData = cache[pid] ?? {};
@@ -1173,23 +1170,35 @@ class _AppPageState extends State<AppPage> {
 
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkmirror.com') &&
         !storeData.containsKey('APKMirror')) {
-      futures.add(BulkImportService.checkApkMirror([pid])
-          .then((r) => MapEntry('APKMirror', r[pid])));
+      futures.add(
+        BulkImportService.checkApkMirror([
+          pid,
+        ]).then((r) => MapEntry('APKMirror', r[pid])),
+      );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
         !storeData.containsKey('F-Droid')) {
-      futures.add(BulkImportService.checkFDroid([pid])
-          .then((r) => MapEntry('F-Droid', r[pid])));
+      futures.add(
+        BulkImportService.checkFDroid([
+          pid,
+        ]).then((r) => MapEntry('F-Droid', r[pid])),
+      );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
         !storeData.containsKey('APKPure')) {
-      futures.add(BulkImportService.checkApkPure([pid])
-          .then((r) => MapEntry('APKPure', r[pid])));
+      futures.add(
+        BulkImportService.checkApkPure([
+          pid,
+        ]).then((r) => MapEntry('APKPure', r[pid])),
+      );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
         !storeData.containsKey('PlayStore')) {
-      futures.add(_checkPlayStoreAvailability(pid)
-          .then((url) => MapEntry('PlayStore', url)));
+      futures.add(
+        _checkPlayStoreAvailability(
+          pid,
+        ).then((url) => MapEntry('PlayStore', url)),
+      );
     }
 
     if (futures.isEmpty) return;
@@ -1210,8 +1219,10 @@ class _AppPageState extends State<AppPage> {
   }
 
   Future<void> _runCheckUpdate(String id, {bool resetVersion = false}) async {
-    final AppsProvider appsProvider =
-        Provider.of<AppsProvider>(context, listen: false);
+    final AppsProvider appsProvider = Provider.of<AppsProvider>(
+      context,
+      listen: false,
+    );
     try {
       setState(() {
         updating = true;
@@ -1225,8 +1236,9 @@ class _AppPageState extends State<AppPage> {
       // while this page was already open in the navigation stack.
       setState(() {
         _requestedMissingIconLoad = false;
-        _storeAvailabilityCacheFuture =
-            BulkScanCache.load().then((cache) => cache[widget.appId]);
+        _storeAvailabilityCacheFuture = BulkScanCache.load().then(
+          (cache) => cache[widget.appId],
+        );
       });
       // Independently check Play Store in the background so other store
       // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
@@ -1289,10 +1301,7 @@ class _AppPageState extends State<AppPage> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () => launchUrlString(
-          url,
-          mode: LaunchMode.externalApplication,
-        ),
+        onTap: () => launchUrlString(url, mode: LaunchMode.externalApplication),
         onLongPress: () {
           _toastUrl(url);
           Clipboard.setData(ClipboardData(text: url));
@@ -1318,9 +1327,9 @@ class _AppPageState extends State<AppPage> {
             child: Text(
               label,
               style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
+                color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                fontSize: 12,
+              ),
             ),
           ),
           Expanded(
@@ -1346,10 +1355,14 @@ class _AppPageState extends State<AppPage> {
           appPageAppsRebuildToken(provider, widget.appId),
     );
 
-    final AppsProvider appsProvider =
-        Provider.of<AppsProvider>(context, listen: false);
-    final SettingsProvider settingsProvider =
-        Provider.of<SettingsProvider>(context, listen: false);
+    final AppsProvider appsProvider = Provider.of<AppsProvider>(
+      context,
+      listen: false,
+    );
+    final SettingsProvider settingsProvider = Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    );
 
     final bool useIconPageColors = settingsProvider.matchAppPageToIconColors;
     var showAppWebpageFinal =
@@ -1361,14 +1374,14 @@ class _AppPageState extends State<AppPage> {
     bool areDownloadsRunning = appsProvider.areDownloadsRunning();
 
     AppInMemory? app = appsProvider.apps[widget.appId];
-    if (!_requestedMissingIconLoad &&
-        app != null &&
-        app.icon == null) {
+    if (!_requestedMissingIconLoad && app != null && app.icon == null) {
       _requestedMissingIconLoad = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        Provider.of<AppsProvider>(context, listen: false)
-            .updateAppIcon(widget.appId, ignoreCache: false);
+        Provider.of<AppsProvider>(
+          context,
+          listen: false,
+        ).updateAppIcon(widget.appId, ignoreCache: false);
       });
     }
     if (widget.openInEditMode &&
@@ -1378,8 +1391,10 @@ class _AppPageState extends State<AppPage> {
       _scheduledOpenInEditMode = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        final AppInMemory? freshApp =
-            Provider.of<AppsProvider>(context, listen: false).apps[widget.appId];
+        final AppInMemory? freshApp = Provider.of<AppsProvider>(
+          context,
+          listen: false,
+        ).apps[widget.appId];
         if (freshApp != null) {
           _startEdit(freshApp, appsProvider);
         }
@@ -1465,7 +1480,6 @@ class _AppPageState extends State<AppPage> {
     bool isVersionDetectionStandard =
         app?.app.additionalSettings['versionDetection'] == true;
 
-
     if (showAppWebpageFinal && app != null && !_webViewUrlLoaded) {
       _webViewUrlLoaded = true;
       final String webUrl = app.app.url;
@@ -1502,9 +1516,9 @@ class _AppPageState extends State<AppPage> {
               child: Text(
                 label,
                 style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
+                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
               ),
             ),
             Expanded(
@@ -1530,9 +1544,9 @@ class _AppPageState extends State<AppPage> {
               child: Text(
                 label,
                 style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
+                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
                 softWrap: false,
                 overflow: TextOverflow.visible,
               ),
@@ -1542,10 +1556,10 @@ class _AppPageState extends State<AppPage> {
               child: SelectableText(
                 value,
                 style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      fontWeight: FontWeight.w500,
-                      fontSize: 14,
-                    ),
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w500,
+                  fontSize: 14,
+                ),
               ),
             ),
           ],
@@ -1569,9 +1583,9 @@ class _AppPageState extends State<AppPage> {
               child: Text(
                 tr('latest'),
                 style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
+                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
                 softWrap: false,
                 overflow: TextOverflow.visible,
               ),
@@ -1586,10 +1600,10 @@ class _AppPageState extends State<AppPage> {
                   SelectableText(
                     value,
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.w500,
-                          fontSize: 14,
-                        ),
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
+                    ),
                   ),
                   if (skipActive)
                     Container(
@@ -1598,15 +1612,17 @@ class _AppPageState extends State<AppPage> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                        color: Theme.of(
+                          ctx,
+                        ).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
                         tr('latestVersionSkipped'),
                         style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                              color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                              fontWeight: FontWeight.w500,
-                            ),
+                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                 ],
@@ -1624,11 +1640,11 @@ class _AppPageState extends State<AppPage> {
       VoidCallback? onTap,
     ) {
       final linkStyle = Theme.of(ctx).textTheme.bodySmall?.copyWith(
-            color: Theme.of(ctx).colorScheme.primary,
-            decoration: onTap != null ? TextDecoration.underline : null,
-            fontWeight: FontWeight.w500,
-            fontSize: 14,
-          );
+        color: Theme.of(ctx).colorScheme.primary,
+        decoration: onTap != null ? TextDecoration.underline : null,
+        fontWeight: FontWeight.w500,
+        fontSize: 14,
+      );
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
@@ -1640,9 +1656,9 @@ class _AppPageState extends State<AppPage> {
               child: Text(
                 label,
                 style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
+                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
                 softWrap: false,
                 overflow: TextOverflow.visible,
               ),
@@ -1651,17 +1667,13 @@ class _AppPageState extends State<AppPage> {
             Expanded(
               child: GestureDetector(
                 onTap: onTap,
-                child: Text(
-                  value,
-                  style: linkStyle,
-                ),
+                child: Text(value, style: linkStyle),
               ),
             ),
           ],
         ),
       );
     }
-
 
     Widget buildAboutBlock(BuildContext themeContext) {
       if (app?.app.additionalSettings['about'] is! String ||
@@ -1678,10 +1690,12 @@ class _AppPageState extends State<AppPage> {
       return GestureDetector(
         onLongPress: () {
           Clipboard.setData(ClipboardData(text: aboutRaw));
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(tr('copiedToClipboard')),
-            duration: const Duration(seconds: 4),
-          ));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(tr('copiedToClipboard')),
+              duration: const Duration(seconds: 4),
+            ),
+          );
         },
         child: Markdown(
           physics: const NeverScrollableScrollPhysics(),
@@ -1713,28 +1727,32 @@ class _AppPageState extends State<AppPage> {
       final ThemeData pageTheme = Theme.of(pageThemeContext);
       final undeterminedTrackOnlyInstalled =
           trackOnly &&
-              app?.app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] ==
-                  true &&
-              app?.app.installedVersion == null;
+          app?.app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] ==
+              true &&
+          app?.app.installedVersion == null;
       bool installed = app?.app.installedVersion != null;
       final String? installedVerStr = app?.app.installedVersion;
       final String latestVerStr = app?.app.latestVersion ?? '';
-      final effectivelyEqual = installed &&
+      final effectivelyEqual =
+          installed &&
           installedVerStr != null &&
           installedVerStr != latestVerStr &&
           versionsEffectivelyEqual(installedVerStr, latestVerStr);
-      final bool versionOrderUnclearState = installedVerStr != null &&
+      final bool versionOrderUnclearState =
+          installedVerStr != null &&
           latestVerStr.isNotEmpty &&
           versionOrderIsUnclear(installedVerStr, latestVerStr);
       final int? versionCmp = installedVerStr != null && latestVerStr.isNotEmpty
           ? compareVersionsByNumericSegments(installedVerStr, latestVerStr)
           : null;
-      final bool newerOnDeviceState = installed &&
+      final bool newerOnDeviceState =
+          installed &&
           installedVerStr != null &&
           installedVerStr != latestVerStr &&
           !effectivelyEqual &&
           versionCmp == 1;
-      final bool sameVersionVerdict = installed &&
+      final bool sameVersionVerdict =
+          installed &&
           installedVerStr != null &&
           latestVerStr.isNotEmpty &&
           !effectivelyEqual &&
@@ -1743,8 +1761,10 @@ class _AppPageState extends State<AppPage> {
           installedVersionIsNewerOrEqual(installedVerStr, latestVerStr);
       var changeLogFn = app != null ? getChangeLogFn(context, app.app) : null;
 
-      final lastUpdateCheckLabel =
-          tr('lastUpdateCheckX', args: [tr('never')]).split(':').first.trim();
+      final lastUpdateCheckLabel = tr(
+        'lastUpdateCheckX',
+        args: [tr('never')],
+      ).split(':').first.trim();
       final lastUpdateCheckValue = app?.app.lastUpdateCheck == null
           ? tr('never')
           : formatDateTimeToMinute(app!.app.lastUpdateCheck!);
@@ -1756,7 +1776,8 @@ class _AppPageState extends State<AppPage> {
         });
         try {
           final App appToSave = app.app.deepCopy();
-          appToSave.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
+          appToSave
+                  .additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
               false;
           await appsProvider.saveApps([appToSave]);
         } catch (err) {
@@ -1811,9 +1832,9 @@ class _AppPageState extends State<AppPage> {
                 onPressed: updating
                     ? null
                     : () => Navigator.pop(
-                          dialogContext,
-                          packageIdController.text.trim(),
-                        ),
+                        dialogContext,
+                        packageIdController.text.trim(),
+                      ),
                 child: Text(tr('ok')),
               ),
             ],
@@ -1971,7 +1992,11 @@ class _AppPageState extends State<AppPage> {
           versionRow(pageThemeContext, tr('installed'), tr('unknown')),
         );
         versionCardChildren.add(
-          versionRow(pageThemeContext, tr('latest'), app?.app.latestVersion ?? '-'),
+          versionRow(
+            pageThemeContext,
+            tr('latest'),
+            app?.app.latestVersion ?? '-',
+          ),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
           versionCardChildren.add(
@@ -1997,8 +2022,9 @@ class _AppPageState extends State<AppPage> {
                   ? null
                   : () async {
                       try {
-                        await appsProvider.downloadAppAssets(
-                            [app.app.id], context);
+                        await appsProvider.downloadAppAssets([
+                          app.app.id,
+                        ], context);
                       } catch (e) {
                         if (!context.mounted) return;
                         showError(e, context);
@@ -2010,7 +2036,11 @@ class _AppPageState extends State<AppPage> {
       } else {
         if (installed) {
           versionCardChildren.add(
-            versionRow(pageThemeContext, tr('installed'), app?.app.installedVersion ?? ''),
+            versionRow(
+              pageThemeContext,
+              tr('installed'),
+              app?.app.installedVersion ?? '',
+            ),
           );
         } else {
           versionCardChildren.add(
@@ -2048,8 +2078,9 @@ class _AppPageState extends State<AppPage> {
                   ? null
                   : () async {
                       try {
-                        await appsProvider.downloadAppAssets(
-                            [app.app.id], context);
+                        await appsProvider.downloadAppAssets([
+                          app.app.id,
+                        ], context);
                       } catch (e) {
                         if (!context.mounted) return;
                         showError(e, context);
@@ -2073,57 +2104,54 @@ class _AppPageState extends State<AppPage> {
 
       final bool trackOnlyUsesTemporaryPackageId =
           app?.app.additionalSettings['trackOnlyTemporaryPackageId'] == true;
-      final Widget? trackOnlyInstalledErrorCard =
-          undeterminedTrackOnlyInstalled
-              ? _materialAppPageSectionCard(
-                  pageThemeContext,
-                  tr('error'),
-                  [
-                    SelectableText(
-                      trackOnlyUsesTemporaryPackageId
-                          ? tr('trackOnlyTempPackageIdInstalledVersion')
-                          : tr('trackOnlyUndeterminedInstalledVersion'),
-                      style: pageTheme.textTheme.bodySmall?.copyWith(
-                            color: pageTheme.colorScheme.onErrorContainer,
-                            height: 1.35,
-                          ),
+      final Widget? trackOnlyInstalledErrorCard = undeterminedTrackOnlyInstalled
+          ? _materialAppPageSectionCard(
+              pageThemeContext,
+              tr('error'),
+              [
+                SelectableText(
+                  trackOnlyUsesTemporaryPackageId
+                      ? tr('trackOnlyTempPackageIdInstalledVersion')
+                      : tr('trackOnlyUndeterminedInstalledVersion'),
+                  style: pageTheme.textTheme.bodySmall?.copyWith(
+                    color: pageTheme.colorScheme.onErrorContainer,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    FilledButton.tonalIcon(
+                      onPressed: updating || app == null
+                          ? null
+                          : openFixTrackOnlyPackageIdDialog,
+                      icon: const Icon(Icons.edit_outlined, size: 20),
+                      label: Text(tr('fixPackageId')),
                     ),
-                    const SizedBox(height: 14),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        FilledButton.tonalIcon(
-                          onPressed: updating || app == null
-                              ? null
-                              : openFixTrackOnlyPackageIdDialog,
-                          icon: const Icon(Icons.edit_outlined, size: 20),
-                          label: Text(tr('fixPackageId')),
-                        ),
-                        FilledButton.tonal(
-                          onPressed: updating || app == null
-                              ? null
-                              : markTrackOnlyAsNotInstalledOnDevice,
-                          child: Text(tr('itsNotInstalled')),
-                        ),
-                      ],
+                    FilledButton.tonal(
+                      onPressed: updating || app == null
+                          ? null
+                          : markTrackOnlyAsNotInstalledOnDevice,
+                      child: Text(tr('itsNotInstalled')),
                     ),
                   ],
-                  sectionBackgroundColor:
-                      pageTheme.colorScheme.errorContainer,
-                  sectionTitleColor:
-                      pageTheme.colorScheme.onErrorContainer,
-                )
-              : null;
+                ),
+              ],
+              sectionBackgroundColor: pageTheme.colorScheme.errorContainer,
+              sectionTitleColor: pageTheme.colorScheme.onErrorContainer,
+            )
+          : null;
 
-      final detailsValueStyle =
-          pageTheme.textTheme.bodySmall!.copyWith(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              );
-      final detailsMonoValueStyle =
-          detailsValueStyle.copyWith(fontFamily: 'monospace');
+      final detailsValueStyle = pageTheme.textTheme.bodySmall!.copyWith(
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      );
+      final detailsMonoValueStyle = detailsValueStyle.copyWith(
+        fontFamily: 'monospace',
+      );
 
       final String? alternateStoresPackageId = app?.app.id;
       final String? alternateStoresTrackedUrl = app?.app.url;
@@ -2136,54 +2164,58 @@ class _AppPageState extends State<AppPage> {
             app.app.id,
             valueStyle: detailsMonoValueStyle,
           ),
-        if (app?.installedInfo != null) () {
-          final appType = classifyAppType(app!);
-          final (IconData typeIcon, Color typeColor, String typeLabel) =
-              switch (appType) {
-            AppTypeGroup.user => (
+        if (app?.installedInfo != null)
+          () {
+            final appType = classifyAppType(app!);
+            final (
+              IconData typeIcon,
+              Color typeColor,
+              String typeLabel,
+            ) = switch (appType) {
+              AppTypeGroup.user => (
                 Icons.person_rounded,
                 Colors.green,
                 tr('appTypeUser'),
               ),
-            AppTypeGroup.system => (
+              AppTypeGroup.system => (
                 Icons.android_rounded,
                 Colors.grey,
                 tr('appTypeSystem'),
               ),
-            AppTypeGroup.privileged => (
+              AppTypeGroup.privileged => (
                 Icons.security_rounded,
                 Colors.grey.shade600,
                 tr('appTypePrivileged'),
               ),
-          };
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 100,
-                  child: Text(
-                    tr('appType'),
-                    style: Theme.of(pageThemeContext).textTheme.bodySmall
-                        ?.copyWith(
-                      color: Theme.of(pageThemeContext)
-                          .colorScheme
-                          .onSurfaceVariant,
-                      fontSize: 12,
+            };
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 100,
+                    child: Text(
+                      tr('appType'),
+                      style: Theme.of(pageThemeContext).textTheme.bodySmall
+                          ?.copyWith(
+                            color: Theme.of(
+                              pageThemeContext,
+                            ).colorScheme.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
                     ),
                   ),
-                ),
-                Icon(typeIcon, size: 14, color: typeColor),
-                const SizedBox(width: 4),
-                Text(
-                  typeLabel,
-                  style: Theme.of(pageThemeContext).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          );
-        }(),
+                  Icon(typeIcon, size: 14, color: typeColor),
+                  const SizedBox(width: 4),
+                  Text(
+                    typeLabel,
+                    style: Theme.of(pageThemeContext).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            );
+          }(),
         if (app?.app.url != null && app!.app.url.isNotEmpty)
           _detailRowTrackedSource(
             pageThemeContext,
@@ -2205,21 +2237,27 @@ class _AppPageState extends State<AppPage> {
                 storeData: storeData,
                 storeName: 'PlayStore',
                 fallbackUrl: null,
-                alreadyTracked:
-                    _trackedUrlIsFromHost(trackedUrl, 'play.google.com'),
+                alreadyTracked: _trackedUrlIsFromHost(
+                  trackedUrl,
+                  'play.google.com',
+                ),
               );
 
               final fdroidUrl = _resolveStoreUrl(
                 storeData: storeData,
                 storeName: 'F-Droid',
                 fallbackUrl: 'https://f-droid.org/packages/$pid/',
-                alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'f-droid.org'),
+                alreadyTracked: _trackedUrlIsFromHost(
+                  trackedUrl,
+                  'f-droid.org',
+                ),
               );
 
               final apkpureUrl = _resolveStoreUrl(
                 storeData: storeData,
                 storeName: 'APKPure',
-                fallbackUrl: null, // search-by-package-ID is not useful; only show confirmed URL
+                fallbackUrl:
+                    null, // search-by-package-ID is not useful; only show confirmed URL
                 alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkpure.'),
               );
 
@@ -2228,7 +2266,10 @@ class _AppPageState extends State<AppPage> {
                 storeName: 'APKMirror',
                 fallbackUrl:
                     'https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=${Uri.encodeComponent(pid)}',
-                alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkmirror.com'),
+                alreadyTracked: _trackedUrlIsFromHost(
+                  trackedUrl,
+                  'apkmirror.com',
+                ),
               );
 
               if (playStoreUrl == null &&
@@ -2301,63 +2342,61 @@ class _AppPageState extends State<AppPage> {
                 child: Text(
                   tr('categories'),
                   style: pageTheme.textTheme.bodySmall?.copyWith(
-                        color: pageTheme.colorScheme.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
+                    color: pageTheme.colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
                 ),
               ),
               Expanded(
                 child: (app?.app.categories ?? []).isEmpty
                     ? Text(tr('none'), style: detailsValueStyle)
                     : Wrap(
-                          spacing: 6,
-                          runSpacing: 4,
-                          alignment: WrapAlignment.start,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            ...(app?.app.categories ?? []).map(
-                              (categoryName) {
-                                final colorArgb =
-                                    settingsProvider.categories[categoryName];
-                                if (colorArgb != null) {
-                                  final fill = Color(colorArgb);
-                                  return Chip(
-                                    label: Text(
-                                      categoryName,
-                                      style: TextStyle(
-                                        color: _labelColorOnCategoryFill(fill),
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                    backgroundColor: fill,
-                                    side: BorderSide.none,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 2,
-                                    ),
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    visualDensity: VisualDensity.compact,
-                                  );
-                                }
-                                return Chip(
-                                  label: Text(
-                                    categoryName,
-                                    style: detailsValueStyle,
+                        spacing: 6,
+                        runSpacing: 4,
+                        alignment: WrapAlignment.start,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          ...(app?.app.categories ?? []).map((categoryName) {
+                            final colorArgb =
+                                settingsProvider.categories[categoryName];
+                            if (colorArgb != null) {
+                              final fill = Color(colorArgb);
+                              return Chip(
+                                label: Text(
+                                  categoryName,
+                                  style: TextStyle(
+                                    color: _labelColorOnCategoryFill(fill),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
                                   ),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 4,
-                                  ),
-                                  materialTapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  visualDensity: VisualDensity.compact,
-                                );
-                              },
-                            ),
-                          ],
-                        ),
+                                ),
+                                backgroundColor: fill,
+                                side: BorderSide.none,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 2,
+                                ),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                              );
+                            }
+                            return Chip(
+                              label: Text(
+                                categoryName,
+                                style: detailsValueStyle,
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            );
+                          }),
+                        ],
+                      ),
               ),
             ],
           ),
@@ -2379,11 +2418,9 @@ class _AppPageState extends State<AppPage> {
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&
               app?.app.additionalSettings['about'].isNotEmpty)
-            _materialAppPageSectionCard(
-              pageThemeContext,
-              tr('notes'),
-              [buildAboutBlock(pageThemeContext)],
-            ),
+            _materialAppPageSectionCard(pageThemeContext, tr('notes'), [
+              buildAboutBlock(pageThemeContext),
+            ]),
         ],
       );
     }
@@ -2408,8 +2445,8 @@ class _AppPageState extends State<AppPage> {
         onTap: _editMode
             ? null
             : (app?.installedInfo != null
-                ? () => pm.openApp(widget.appId)
-                : null),
+                  ? () => pm.openApp(widget.appId)
+                  : null),
         emptyPlaceholder: Container(
           height: scaledIconSize,
           width: scaledIconSize,
@@ -2445,17 +2482,19 @@ class _AppPageState extends State<AppPage> {
                         ListenableBuilder(
                           listenable: _nameController,
                           builder: (BuildContext context, Widget? child) {
-                            final ColorScheme heroScheme =
-                                Theme.of(themeContext).colorScheme;
+                            final ColorScheme heroScheme = Theme.of(
+                              themeContext,
+                            ).colorScheme;
                             final String previewText =
                                 _nameController.text.isEmpty
-                                    ? tr('app')
-                                    : _nameController.text;
+                                ? tr('app')
+                                : _nameController.text;
                             return Text(
                               previewText,
                               style: titleStyle?.copyWith(
                                 fontWeight: FontWeight.w700,
-                                fontSize: (titleStyle.fontSize ?? 22) *
+                                fontSize:
+                                    (titleStyle.fontSize ?? 22) *
                                     heroScale *
                                     1.06,
                                 color: _nameController.text.isEmpty
@@ -2471,11 +2510,10 @@ class _AppPageState extends State<AppPage> {
                         Text(
                           app?.name ?? tr('app'),
                           style: titleStyle?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                fontSize: (titleStyle.fontSize ?? 22) *
-                                    heroScale *
-                                    1.06,
-                              ),
+                            fontWeight: FontWeight.w700,
+                            fontSize:
+                                (titleStyle.fontSize ?? 22) * heroScale * 1.06,
+                          ),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2483,13 +2521,12 @@ class _AppPageState extends State<AppPage> {
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
                         style: bylineStyle?.copyWith(
-                              color: Theme.of(themeContext)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                              fontSize: (bylineStyle.fontSize ?? 12) *
-                                  heroScale *
-                                  1.08,
-                            ),
+                          color: Theme.of(
+                            themeContext,
+                          ).colorScheme.onSurfaceVariant,
+                          fontSize:
+                              (bylineStyle.fontSize ?? 12) * heroScale * 1.08,
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -2590,8 +2627,7 @@ class _AppPageState extends State<AppPage> {
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
                         style: dialogColumnTheme.textTheme.bodySmall?.copyWith(
-                          color: dialogColumnTheme
-                              .colorScheme.onSurfaceVariant,
+                          color: dialogColumnTheme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                       Padding(
@@ -2618,7 +2654,8 @@ class _AppPageState extends State<AppPage> {
 
     Widget getAppWebView(BuildContext themeContext) {
       if (app == null) return const SizedBox.shrink();
-      final Color webViewSurface = Color.lerp(
+      final Color webViewSurface =
+          Color.lerp(
             Theme.of(themeContext).colorScheme.surface,
             Colors.black,
             Theme.of(themeContext).brightness == Brightness.dark
@@ -2652,7 +2689,9 @@ class _AppPageState extends State<AppPage> {
                   final App? updatedApp = app?.app.deepCopy();
                   if (updatedApp != null) {
                     updatedApp.installedVersion = updatedApp.latestVersion;
-                    updatedApp.additionalSettings.remove('skippedLatestVersion');
+                    updatedApp.additionalSettings.remove(
+                      'skippedLatestVersion',
+                    );
                     appsProvider.saveApps([updatedApp]);
                   }
                   Navigator.of(context).pop();
@@ -2668,8 +2707,10 @@ class _AppPageState extends State<AppPage> {
     getBottomCenterActions(BuildContext themeContext) {
       final ThemeData actionTheme = Theme.of(themeContext);
       const double expressiveRadius = 26;
-      const EdgeInsets expressivePadding =
-          EdgeInsets.symmetric(horizontal: 16, vertical: 14);
+      const EdgeInsets expressivePadding = EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 14,
+      );
       const Size expressiveMinimumSize = Size(48, 52);
       final RoundedRectangleBorder expressiveShape = RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(expressiveRadius),
@@ -2684,10 +2725,12 @@ class _AppPageState extends State<AppPage> {
         shadowColor: actionTheme.colorScheme.shadow,
         backgroundColor: actionTheme.colorScheme.primary,
         foregroundColor: actionTheme.colorScheme.onPrimary,
-        disabledBackgroundColor:
-            actionTheme.colorScheme.onSurface.withAlpha(31),
-        disabledForegroundColor:
-            actionTheme.colorScheme.onSurface.withAlpha(97),
+        disabledBackgroundColor: actionTheme.colorScheme.onSurface.withAlpha(
+          31,
+        ),
+        disabledForegroundColor: actionTheme.colorScheme.onSurface.withAlpha(
+          97,
+        ),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
 
@@ -2695,13 +2738,16 @@ class _AppPageState extends State<AppPage> {
         return const SizedBox.shrink();
       }
 
-      // Update label shows size when known (GitHub apps); plain otherwise.
+      // Update label shows size when known from the source metadata.
       final int? knownApkSizeBytes = app?.app.apkSizeBytes;
-      // Appends "· 43 MB" to install/update labels when size is known (GitHub).
-      String sizeAnnotated(String base) =>
-          !trackOnly && knownApkSizeBytes != null
-          ? '$base · ${_formatBytes(knownApkSizeBytes)}'
-          : base;
+      // Appends "· 43 MB" to install/update labels when size is known.
+      String sizeAnnotated(String base) {
+        if (knownApkSizeBytes == null) {
+          return base;
+        }
+        return '$base · ${_formatBytes(knownApkSizeBytes)}';
+      }
+
       final String updateLabel = sizeAnnotated(tr('update'));
       final String installLabel = sizeAnnotated(tr('install'));
 
@@ -2710,14 +2756,13 @@ class _AppPageState extends State<AppPage> {
         final double dp = app!.downloadProgress!;
         final bool isInstalling = dp < 0;
         final int? totalBytes = app.downloadTotalBytes;
-        final String bytesLabel =
-            !isInstalling && totalBytes != null
+        final String bytesLabel = !isInstalling && totalBytes != null
             ? ' · ${_formatBytes((dp / 100 * totalBytes).round())} / ${_formatBytes(totalBytes)}'
             : '';
         final String label = isInstalling
             ? '${tr('installing')}…'
             : 'Downloading ${dp.round()}%$bytesLabel';
-        return ClipRRect(
+        final Widget progressBar = ClipRRect(
           borderRadius: BorderRadius.circular(expressiveRadius),
           child: SizedBox(
             height: 52,
@@ -2732,8 +2777,9 @@ class _AppPageState extends State<AppPage> {
                   child: FractionallySizedBox(
                     widthFactor: isInstalling ? 1.0 : dp / 100,
                     child: Container(
-                      color: actionTheme.colorScheme.primary
-                          .withAlpha(isInstalling ? 55 : 220),
+                      color: actionTheme.colorScheme.primary.withAlpha(
+                        isInstalling ? 55 : 220,
+                      ),
                     ),
                   ),
                 ),
@@ -2755,6 +2801,20 @@ class _AppPageState extends State<AppPage> {
             ),
           ),
         );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            progressBar,
+            if (!isInstalling)
+              Center(
+                child: TextButton(
+                  onPressed: () => appsProvider.cancelDownload(app.app.id),
+                  child: Text(tr('cancel')),
+                ),
+              ),
+          ],
+        );
       }
 
       final bool actionBlocked = updating || areDownloadsRunning;
@@ -2768,13 +2828,15 @@ class _AppPageState extends State<AppPage> {
           app != null && isSkipActiveForCurrentLatest(app.app);
       final bool trackOnlyHasVersionUpdate =
           trackOnly && (actionableUpdate || uncertainUpdate);
-      final bool nonStandardVersionBehind = !trackOnly &&
+      final bool nonStandardVersionBehind =
+          !trackOnly &&
           !isVersionDetectionStandard &&
           (actionableUpdate || uncertainUpdate);
       // Version order unclear: user should use Update and/or Skip only; no manual
       // "mark as latest" second button (mutually exclusive with actionableUpdate).
       final bool uncertainOnly = uncertainUpdate;
-      final bool primaryActionEnabled = !actionBlocked &&
+      final bool primaryActionEnabled =
+          !actionBlocked &&
           (installedVersionIsNull ||
               ((actionableUpdate || uncertainUpdate) && !skipActive));
 
@@ -2783,7 +2845,8 @@ class _AppPageState extends State<AppPage> {
         if (appForSkip == null || appForSkip.installedVersion == null) {
           return primaryBar;
         }
-        final bool showSkipToggle = appHasActionableUpdate(appForSkip) ||
+        final bool showSkipToggle =
+            appHasActionableUpdate(appForSkip) ||
             versionOrderUncertainUpdate(appForSkip) ||
             isSkipActiveForCurrentLatest(appForSkip);
         if (!showSkipToggle) {
@@ -2795,7 +2858,8 @@ class _AppPageState extends State<AppPage> {
           if (isSkipActiveForCurrentLatest(copy)) {
             copy.additionalSettings.remove('skippedLatestVersion');
           } else {
-            copy.additionalSettings['skippedLatestVersion'] = copy.latestVersion;
+            copy.additionalSettings['skippedLatestVersion'] =
+                copy.latestVersion;
           }
           await appsProvider.saveApps([copy]);
           if (mounted) {
@@ -2871,7 +2935,7 @@ class _AppPageState extends State<AppPage> {
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.center,
                       child: Text(
-                        tr('update'),
+                        updateLabel,
                         maxLines: 1,
                         textAlign: TextAlign.center,
                       ),
@@ -2911,7 +2975,7 @@ class _AppPageState extends State<AppPage> {
               fit: BoxFit.scaleDown,
               alignment: Alignment.center,
               child: Text(
-                tr('update'),
+                updateLabel,
                 maxLines: 1,
                 textAlign: TextAlign.center,
               ),
@@ -2951,8 +3015,9 @@ class _AppPageState extends State<AppPage> {
                 Expanded(
                   child: FilledButton(
                     style: expressiveFilled,
-                    onPressed:
-                        markUpdatedActionBlocked ? null : showMarkUpdatedDialog,
+                    onPressed: markUpdatedActionBlocked
+                        ? null
+                        : showMarkUpdatedDialog,
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.center,
@@ -3031,21 +3096,19 @@ class _AppPageState extends State<AppPage> {
           border: Border(
             top: BorderSide(
               color: Theme.of(themeContext).brightness == Brightness.dark
-                  ? Theme.of(themeContext)
-                      .colorScheme.outlineVariant
-                      .withAlpha(140)
-                  : Theme.of(themeContext)
-                      .colorScheme.outlineVariant
-                      .withAlpha(70),
+                  ? Theme.of(
+                      themeContext,
+                    ).colorScheme.outlineVariant.withAlpha(140)
+                  : Theme.of(
+                      themeContext,
+                    ).colorScheme.outlineVariant.withAlpha(70),
             ),
           ),
           boxShadow: [
             BoxShadow(
               color: Theme.of(themeContext).colorScheme.shadow.withAlpha(
-                    Theme.of(themeContext).brightness == Brightness.dark
-                        ? 130
-                        : 40,
-                  ),
+                Theme.of(themeContext).brightness == Brightness.dark ? 130 : 40,
+              ),
               blurRadius: Theme.of(themeContext).brightness == Brightness.dark
                   ? 18
                   : 12,
@@ -3104,14 +3167,16 @@ class _AppPageState extends State<AppPage> {
                                       (_) => AdditionalOptionsPage(
                                         appId: widget.appId,
                                         onAfterSave:
-                                            (String savedAppId,
-                                                bool versionDetectionJustEnabled) async {
-                                          await _runCheckUpdate(
-                                            savedAppId,
-                                            resetVersion:
-                                                versionDetectionJustEnabled,
-                                          );
-                                        },
+                                            (
+                                              String savedAppId,
+                                              bool versionDetectionJustEnabled,
+                                            ) async {
+                                              await _runCheckUpdate(
+                                                savedAppId,
+                                                resetVersion:
+                                                    versionDetectionJustEnabled,
+                                              );
+                                            },
                                       ),
                                     ),
                                   );
@@ -3135,24 +3200,25 @@ class _AppPageState extends State<AppPage> {
                                   child: Builder(
                                     builder:
                                         (BuildContext dialogThemedContext) {
-                                      return AlertDialog(
-                                        scrollable: true,
-                                        content: getFullInfoColumn(
-                                          dialogThemedContext,
-                                          small: true,
-                                        ),
-                                        title: Text(app.name),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () {
-                                              Navigator.of(dialogRouteContext)
-                                                  .pop();
-                                            },
-                                            child: Text(tr('continue')),
-                                          ),
-                                        ],
-                                      );
-                                    },
+                                          return AlertDialog(
+                                            scrollable: true,
+                                            content: getFullInfoColumn(
+                                              dialogThemedContext,
+                                              small: true,
+                                            ),
+                                            title: Text(app.name),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () {
+                                                  Navigator.of(
+                                                    dialogRouteContext,
+                                                  ).pop();
+                                                },
+                                                child: Text(tr('continue')),
+                                              ),
+                                            ],
+                                          );
+                                        },
                                   ),
                                 );
                               },
@@ -3167,7 +3233,8 @@ class _AppPageState extends State<AppPage> {
                         app?.app.installedVersion != null) {
                       final String ins = app!.app.installedVersion!;
                       final String lat = app.app.latestVersion;
-                      final bool showResetInstall = ins == lat ||
+                      final bool showResetInstall =
+                          ins == lat ||
                           versionsEffectivelyEqual(ins, lat) ||
                           (installedVersionIsNewerOrEqual(ins, lat) &&
                               !versionOrderIsUnclear(ins, lat));
@@ -3201,9 +3268,9 @@ class _AppPageState extends State<AppPage> {
                                 if (appRow == null) return;
                                 final RemoveAppsWithModalResult removeResult =
                                     await appsProvider.removeAppsWithModal(
-                                  themeContext,
-                                  [appRow.app],
-                                );
+                                      themeContext,
+                                      [appRow.app],
+                                    );
                                 if (removeResult.shouldShowSnackBar &&
                                     messenger != null) {
                                   final Set<String> undoAppIds =
@@ -3223,14 +3290,15 @@ class _AppPageState extends State<AppPage> {
                                                 label: tr('undo'),
                                                 onPressed: () => appsProvider
                                                     .undoDeferredObtainiumRemovals(
-                                                  undoAppIds,
-                                                ),
+                                                      undoAppIds,
+                                                    ),
                                               )
                                             : null,
                                       ),
                                     );
                                 }
-                                if (removeResult.obtainiumEntryRemovedOrScheduled &&
+                                if (removeResult
+                                        .obtainiumEntryRemovedOrScheduled &&
                                     themeContext.mounted) {
                                   Navigator.of(themeContext).pop();
                                 }
@@ -3242,9 +3310,7 @@ class _AppPageState extends State<AppPage> {
                     return Row(
                       children: [
                         for (final Widget actionWidget in bottomBarActions)
-                          Expanded(
-                            child: Center(child: actionWidget),
-                          ),
+                          Expanded(child: Center(child: actionWidget)),
                       ],
                     );
                   },
@@ -3300,8 +3366,9 @@ class _AppPageState extends State<AppPage> {
                   break;
                 case _UnsavedAction.saveAndExit:
                   final appsProvider = Provider.of<AppsProvider>(
-                      themedPageContext,
-                      listen: false);
+                    themedPageContext,
+                    listen: false,
+                  );
                   await _saveEdit(freshApp, appsProvider);
                   if (widget.openInEditMode) {
                     shouldPopPage = true;
@@ -3318,110 +3385,114 @@ class _AppPageState extends State<AppPage> {
               }
             },
             child: Scaffold(
-            resizeToAvoidBottomInset: true,
-            appBar: showAppWebpageFinal ? AppBar() : null,
-            backgroundColor: appPageDeeperSurfaceColor(
-              pageColorSchemeForPage.surface,
-              pageBrightness,
-            ),
-            floatingActionButton:
-                _editModeFloatingActionButtons(
-              themedPageContext,
-              app,
-              appsProvider,
-              pageThemeForPage,
-            ),
-            floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-            body: RefreshIndicator(
-              displacement: 20,
-              child: showAppWebpageFinal
-                  ? getAppWebView(themedPageContext)
-                  : CustomScrollView(
-                      controller: _appPageScrollController,
-                      cacheExtent: 1600,
-                      physics: const AlwaysScrollableScrollPhysics(
-                        parent: ClampingScrollPhysics(),
-                      ),
-                      slivers: [
-                        SliverToBoxAdapter(
-                          child: SafeArea(
-                            top: true,
-                            bottom: false,
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.stretch,
-                                children: [
-                                  Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.center,
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.arrow_back),
-                                        onPressed: updating
-                                            ? null
-                                            : () => Navigator.of(
+              resizeToAvoidBottomInset: true,
+              appBar: showAppWebpageFinal ? AppBar() : null,
+              backgroundColor: appPageDeeperSurfaceColor(
+                pageColorSchemeForPage.surface,
+                pageBrightness,
+              ),
+              floatingActionButton: _editModeFloatingActionButtons(
+                themedPageContext,
+                app,
+                appsProvider,
+                pageThemeForPage,
+              ),
+              floatingActionButtonLocation:
+                  FloatingActionButtonLocation.endFloat,
+              body: RefreshIndicator(
+                displacement: 20,
+                child: showAppWebpageFinal
+                    ? getAppWebView(themedPageContext)
+                    : CustomScrollView(
+                        controller: _appPageScrollController,
+                        cacheExtent: 1600,
+                        physics: const AlwaysScrollableScrollPhysics(
+                          parent: ClampingScrollPhysics(),
+                        ),
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: SafeArea(
+                              top: true,
+                              bottom: false,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 12),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.arrow_back),
+                                          onPressed: updating
+                                              ? null
+                                              : () => Navigator.of(
                                                   themedPageContext,
                                                 ).maybePop(),
-                                        tooltip: MaterialLocalizations.of(
-                                                themedPageContext)
-                                            .backButtonTooltip,
-                                      ),
-                                      Expanded(
-                                        child: buildDetailHeroContent(
-                                          themedPageContext,
+                                          tooltip: MaterialLocalizations.of(
+                                            themedPageContext,
+                                          ).backButtonTooltip,
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  if (_editMode && app != null)
-                                    _buildEditMetadataSection(
-                                      themedPageContext,
-                                      app,
-                                      appsProvider,
-                                      settingsProvider,
-                                    )
-                                  else
-                                    getInfoColumn(
-                                      themedPageContext,
-                                      small: false,
-                                    ),
-                                  Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                        16, 0, 16, 16),
-                                    child: Row(
-                                      children: [
                                         Expanded(
-                                          child: getBottomCenterActions(
+                                          child: buildDetailHeroContent(
                                             themedPageContext,
                                           ),
                                         ),
                                       ],
                                     ),
-                                  ),
-                                  if (_editMode) const SizedBox(height: 104),
-                                  SizedBox(
-                                    height: MediaQuery.of(themedPageContext)
-                                        .padding
-                                        .bottom,
-                                  ),
-                                ],
+                                    if (_editMode && app != null)
+                                      _buildEditMetadataSection(
+                                        themedPageContext,
+                                        app,
+                                        appsProvider,
+                                        settingsProvider,
+                                      )
+                                    else
+                                      getInfoColumn(
+                                        themedPageContext,
+                                        small: false,
+                                      ),
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        0,
+                                        16,
+                                        16,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: getBottomCenterActions(
+                                              themedPageContext,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (_editMode) const SizedBox(height: 104),
+                                    SizedBox(
+                                      height: MediaQuery.of(
+                                        themedPageContext,
+                                      ).padding.bottom,
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-              onRefresh: () async {
-                if (_editMode) return;
-                if (app != null) {
-                  await _runCheckUpdate(app.app.id);
-                }
-              },
+                        ],
+                      ),
+                onRefresh: () async {
+                  if (_editMode) return;
+                  if (app != null) {
+                    await _runCheckUpdate(app.app.id);
+                  }
+                },
+              ),
+              bottomSheet: getBottomSheetMenu(themedPageContext),
             ),
-            bottomSheet: getBottomSheetMenu(themedPageContext),
-          ),
           );
         },
       ),
