@@ -900,17 +900,17 @@ Future<File> downloadFile(
         })
         .transform(
           StreamTransformer<List<int>, List<int>>.fromHandlers(
-            handleData: (List<int> data, EventSink<List<int>> sink) {
+            handleData: (List<int> data, EventSink<List<int>> eventSink) {
               downloadBuffer.add(data);
               if (downloadBuffer.length >= downloadBufferSize) {
-                sink.add(downloadBuffer.takeBytes());
+                eventSink.add(downloadBuffer.takeBytes());
               }
             },
-            handleDone: (EventSink<List<int>> sink) {
+            handleDone: (EventSink<List<int>> eventSink) {
               if (downloadBuffer.isNotEmpty) {
-                sink.add(downloadBuffer.takeBytes());
+                eventSink.add(downloadBuffer.takeBytes());
               }
-              sink.close();
+              eventSink.close();
             },
           ),
         )

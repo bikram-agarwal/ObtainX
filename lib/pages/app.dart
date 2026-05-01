@@ -2742,7 +2742,7 @@ class _AppPageState extends State<AppPage> {
       final int? knownApkSizeBytes = app?.app.apkSizeBytes;
       // Appends "· 43 MB" to install/update labels when size is known.
       String sizeAnnotated(String base) {
-        if (knownApkSizeBytes == null) {
+        if (knownApkSizeBytes == null || trackOnly) {
           return base;
         }
         return '$base · ${_formatBytes(knownApkSizeBytes)}';

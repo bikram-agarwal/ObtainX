@@ -238,11 +238,12 @@ class FDroid extends AppSource {
       if (filterVersionsByRegEx?.isNotEmpty == true) {
         version = null;
         releaseChoices = [];
-        for (var i = 0; i < releases.length; i++) {
+        for (final release in releases) {
           if (RegExp(
             filterVersionsByRegEx!,
-          ).hasMatch(releases[i]['versionName']?.toString() ?? '')) {
-            version = releases[i]['versionName']?.toString();
+          ).hasMatch(release['versionName']?.toString() ?? '')) {
+            version = release['versionName']?.toString();
+            break;
           }
         }
         if (version == null) {
