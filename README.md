@@ -2,7 +2,6 @@
 
 ObtainX builds on everything Obtainium does well — same sources, same trust model, same spirit — with a reworked UI and a set of features aimed at making everyday use a little smoother. For a side-by-side comparison with screenshots, see [ObtainX vs Obtainium](./docs/Difference_with_Obtainium.md).
 
----
 
 ## ✨ New Features
 
@@ -20,6 +19,8 @@ Features that don't exist in Obtainium at all.
 
 - **🖼️ Custom app icons** — Not happy with an app's icon or a blank placeholder? Tap the icon on any app's detail page to set your own — pick from your gallery or grab one from the web.
 
+- **⚖️ Know the update size beforehand** — See the exact download size for every update a - across all supported stores — before you even hit the update button.
+
 - **⏭️ Skip Version** — Pass on a specific release you don't want without marking the app as "updated." The next release will still show up normally.
 
 - **🧩 Advanced filter / RegEx Assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required. Full details in the [Additional options guide](./additional-options-guide.md).
@@ -28,7 +29,6 @@ Features that don't exist in Obtainium at all.
 
 - **💾 Save assets** - Option to save update assets (e.g. APKs) to your chosen folder, during update process itself.
 
----
 
 ## 🔧 Enhanced Features
 
@@ -48,8 +48,6 @@ Features Obtainium has, extended or improved here.
 - **🔖 Active filter chips** — Extends Obtainium's filter with dismissible chips pinned below the toolbar showing every active non-text filter (category, pinned, installed state, etc.). Tap any chip to clear just that filter. The row disappears entirely when nothing is active.
 
 - **🏷️ Category customization** — More control over your categories: instead of cycling between a few random colors, choose from a 5×12 color palette (vivid to pastel), or enter the hex value yourself. A live preview of the category chip as you name and color it. Category colors are WYSIWYG. Category's name switches between black and white text automatically for readability. You can also rename an existing category, and all assigned apps automatically receive it. 
-
----
 
 ## 🎨 UI & UX
 
