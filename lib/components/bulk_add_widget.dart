@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -96,6 +97,24 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   final Set<String> _selectedPackages = {};
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+
+  // ── Cached filtered-apps list ────────────────────────────────────────────
+  // The previous getter ran the .where(...).toList() pass on every build -
+  // including every checkbox tap. With 300 apps that's ~600 String ops and a
+  // List allocation each tap, all wasted. We now cache the result keyed by
+  // the source list identity + the search query and only recompute when one
+  // of those changes. On checkbox toggles the cached list is reused as-is.
+  List<InstalledAppInfo>? _filteredAppsCache;
+  Object? _filteredAppsCacheSourceId;
+  String? _filteredAppsCacheQuery;
+
+  // ── Search-input debounce ────────────────────────────────────────────────
+  // The previous TextField fired setState per keystroke - rebuilding the chip
+  // rows, the count, the FAB badge, and the entire ListView on every key. We
+  // now coalesce keystrokes within a 150ms window into a single setState so
+  // fast typing rebuilds the step at most ~6 times instead of once-per-key.
+  Timer? _searchDebounceTimer;
+  static const Duration _searchDebounceWindow = Duration(milliseconds: 150);
   // Icon cache: packageName -> Uint8List | false (failed). Absent key = not loaded yet.
   final Map<String, Object?> _iconCache = {};
   final Map<String, Future<void>> _iconLoadFutures = {};
@@ -176,6 +195,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -657,15 +677,28 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   // ─── App Selection Step ────────────────────────────────────────────────
 
   List<InstalledAppInfo> get _filteredApps {
-    if (_searchQuery.isEmpty) return _installedApps;
-    final q = _searchQuery.toLowerCase();
-    return _installedApps
-        .where(
-          (a) =>
-              a.name.toLowerCase().contains(q) ||
-              a.packageName.toLowerCase().contains(q),
-        )
-        .toList();
+    // Reuse the cached result when neither the source list nor the query
+    // has changed - this is the common case during checkbox interactions.
+    if (identical(_filteredAppsCacheSourceId, _installedApps) &&
+        _filteredAppsCacheQuery == _searchQuery &&
+        _filteredAppsCache != null) {
+      return _filteredAppsCache!;
+    }
+    final List<InstalledAppInfo> result;
+    if (_searchQuery.isEmpty) {
+      result = _installedApps;
+    } else {
+      final q = _searchQuery.toLowerCase();
+      result = _installedApps
+          .where(
+            (a) => a.nameLower.contains(q) || a.packageNameLower.contains(q),
+          )
+          .toList();
+    }
+    _filteredAppsCacheSourceId = _installedApps;
+    _filteredAppsCacheQuery = _searchQuery;
+    _filteredAppsCache = result;
+    return result;
   }
 
   Widget _lazyBulkAppIcon(String packageName, {double size = 40}) {
@@ -715,8 +748,25 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                           vertical: 8,
                         ),
                       ),
-                      onChanged: (String value) =>
-                          setState(() => _searchQuery = value),
+                      onChanged: (String value) {
+                        // Debounced: coalesces fast typing into a single
+                        // setState after the user pauses for the window
+                        // duration. Instant-clear (empty value) skips the
+                        // debounce so the user sees the list reset right
+                        // away when they backspace to nothing.
+                        _searchDebounceTimer?.cancel();
+                        if (value.isEmpty) {
+                          if (_searchQuery.isNotEmpty) {
+                            setState(() => _searchQuery = '');
+                          }
+                          return;
+                        }
+                        _searchDebounceTimer = Timer(_searchDebounceWindow, () {
+                          if (!mounted) return;
+                          if (_searchQuery == value) return;
+                          setState(() => _searchQuery = value);
+                        });
+                      },
                     ),
                   ),
                   if (_searchQuery.isNotEmpty)
@@ -727,6 +777,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                         color: colorScheme.onSurfaceVariant,
                       ),
                       onPressed: () {
+                        _searchDebounceTimer?.cancel();
                         _searchController.clear();
                         setState(() => _searchQuery = '');
                       },

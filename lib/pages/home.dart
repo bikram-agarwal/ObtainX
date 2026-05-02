@@ -353,10 +353,13 @@ class _HomePageState extends State<HomePage> {
     } else if (selectedIndexHistory.isEmpty ||
         (selectedIndexHistory.isNotEmpty &&
             selectedIndexHistory.last != index)) {
+      if (!mounted || currentRequestId != pageSwitchRequestId) {
+        return;
+      }
       setState(() {
-        int existingInd = selectedIndexHistory.indexOf(index);
-        if (existingInd >= 0) {
-          selectedIndexHistory.removeAt(existingInd);
+        int existingIndex = selectedIndexHistory.indexOf(index);
+        if (existingIndex >= 0) {
+          selectedIndexHistory.removeAt(existingIndex);
         }
         selectedIndexHistory.add(index);
       });
@@ -444,14 +447,14 @@ class _HomePageState extends State<HomePage> {
               .map(
                 (MapEntry<int, NavigationPageItem> entry) =>
                     NavigationDestination(
-                  icon: entry.key == 0 && updateCount > 0
-                      ? Badge(
-                          label: Text(updateCount.toString()),
-                          child: Icon(entry.value.icon),
-                        )
-                      : Icon(entry.value.icon),
-                  label: entry.value.title,
-                ),
+                      icon: entry.key == 0 && updateCount > 0
+                          ? Badge(
+                              label: Text(updateCount.toString()),
+                              child: Icon(entry.value.icon),
+                            )
+                          : Icon(entry.value.icon),
+                      label: entry.value.title,
+                    ),
               )
               .toList();
           final int homeNavSelectedIndex = selectedIndexHistory.isEmpty
