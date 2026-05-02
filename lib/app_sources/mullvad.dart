@@ -3,6 +3,7 @@ import 'package:http/http.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class Mullvad extends AppSource {
   Mullvad() {
@@ -36,7 +37,7 @@ class Mullvad extends AppSource {
       additionalSettings,
     );
     if (res.statusCode == 200) {
-      var versions = parse(res.body)
+      var versions = (await parseHtmlOffIsolate(res.body))
           .querySelectorAll('p')
           .map((e) => e.innerHtml)
           .where((p) => p.contains('Latest version: '))

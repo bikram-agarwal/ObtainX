@@ -4,6 +4,7 @@ import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/components/generated_form.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:easy_localization/easy_localization.dart';
 
 class SourceHut extends AppSource {
@@ -61,7 +62,7 @@ class SourceHut extends AppSource {
       additionalSettings,
     );
     if (res.statusCode == 200) {
-      var parsedHtml = parse(res.body);
+      var parsedHtml = await parseHtmlOffIsolate(res.body);
       List<APKDetails> apkDetailsList = [];
       int ind = 0;
 
@@ -101,7 +102,7 @@ class SourceHut extends AppSource {
         List<MapEntry<String, String>> apkUrls = [];
         if (res2.statusCode == 200) {
           apkUrls = getApkUrlsFromUrls(
-            parse(res2.body)
+            (await parseHtmlOffIsolate(res2.body))
                 .querySelectorAll('a')
                 .map((e) => e.attributes['href'] ?? '')
                 .where((e) => e.toLowerCase().endsWith('.apk'))

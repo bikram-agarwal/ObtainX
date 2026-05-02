@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:html/parser.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class APKCombo extends AppSource {
   APKCombo() {
@@ -52,7 +53,7 @@ class APKCombo extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
-    var html = parse(res.body);
+    var html = await parseHtmlOffIsolate(res.body);
     return html
         .querySelectorAll('#variants-tab > div > ul > li')
         .map((e) {
@@ -108,7 +109,7 @@ class APKCombo extends AppSource {
     if (preres.statusCode != 200) {
       throw getObtainiumHttpError(preres);
     }
-    var res = parse(preres.body);
+    var res = await parseHtmlOffIsolate(preres.body);
     String? version = res.querySelector('div.version')?.text.trim();
     if (version == null) {
       throw NoVersionError();

@@ -2,6 +2,7 @@ import 'package:html/parser.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class NeutronCode extends AppSource {
   NeutronCode() {
@@ -84,7 +85,7 @@ class NeutronCode extends AppSource {
   ) async {
     Response res = await sourceRequest(standardUrl, additionalSettings);
     if (res.statusCode == 200) {
-      var http = parse(res.body);
+      var http = await parseHtmlOffIsolate(res.body);
       var name = http.querySelector('.pd-title')?.innerHtml;
       var filename = http.querySelector('.pd-filename .pd-float')?.innerHtml;
       if (filename == null) {

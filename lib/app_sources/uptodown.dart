@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:html/parser.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 DateTime? parseDateTimeMMMddCommayyyy(String? dateString) {
   DateTime? releaseDate;
@@ -59,7 +60,7 @@ class Uptodown extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
-    var html = parse(res.body);
+    var html = await parseHtmlOffIsolate(res.body);
     String? version = html.querySelector('div.version')?.innerHtml;
     String? name = html.querySelector('#detail-app-name')?.innerHtml.trim();
     String? author = html.querySelector('#author-link')?.innerHtml.trim();
@@ -135,7 +136,7 @@ class Uptodown extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
-    var html = parse(res.body);
+    var html = await parseHtmlOffIsolate(res.body);
     var finalUrlKey = html
         .querySelector('#detail-download-button')
         ?.attributes['data-url'];

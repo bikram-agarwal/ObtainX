@@ -8,6 +8,7 @@ import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class FDroid extends AppSource {
   FDroid() {
@@ -157,7 +158,9 @@ class FDroid extends AppSource {
     );
     if (res.statusCode == 200) {
       Map<String, List<String>> urlsWithDescriptions = {};
-      parse(res.body).querySelectorAll('.package-header').forEach((e) {
+      (await parseHtmlOffIsolate(
+        res.body,
+      )).querySelectorAll('.package-header').forEach((e) {
         String? url = e.attributes['href'];
         if (url != null) {
           try {
@@ -348,7 +351,7 @@ class FDroid extends AppSource {
               additionalSettings,
             );
             if (pageRes.statusCode == 200) {
-              final doc = parse(pageRes.body);
+              final doc = await parseHtmlOffIsolate(pageRes.body);
               iconUrl =
                   doc
                       .querySelector('meta[property="og:image"]')

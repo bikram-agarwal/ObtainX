@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
@@ -2120,9 +2121,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   // ─── Helpers ───────────────────────────────────────────────────────────
 
-  Widget _m3LoadingIndicator({double size = 64}) => BulkM3LoadingIndicator(
-    size: size,
+  Widget _m3LoadingIndicator({double size = 64}) => ExpressiveLoadingIndicator(
     color: Theme.of(context).colorScheme.primary,
+    constraints: BoxConstraints.tightFor(width: size, height: size),
+    semanticsLabel: tr('pleaseWait'),
   );
 
   // ─── Build ─────────────────────────────────────────────────────────────
@@ -2258,75 +2260,9 @@ class _LazyBulkAppIconState extends State<_LazyBulkAppIcon> {
   }
 }
 
-/// Staggered-dot loading indicator used while bulk lists load or stores scan.
-class BulkM3LoadingIndicator extends StatefulWidget {
-  final double size;
-  final Color color;
-
-  const BulkM3LoadingIndicator({
-    super.key,
-    required this.size,
-    required this.color,
-  });
-
-  @override
-  State<BulkM3LoadingIndicator> createState() => _BulkM3LoadingIndicatorState();
-}
-
-class _BulkM3LoadingIndicatorState extends State<BulkM3LoadingIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  static const int _dotCount = 5;
-  static const double _staggerFraction = 0.15;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final double dotSize = widget.size / _dotCount * 0.7;
-    return SizedBox(
-      width: widget.size,
-      height: widget.size * 0.45,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (BuildContext context, Widget? child) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: List<Widget>.generate(_dotCount, (int dotIndex) {
-              final double wavePhase =
-                  (_controller.value - dotIndex * _staggerFraction) % 1.0;
-              final double scale =
-                  0.35 + 0.65 * (0.5 - 0.5 * math.cos(wavePhase * 2 * math.pi));
-              return Transform.scale(
-                scale: scale,
-                child: Container(
-                  width: dotSize,
-                  height: dotSize,
-                  decoration: BoxDecoration(
-                    color: widget.color,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              );
-            }),
-          );
-        },
-      ),
-    );
-  }
-}
+// [BulkM3LoadingIndicator] - the hand-rolled 5-dot staggered-scale animation
+// that used to live here - was replaced by [ExpressiveLoadingIndicator] from
+// package:expressive_loading_indicator. The new widget renders the official
+// Material 3 Expressive morphing-polygon shape (the same one shown inside
+// the pull-to-refresh indicator) and keeps the loading visuals consistent
+// across the app.

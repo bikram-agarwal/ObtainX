@@ -6,6 +6,7 @@ import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class Farsroid extends AppSource {
   Farsroid() {
@@ -48,7 +49,7 @@ class Farsroid extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
-    var html = parse(res.body);
+    var html = await parseHtmlOffIsolate(res.body);
     var dlinks = html.querySelectorAll('.download-links');
     if (dlinks.isEmpty) {
       throw NoReleasesError();

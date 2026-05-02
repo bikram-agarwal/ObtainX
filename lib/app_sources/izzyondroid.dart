@@ -197,7 +197,7 @@ class IzzyOnDroid extends AppSource {
     if (indexResponse.statusCode != 200) {
       throw getObtainiumHttpError(indexResponse);
     }
-    return FDroidRepo.apkDetailsFromIndexXmlResponse(
+    return await FDroidRepo.apkDetailsFromIndexXmlResponse(
       indexResponse,
       appIdOrName,
       additionalSettings,
@@ -231,7 +231,7 @@ class IzzyOnDroid extends AppSource {
       throw getObtainiumHttpError(indexResponse);
     }
     final Map<String, List<String>> parsed =
-        FDroidRepo.parseIndexXmlSearchResults(indexResponse, query);
+        await FDroidRepo.parseIndexXmlSearchResults(indexResponse, query);
     final Map<String, List<String>> out = <String, List<String>>{};
     for (final MapEntry<String, List<String>> entry in parsed.entries) {
       final String? packageId =

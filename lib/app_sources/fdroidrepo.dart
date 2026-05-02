@@ -4,6 +4,7 @@ import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 /// Loads a third-party F-Droid repo [index.xml] by trying common URL shapes.
 /// [doSourceRequest] should be the owning [AppSource.sourceRequest] so TLS,
@@ -96,11 +97,11 @@ class FDroidRepo extends AppSource {
   }
 
   /// Parses a successful [index.xml] [Response] into search result entries.
-  static Map<String, List<String>> parseIndexXmlSearchResults(
+  static Future<Map<String, List<String>>> parseIndexXmlSearchResults(
     Response res,
     String query,
-  ) {
-    final body = parse(res.body);
+  ) async {
+    final body = await parseHtmlOffIsolate(res.body);
     final Map<String, List<String>> results = <String, List<String>>{};
     body.querySelectorAll('application').toList().forEach((app) {
       final String appId = app.attributes['id']!;
@@ -120,13 +121,13 @@ class FDroidRepo extends AppSource {
   /// [indexXmlResponse] must have status 200 and a valid F-Droid index body.
   /// [authorFallback] is used when the index has no repo or per-app author
   /// (typically the Obtanium source display name).
-  static APKDetails apkDetailsFromIndexXmlResponse(
+  static Future<APKDetails> apkDetailsFromIndexXmlResponse(
     Response indexXmlResponse,
     String appIdOrName,
     Map<String, dynamic> additionalSettings,
     String authorFallback,
-  ) {
-    var body = parse(indexXmlResponse.body);
+  ) async {
+    var body = await parseHtmlOffIsolate(indexXmlResponse.body);
     var foundApps = body.querySelectorAll('application').where((element) {
       return element.attributes['id'] == appIdOrName;
     }).toList();
@@ -259,7 +260,7 @@ class FDroidRepo extends AppSource {
       querySettings,
     );
     if (res.statusCode == 200) {
-      return FDroidRepo.parseIndexXmlSearchResults(res, query);
+      return await FDroidRepo.parseIndexXmlSearchResults(res, query);
     } else {
       throw getObtainiumHttpError(res);
     }
@@ -343,7 +344,7 @@ class FDroidRepo extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
-    return apkDetailsFromIndexXmlResponse(
+    return await apkDetailsFromIndexXmlResponse(
       res,
       appIdOrName,
       additionalSettings,

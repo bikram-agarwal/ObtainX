@@ -10,6 +10,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 // TEMP APKMIRROR SIZE DEBUG: keep enabled until APKMirror size refresh is confirmed.
 const bool apkMirrorSizeDebugLoggingEnabled = true;
@@ -628,7 +629,9 @@ class APKMirror extends AppSource {
           releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
         }
       } else {
-        final parsedItems = parse(res.body).querySelectorAll('item');
+        final parsedItems = (await parseHtmlOffIsolate(
+          res.body,
+        )).querySelectorAll('item');
         for (int scanIndex = 0; scanIndex < parsedItems.length; scanIndex++) {
           collectReleaseTitleCandidate(
             parsedItems[scanIndex].querySelector('title')?.innerHtml,

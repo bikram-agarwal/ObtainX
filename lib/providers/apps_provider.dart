@@ -3,6 +3,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'package:obtainium/app_sources/app_package_formats.dart';
 import 'dart:io';
 import 'dart:math';
@@ -1003,6 +1004,14 @@ class RemoveAppsWithModalResult {
 }
 
 class AppsProvider with ChangeNotifier {
+  // Lowered from 4 to 2 alongside moving HTML parsing off the UI isolate.
+  // Even with parses now running on background isolates via
+  // [parseHtmlOffIsolate], two concurrent network+parse pipelines is enough
+  // to saturate phones' typical wifi+cpu envelope; cranking it higher
+  // mostly added isolate-spawn churn and rate-limiting pressure on
+  // upstream sources without speeding up the wall-clock refresh.
+  static const int _maxParallelUpdateChecks = 2;
+
   // In memory App state (should always be kept in sync with local storage versions)
   Map<String, AppInMemory> apps = {};
   bool loadingApps = false;
@@ -1014,6 +1023,16 @@ class AppsProvider with ChangeNotifier {
   // the whole provider (e.g. AppPage) don't get hammered on every byte chunk.
   Timer? _progressNotifyTimer;
   final Map<String, DownloadCancelToken> _downloadCancelTokens = {};
+
+  // ── Auto-export debounce ──────────────────────────────────────────────────
+  // [export] is called with `isAuto: true` after every saveApps and at the end
+  // of every checkUpdates run. Each invocation does an SAF listFiles + delete
+  // + JsonEncoder.withIndent + utf8.encode + SAF createFile - non-trivial
+  // wall-clock work, much of it on the UI isolate. Coalesce a burst of calls
+  // (e.g. the 50 saveApps that fire as a refresh completes) into a single
+  // trailing-edge run via this timer so the user only pays the cost once.
+  Timer? _autoExportTimer;
+  static const Duration _autoExportDebounce = Duration(seconds: 2);
 
   /// Remove-from-Obtainium was confirmed without uninstall: JSON is stashed, UI updates,
   /// and disk is purged after 5s unless the user undoes.
@@ -2863,6 +2882,8 @@ class AppsProvider with ChangeNotifier {
     List<App> apps, {
     bool attemptToCorrectInstallStatus = true,
     bool onlyIfExists = true,
+    bool notifyListenersAfterSave = true,
+    bool autoExportAfterSave = true,
   }) async {
     attemptToCorrectInstallStatus = attemptToCorrectInstallStatus;
     await Future.wait(
@@ -2870,8 +2891,30 @@ class AppsProvider with ChangeNotifier {
         var app = a.deepCopy();
         clearStaleSkippedLatestVersionInPlace(app);
         PackageInfo? info = await getInstalledInfo(app.id);
-        var icon = await info?.applicationInfo?.getAppIcon();
-        app.name = await (info?.applicationInfo?.getAppLabel()) ?? app.name;
+        // Reuse the cached icon and OS label whenever the installed package
+        // hasn't changed since the last save. [getAppIcon] returns large PNG
+        // bytes via a JNI hop and [getAppLabel] is another platform-channel
+        // round-trip; doing them per-app on every checkUpdate run (50+ apps
+        // on a pull-to-refresh) is the second-largest source of UI-isolate
+        // jank after the rebuild storm. We still call [getInstalledInfo]
+        // unconditionally - it's cheap and we need the current versionName
+        // to detect external uninstalls / updates.
+        final AppInMemory? cachedInMemory = this.apps[app.id];
+        final bool installedUnchanged =
+            cachedInMemory != null &&
+            cachedInMemory.installedInfo?.packageName == info?.packageName &&
+            cachedInMemory.installedInfo?.versionName == info?.versionName &&
+            cachedInMemory.installedInfo?.versionCode == info?.versionCode;
+        Uint8List? icon;
+        if (installedUnchanged) {
+          icon = cachedInMemory.icon;
+          // Preserve the previously-saved name (which already reflects the
+          // OS label from the last save, if one was available).
+          app.name = cachedInMemory.app.name;
+        } else {
+          icon = await info?.applicationInfo?.getAppIcon();
+          app.name = await (info?.applicationInfo?.getAppLabel()) ?? app.name;
+        }
         if (attemptToCorrectInstallStatus) {
           app = getCorrectedInstallStatusAppIfPossible(app, info) ?? app;
         }
@@ -2897,8 +2940,12 @@ class AppsProvider with ChangeNotifier {
         }
       }),
     );
-    notifyListeners();
-    export(isAuto: true);
+    if (notifyListenersAfterSave) {
+      notifyListeners();
+    }
+    if (autoExportAfterSave) {
+      export(isAuto: true);
+    }
   }
 
   String _fileBasename(String rawPath) {
@@ -3207,7 +3254,11 @@ class AppsProvider with ChangeNotifier {
     settingsProvider.setCategories(cats, appsProvider: this);
   }
 
-  Future<App?> checkUpdate(String appId) async {
+  Future<App?> checkUpdate(
+    String appId, {
+    bool notifyListenersAfterSave = true,
+    bool autoExportAfterSave = true,
+  }) async {
     App? currentApp = apps[appId]!.app;
     // Pause update checks until the user resolves a pending repo rename.
     if (currentApp.hasPendingRepoRename) {
@@ -3226,7 +3277,11 @@ class AppsProvider with ChangeNotifier {
     if (currentApp.preferredApkIndex < newApp.apkUrls.length) {
       newApp.preferredApkIndex = currentApp.preferredApkIndex;
     }
-    await saveApps([newApp]);
+    await saveApps(
+      [newApp],
+      notifyListenersAfterSave: notifyListenersAfterSave,
+      autoExportAfterSave: autoExportAfterSave,
+    );
     if (_apkMirrorSizeDebugLoggingEnabledForAppsProvider &&
         currentApp.url.contains('apkmirror.com')) {
       final App? savedApp = apps[appId]?.app;
@@ -3314,28 +3369,61 @@ class AppsProvider with ChangeNotifier {
                 settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
           );
         }
-        await Future.wait(
-          appIds.map((appId) async {
+        var nextAppIndex = 0;
+        var appSaveCompleted = false;
+        var lastProgressNotificationAt = DateTime.fromMicrosecondsSinceEpoch(0);
+        const progressNotificationInterval = Duration(milliseconds: 250);
+        final workerCount = appIds.length < _maxParallelUpdateChecks
+            ? appIds.length
+            : _maxParallelUpdateChecks;
+
+        Future<void> runUpdateCheckWorker() async {
+          while (true) {
+            final currentAppIndex = nextAppIndex;
+            if (currentAppIndex >= appIds.length) {
+              return;
+            }
+            nextAppIndex += 1;
+            final appId = appIds[currentAppIndex];
             App? newApp;
             try {
-              newApp = await checkUpdate(appId);
-            } catch (e) {
-              if ((e is RateLimitError || e is SocketException) &&
+              newApp = await checkUpdate(
+                appId,
+                notifyListenersAfterSave: false,
+                autoExportAfterSave: false,
+              );
+              appSaveCompleted = true;
+              final now = DateTime.now();
+              if (now.difference(lastProgressNotificationAt) >=
+                  progressNotificationInterval) {
+                lastProgressNotificationAt = now;
+                notifyListeners();
+              }
+            } catch (error) {
+              if ((error is RateLimitError || error is SocketException) &&
                   throwErrorsForRetry) {
                 rethrow;
               }
-              if (e is RepositoryRenamedError) {
-                await updatePendingRepoRename(appId, e.newUrl);
+              if (error is RepositoryRenamedError) {
+                await updatePendingRepoRename(appId, error.newUrl);
               } else {
-                errors.add(appId, e, appName: apps[appId]?.name);
+                errors.add(appId, error, appName: apps[appId]?.name);
               }
             }
             if (newApp != null) {
               updates.add(newApp);
             }
-          }),
+          }
+        }
+
+        await Future.wait(
+          List.generate(workerCount, (unusedIndex) => runUpdateCheckWorker()),
           eagerError: true,
         );
+        if (appSaveCompleted) {
+          notifyListeners();
+          export(isAuto: true);
+        }
       } finally {
         gettingUpdates = false;
       }
@@ -3429,6 +3517,32 @@ class AppsProvider with ChangeNotifier {
     isAuto = false,
     SettingsProvider? sp,
   }) async {
+    final SettingsProvider settingsProvider = sp ?? this.settingsProvider;
+    // Auto exports get debounced - bursts of saveApps calls coalesce into a
+    // single trailing-edge fire 2s after the last call. Manual exports
+    // (pickOnly or user-triggered Save) bypass the debounce and run inline
+    // because the user is awaiting the returned path.
+    if (isAuto && !pickOnly) {
+      _autoExportTimer?.cancel();
+      _autoExportTimer = Timer(_autoExportDebounce, () {
+        _autoExportTimer = null;
+        // Fire-and-forget: existing isAuto callers don't await the result.
+        unawaited(_runExport(pickOnly: false, isAuto: true, sp: sp));
+      });
+      return null;
+    }
+    return _runExport(pickOnly: pickOnly, isAuto: isAuto, sp: sp);
+  }
+
+  /// Performs the actual export work: SAF directory checks, optional cleanup
+  /// of prior auto-export files, JSON encoding (off-isolate), and the SAF
+  /// createFile write. Called inline for manual exports and via the debounce
+  /// timer for auto exports.
+  Future<String?> _runExport({
+    required bool pickOnly,
+    required bool isAuto,
+    SettingsProvider? sp,
+  }) async {
     SettingsProvider settingsProvider = sp ?? this.settingsProvider;
     var exportDir = await settingsProvider.getExportDir();
     if (isAuto) {
@@ -3457,14 +3571,20 @@ class AppsProvider with ChangeNotifier {
     }
     String? returnPath;
     if (!pickOnly) {
-      var encoder = const JsonEncoder.withIndent("    ");
       Map<String, dynamic> finalExport = generateExportJSON();
+      // Heavy work - JsonEncoder.withIndent over the whole apps+settings
+      // payload plus utf8 encoding - is run on a background isolate so the
+      // UI thread stays responsive even when the export is large.
+      final Uint8List bytes = await Isolate.run<Uint8List>(() {
+        const JsonEncoder encoder = JsonEncoder.withIndent('    ');
+        return Uint8List.fromList(utf8.encode(encoder.convert(finalExport)));
+      }, debugName: 'export-json-encode');
       var result = await saf.createFile(
         exportDir,
         displayName:
             '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
         mimeType: 'application/json',
-        bytes: Uint8List.fromList(utf8.encode(encoder.convert(finalExport))),
+        bytes: bytes,
       );
       if (result == null) {
         throw ObtainiumError(tr('unexpectedError'));

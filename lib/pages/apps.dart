@@ -1,7 +1,8 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -183,21 +184,94 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
         a.app.author,
         a.app.latestVersion,
         a.app.installedVersion,
-        a.app.lastUpdateCheck,
         a.app.pinned,
         a.app.categories.length,
         Object.hashAll(a.app.categories),
         a.app.additionalSettings['onDemandOnly'] == true,
         a.app.additionalSettings['skippedLatestVersion'],
-        // Folder membership — needed so the main-page filter (hide foldered
+        // Folder membership - needed so the main-page filter (hide foldered
         // apps) and folder-view filter both re-run when membership changes.
         Object.hashAll((a.app.additionalSettings['folderIds'] as List? ?? [])),
         // Icon fields deliberately excluded: each row watches its own icon
         // via _AppIconWidget.context.select, so icon loads only rebuild that
         // one row widget instead of the entire apps list.
+        // [App.lastUpdateCheck] is also deliberately excluded. It changes for
+        // every app on every pull-to-refresh and would otherwise force the
+        // entire AppsPage (filter / sort / group / sliver list) to rebuild
+        // on every notifyListeners() tick (~4 Hz) during checkUpdates, which
+        // is the dominant cause of refresh-time scroll stutter on large lists.
+        // The list will still re-sort once at the end of refresh because the
+        // final notifyListeners() flips other fields (e.g. latestVersion) on
+        // any apps that actually got an update. Users sorting by
+        // [SortColumnSettings.lastUpdateCheck] see their order update once
+        // the refresh finishes rather than continuously during it - this is
+        // intentional, since reordering rows under the user's finger while
+        // they try to scroll is itself a usability problem.
       ]),
     ),
   ]);
+}
+
+/// Progress bar shown during pull-to-refresh and initial app-load.
+///
+/// Subscribes to [AppsProvider] via a narrow [context.select] that returns
+/// only `(loadingApps, checkedCount)`. As [AppsProvider.checkUpdates] saves
+/// each app and calls [AppsProvider.notifyListeners] (~ every 250 ms),
+/// `checkedCount` ticks up and only THIS widget rebuilds - the surrounding
+/// [AppsPage] (filter / sort / sliver list) does not.
+///
+/// Counterpart to the deliberate exclusion of [App.lastUpdateCheck] from
+/// [_appsPageAppsRebuildToken]. That exclusion is what fixed the scroll
+/// stutter; this widget restores the live progress feedback that the
+/// exclusion would otherwise have stripped out.
+class _RefreshProgressBar extends StatelessWidget {
+  const _RefreshProgressBar({
+    required this.refreshingSince,
+    required this.progressDenominator,
+    required this.onDemandOnlyList,
+    required this.folderId,
+  });
+
+  final DateTime? refreshingSince;
+  final int progressDenominator;
+  final bool onDemandOnlyList;
+  final String? folderId;
+
+  @override
+  Widget build(BuildContext context) {
+    final (bool loadingApps, int checkedCount) = context
+        .select<AppsProvider, (bool, int)>((p) {
+          if (p.loadingApps) {
+            return (true, 0);
+          }
+          final DateTime? since = refreshingSince;
+          if (since == null) {
+            return (false, 0);
+          }
+          int count = 0;
+          for (final a in p.apps.values) {
+            final last = a.app.lastUpdateCheck;
+            if (last == null || last.isBefore(since)) continue;
+            if (onDemandOnlyList &&
+                a.app.additionalSettings['onDemandOnly'] != true) {
+              continue;
+            }
+            final String? folder = folderId;
+            if (folder != null && !folderIdsForApp(a.app).contains(folder)) {
+              continue;
+            }
+            count++;
+          }
+          return (false, count);
+        });
+    return LinearProgressIndicator(
+      value: loadingApps
+          ? null
+          : (progressDenominator > 0
+                ? checkedCount / progressDenominator
+                : 0.0),
+    );
+  }
 }
 
 /// An isolated icon widget that subscribes only to its own app's icon bytes.
@@ -1428,8 +1502,22 @@ class AppsPageState extends State<AppsPage> {
     return false;
   }
 
-  final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
-      GlobalKey<RefreshIndicatorState>();
+  // Typed for [ExpressiveRefreshIndicatorState] (from expressive_refresh) so
+  // we can call .show() to programmatically trigger the refresh from the
+  // checkOnStart auto-refresh path. The state class mirrors Flutter's
+  // [RefreshIndicatorState.show] API ({bool atTop = true}).
+  final GlobalKey<ExpressiveRefreshIndicatorState> _refreshIndicatorKey =
+      GlobalKey<ExpressiveRefreshIndicatorState>();
+
+  // ── Deferred background store-availability scan ───────────────────────────
+  // The post-refresh APKMirror/F-Droid availability scan does ~50 HTTP fetches
+  // and HTML parses (now off the UI isolate per [parseHtmlOffIsolate], but
+  // still consumes radio + battery and can stutter network-dependent widgets).
+  // We delay it by a few seconds after refresh completes so the user has
+  // unimpeded scrolling during the immediate post-refresh window. Cancelled
+  // on dispose and reset on each refresh.
+  Timer? _deferredStoreScanTimer;
+  static const Duration _deferredStoreScanDelay = Duration(seconds: 3);
 
   late final ScrollController scrollController;
 
@@ -1587,6 +1675,7 @@ class AppsPageState extends State<AppsPage> {
 
   @override
   void dispose() {
+    _deferredStoreScanTimer?.cancel();
     scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -1806,7 +1895,16 @@ class AppsPageState extends State<AppsPage> {
       HapticFeedback.lightImpact();
       setState(() {
         refreshingSince = DateTime.now();
-        _appListIconWarmFutures.clear();
+        // Note: [_appListIconWarmFutures] is intentionally NOT cleared here.
+        // Clearing it caused every visible row to re-enter [updateAppIcon] on
+        // every pull-to-refresh, which on 50+ apps means 50 disk reads of the
+        // user-icon override file plus 50 platform-channel calls back to the
+        // OS - all on the UI isolate, all while the user is trying to scroll.
+        // Icons are keyed by [App.id] and don't change just because we ran
+        // an update check, so the warm map stays valid across refreshes.
+        // Forced re-decode of a specific app's icon already goes through
+        // [AppsProvider.updateAppIcon] with `ignoreCache: true` from the
+        // app-detail page, which bypasses this map.
       });
       final Future<List<App>> refreshFuture;
       if (widget.onDemandOnlyList) {
@@ -1839,7 +1937,17 @@ class AppsPageState extends State<AppsPage> {
             setState(() {
               refreshingSince = null;
             });
-            unawaited(backgroundScanStoreAvailability());
+            // Defer the background store-availability scan so the user gets
+            // a few seconds of unimpeded UI right after the refresh
+            // completes. Reset the timer if another refresh fires before the
+            // delay elapses (debounce-ish behaviour: only the most recent
+            // refresh's scan is queued at any time).
+            _deferredStoreScanTimer?.cancel();
+            _deferredStoreScanTimer = Timer(_deferredStoreScanDelay, () {
+              _deferredStoreScanTimer = null;
+              if (!mounted) return;
+              unawaited(backgroundScanStoreAvailability());
+            });
           });
     }
 
@@ -2397,34 +2505,17 @@ class AppsPageState extends State<AppsPage> {
           ),
         if (refreshingSince != null || appsProvider.loadingApps)
           SliverToBoxAdapter(
-            child: LinearProgressIndicator(
-              value: appsProvider.loadingApps
-                  ? null
-                  : appsProvider.apps.values
-                            .where(
-                              (element) =>
-                                  !(element.app.lastUpdateCheck?.isBefore(
-                                        refreshingSince!,
-                                      ) ??
-                                      true),
-                            )
-                            .where(
-                              (element) =>
-                                  !widget.onDemandOnlyList ||
-                                  element
-                                          .app
-                                          .additionalSettings['onDemandOnly'] ==
-                                      true,
-                            )
-                            .where(
-                              (element) =>
-                                  progressFolderId == null ||
-                                  folderIdsForApp(
-                                    element.app,
-                                  ).contains(progressFolderId),
-                            )
-                            .length /
-                        progressDenominator,
+            // Top padding pushes the bar clear of the [CustomAppBar] blur
+            // overlay's bottom edge - sitting flush against it produced a
+            // visible half-blurred line through the indicator.
+            child: Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: _RefreshProgressBar(
+                refreshingSince: refreshingSince,
+                progressDenominator: progressDenominator,
+                onDemandOnlyList: widget.onDemandOnlyList,
+                folderId: progressFolderId,
+              ),
             ),
           ),
       ];
@@ -3813,7 +3904,12 @@ class AppsPageState extends State<AppsPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
-              child: RefreshIndicator(
+              // [ExpressiveRefreshIndicator] is a drop-in replacement for the
+              // stock [RefreshIndicator] - same API surface (child, onRefresh,
+              // displacement, color, etc.) - but renders the M3 Expressive
+              // morphing-polygon loading shape instead of the legacy circular
+              // spinner. From package: expressive_refresh.
+              child: ExpressiveRefreshIndicator(
                 key: _refreshIndicatorKey,
                 onRefresh: refresh,
                 child: Scrollbar(

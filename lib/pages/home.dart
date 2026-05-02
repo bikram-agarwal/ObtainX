@@ -37,6 +37,7 @@ class NavigationPageItem {
 class _HomePageState extends State<HomePage> {
   List<int> selectedIndexHistory = [];
   bool isReversing = false;
+  int pageSwitchRequestId = 0;
   int prevAppCount = -1;
   bool prevIsLoading = true;
   late AppLinks _appLinks;
@@ -326,12 +327,25 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> switchToPage(int index) async {
+    final int activeIndex = selectedIndexHistory.isEmpty
+        ? 0
+        : selectedIndexHistory.last;
+    if (activeIndex == index) {
+      return;
+    }
+
+    pageSwitchRequestId += 1;
+    final int currentRequestId = pageSwitchRequestId;
+
     setIsReversing(index);
     if (index == 0) {
       while ((pages[0].widget.key as GlobalKey<AppsPageState>).currentState !=
           null) {
         // Avoid duplicate GlobalKey error
         await Future.delayed(const Duration(microseconds: 1));
+      }
+      if (!mounted || currentRequestId != pageSwitchRequestId) {
+        return;
       }
       setState(() {
         selectedIndexHistory.clear();

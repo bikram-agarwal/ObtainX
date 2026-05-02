@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
+import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
@@ -1377,7 +1378,7 @@ class _ThirdPartyInstallerSelectorState
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (_loading)
-          const Center(child: CircularProgressIndicator())
+          const Center(child: ExpressiveLoadingIndicator())
         else
           ListTile(
             contentPadding: EdgeInsets.zero,

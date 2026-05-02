@@ -458,37 +458,32 @@ class _AppPageState extends State<AppPage> {
     ThemeData pageThemeForDialogs,
   ) {
     if (!_editMode || appData == null) return null;
-    final double bottomClearance =
-        MediaQuery.of(themeContext).padding.bottom + 80;
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomClearance),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'app_page_edit_cancel',
-            tooltip: tr('cancel'),
-            onPressed: updating
-                ? null
-                : () => _onCancelEditPressed(
-                    themeContext,
-                    appData,
-                    pageThemeForDialogs,
-                  ),
-            child: const Icon(Icons.close),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton(
-            heroTag: 'app_page_edit_save',
-            tooltip: tr('save'),
-            onPressed: appData.downloadProgress != null || updating
-                ? null
-                : () => _saveEdit(appData, appsProvider),
-            child: const Icon(Icons.check),
-          ),
-        ],
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        FloatingActionButton.small(
+          heroTag: 'app_page_edit_cancel',
+          tooltip: tr('cancel'),
+          onPressed: updating
+              ? null
+              : () => _onCancelEditPressed(
+                  themeContext,
+                  appData,
+                  pageThemeForDialogs,
+                ),
+          child: const Icon(Icons.close),
+        ),
+        const SizedBox(height: 12),
+        FloatingActionButton(
+          heroTag: 'app_page_edit_save',
+          tooltip: tr('save'),
+          onPressed: appData.downloadProgress != null || updating
+              ? null
+              : () => _saveEdit(appData, appsProvider),
+          child: const Icon(Icons.check),
+        ),
+      ],
     );
   }
 
@@ -3109,7 +3104,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getBottomSheetMenu(BuildContext themeContext) => Container(
+    getBottomNavigationMenu(BuildContext themeContext) => Container(
       decoration: BoxDecoration(
         color: Theme.of(themeContext).brightness == Brightness.dark
             ? Theme.of(themeContext).colorScheme.surfaceContainerHigh
@@ -3492,11 +3487,6 @@ class _AppPageState extends State<AppPage> {
                                       ),
                                     ),
                                     if (_editMode) const SizedBox(height: 104),
-                                    SizedBox(
-                                      height: MediaQuery.of(
-                                        themedPageContext,
-                                      ).padding.bottom,
-                                    ),
                                   ],
                                 ),
                               ),
@@ -3511,7 +3501,7 @@ class _AppPageState extends State<AppPage> {
                   }
                 },
               ),
-              bottomSheet: getBottomSheetMenu(themedPageContext),
+              bottomNavigationBar: getBottomNavigationMenu(themedPageContext),
             ),
           );
         },

@@ -1,4 +1,5 @@
 import 'package:easy_localization/easy_localization.dart';
+import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -384,12 +385,11 @@ class AddAppPageState extends State<AddAppPage> {
               width: 48,
               height: 48,
               child: Center(
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: colorScheme.primary,
+                child: ExpressiveLoadingIndicator(
+                  color: colorScheme.primary,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 24,
+                    height: 24,
                   ),
                 ),
               ),
@@ -872,12 +872,11 @@ class AddAppPageState extends State<AddAppPage> {
               width: 48,
               height: 48,
               child: Center(
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: colorScheme.primary,
+                child: ExpressiveLoadingIndicator(
+                  color: colorScheme.primary,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 22,
+                    height: 22,
                   ),
                 ),
               ),

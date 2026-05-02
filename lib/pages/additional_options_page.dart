@@ -1,4 +1,5 @@
 import 'package:easy_localization/easy_localization.dart';
+import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
@@ -464,12 +465,11 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
                   tooltip: tr('continue'),
                   onPressed: (!_valid || _saving) ? null : _onSave,
                   child: _saving
-                      ? SizedBox(
-                          width: 26,
-                          height: 26,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            color: pageThemeForPage.colorScheme.onPrimary,
+                      ? ExpressiveLoadingIndicator(
+                          color: pageThemeForPage.colorScheme.onPrimary,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 26,
+                            height: 26,
                           ),
                         )
                       : const Icon(Icons.check),

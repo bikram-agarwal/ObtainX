@@ -7,6 +7,7 @@ import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 String ensureAbsoluteUrl(String ambiguousUrl, Uri referenceAbsoluteUrl) {
   try {
@@ -132,7 +133,7 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
 ) async {
   bool matchLinksOutsideATags =
       additionalSettings['matchLinksOutsideATags'] == true;
-  var html = parse(rawBody);
+  var html = await parseHtmlOffIsolate(rawBody);
   List<MapEntry<String, String>> allLinks = html
       .querySelectorAll('a')
       .map(

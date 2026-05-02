@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:html/parser.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class RockMods extends AppSource {
   RockMods() {
@@ -32,7 +33,7 @@ class RockMods extends AppSource {
       if (res.statusCode != 200) {
         throw getObtainiumHttpError(res);
       }
-      var html = parse(res.body);
+      var html = await parseHtmlOffIsolate(res.body);
 
       var nameElement = html.querySelector('h1');
       var appName = nameElement?.text ?? standardUrl.split('/').last;
@@ -84,7 +85,7 @@ class RockMods extends AppSource {
             if (resIntermediate.statusCode != 200) {
               throw getObtainiumHttpError(resIntermediate);
             }
-            return parse(resIntermediate.body);
+            return await parseHtmlOffIsolate(resIntermediate.body);
           }).toList();
           final intermediateResults = await Future.wait(intermediateFutures);
           for (final htmlIntermediate in intermediateResults) {
@@ -107,7 +108,7 @@ class RockMods extends AppSource {
         if (resSlug.statusCode != 200) {
           throw getObtainiumHttpError(resSlug);
         }
-        return MapEntry(slugUrl, parse(resSlug.body));
+        return MapEntry(slugUrl, await parseHtmlOffIsolate(resSlug.body));
       }).toList();
       final slugResults = await Future.wait(slugFutures);
 

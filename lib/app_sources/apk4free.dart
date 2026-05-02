@@ -1,6 +1,7 @@
 import 'package:html/parser.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 
 class Apk4Free extends AppSource {
   Apk4Free() {
@@ -31,7 +32,7 @@ class Apk4Free extends AppSource {
       if (res.statusCode != 200) {
         throw getObtainiumHttpError(res);
       }
-      var html = parse(res.body);
+      var html = await parseHtmlOffIsolate(res.body);
 
       var titleElement = html.querySelector('h1.main-box-title');
       var fullTitle = titleElement?.text.trim();
@@ -102,7 +103,7 @@ class Apk4Free extends AppSource {
       if (resDlPage.statusCode != 200) {
         throw getObtainiumHttpError(resDlPage);
       }
-      var htmlDlPage = parse(resDlPage.body);
+      var htmlDlPage = await parseHtmlOffIsolate(resDlPage.body);
 
       List<MapEntry<String, String>> apkUrls = [];
 
