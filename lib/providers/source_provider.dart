@@ -117,7 +117,7 @@ String getVersionStringSource(
   }
   if (configuredSource is String &&
       validVersionStringSources.contains(configuredSource)) {
-    return versionStringSourceDefault;
+    return configuredSource;
   }
   return versionStringSourceDefault;
 }

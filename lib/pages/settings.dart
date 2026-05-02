@@ -371,6 +371,12 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
 
+    // M3 Expressive slider design - thick gapped track + vertical-bar thumb.
+    // Implemented via custom [SliderTrackShape] / [SliderComponentShape]
+    // painters at the bottom of this file. The slider_m3e package's
+    // "round" / "square" thumb variants don't match the M3E reference
+    // (which is a vertical-pill thumb), so we keep our spec-correct
+    // hand-built shapes.
     var intervalSlider = SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: 16,
@@ -800,8 +806,6 @@ class _SettingsPageState extends State<SettingsPage> {
                                                   .appUiScaleMin,
                                               max: SettingsProvider
                                                   .appUiScaleMax,
-                                              // 0.05 increments between
-                                              // [appUiScaleMin]..[appUiScaleMax].
                                               divisions:
                                                   ((SettingsProvider
                                                                           .appUiScaleMax -
@@ -1538,12 +1542,49 @@ class _VerticalBarThumbShape extends SliderComponentShape {
     required double textScaleFactor,
     required Size sizeWithOverflow,
   }) {
+    // Flutter's slider computes the framework-provided [center.dx] using
+    // the FULL trackRect width:
+    //   thumbX = trackRect.left + value * trackRect.width
+    // ...but tick marks are inset on each side by trackHeight/2:
+    //   tickX  = trackRect.left + value * (trackRect.width - trackHeight)
+    //                           + trackHeight/2
+    // The two only coincide at value == 0.5. Everywhere else the thumb
+    // drifts off the tick proportionally to (value - 0.5) * trackHeight.
+    // For a default 4dp track this drift is sub-pixel and unnoticeable;
+    // for our M3E 16dp track it's a visible 8dp at the endpoints.
+    //
+    // Re-project the framework-provided center onto the tick-aligned
+    // x-axis so the vertical bar thumb lands exactly on each dot.
+    final Rect trackRect = sliderTheme.trackShape!.getPreferredRect(
+      parentBox: parentBox,
+      offset: Offset.zero,
+      sliderTheme: sliderTheme,
+      isEnabled: enableAnimation.value > 0,
+      isDiscrete: isDiscrete,
+    );
+    final double trackHeight = trackRect.height;
+    final double trackWidth = trackRect.width;
+    Offset alignedCenter = center;
+    if (trackWidth > trackHeight) {
+      final double valueRatio = textDirection == TextDirection.rtl
+          ? 1.0 - value
+          : value;
+      final double alignedX =
+          trackRect.left +
+          valueRatio * (trackWidth - trackHeight) +
+          trackHeight / 2;
+      alignedCenter = Offset(alignedX, center.dy);
+    }
     final canvas = context.canvas;
     final paint = Paint()
       ..color = sliderTheme.thumbColor ?? Colors.white
       ..style = PaintingStyle.fill;
     final rrect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: _width, height: _height),
+      Rect.fromCenter(
+        center: alignedCenter,
+        width: _width,
+        height: _height,
+      ),
       const Radius.circular(_radius),
     );
     canvas.drawRRect(rrect, paint);
@@ -1579,6 +1620,25 @@ class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
       isDiscrete: isDiscrete,
     );
 
+    // Re-project thumbCenter.dx onto the tick-aligned axis so the split
+    // between active and inactive lanes coincides with the rendered
+    // thumb position. See the long comment in [_VerticalBarThumbShape]
+    // for why this re-projection is needed (Flutter's tick range is
+    // inset by trackHeight/2 on each side; the framework-provided
+    // thumbCenter is on the un-inset full-track axis).
+    double thumbX = thumbCenter.dx;
+    final double trackHeight = trackRect.height;
+    final double trackWidth = trackRect.width;
+    if (trackWidth > trackHeight) {
+      final double valueRatio = ((thumbCenter.dx - trackRect.left) /
+              trackWidth)
+          .clamp(0.0, 1.0);
+      thumbX =
+          trackRect.left +
+          valueRatio * (trackWidth - trackHeight) +
+          trackHeight / 2;
+    }
+
     final activePaint = Paint()
       ..color = (sliderTheme.activeTrackColor ?? Colors.blue);
     final inactivePaint = Paint()
@@ -1590,7 +1650,7 @@ class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
         Rect.fromLTRB(
           trackRect.left,
           trackRect.top,
-          thumbCenter.dx - _gap,
+          thumbX - _gap,
           trackRect.bottom,
         ),
         topLeft: const Radius.circular(_radius),
@@ -1603,7 +1663,7 @@ class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
     canvas.drawRRect(
       RRect.fromRectAndCorners(
         Rect.fromLTRB(
-          thumbCenter.dx + _gap,
+          thumbX + _gap,
           trackRect.top,
           trackRect.right,
           trackRect.bottom,

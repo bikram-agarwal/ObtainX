@@ -1,4 +1,3 @@
-import 'dart:math' show sqrt;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -39,52 +38,46 @@ class CustomAppBar extends StatefulWidget {
 }
 
 class _CustomAppBarState extends State<CustomAppBar> {
-  // Two layers balance look vs GPU cost while scrolling (each layer is a
-  // BackdropFilter pass over content under the app bar).
-  static const int _layers = 2;
-  static final double _sigmaPerLayer = 7.0 / sqrt(_layers.toDouble());
+  // Single BackdropFilter pass + colour tint gradient. See
+  // [ProgressiveTopEdgeOverlay] for the rationale: the previous two-layer
+  // implementation cost ~2x as much GPU per frame and produced 30 fps
+  // drops on mid-range Android during apps-list scroll. The colour tint
+  // gradient handles the "progressive" feel that the second blur used to
+  // provide.
+  static const double _blurSigma = 4.0;
 
-  /// Progressive-blur widget that fills its parent via [FractionallySizedBox]
-  /// — no LayoutBuilder, no extra layout passes.
-  ///
-  /// Passed directly as [SliverAppBar.flexibleSpace] (not as
-  /// [FlexibleSpaceBar.background]) so it never fades during collapse.
+  /// Progressive-blur widget passed straight to [SliverAppBar.flexibleSpace]
+  /// (not [FlexibleSpaceBar.background]) so it never fades during collapse.
+  /// Wrapped in [RepaintBoundary] to isolate the blur layer's composition
+  /// from neighbouring widgets' dirty rects.
   Widget _buildBlur(Color overlayColor) {
     return IgnorePointer(
-      child: ClipRect(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            for (int i = 1; i <= _layers; i++)
-              Align(
-                alignment: Alignment.topCenter,
-                child: FractionallySizedBox(
-                  widthFactor: 1.0,
-                  heightFactor: i / _layers,
-                  child: ClipRect(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(
-                        sigmaX: _sigmaPerLayer,
-                        sigmaY: _sigmaPerLayer,
-                      ),
-                      child: const SizedBox.expand(),
-                    ),
+      child: RepaintBoundary(
+        child: ClipRect(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: _blurSigma,
+                  sigmaY: _blurSigma,
+                ),
+                child: const SizedBox.expand(),
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      overlayColor,
+                      overlayColor.withValues(alpha: 0),
+                    ],
                   ),
                 ),
               ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    overlayColor,
-                    overlayColor.withValues(alpha: 0),
-                  ],
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -138,10 +131,31 @@ class _CustomAppBarState extends State<CustomAppBar> {
           ),
           child: Row(
             children: [
-              AnimatedDefaultTextStyle(
+              // Wrapping the title in [AnimatedSize] gives the Row layout
+              // a smoothly-tweened width when the title's intrinsic width
+              // changes (e.g. when [titleStyle] flips between titleLarge
+              // and titleSmall as the search bar expands/collapses).
+              // Without it, every animation frame of the implicit
+              // text-style transition re-runs the Text widget's intrinsic
+              // width measurement, and the Row reflows discretely - that's
+              // what produced the stutter as the search bar reached the
+              // title and the title had to give up space.
+              //
+              // [AnimatedDefaultTextStyle]'s default curve is
+              // [Curves.linear], which makes the size shift feel
+              // mechanical. Switching to [Curves.fastEaseInToSlowEaseOut]
+              // matches the M3-emphasized motion curve we use elsewhere
+              // for page transitions.
+              AnimatedSize(
                 duration: const Duration(milliseconds: 200),
-                style: resolvedCompactTitle,
-                child: Text(widget.title),
+                curve: Curves.fastEaseInToSlowEaseOut,
+                alignment: AlignmentDirectional.centerStart,
+                child: AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.fastEaseInToSlowEaseOut,
+                  style: resolvedCompactTitle,
+                  child: Text(widget.title),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(child: widget.searchWidget!),

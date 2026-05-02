@@ -398,12 +398,36 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // Default flipped from true to false. With `progressiveBlurEnabled` on,
+  // every frame on the apps list ran 4 BackdropFilter passes (2 at the top
+  // app bar, 2 at the bottom navigation bar). On mid-range Android devices
+  // that consumed 20-60 ms per frame and produced sustained 30 fps drops
+  // for users who never thought to look in settings. Now off-by-default;
+  // users on capable hardware can opt back in via the toggle.
   bool get progressiveBlurEnabled {
-    return prefs?.getBool('progressiveBlurEnabled') ?? true;
+    if (reduceVisualEffects) return false;
+    return prefs?.getBool('progressiveBlurEnabled') ?? false;
   }
 
   set progressiveBlurEnabled(bool value) {
     prefs?.setBool('progressiveBlurEnabled', value);
+    notifyListeners();
+  }
+
+  // Master "low-fidelity mode" toggle. When on:
+  //   - Forces [progressiveBlurEnabled] off regardless of its own setting,
+  //     so all BackdropFilter passes are skipped.
+  //   - Skips the [OpenContainer] container-transform morph for the apps
+  //     list -> AppPage navigation; uses a plain page-route push instead.
+  // Intended for users who report frame-rate drops on older devices, as a
+  // single-switch escape hatch. Default false to preserve the visual look
+  // for everyone whose hardware can handle it.
+  bool get reduceVisualEffects {
+    return prefs?.getBool('reduceVisualEffects') ?? false;
+  }
+
+  set reduceVisualEffects(bool value) {
+    prefs?.setBool('reduceVisualEffects', value);
     notifyListeners();
   }
 

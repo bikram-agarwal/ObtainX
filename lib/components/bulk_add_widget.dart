@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
@@ -1366,12 +1367,11 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   ),
                   if (!storeComplete) ...[
                     const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: started ? progressValue : null,
-                        minHeight: 4,
-                      ),
+                    // M3 Expressive wavy progress bar. Owns its own height
+                    // and shape per the spec, so we drop the previous
+                    // ClipRRect/minHeight wrapping.
+                    LinearProgressIndicatorM3E(
+                      value: started ? progressValue : null,
                     ),
                   ],
                 ],

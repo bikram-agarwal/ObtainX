@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' show parse;
 import 'package:http/http.dart' as http;
@@ -16,6 +17,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 const int _flagSystem = 1; // ApplicationInfo.FLAG_SYSTEM = 0x1
 const int _flagUpdatedSystemApp =
     128; // ApplicationInfo.FLAG_UPDATED_SYSTEM_APP = 0x80
+const _deviceAppsChannel = MethodChannel('dev.imranr.obtainium/device_apps');
 
 class InstalledAppInfo {
   final String packageName;
@@ -103,14 +105,15 @@ class BulkImportService {
       filtered.add(pkg);
     }
 
-    // Fetch all app labels concurrently instead of sequentially.
-    final names = await Future.wait(
-      filtered.map(
-        (pkg) async =>
-            await pkg.applicationInfo?.getAppLabel() ??
-            pkg.applicationInfo?.processName ??
-            (pkg.packageName as String),
-      ),
+    final packageNames = [
+      for (final pkg in filtered) pkg.packageName as String,
+    ];
+    final labelsByPackageName = Map<String, String>.from(
+      await _deviceAppsChannel.invokeMapMethod<String, String>(
+            'getApplicationLabels',
+            {'packageNames': packageNames},
+          ) ??
+          const <String, String>{},
     );
 
     // Reset the ApplicationInfo cache to match this fresh installed-apps
@@ -119,9 +122,9 @@ class BulkImportService {
     _applicationInfoByPackage.clear();
 
     final result = <InstalledAppInfo>[
-      for (int i = 0; i < filtered.length; i++)
+      for (int packageIndex = 0; packageIndex < filtered.length; packageIndex++)
         () {
-          final pkg = filtered[i];
+          final pkg = filtered[packageIndex];
           final pkgName = pkg.packageName as String;
           // Stash the ApplicationInfo for later icon lookup so getAppIcon()
           // doesn't need to do its own pm.getPackageInfo().
@@ -130,7 +133,11 @@ class BulkImportService {
           }
           return InstalledAppInfo(
             packageName: pkgName,
-            name: names[i],
+            name:
+                labelsByPackageName[pkgName] ??
+                pkg.applicationInfo?.nonLocalizedLabel ??
+                pkg.applicationInfo?.processName ??
+                pkgName,
             icon: null,
             isSystemApp:
                 ((pkg.applicationInfo?.flags ?? 0) & _flagSystem) != 0 ||

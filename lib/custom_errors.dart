@@ -75,6 +75,10 @@ class RepositoryRenamedError extends ObtainiumError {
   RepositoryRenamedError(this.oldUrl, this.newUrl) : super(tr('repoRenamed'));
 }
 
+class DownloadCancelledError extends ObtainiumError {
+  DownloadCancelledError() : super(tr('cancelled'));
+}
+
 class NotImplementedError extends ObtainiumError {
   NotImplementedError() : super(tr('functionNotImplemented'));
 }
@@ -117,23 +121,28 @@ class MultiAppMultiError extends ObtainiumError {
       .join('\n\n');
 }
 
-void showMessage(dynamic e, BuildContext context, {bool isError = false}) {
+void showMessage(
+  dynamic e,
+  BuildContext context, {
+  bool isError = false,
+  ThemeData? theme,
+}) {
   Provider.of<LogsProvider>(
     context,
     listen: false,
   ).add(e.toString(), level: isError ? LogLevels.error : LogLevels.info);
   if (e is String || (e is ObtainiumError && !e.unexpected)) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(
-      content: Text(e.toString()),
-      duration: const Duration(seconds: 4),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(e.toString()),
+        duration: const Duration(seconds: 4),
+      ),
+    );
   } else {
     showDialog(
       context: context,
       builder: (BuildContext ctx) {
-        return AlertDialog(
+        final Widget dialog = AlertDialog(
           scrollable: true,
           title: Text(
             e is MultiAppMultiError
@@ -143,12 +152,12 @@ void showMessage(dynamic e, BuildContext context, {bool isError = false}) {
           content: GestureDetector(
             onLongPress: () {
               Clipboard.setData(ClipboardData(text: e.toString()));
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(
-                content: Text(tr('copiedToClipboard')),
-                duration: const Duration(seconds: 4),
-              ));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(tr('copiedToClipboard')),
+                  duration: const Duration(seconds: 4),
+                ),
+              );
             },
             child: Text(e.toString()),
           ),
@@ -161,13 +170,14 @@ void showMessage(dynamic e, BuildContext context, {bool isError = false}) {
             ),
           ],
         );
+        return theme == null ? dialog : Theme(data: theme, child: dialog);
       },
     );
   }
 }
 
-void showError(dynamic e, BuildContext context) {
-  showMessage(e, context, isError: true);
+void showError(dynamic e, BuildContext context, {ThemeData? theme}) {
+  showMessage(e, context, isError: true, theme: theme);
 }
 
 String list2FriendlyString(List<String> list) {

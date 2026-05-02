@@ -128,16 +128,36 @@ List<Widget> buildThemesSettingsCardItems(
     ),
     SwitchListTile(
       title: Text(tr('settingsProgressiveBlur')),
+      // Caption hints at the perf cost so users understand why this is
+      // off-by-default and can decide whether to opt in.
+      subtitle: Text(tr('settingsProgressiveBlurSubtitle')),
       value: settings.progressiveBlurEnabled,
-      onChanged: (bool value) {
-        settings.progressiveBlurEnabled = value;
-      },
+      // Hard-disabled when the master "reduce visual effects" switch is
+      // on - no point letting users toggle a control that won't take
+      // effect.
+      onChanged: settings.reduceVisualEffects
+          ? null
+          : (bool value) {
+              settings.progressiveBlurEnabled = value;
+            },
     ),
     SwitchListTile(
       title: Text(tr('matchAppPageToIconColors')),
       value: settings.matchAppPageToIconColors,
       onChanged: (bool value) {
         settings.matchAppPageToIconColors = value;
+      },
+    ),
+    // Master "low-fidelity mode" toggle. Forces blur off and skips the
+    // OpenContainer container-transform morph for apps-list -> AppPage
+    // navigation. Single-switch escape hatch for users on weaker
+    // hardware who report frame-rate drops.
+    SwitchListTile(
+      title: Text(tr('settingsReduceVisualEffects')),
+      subtitle: Text(tr('settingsReduceVisualEffectsSubtitle')),
+      value: settings.reduceVisualEffects,
+      onChanged: (bool value) {
+        settings.reduceVisualEffects = value;
       },
     ),
   ];

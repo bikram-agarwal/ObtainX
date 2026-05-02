@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
@@ -896,7 +897,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                       ),
                       if (importInProgress) ...[
                         const SizedBox(height: 14),
-                        const LinearProgressIndicator(),
+                        const LinearProgressIndicatorM3E(),
                         const SizedBox(height: 14),
                       ],
                       importPageSectionTitle(

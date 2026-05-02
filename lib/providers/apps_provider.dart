@@ -549,7 +549,7 @@ class DownloadCancelToken {
     if (!_isCancelled) {
       return;
     }
-    throw ObtainiumError(tr('cancelled'));
+    throw DownloadCancelledError();
   }
 }
 
@@ -583,7 +583,7 @@ Future<File> downloadFileWithRetry(
     );
   } catch (e) {
     if (cancelToken?.isCancelled == true) {
-      throw ObtainiumError(tr('cancelled'));
+      throw DownloadCancelledError();
     }
     if (retries > 0 && e is ClientException) {
       await Future.delayed(const Duration(seconds: 5));
@@ -925,7 +925,7 @@ Future<File> downloadFile(
       if (tempDownloadedFile.existsSync()) {
         deleteFile(tempDownloadedFile);
       }
-      throw ObtainiumError(tr('cancelled'));
+      throw DownloadCancelledError();
     }
     rethrow;
   } finally {
@@ -2146,11 +2146,22 @@ class AppsProvider with ChangeNotifier {
       } catch (e) {
         apps[id]?.downloadProgress = null;
         apps[id]?.downloadTotalBytes = null;
+        if (e is DownloadCancelledError) {
+          notifyListeners();
+          return {
+            'id': id,
+            'cancelled': true,
+            'willBeSilent': willBeSilent,
+            'downloadedFile': downloadedFile,
+            'downloadedDir': downloadedDir,
+          };
+        }
         errors.add(id, e, appName: apps[id]?.name);
         notifyListeners();
       }
       return {
         'id': id,
+        'cancelled': false,
         'willBeSilent': willBeSilent,
         'downloadedFile': downloadedFile,
         'downloadedDir': downloadedDir,
@@ -2169,6 +2180,9 @@ class AppsProvider with ChangeNotifier {
     }
     bool needsLegacyInterInstallDelay = false;
     for (var res in downloadResults) {
+      if (res['cancelled'] == true) {
+        continue;
+      }
       if (!errors.appIdNames.containsKey(res['id'])) {
         try {
           if (settingsProvider.installerMode == 'legacy' &&

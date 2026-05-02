@@ -1,11 +1,13 @@
 import 'dart:async' show Timer, unawaited;
 import 'dart:convert';
 
+import 'package:animations/animations.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
@@ -264,7 +266,11 @@ class _RefreshProgressBar extends StatelessWidget {
           }
           return (false, count);
         });
-    return LinearProgressIndicator(
+    // M3 Expressive linear progress indicator. Wavy active track with a
+    // stop-dot at the end (per the M3E spec). The widget draws two
+    // separate lanes (active above, track below) with a fixed gap so the
+    // active and inactive segments never overlap.
+    return LinearProgressIndicatorM3E(
       value: loadingApps
           ? null
           : (progressDenominator > 0
@@ -1555,10 +1561,12 @@ class AppsPageState extends State<AppsPage> {
   final Set<String> _collapsedGroups = {};
 
   // ── Hero keep-alive ───────────────────────────────────────────────────────
-  // While AppPage is open for a given app, its list row must stay built so
-  // the Hero destination exists when the user swipes back. This id is set
-  // when Navigator.push fires and cleared when the route pops.
-  String? _heroKeepaliveAppId;
+  // Removed: previously held the appId of the row whose AppPage was open so
+  // the row would stay mounted (via [_SwipeableListItem.keepAlive]) for the
+  // back-pop Hero flight. With the [OpenContainer] (Container Transform)
+  // migration in [getSingleAppHorizTile], the morph manages the source-row
+  // lifecycle for the duration of the open animation, so manual keep-alive
+  // is no longer required.
 
   // ── Inline search ─────────────────────────────────────────────────────────
   late final TextEditingController _searchController;
@@ -2503,7 +2511,15 @@ class AppsPageState extends State<AppsPage> {
               ),
             ),
           ),
-        if (refreshingSince != null || appsProvider.loadingApps)
+        // Show the bar only for explicit user-initiated refreshes
+        // ([refreshingSince] != null) OR for the very first app-load when
+        // the in-memory map is still empty. The previous condition also
+        // matched silent foreground re-loads ([loadingApps] flips on every
+        // FGBG resume so we can re-detect external installs/uninstalls);
+        // that produced a "flashback" of the progress bar at the top of
+        // the screen every time the user briefly switched away and back.
+        if (refreshingSince != null ||
+            (appsProvider.loadingApps && appsProvider.apps.isEmpty))
           SliverToBoxAdapter(
             // Top padding pushes the bar clear of the [CustomAppBar] blur
             // overlay's bottom edge - sitting flush against it produced a
@@ -2574,52 +2590,113 @@ class AppsPageState extends State<AppsPage> {
           .getSource(app.app.url, overrideSource: app.app.overrideSource)
           .hosts
           .firstOrNull;
-      final Widget swipeItem = _SwipeableListItem(
-        key: ValueKey(appId),
-        appId: appId,
-        hasUpdate: hasUpdate || hasUncertainUpdate,
-        isPinned: app.app.pinned,
-        isInstalled: installed != null,
-        areDownloadsRunning: downloadsRunning,
-        keepAlive: _heroKeepaliveAppId == appId,
-        rightAction: settingsProvider.rightSwipeAction,
-        leftAction: settingsProvider.leftSwipeAction,
-        appsListHeroFolderId: widget.folderId,
-        child: _AppListItem(
-          appId: appId,
-          isSelected: selectedAppIds.contains(appId),
-          areDownloadsRunning: downloadsRunning,
-          iconWidget: getAppIcon(index),
-          sourceHost: sourceHost,
-          showAppTypeBadge: settingsProvider.showAppTypeBadge,
-          showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
-          onTap: selectedAppIds.isNotEmpty
-              ? () => toggleAppSelected(app.app)
-              : () {
-                  setState(() => _heroKeepaliveAppId = appId);
-                  Navigator.push(
-                    context,
-                    heroFriendlyAppPageRoute(
-                      (_) => AppPage(
-                        appId: appId,
-                        appsListHeroFolderId: widget.folderId,
-                      ),
-                    ),
-                  ).then((_) {
-                    if (mounted) setState(() => _heroKeepaliveAppId = null);
-                  });
-                },
-          onLongPress: () => toggleAppSelected(app.app),
-          highlightTouchTargets: settingsProvider.highlightTouchTargets,
-          categoryColors: settingsProvider.categories,
-          itemBorderRadius: groupPosition != null
-              ? m3eListGroupItemRadius(
-                  groupPosition,
-                  flatListBody: flatListBody,
-                )
-              : null,
-        ),
-      );
+      // M3 Container Transform: tapping the row morphs the row's container
+      // into the AppPage's container. Replaces the previous
+      // `Navigator.push(heroFriendlyAppPageRoute(...))` flow plus the
+      // `_heroKeepaliveAppId` keep-alive state machine - OpenContainer
+      // owns the widget lifecycle during the morph, so we no longer
+      // need to keep the source row alive manually.
+      //
+      // Selection mode (`selectedAppIds.isNotEmpty`) still routes the tap
+      // to [toggleAppSelected]; it never triggers the morph in that mode.
+      // Long-press still toggles selection. Swipe actions on the row are
+      // unaffected because they're handled inside [_SwipeableListItem].
+      // The icon's own onLongPress (which opens AppPage with the opposite
+      // view) still uses the standard Navigator.push - that's a secondary
+      // path and doesn't benefit from container transform.
+      final BorderRadius? itemRadius = groupPosition != null
+          ? m3eListGroupItemRadius(
+              groupPosition,
+              flatListBody: flatListBody,
+            )
+          : null;
+
+      // Builds the row visual given the callback that should fire when the
+      // user taps a non-selected row. Used by both the OpenContainer path
+      // (callback = openContainer) and the [reduceVisualEffects] fallback
+      // path (callback = direct Navigator.push).
+      Widget buildRowWith(VoidCallback navigateToAppPage) =>
+          _SwipeableListItem(
+            key: ValueKey(appId),
+            appId: appId,
+            hasUpdate: hasUpdate || hasUncertainUpdate,
+            isPinned: app.app.pinned,
+            isInstalled: installed != null,
+            areDownloadsRunning: downloadsRunning,
+            keepAlive: false,
+            rightAction: settingsProvider.rightSwipeAction,
+            leftAction: settingsProvider.leftSwipeAction,
+            appsListHeroFolderId: widget.folderId,
+            child: _AppListItem(
+              appId: appId,
+              isSelected: selectedAppIds.contains(appId),
+              areDownloadsRunning: downloadsRunning,
+              iconWidget: getAppIcon(index),
+              sourceHost: sourceHost,
+              showAppTypeBadge: settingsProvider.showAppTypeBadge,
+              showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
+              onTap: selectedAppIds.isNotEmpty
+                  ? () => toggleAppSelected(app.app)
+                  : navigateToAppPage,
+              onLongPress: () => toggleAppSelected(app.app),
+              highlightTouchTargets: settingsProvider.highlightTouchTargets,
+              categoryColors: settingsProvider.categories,
+              itemBorderRadius: itemRadius,
+            ),
+          );
+
+      // M3 Container Transform: tapping the row morphs the row's container
+      // into the AppPage's container. Replaces the previous
+      // `Navigator.push(heroFriendlyAppPageRoute(...))` flow plus the
+      // `_heroKeepaliveAppId` keep-alive state machine - OpenContainer
+      // owns the widget lifecycle during the morph, so we no longer
+      // need to keep the source row alive manually.
+      //
+      // When [SettingsProvider.reduceVisualEffects] is on, we skip the
+      // morph entirely and use a plain page-route push. The morph
+      // rasterizes the source AND target during the transition (both
+      // expensive) and is one of the heavier paint costs in the app -
+      // dropping it gives users on weaker hardware their frame budget
+      // back during navigation.
+      //
+      // Selection mode (`selectedAppIds.isNotEmpty`) still routes the tap
+      // to [toggleAppSelected]; it never triggers navigation in that mode.
+      // Long-press still toggles selection. Swipe actions on the row are
+      // unaffected because they're handled inside [_SwipeableListItem].
+      // The icon's own onLongPress (which opens AppPage with the opposite
+      // view) still uses the standard Navigator.push - that's a secondary
+      // path and doesn't benefit from container transform.
+      final Widget swipeItem = settingsProvider.reduceVisualEffects
+          ? buildRowWith(
+              () => Navigator.push(
+                context,
+                heroFriendlyAppPageRoute(
+                  (_) => AppPage(
+                    appId: appId,
+                    appsListHeroFolderId: widget.folderId,
+                  ),
+                ),
+              ),
+            )
+          : OpenContainer(
+              key: ValueKey('open-$appId'),
+              closedColor: Colors.transparent,
+              openColor: Theme.of(context).scaffoldBackgroundColor,
+              closedElevation: 0,
+              openElevation: 0,
+              transitionType: ContainerTransitionType.fadeThrough,
+              transitionDuration: const Duration(milliseconds: 320),
+              closedShape: itemRadius != null
+                  ? RoundedRectangleBorder(borderRadius: itemRadius)
+                  : const RoundedRectangleBorder(),
+              // We drive the open trigger from [_AppListItem.onTap] ourselves
+              // so selection-mode taps stay routed to [toggleAppSelected].
+              tappable: false,
+              openBuilder: (BuildContext _, VoidCallback _) =>
+                  AppPage(appId: appId, appsListHeroFolderId: widget.folderId),
+              closedBuilder: (BuildContext _, VoidCallback openContainer) =>
+                  buildRowWith(openContainer),
+            );
       if (groupPosition != null) {
         return ClipRRect(
           borderRadius: m3eListGroupItemRadius(

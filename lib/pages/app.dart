@@ -590,7 +590,7 @@ class _AppPageState extends State<AppPage> {
         _editStagedIconBytes!,
       );
       if (iconErr != null) {
-        if (mounted) showError(ObtainiumError(iconErr), context);
+        if (mounted) _showPageError(ObtainiumError(iconErr), context);
         return;
       }
     }
@@ -619,7 +619,7 @@ class _AppPageState extends State<AppPage> {
     if (bytes == null) return;
     if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
       if (mounted) {
-        showError(ObtainiumError(tr('changeAppIconInvalidPng')), context);
+        _showPageError(ObtainiumError(tr('changeAppIconInvalidPng')), context);
       }
       return;
     }
@@ -660,6 +660,32 @@ class _AppPageState extends State<AppPage> {
     launchUrlString(
       'https://images.google.com/search?tbm=isch&q=${Uri.encodeComponent(query)}',
       mode: LaunchMode.externalApplication,
+    );
+  }
+
+  void _showPageError(dynamic error, BuildContext hostContext) {
+    if (!hostContext.mounted) return;
+    showError(error, hostContext, theme: _cachedPageTheme);
+  }
+
+  void _showPageMessage(dynamic message, BuildContext hostContext) {
+    if (!hostContext.mounted) return;
+    showMessage(message, hostContext, theme: _cachedPageTheme);
+  }
+
+  Future<T?> _showPageDialog<T>({
+    required BuildContext hostContext,
+    required WidgetBuilder builder,
+  }) {
+    final ThemeData? pageTheme = _cachedPageTheme;
+    return showDialog<T>(
+      context: hostContext,
+      builder: (BuildContext dialogContext) {
+        final Widget dialog = builder(dialogContext);
+        return pageTheme == null
+            ? dialog
+            : Theme(data: pageTheme, child: dialog);
+      },
     );
   }
 
@@ -1179,7 +1205,7 @@ class _AppPageState extends State<AppPage> {
         NavigationDelegate(
           onWebResourceError: (WebResourceError error) {
             if (error.isForMainFrame == true) {
-              showError(
+              _showPageError(
                 ObtainiumError(error.description, unexpected: true),
                 context,
               );
@@ -1304,7 +1330,7 @@ class _AppPageState extends State<AppPage> {
         await appsProvider.updatePendingRepoRename(id, err.newUrl);
       } else if (context.mounted) {
         // ignore: use_build_context_synchronously
-        showError(err, context);
+        _showPageError(err, context);
       }
     } finally {
       if (context.mounted) {
@@ -1828,7 +1854,7 @@ class _AppPageState extends State<AppPage> {
           await appsProvider.saveApps([appToSave]);
         } catch (err) {
           if (context.mounted) {
-            showError(err, context);
+            _showPageError(err, context);
           }
         } finally {
           if (context.mounted) {
@@ -1842,8 +1868,8 @@ class _AppPageState extends State<AppPage> {
       Future<void> openFixTrackOnlyPackageIdDialog() async {
         if (app == null) return;
         final packageIdController = TextEditingController(text: app.app.id);
-        final submittedPackageId = await showDialog<String>(
-          context: context,
+        final submittedPackageId = await _showPageDialog<String>(
+          hostContext: context,
           builder: (dialogContext) => AlertDialog(
             title: Text(tr('fixPackageId')),
             content: SingleChildScrollView(
@@ -1908,7 +1934,7 @@ class _AppPageState extends State<AppPage> {
           );
         } catch (err) {
           if (context.mounted) {
-            showError(err, context);
+            _showPageError(err, context);
           }
         } finally {
           if (context.mounted) {
@@ -2070,10 +2096,10 @@ class _AppPageState extends State<AppPage> {
                       try {
                         await appsProvider.downloadAppAssets([
                           app.app.id,
-                        ], context);
+                        ], pageThemeContext);
                       } catch (e) {
                         if (!context.mounted) return;
-                        showError(e, context);
+                        _showPageError(e, context);
                       }
                     },
             ),
@@ -2126,10 +2152,10 @@ class _AppPageState extends State<AppPage> {
                       try {
                         await appsProvider.downloadAppAssets([
                           app.app.id,
-                        ], context);
+                        ], pageThemeContext);
                       } catch (e) {
                         if (!context.mounted) return;
-                        showError(e, context);
+                        _showPageError(e, context);
                       }
                     },
             ),
@@ -2717,8 +2743,8 @@ class _AppPageState extends State<AppPage> {
     }
 
     showMarkUpdatedDialog() {
-      return showDialog(
-        context: context,
+      return _showPageDialog(
+        hostContext: context,
         builder: (BuildContext ctx) {
           return AlertDialog(
             title: Text(tr('alreadyUpToDateQuestion')),
@@ -2950,14 +2976,14 @@ class _AppPageState extends State<AppPage> {
           HapticFeedback.heavyImpact();
           final res = await appsProvider.downloadAndInstallLatestApps(
             app?.app.id != null ? [app!.app.id] : [],
-            globalNavigatorKey.currentContext,
+            themeContext,
           );
           if (res.isNotEmpty && !trackOnly && context.mounted) {
-            showMessage(successMessage, context);
+            _showPageMessage(successMessage, context);
           }
         } catch (e) {
           if (context.mounted) {
-            showError(e, context);
+            _showPageError(e, context);
           }
         }
       }
@@ -3484,6 +3510,22 @@ class _AppPageState extends State<AppPage> {
                                       children: [
                                         IconButton(
                                           icon: const Icon(Icons.arrow_back),
+                                          // Pin to the per-app PRIMARY
+                                          // colour. The previous attempt
+                                          // used [colorScheme.onSurface],
+                                          // which on light themes is a
+                                          // near-black and on dark themes
+                                          // a near-white - effectively the
+                                          // same value the main app theme
+                                          // produces, so the per-app tint
+                                          // wasn't visible.
+                                          // [colorScheme.primary] is the
+                                          // accent derived from this app's
+                                          // icon, so the back button now
+                                          // visibly belongs to the page.
+                                          color: pageThemeForPage
+                                              .colorScheme
+                                              .primary,
                                           onPressed: updating
                                               ? null
                                               : () => Navigator.of(

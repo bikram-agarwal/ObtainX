@@ -41,7 +41,13 @@ dependencies:
   provider: ^6.1.5+1
   http: ^1.6.0
   webview_flutter: ^4.13.1
-  dynamic_system_colors: ^1.9.0
+  # Upstream Material `dynamic_color` package. We use only `DynamicColorBuilder`
+  # and the `.harmonized()` ColorScheme extension - both available in the
+  # upstream package - so the previous `dynamic_system_colors` fork (which
+  # added APIs we don't use) was swapped out for the upstream to unblock the
+  # bruckcode M3E packages, which transitively depend on `dynamic_color` and
+  # would otherwise collide with the fork's identical Android plugin class.
+  dynamic_color: ^1.8.1
   html: ^0.15.6
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2
@@ -107,6 +113,12 @@ dependencies:
   # CircularProgressIndicator instances for visual consistency with the
   # pull-to-refresh.
   expressive_loading_indicator: ^0.0.1
+  # Material 3 Expressive linear/circular progress indicators - the wavy
+  # active-track variant. Replaces stock LinearProgressIndicator at the
+  # main user-facing surfaces (refresh progress, install button overlay,
+  # bulk-add per-store scan, import/export). Verified publisher
+  # bruckcode.de, MIT, also via m3e_design.
+  progress_indicator_m3e: ^0.1.1
 
 dev_dependencies:
   flutter_test:

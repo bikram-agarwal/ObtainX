@@ -25,6 +25,7 @@ import java.io.File
 import java.util.UUID
 
 private const val CHANNEL = "dev.imranr.obtainium/installer"
+private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
@@ -127,6 +128,44 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            DEVICE_APPS_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getApplicationLabels" -> {
+                    val packageNames = call.argument<List<String>>("packageNames")
+                    if (packageNames == null) {
+                        result.success(emptyMap<String, String>())
+                        return@setMethodCallHandler
+                    }
+                    result.success(getApplicationLabels(packageNames))
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getApplicationLabels(packageNames: List<String>): Map<String, String> {
+        val labelsByPackageName = mutableMapOf<String, String>()
+        for (packageName in packageNames) {
+            try {
+                val applicationInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.getApplicationInfo(
+                        packageName,
+                        PackageManager.ApplicationInfoFlags.of(0),
+                    )
+                } else {
+                    packageManager.getApplicationInfo(packageName, 0)
+                }
+                labelsByPackageName[packageName] =
+                    packageManager.getApplicationLabel(applicationInfo).toString()
+            } catch (_: PackageManager.NameNotFoundException) {
+                // App was uninstalled between package scan and label lookup.
+            }
+        }
+        return labelsByPackageName
     }
 
     private fun queryApkInstallerActivities(): List<Map<String, Any>> {
