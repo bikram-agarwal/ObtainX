@@ -182,6 +182,27 @@ void main() {
     },
   );
 
+  test('legacy release-date microseconds compare with ISO release dates', () {
+    expect(
+      versionsEffectivelyEqual('1777370225000000', '2026-04-28T09:57:05.000Z'),
+      true,
+    );
+    expect(
+      compareVersionsByNumericSegments(
+        '1777370225000000',
+        '2026-04-28T09:57:06.000Z',
+      ),
+      -1,
+    );
+    expect(
+      compareVersionsByNumericSegments(
+        '1777370225000000',
+        '2026-04-28T09:57:04.000Z',
+      ),
+      1,
+    );
+  });
+
   test('f-droid regex version filter keeps newest matching release', () async {
     final details = await FDroid().getAPKUrlsFromFDroidPackagesAPIResponse(
       Response('''

@@ -1471,6 +1471,7 @@ class AppsPageState extends State<AppsPage> {
   );
   Set<String> selectedAppIds = {};
   DateTime? refreshingSince;
+  bool initialAppLoadCompleted = false;
 
   bool clearSelected() {
     if (selectedAppIds.isNotEmpty) {
@@ -1858,6 +1859,9 @@ class AppsPageState extends State<AppsPage> {
     );
     var appsProvider = context.read<AppsProvider>();
     var settingsProvider = context.watch<SettingsProvider>();
+    if (!initialAppLoadCompleted && !appsProvider.loadingApps) {
+      initialAppLoadCompleted = true;
+    }
 
     Future<void> backgroundScanStoreAvailability() async {
       late final List<String> idsForStoreHintScan;
@@ -2512,14 +2516,15 @@ class AppsPageState extends State<AppsPage> {
             ),
           ),
         // Show the bar only for explicit user-initiated refreshes
-        // ([refreshingSince] != null) OR for the very first app-load when
-        // the in-memory map is still empty. The previous condition also
-        // matched silent foreground re-loads ([loadingApps] flips on every
-        // FGBG resume so we can re-detect external installs/uninstalls);
-        // that produced a "flashback" of the progress bar at the top of
-        // the screen every time the user briefly switched away and back.
+        // ([refreshingSince] != null) OR for the first app-load before this
+        // page has seen loading complete. Silent foreground reloads also set
+        // [loadingApps], and the app list can legitimately be empty then; the
+        // one-shot guard prevents that empty-library edge case from flashing
+        // the progress bar.
         if (refreshingSince != null ||
-            (appsProvider.loadingApps && appsProvider.apps.isEmpty))
+            (!initialAppLoadCompleted &&
+                appsProvider.loadingApps &&
+                appsProvider.apps.isEmpty))
           SliverToBoxAdapter(
             // Top padding pushes the bar clear of the [CustomAppBar] blur
             // overlay's bottom edge - sitting flush against it produced a
@@ -2605,45 +2610,41 @@ class AppsPageState extends State<AppsPage> {
       // view) still uses the standard Navigator.push - that's a secondary
       // path and doesn't benefit from container transform.
       final BorderRadius? itemRadius = groupPosition != null
-          ? m3eListGroupItemRadius(
-              groupPosition,
-              flatListBody: flatListBody,
-            )
+          ? m3eListGroupItemRadius(groupPosition, flatListBody: flatListBody)
           : null;
 
       // Builds the row visual given the callback that should fire when the
       // user taps a non-selected row. Used by both the OpenContainer path
       // (callback = openContainer) and the [reduceVisualEffects] fallback
       // path (callback = direct Navigator.push).
-      Widget buildRowWith(VoidCallback navigateToAppPage) =>
-          _SwipeableListItem(
-            key: ValueKey(appId),
-            appId: appId,
-            hasUpdate: hasUpdate || hasUncertainUpdate,
-            isPinned: app.app.pinned,
-            isInstalled: installed != null,
-            areDownloadsRunning: downloadsRunning,
-            keepAlive: false,
-            rightAction: settingsProvider.rightSwipeAction,
-            leftAction: settingsProvider.leftSwipeAction,
-            appsListHeroFolderId: widget.folderId,
-            child: _AppListItem(
-              appId: appId,
-              isSelected: selectedAppIds.contains(appId),
-              areDownloadsRunning: downloadsRunning,
-              iconWidget: getAppIcon(index),
-              sourceHost: sourceHost,
-              showAppTypeBadge: settingsProvider.showAppTypeBadge,
-              showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
-              onTap: selectedAppIds.isNotEmpty
-                  ? () => toggleAppSelected(app.app)
-                  : navigateToAppPage,
-              onLongPress: () => toggleAppSelected(app.app),
-              highlightTouchTargets: settingsProvider.highlightTouchTargets,
-              categoryColors: settingsProvider.categories,
-              itemBorderRadius: itemRadius,
-            ),
-          );
+      Widget buildRowWith(VoidCallback navigateToAppPage) => _SwipeableListItem(
+        key: ValueKey(appId),
+        appId: appId,
+        hasUpdate: hasUpdate || hasUncertainUpdate,
+        isPinned: app.app.pinned,
+        isInstalled: installed != null,
+        areDownloadsRunning: downloadsRunning,
+        keepAlive: false,
+        rightAction: settingsProvider.rightSwipeAction,
+        leftAction: settingsProvider.leftSwipeAction,
+        appsListHeroFolderId: widget.folderId,
+        child: _AppListItem(
+          appId: appId,
+          isSelected: selectedAppIds.contains(appId),
+          areDownloadsRunning: downloadsRunning,
+          iconWidget: getAppIcon(index),
+          sourceHost: sourceHost,
+          showAppTypeBadge: settingsProvider.showAppTypeBadge,
+          showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
+          onTap: selectedAppIds.isNotEmpty
+              ? () => toggleAppSelected(app.app)
+              : navigateToAppPage,
+          onLongPress: () => toggleAppSelected(app.app),
+          highlightTouchTargets: settingsProvider.highlightTouchTargets,
+          categoryColors: settingsProvider.categories,
+          itemBorderRadius: itemRadius,
+        ),
+      );
 
       // M3 Container Transform: tapping the row morphs the row's container
       // into the AppPage's container. Replaces the previous

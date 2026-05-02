@@ -32,6 +32,7 @@ import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
@@ -63,6 +64,13 @@ final RegExp _androidApplicationIdPattern = RegExp(
 bool versionsEffectivelyEqual(String installed, String latest) {
   if (installed == latest) return true;
   if (installed.isEmpty || latest.isEmpty) return false;
+  final int? releaseDateVersionComparison = compareReleaseDateVersionStrings(
+    installed,
+    latest,
+  );
+  if (releaseDateVersionComparison == 0) {
+    return true;
+  }
   final installedLen = installed.length;
   final latestLen = latest.length;
   if (latest.startsWith(installed) &&
@@ -91,6 +99,33 @@ bool versionsEffectivelyEqual(String installed, String latest) {
 }
 
 bool _isDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39; // '0'..'9'
+
+DateTime? _dateFromReleaseDateVersionString(String version) {
+  final String trimmedVersion = version.trim();
+  if (trimmedVersion.isEmpty) {
+    return null;
+  }
+  if (RegExp(r'^\d{15,17}$').hasMatch(trimmedVersion)) {
+    try {
+      return DateTime.fromMicrosecondsSinceEpoch(int.parse(trimmedVersion));
+    } catch (_) {
+      return null;
+    }
+  }
+  if (!RegExp(r'^\d{4}-\d{2}-\d{2}(?:[T ].*)?$').hasMatch(trimmedVersion)) {
+    return null;
+  }
+  return DateTime.tryParse(trimmedVersion);
+}
+
+int? compareReleaseDateVersionStrings(String installed, String latest) {
+  final DateTime? installedDate = _dateFromReleaseDateVersionString(installed);
+  final DateTime? latestDate = _dateFromReleaseDateVersionString(latest);
+  if (installedDate == null || latestDate == null) {
+    return null;
+  }
+  return installedDate.toUtc().compareTo(latestDate.toUtc()).sign;
+}
 
 /// True when [needle] appears in [longer] as a contiguous substring with
 /// boundaries so we do not treat [2.0] as inside [12.0] or [.0] as inside [8.0].
@@ -259,6 +294,9 @@ bool versionOrderIsUnclear(String installed, String latest) {
   if (installed.isEmpty || latest.isEmpty) return false;
   if (installed == latest) return false;
   if (versionsEffectivelyEqual(installed, latest)) return false;
+  if (compareReleaseDateVersionStrings(installed, latest) != null) {
+    return false;
+  }
   if (compareVersionsByNumericSegments(installed, latest) == 0) {
     return true;
   }
@@ -332,6 +370,13 @@ bool versionOrderUncertainUpdate(App app) {
 /// Compare version strings by numeric segments (e.g. 2.0.0 vs 1.9.9).
 /// Returns -1 if [installed] < [latest], 0 if equal, 1 if [installed] > [latest], null if not comparable.
 int? compareVersionsByNumericSegments(String installed, String latest) {
+  final int? releaseDateVersionComparison = compareReleaseDateVersionStrings(
+    installed,
+    latest,
+  );
+  if (releaseDateVersionComparison != null) {
+    return releaseDateVersionComparison;
+  }
   final installedSegments = RegExp(
     r'\d+',
   ).allMatches(installed).map((m) => int.tryParse(m.group(0)!) ?? 0).toList();
@@ -1881,6 +1926,7 @@ class AppsProvider with ChangeNotifier {
     BuildContext? context,
     bool pickAnyAsset, {
     bool evenIfSingleChoice = false,
+    ThemeData? dialogTheme,
   }) async {
     var urlsToSelectFrom = app.apkUrls;
     if (pickAnyAsset) {
@@ -1893,6 +1939,9 @@ class AppsProvider with ChangeNotifier {
             : 0];
     // get device supported architecture
     List<String> archs = (await DeviceInfoPlugin().androidInfo).supportedAbis;
+    if (context != null && !context.mounted) {
+      return appFileUrl;
+    }
 
     if ((urlsToSelectFrom.length > 1 || evenIfSingleChoice) &&
         context != null) {
@@ -1900,12 +1949,15 @@ class AppsProvider with ChangeNotifier {
         // ignore: use_build_context_synchronously
         context: context,
         builder: (BuildContext ctx) {
-          return AppFilePicker(
+          final Widget dialog = AppFilePicker(
             app: app,
             initVal: appFileUrl,
             archs: archs,
             pickAnyAsset: pickAnyAsset,
           );
+          return dialogTheme == null
+              ? dialog
+              : Theme(data: dialogTheme, child: dialog);
         },
       );
     }
@@ -1924,15 +1976,21 @@ class AppsProvider with ChangeNotifier {
           'placeholder',
         ].contains(getHost(appFileUrl.value)) &&
         context != null) {
+      if (!context.mounted) {
+        return null;
+      }
       if (!(settingsProvider.hideAPKOriginWarning) &&
           await showDialog(
                 // ignore: use_build_context_synchronously
                 context: context,
                 builder: (BuildContext ctx) {
-                  return APKOriginWarningDialog(
+                  final Widget dialog = APKOriginWarningDialog(
                     sourceUrl: app.url,
                     apkUrl: appFileUrl!.value,
                   );
+                  return dialogTheme == null
+                      ? dialog
+                      : Theme(data: dialogTheme, child: dialog);
                 },
               ) !=
               true) {
@@ -1953,6 +2011,7 @@ class AppsProvider with ChangeNotifier {
     NotificationsProvider? notificationsProvider,
     bool forceParallelDownloads = false,
     bool useExisting = true,
+    ThemeData? dialogTheme,
   }) async {
     notificationsProvider =
         notificationsProvider ?? context?.read<NotificationsProvider>();
@@ -1975,8 +2034,14 @@ class AppsProvider with ChangeNotifier {
         await checkUpdate(apps[id]!.app.id);
       }
       if (!trackOnly) {
+        if (context != null && !context.mounted) return [];
         // ignore: use_build_context_synchronously
-        apkUrl = await confirmAppFileUrl(apps[id]!.app, context, false);
+        apkUrl = await confirmAppFileUrl(
+          apps[id]!.app,
+          context,
+          false,
+          dialogTheme: dialogTheme,
+        );
       }
       if (apkUrl != null) {
         int urlInd = apps[id]!.app.apkUrls
@@ -2216,6 +2281,7 @@ class AppsProvider with ChangeNotifier {
     List<String> appIds,
     BuildContext context, {
     bool forceParallelDownloads = false,
+    ThemeData? dialogTheme,
   }) async {
     NotificationsProvider notificationsProvider = context
         .read<NotificationsProvider>();
@@ -2240,6 +2306,7 @@ class AppsProvider with ChangeNotifier {
           context,
           true,
           evenIfSingleChoice: true,
+          dialogTheme: dialogTheme,
         );
         if (tempFileUrl != null) {
           var s = SourceProvider().getSource(
@@ -2901,8 +2968,8 @@ class AppsProvider with ChangeNotifier {
   }) async {
     attemptToCorrectInstallStatus = attemptToCorrectInstallStatus;
     await Future.wait(
-      apps.map((a) async {
-        var app = a.deepCopy();
+      apps.map((appToSave) async {
+        var app = appToSave.deepCopy();
         clearStaleSkippedLatestVersionInPlace(app);
         PackageInfo? info = await getInstalledInfo(app.id);
         // Reuse the cached icon whenever the installed package
@@ -2922,9 +2989,18 @@ class AppsProvider with ChangeNotifier {
           app.name = cachedInMemory.app.name;
         } else {
           icon = await info?.applicationInfo?.getAppIcon();
-          final String? appLabel = info?.applicationInfo?.nonLocalizedLabel
-              ?.toString()
-              .trim();
+          String? localizedLabel;
+          if (Platform.isAndroid && info != null) {
+            final labelsByPackageName =
+                await BulkImportService.getApplicationLabels([app.id]);
+            localizedLabel = labelsByPackageName[app.id]?.trim();
+            if (localizedLabel?.isNotEmpty != true) {
+              info = await getInstalledInfo(app.id);
+            }
+          }
+          final String? appLabel = localizedLabel?.isNotEmpty == true
+              ? localizedLabel
+              : info?.applicationInfo?.nonLocalizedLabel?.toString().trim();
           if (appLabel?.isNotEmpty == true) {
             app.name = appLabel!;
           }
@@ -3495,7 +3571,9 @@ class AppsProvider with ChangeNotifier {
   Map<String, dynamic> generateExportJSON({
     List<String>? appIds,
     int? overrideExportSettings,
+    SettingsProvider? sp,
   }) {
+    final SettingsProvider exportSettingsProvider = sp ?? settingsProvider;
     Map<String, dynamic> finalExport = {};
     finalExport['apps'] = apps.values
         .where((e) {
@@ -3507,18 +3585,21 @@ class AppsProvider with ChangeNotifier {
         })
         .map((e) => e.app.toJson())
         .toList();
-    int shouldExportSettings = settingsProvider.exportSettings;
+    int shouldExportSettings = exportSettingsProvider.exportSettings;
     if (overrideExportSettings != null) {
       shouldExportSettings = overrideExportSettings;
     }
     if (shouldExportSettings > 0) {
-      var settingsValueKeys = settingsProvider.prefs?.getKeys();
+      var settingsValueKeys = exportSettingsProvider.prefs?.getKeys();
       if (shouldExportSettings < 2) {
         settingsValueKeys?.removeWhere((k) => k.endsWith('-creds'));
       }
       finalExport['settings'] = Map<String, Object?>.fromEntries(
         (settingsValueKeys
-                ?.map((key) => MapEntry(key, settingsProvider.prefs?.get(key)))
+                ?.map(
+                  (key) =>
+                      MapEntry(key, exportSettingsProvider.prefs?.get(key)),
+                )
                 .toList()) ??
             [],
       );
@@ -3584,7 +3665,9 @@ class AppsProvider with ChangeNotifier {
     }
     String? returnPath;
     if (!pickOnly) {
-      Map<String, dynamic> finalExport = generateExportJSON();
+      Map<String, dynamic> finalExport = generateExportJSON(
+        sp: settingsProvider,
+      );
       // Heavy work - JsonEncoder.withIndent over the whole apps+settings
       // payload plus utf8 encoding - is run on a background isolate so the
       // UI thread stays responsive even when the export is large.

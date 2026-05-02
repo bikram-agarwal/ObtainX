@@ -35,16 +35,7 @@ enum SortOrderSettings { ascending, descending }
 
 enum AppsListGroupBy { none, category, source, appType }
 
-enum SwipeAction {
-  update,
-  pin,
-  appOptions,
-  delete,
-  open,
-  appInfo,
-  edit,
-  none,
-}
+enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 
 /// Order for settings dropdowns: alphabetical by localized action label,
 /// with [SwipeAction.none] ("None") always last.
@@ -75,15 +66,35 @@ class SettingsProvider with ChangeNotifier {
   Future<void> initializeSettings() async {
     prefs = await SharedPreferences.getInstance();
     _categoriesMemory = null;
+    _migrateProgressiveBlurDefaultForExistingUsers();
     defaultAppDir = (await getAppStorageDir()).path;
     _migrateShizukuSetting();
     _migrateSwipeActionPrefs();
     _syncSwipeActionNameStringsIfMissing();
     _migrateThemeAccentPrefs();
     final info = await DeviceInfoPlugin().androidInfo;
-    isTV = info.systemFeatures.contains('android.hardware.type.television') ||
+    isTV =
+        info.systemFeatures.contains('android.hardware.type.television') ||
         info.systemFeatures.contains('android.software.leanback');
     notifyListeners();
+  }
+
+  void _migrateProgressiveBlurDefaultForExistingUsers() {
+    if (prefs == null) return;
+    if (prefs!.containsKey('progressiveBlurDefaultMigrated')) return;
+    final Set<String> existingKeys = prefs!.getKeys();
+    final bool existingInstall = existingKeys.isNotEmpty;
+    final bool hasExplicitProgressiveBlur = prefs!.containsKey(
+      'progressiveBlurEnabled',
+    );
+    final bool reduceVisualEffectsEnabled =
+        prefs!.getBool('reduceVisualEffects') ?? false;
+    if (existingInstall &&
+        !hasExplicitProgressiveBlur &&
+        !reduceVisualEffectsEnabled) {
+      prefs!.setBool('progressiveBlurEnabled', true);
+    }
+    prefs!.setBool('progressiveBlurDefaultMigrated', true);
   }
 
   void _migrateThemeAccentPrefs() {
@@ -101,8 +112,9 @@ class SettingsProvider with ChangeNotifier {
         AppAccentColorSource.custom.name,
       );
       final int? colorCode = prefs!.getInt('themeColor');
-      final Color fromLegacy =
-          (colorCode != null) ? Color(colorCode) : obtainiumThemeColor;
+      final Color fromLegacy = (colorCode != null)
+          ? Color(colorCode)
+          : obtainiumThemeColor;
       final String hex = colorToCanonicalHex(fromLegacy);
       prefs!.setString('activeCustomSeedHex', hex);
       prefs!.setString('savedCustomSeedHexList', jsonEncode([hex]));
@@ -198,8 +210,7 @@ class SettingsProvider with ChangeNotifier {
   static const double appUiScaleDefault = 1.0;
 
   double get appUiScale {
-    final double raw =
-        prefs?.getDouble('appUiScale') ?? appUiScaleDefault;
+    final double raw = prefs?.getDouble('appUiScale') ?? appUiScaleDefault;
     if (raw.isNaN || raw <= 0) return appUiScaleDefault;
     return raw.clamp(appUiScaleMin, appUiScaleMax);
   }
@@ -267,8 +278,9 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Color get themeColor {
-    final Color? fromHex =
-        colorFromNormalizedHex(normalizeCustomSeedHexOrNull(activeCustomSeedHex));
+    final Color? fromHex = colorFromNormalizedHex(
+      normalizeCustomSeedHexOrNull(activeCustomSeedHex),
+    );
     if (fromHex != null) return fromHex;
     final int? colorCode = prefs?.getInt('themeColor');
     return (colorCode != null) ? Color(colorCode) : obtainiumThemeColor;
@@ -304,7 +316,9 @@ class SettingsProvider with ChangeNotifier {
   }
 
   AppThemePaletteStyle get appThemePaletteStyle {
-    return AppThemePaletteStyleX.tryParse(prefs?.getString('appThemePaletteStyle')) ??
+    return AppThemePaletteStyleX.tryParse(
+          prefs?.getString('appThemePaletteStyle'),
+        ) ??
         AppThemePaletteStyle.tonalSpot;
   }
 
@@ -315,8 +329,9 @@ class SettingsProvider with ChangeNotifier {
 
   String get activeCustomSeedHex {
     final String? stored = prefs?.getString('activeCustomSeedHex');
-    final String? normalized =
-        stored != null ? normalizeCustomSeedHexOrNull(stored) : null;
+    final String? normalized = stored != null
+        ? normalizeCustomSeedHexOrNull(stored)
+        : null;
     if (normalized != null) return normalized;
     final int? colorCode = prefs?.getInt('themeColor');
     return colorToCanonicalHex(
@@ -376,8 +391,9 @@ class SettingsProvider with ChangeNotifier {
   void removeCustomSeedHex(String raw) {
     final String? normalized = normalizeCustomSeedHexOrNull(raw);
     if (normalized == null) return;
-    final List<String> list =
-        savedCustomSeedHexes.where((String h) => h != normalized).toList();
+    final List<String> list = savedCustomSeedHexes
+        .where((String h) => h != normalized)
+        .toList();
     if (list.isEmpty) {
       list.add(colorToCanonicalHex(obtainiumThemeColor));
     }
@@ -398,12 +414,9 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // Default flipped from true to false. With `progressiveBlurEnabled` on,
-  // every frame on the apps list ran 4 BackdropFilter passes (2 at the top
-  // app bar, 2 at the bottom navigation bar). On mid-range Android devices
-  // that consumed 20-60 ms per frame and produced sustained 30 fps drops
-  // for users who never thought to look in settings. Now off-by-default;
-  // users on capable hardware can opt back in via the toggle.
+  // New installs default this off because it can be expensive, but
+  // [_migrateProgressiveBlurDefaultForExistingUsers] preserves the old
+  // implicit enabled default for users upgrading without an explicit pref.
   bool get progressiveBlurEnabled {
     if (reduceVisualEffects) return false;
     return prefs?.getBool('progressiveBlurEnabled') ?? false;
@@ -428,6 +441,9 @@ class SettingsProvider with ChangeNotifier {
 
   set reduceVisualEffects(bool value) {
     prefs?.setBool('reduceVisualEffects', value);
+    if (value) {
+      prefs?.remove('progressiveBlurEnabled');
+    }
     notifyListeners();
   }
 
@@ -671,8 +687,7 @@ class SettingsProvider with ChangeNotifier {
   bool get groupByCategory => appsListGroupBy == AppsListGroupBy.category;
 
   set groupByCategory(bool show) {
-    appsListGroupBy =
-        show ? AppsListGroupBy.category : AppsListGroupBy.none;
+    appsListGroupBy = show ? AppsListGroupBy.category : AppsListGroupBy.none;
   }
 
   bool get hideTrackOnlyWarning {
@@ -727,14 +742,18 @@ class SettingsProvider with ChangeNotifier {
       // Each UI action (rename, delete) fires a separate call, so at most one
       // rename is in flight per call.
       final Map<String, int> oldCats = categories;
-      final Set<String> removed =
-          oldCats.keys.toSet().difference(cats.keys.toSet());
-      final Set<String> added =
-          cats.keys.toSet().difference(oldCats.keys.toSet());
-      final String? renamedFrom =
-          (removed.length == 1 && added.length == 1) ? removed.first : null;
-      final String? renamedTo =
-          (removed.length == 1 && added.length == 1) ? added.first : null;
+      final Set<String> removed = oldCats.keys.toSet().difference(
+        cats.keys.toSet(),
+      );
+      final Set<String> added = cats.keys.toSet().difference(
+        oldCats.keys.toSet(),
+      );
+      final String? renamedFrom = (removed.length == 1 && added.length == 1)
+          ? removed.first
+          : null;
+      final String? renamedTo = (removed.length == 1 && added.length == 1)
+          ? added.first
+          : null;
 
       List<App> changedApps = appsProvider
           .getAppValues()
@@ -773,7 +792,10 @@ class SettingsProvider with ChangeNotifier {
   }
 
   set appFolders(List<AppFolder> folders) {
-    prefs?.setString('appFolders', jsonEncode(folders.map((f) => f.toJson()).toList()));
+    prefs?.setString(
+      'appFolders',
+      jsonEncode(folders.map((f) => f.toJson()).toList()),
+    );
     notifyListeners();
   }
 
@@ -810,7 +832,10 @@ class SettingsProvider with ChangeNotifier {
   SortColumnSettings folderSortColumn(String id) {
     final idx = _getFolderViewRaw(id)?['sortColumn'] as int?;
     if (idx == null) return sortColumn;
-    return SortColumnSettings.values[idx.clamp(0, SortColumnSettings.values.length - 1)];
+    return SortColumnSettings.values[idx.clamp(
+      0,
+      SortColumnSettings.values.length - 1,
+    )];
   }
 
   void setFolderSortColumn(String id, SortColumnSettings v) =>
@@ -819,7 +844,10 @@ class SettingsProvider with ChangeNotifier {
   SortOrderSettings folderSortOrder(String id) {
     final idx = _getFolderViewRaw(id)?['sortOrder'] as int?;
     if (idx == null) return sortOrder;
-    return SortOrderSettings.values[idx.clamp(0, SortOrderSettings.values.length - 1)];
+    return SortOrderSettings.values[idx.clamp(
+      0,
+      SortOrderSettings.values.length - 1,
+    )];
   }
 
   void setFolderSortOrder(String id, SortOrderSettings v) =>
@@ -828,7 +856,10 @@ class SettingsProvider with ChangeNotifier {
   AppsListGroupBy folderGroupBy(String id) {
     final idx = _getFolderViewRaw(id)?['groupBy'] as int?;
     if (idx == null) return appsListGroupBy;
-    return AppsListGroupBy.values[idx.clamp(0, AppsListGroupBy.values.length - 1)];
+    return AppsListGroupBy.values[idx.clamp(
+      0,
+      AppsListGroupBy.values.length - 1,
+    )];
   }
 
   void setFolderGroupBy(String id, AppsListGroupBy v) =>
@@ -998,6 +1029,7 @@ class SettingsProvider with ChangeNotifier {
       final bool writable = await saf.canWrite(treeUri) ?? false;
       return readable && writable;
     }
+
     if (!await canAccessExportTree(uri)) {
       // Transient SAF failures should not wipe a still-valid grant.
       await Future<void>.delayed(const Duration(milliseconds: 200));
@@ -1061,6 +1093,7 @@ class SettingsProvider with ChangeNotifier {
       final bool writable = await saf.canWrite(treeUri) ?? false;
       return readable && writable;
     }
+
     if (!await canAccessApkSaveTree(uri)) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await canAccessApkSaveTree(uri)) {

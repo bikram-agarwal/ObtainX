@@ -390,6 +390,26 @@ Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
   return json;
 }
 
+DateTime? dateTimeFromJsonValue(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return DateTime.fromMicrosecondsSinceEpoch(value);
+  }
+  if (value is String) {
+    final DateTime? isoDateTime = DateTime.tryParse(value);
+    if (isoDateTime != null) {
+      return isoDateTime;
+    }
+    final int? microsecondsSinceEpoch = int.tryParse(value);
+    if (microsecondsSinceEpoch != null) {
+      return DateTime.fromMicrosecondsSinceEpoch(microsecondsSinceEpoch);
+    }
+  }
+  return null;
+}
+
 class App {
   late String id;
   late String url;
@@ -525,9 +545,7 @@ class App {
       ),
       (json['preferredApkIndex'] ?? -1) as int,
       jsonDecode(json['additionalSettings']) as Map<String, dynamic>,
-      json['lastUpdateCheck'] == null
-          ? null
-          : DateTime.fromMicrosecondsSinceEpoch(json['lastUpdateCheck']),
+      dateTimeFromJsonValue(json['lastUpdateCheck']),
       json['pinned'] ?? false,
       categories: json['categories'] != null
           ? (json['categories'] as List<dynamic>)
@@ -536,9 +554,7 @@ class App {
           : json['category'] != null
           ? [json['category'] as String]
           : [],
-      releaseDate: json['releaseDate'] == null
-          ? null
-          : DateTime.fromMicrosecondsSinceEpoch(json['releaseDate']),
+      releaseDate: dateTimeFromJsonValue(json['releaseDate']),
       changeLog: json['changeLog'] == null ? null : json['changeLog'] as String,
       overrideSource: json['overrideSource'],
       allowIdChange: json['allowIdChange'] ?? false,
@@ -1459,12 +1475,12 @@ class SourceProvider {
       apk.rawReleaseTitleCandidates,
     );
     var trackOnly = additionalSettings['trackOnly'] == true;
+    final String rawLatestVersionFromSource = apk.version;
 
     if (additionalSettings['releaseDateAsVersion'] == true &&
         apk.releaseDate != null) {
       apk.version = apk.releaseDate!.toUtc().toIso8601String();
     }
-    final String rawLatestVersionFromSource = apk.version;
 
     if (source.runtimeType !=
             HTML().runtimeType && // Some sources do it separately

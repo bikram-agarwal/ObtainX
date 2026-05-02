@@ -13,6 +13,18 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
+  try {
+    final dynamic decodedBody = jsonDecode(responseBody);
+    if (decodedBody is Map<String, dynamic>) {
+      return decodedBody;
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
 class GitHub extends AppSource {
   GitHub({bool hostChanged = false}) {
     hosts = ['github.com'];
@@ -394,10 +406,15 @@ class GitHub extends AppSource {
     if (refResponse.statusCode != 200) {
       return null;
     }
-    final dynamic refBody = jsonDecode(refResponse.body);
-    final dynamic refObject = refBody['object'];
-    final String? objectSha = refObject?['sha'] as String?;
-    final String? objectType = refObject?['type'] as String?;
+    final Map<String, dynamic>? refBody = _jsonObjectFromResponseBody(
+      refResponse.body,
+    );
+    final dynamic refObject = refBody?['object'];
+    if (refObject is! Map<String, dynamic>) {
+      return null;
+    }
+    final String? objectSha = refObject['sha'] as String?;
+    final String? objectType = refObject['type'] as String?;
     if (objectSha == null || objectSha.isEmpty) {
       return null;
     }
@@ -414,10 +431,15 @@ class GitHub extends AppSource {
     if (tagResponse.statusCode != 200) {
       return null;
     }
-    final dynamic tagBody = jsonDecode(tagResponse.body);
-    final dynamic tagObject = tagBody['object'];
-    final String? commitSha = tagObject?['sha'] as String?;
-    final String? commitType = tagObject?['type'] as String?;
+    final Map<String, dynamic>? tagBody = _jsonObjectFromResponseBody(
+      tagResponse.body,
+    );
+    final dynamic tagObject = tagBody?['object'];
+    if (tagObject is! Map<String, dynamic>) {
+      return null;
+    }
+    final String? commitSha = tagObject['sha'] as String?;
+    final String? commitType = tagObject['type'] as String?;
     return commitType == 'commit' ? commitSha : null;
   }
 
@@ -703,6 +725,14 @@ class GitHub extends AppSource {
           selectedVersionSource = filteredApkUrls.last.key;
         } else if (versionStringSource == versionStringSourceReleaseTitle) {
           selectedVersionSource = nameToFilter;
+        } else if (versionStringSource == versionStringSourceReleaseDate) {
+          selectedVersionSource = getReleaseDateFromRelease(
+            targetRelease,
+            useLatestAssetDateAsReleaseDate,
+          )?.toUtc().toIso8601String();
+          if (selectedVersionSource == null) {
+            throw NoVersionError();
+          }
         } else if (versionStringSource == versionStringSourceReleaseCommitSha) {
           selectedVersionSource = await getReleaseCommitSha(
             targetRelease,

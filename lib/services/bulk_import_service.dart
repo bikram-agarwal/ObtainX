@@ -80,6 +80,21 @@ class BulkImportService {
         'https://www.apkmirror.com/apk/google-inc/youtube-music/',
   };
 
+  static Future<Map<String, String>> getApplicationLabels(
+    List<String> packageNames,
+  ) async {
+    if (packageNames.isEmpty) {
+      return const <String, String>{};
+    }
+    final labelsByPackageName = await _deviceAppsChannel
+        .invokeMapMethod<String, String>('getApplicationLabels', {
+          'packageNames': packageNames,
+        });
+    return Map<String, String>.from(
+      labelsByPackageName ?? const <String, String>{},
+    );
+  }
+
   /// Returns all installed apps, filtered by system/user.
   static Future<List<InstalledAppInfo>> getInstalledApps({
     bool includeSystem = false,
@@ -108,13 +123,7 @@ class BulkImportService {
     final packageNames = [
       for (final pkg in filtered) pkg.packageName as String,
     ];
-    final labelsByPackageName = Map<String, String>.from(
-      await _deviceAppsChannel.invokeMapMethod<String, String>(
-            'getApplicationLabels',
-            {'packageNames': packageNames},
-          ) ??
-          const <String, String>{},
-    );
+    final labelsByPackageName = await getApplicationLabels(packageNames);
 
     // Reset the ApplicationInfo cache to match this fresh installed-apps
     // snapshot. Stale entries from a previous fetch could refer to apps the

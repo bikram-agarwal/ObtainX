@@ -2094,9 +2094,11 @@ class _AppPageState extends State<AppPage> {
                   ? null
                   : () async {
                       try {
-                        await appsProvider.downloadAppAssets([
-                          app.app.id,
-                        ], pageThemeContext);
+                        await appsProvider.downloadAppAssets(
+                          [app.app.id],
+                          context,
+                          dialogTheme: pageTheme,
+                        );
                       } catch (e) {
                         if (!context.mounted) return;
                         _showPageError(e, context);
@@ -2150,9 +2152,11 @@ class _AppPageState extends State<AppPage> {
                   ? null
                   : () async {
                       try {
-                        await appsProvider.downloadAppAssets([
-                          app.app.id,
-                        ], pageThemeContext);
+                        await appsProvider.downloadAppAssets(
+                          [app.app.id],
+                          context,
+                          dialogTheme: pageTheme,
+                        );
                       } catch (e) {
                         if (!context.mounted) return;
                         _showPageError(e, context);
@@ -2976,7 +2980,8 @@ class _AppPageState extends State<AppPage> {
           HapticFeedback.heavyImpact();
           final res = await appsProvider.downloadAndInstallLatestApps(
             app?.app.id != null ? [app!.app.id] : [],
-            themeContext,
+            context,
+            dialogTheme: _cachedPageTheme,
           );
           if (res.isNotEmpty && !trackOnly && context.mounted) {
             _showPageMessage(successMessage, context);
