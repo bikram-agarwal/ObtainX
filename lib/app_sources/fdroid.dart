@@ -216,6 +216,16 @@ class FDroid extends AppSource {
       if (releases.isEmpty) {
         throw NoReleasesError();
       }
+      final List<String> rawVersionNameCandidates = <String>[];
+      for (final release in releases) {
+        final String? versionName = release['versionName']?.toString().trim();
+        if (versionName == null ||
+            versionName.isEmpty ||
+            rawVersionNameCandidates.contains(versionName)) {
+          continue;
+        }
+        rawVersionNameCandidates.add(versionName);
+      }
       String? version;
       Iterable<dynamic> releaseChoices = [];
       // Grab the versionCode suggested if the user chose to do that
@@ -355,6 +365,7 @@ class FDroid extends AppSource {
         getApkUrlsFromUrls(uniqueApkUrls),
         AppNames(sourceName, packageLabel),
         iconUrl: iconUrl,
+        rawReleaseTitleCandidates: rawVersionNameCandidates,
         apkSizeBytes: apkSizeBytes,
       );
     } else {

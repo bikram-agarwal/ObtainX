@@ -210,7 +210,12 @@ String? tryBuildFilterRegExFromSelection({
   return null;
 }
 
-enum RegexAssistKind { versionExtraction, apkFilter, releaseTitleFilter }
+enum RegexAssistKind {
+  versionExtraction,
+  apkFilter,
+  releaseTitleFilter,
+  versionFilter,
+}
 
 List<String> regexAssistLinesFromSnapshot(String? snapshot) {
   if (snapshot == null || snapshot.trim().isEmpty) {
@@ -300,6 +305,24 @@ List<List<GeneratedFormItem>> attachRegexAssistToItems(
                     : null,
                 rawLineSuggestions: titleRawLines,
                 filterFieldKey: 'filterReleaseTitlesByRegEx',
+                patch: patch,
+              );
+            };
+      } else if (element.key == 'filterVersionsByRegEx') {
+        element.assistAction =
+            (
+              BuildContext context,
+              FormValuesTextPatch patch,
+              Map<String, dynamic> currentValues,
+            ) {
+              return showRegexAssistDialog(
+                context: context,
+                kind: RegexAssistKind.versionFilter,
+                initialRaw: titleRawLines.isNotEmpty
+                    ? titleRawLines.first
+                    : rawLatestVersionFromSource,
+                rawLineSuggestions: titleRawLines,
+                filterFieldKey: 'filterVersionsByRegEx',
                 patch: patch,
               );
             };
@@ -438,6 +461,8 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
         return tr('filterRegexAssistTitleApk');
       case RegexAssistKind.releaseTitleFilter:
         return tr('filterRegexAssistTitleRelease');
+      case RegexAssistKind.versionFilter:
+        return tr('filterRegexAssistTitleVersion');
     }
   }
 
@@ -449,6 +474,8 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
         return tr('filterRegexAssistRawHintApk');
       case RegexAssistKind.releaseTitleFilter:
         return tr('filterRegexAssistRawHintRelease');
+      case RegexAssistKind.versionFilter:
+        return tr('filterRegexAssistRawHintVersion');
     }
   }
 
@@ -460,6 +487,8 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
         return tr('filterRegexAssistPickLabelApk');
       case RegexAssistKind.releaseTitleFilter:
         return tr('filterRegexAssistPickLabelRelease');
+      case RegexAssistKind.versionFilter:
+        return tr('filterRegexAssistPickLabelVersion');
     }
   }
 

@@ -1617,7 +1617,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
             margin: const EdgeInsets.only(top: 8, bottom: 8),
             decoration: appPageSectionCardDecoration(context),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
