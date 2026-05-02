@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:html/dom.dart' as html_dom;
-import 'package:html/parser.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -148,8 +147,11 @@ String? titleFromApkMirrorRssItemInner(String itemInnerXml) {
 }
 
 /// Resolves Open Graph / Twitter image URL from an APKMirror app listing page.
-String? iconUrlFromApkMirrorAppPageHtml(String html, String pageUrl) {
-  final doc = parse(html);
+Future<String?> iconUrlFromApkMirrorAppPageHtml(
+  String html,
+  String pageUrl,
+) async {
+  final doc = await parseHtmlOffIsolate(html);
   String? raw =
       doc.querySelector('meta[property="og:image"]')?.attributes['content'] ??
       doc.querySelector('meta[name="twitter:image"]')?.attributes['content'] ??
@@ -185,8 +187,8 @@ int? apkSizeBytesFromApkMirrorSizeText(String sizeText) {
   return (sizeNumber * multiplier).round();
 }
 
-int? apkSizeBytesFromApkMirrorReleasePageHtml(String html) {
-  final pageText = parse(html).body?.text ?? html;
+Future<int?> apkSizeBytesFromApkMirrorReleasePageHtml(String html) async {
+  final pageText = (await parseHtmlOffIsolate(html)).body?.text ?? html;
   final exactBytesMatch = RegExp(
     r'\(([0-9][0-9,]*)\s*bytes\)',
     caseSensitive: false,
@@ -272,12 +274,12 @@ String _apkMirrorDownloadPageKeyFromLinkElement(html_dom.Element linkElement) {
   return bestText.isNotEmpty ? bestText : linkElement.outerHtml;
 }
 
-List<MapEntry<String, String>>
+Future<List<MapEntry<String, String>>>
 _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
   String html,
   String releasePageUrl,
-) {
-  final doc = parse(html);
+) async {
+  final doc = await parseHtmlOffIsolate(html);
   final Map<String, int> weightedUrls = {};
   final Map<String, String> urlKeys = {};
   for (final linkElement in doc.querySelectorAll('a[href]')) {
@@ -317,14 +319,14 @@ _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
       .toList();
 }
 
-List<String> apkMirrorDownloadPageUrlsFromReleasePageHtml(
+Future<List<String>> apkMirrorDownloadPageUrlsFromReleasePageHtml(
   String html,
   String releasePageUrl,
-) {
-  return _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
+) async {
+  return (await _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
     html,
     releasePageUrl,
-  ).map((entry) => entry.value).toList();
+  )).map((entry) => entry.value).toList();
 }
 
 List<String> apkMirrorFallbackDownloadPageUrlsFromReleasePageUrl(
@@ -361,16 +363,19 @@ List<String> apkMirrorFallbackDownloadPageUrlsFromReleasePageUrl(
   return candidates;
 }
 
-bool apkMirrorDownloadPageHtmlIsBundle(String html) {
-  final pageText = parse(html).body?.text ?? html;
+Future<bool> apkMirrorDownloadPageHtmlIsBundle(String html) async {
+  final pageText = (await parseHtmlOffIsolate(html)).body?.text ?? html;
   return RegExp(
     r'Download\s+APK\s+Bundle',
     caseSensitive: false,
   ).hasMatch(pageText);
 }
 
-String _apkMirrorDownloadPageKeyFromHtml(String html, String url) {
-  final doc = parse(html);
+Future<String> _apkMirrorDownloadPageKeyFromHtml(
+  String html,
+  String url,
+) async {
+  final doc = await parseHtmlOffIsolate(html);
   final titleText = doc.querySelector('title')?.text;
   final headingText =
       doc.querySelector('h1')?.text ?? doc.querySelector('h2')?.text;
@@ -706,14 +711,14 @@ class APKMirror extends AppSource {
             'release page status=${releasePageResponse.statusCode} bytes=${releasePageResponse.body.length} url=$releasePageUrl',
           );
           if (releasePageResponse.statusCode == 200) {
-            apkSizeBytes = apkSizeBytesFromApkMirrorReleasePageHtml(
+            apkSizeBytes = await apkSizeBytesFromApkMirrorReleasePageHtml(
               releasePageResponse.body,
             );
             await _logApkMirrorSizeDebug(
               'release page parsedSize=${apkSizeBytes?.toString() ?? "<null>"}',
             );
             final downloadPageEntries =
-                _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
+                await _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
                   releasePageResponse.body,
                   releasePageUrl,
                 );
@@ -742,9 +747,10 @@ class APKMirror extends AppSource {
               if (downloadPageResponse.statusCode != 200) {
                 continue;
               }
-              final candidateSize = apkSizeBytesFromApkMirrorReleasePageHtml(
-                downloadPageResponse.body,
-              );
+              final candidateSize =
+                  await apkSizeBytesFromApkMirrorReleasePageHtml(
+                    downloadPageResponse.body,
+                  );
               if (checkedDownloadCandidates <= 8) {
                 await _logApkMirrorSizeDebug(
                   'download candidate #$checkedDownloadCandidates parsedSize=${candidateSize?.toString() ?? "<null>"}',
@@ -753,7 +759,7 @@ class APKMirror extends AppSource {
               if (candidateSize == null) {
                 continue;
               }
-              final candidateIsBundle = apkMirrorDownloadPageHtmlIsBundle(
+              final candidateIsBundle = await apkMirrorDownloadPageHtmlIsBundle(
                 downloadPageResponse.body,
               );
               sizeCandidates.add(
@@ -799,7 +805,7 @@ class APKMirror extends AppSource {
               }
               consecutiveMissedFallbackCandidates = 0;
               final fallbackCandidateSize =
-                  apkSizeBytesFromApkMirrorReleasePageHtml(
+                  await apkSizeBytesFromApkMirrorReleasePageHtml(
                     fallbackDownloadPageResponse.body,
                   );
               if (checkedFallbackDownloadCandidates <= 8) {
@@ -811,12 +817,12 @@ class APKMirror extends AppSource {
                 continue;
               }
               final fallbackCandidateIsBundle =
-                  apkMirrorDownloadPageHtmlIsBundle(
+                  await apkMirrorDownloadPageHtmlIsBundle(
                     fallbackDownloadPageResponse.body,
                   );
               sizeCandidates.add(
                 _ApkMirrorSizeCandidate(
-                  key: _apkMirrorDownloadPageKeyFromHtml(
+                  key: await _apkMirrorDownloadPageKeyFromHtml(
                     fallbackDownloadPageResponse.body,
                     fallbackDownloadPageUrl,
                   ),
@@ -857,7 +863,10 @@ class APKMirror extends AppSource {
           'listing page status=${pageRes.statusCode} bytes=${pageRes.body.length} url=$standardUrl',
         );
         if (pageRes.statusCode == 200) {
-          iconUrl = iconUrlFromApkMirrorAppPageHtml(pageRes.body, standardUrl);
+          iconUrl = await iconUrlFromApkMirrorAppPageHtml(
+            pageRes.body,
+            standardUrl,
+          );
           await _logApkMirrorSizeDebug(
             'listing page iconUrl=${iconUrl ?? "<null>"}',
           );

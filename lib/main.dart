@@ -460,6 +460,29 @@ class _ObtainiumState extends State<Obtainium> {
             navigatorKey: globalNavigatorKey,
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
+            // App-wide UI scale. The user controls scaling via the
+            // [SettingsProvider.appUiScale] slider in the Settings page.
+            // When the slider is at the default 1.0 we return the child
+            // unwrapped, so the OS-reported MediaQuery (including any
+            // non-linear textScaler curve) flows through untouched. When
+            // the slider is off-default we multiply the OS scaler by the
+            // user's factor and replace it with a linear approximation.
+            builder: (BuildContext context, Widget? child) {
+              final double userScale = settingsProvider.appUiScale;
+              if (userScale == 1.0) {
+                return child ?? const SizedBox.shrink();
+              }
+              final MediaQueryData mq = MediaQuery.of(context);
+              const double referenceSize = 14.0;
+              final double systemFactor =
+                  mq.textScaler.scale(referenceSize) / referenceSize;
+              return MediaQuery(
+                data: mq.copyWith(
+                  textScaler: TextScaler.linear(systemFactor * userScale),
+                ),
+                child: child ?? const SizedBox.shrink(),
+              );
+            },
             theme: ThemeData(
               useMaterial3: true,
               colorScheme: themeColorScheme,

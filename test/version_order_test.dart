@@ -212,27 +212,27 @@ void main() {
     );
   });
 
-  test('apk mirror download page size text is parsed', () {
+  test('apk mirror download page size text is parsed', () async {
     expect(
-      apkSizeBytesFromApkMirrorReleasePageHtml(
+      await apkSizeBytesFromApkMirrorReleasePageHtml(
         'Download APK Bundle Base APK and 3 splits, 3.06 MB',
       ),
       3208643,
     );
   });
 
-  test('apk mirror exact byte size wins when present', () {
+  test('apk mirror exact byte size wins when present', () async {
     expect(
-      apkSizeBytesFromApkMirrorReleasePageHtml(
+      await apkSizeBytesFromApkMirrorReleasePageHtml(
         '3.06 MB (3,212,945 bytes) File size:3.11 MB',
       ),
       3212945,
     );
   });
 
-  test('apk mirror release page uses first file size fallback', () {
+  test('apk mirror release page uses first file size fallback', () async {
     expect(
-      apkSizeBytesFromApkMirrorReleasePageHtml(
+      await apkSizeBytesFromApkMirrorReleasePageHtml(
         'File size:7.12 MB Downloads:2,884 File size:7.36 MB',
       ),
       7465861,
@@ -267,9 +267,9 @@ void main() {
     );
   });
 
-  test('apk mirror release page download urls strip duplicate fragments', () {
+  test('apk mirror release page download urls strip duplicate fragments', () async {
     expect(
-      apkMirrorDownloadPageUrlsFromReleasePageHtml(
+      await apkMirrorDownloadPageUrlsFromReleasePageHtml(
         '''
 <a href="youtube-21-18-163-3-android-apk-download/">21.18.163 APK</a>
 <a href="youtube-21-18-163-3-android-apk-download/#disqus_thread">comments</a>

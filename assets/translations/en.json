@@ -307,6 +307,7 @@
     "shizukuOldAndroidWithADB": "Shizuku running on Android < 8.1 with ADB - update Android or use Dhizuku or Sui instead",
     "shizukuPretendToBeGooglePlay": "Set Google Play as the installation source (if Shizuku is used)",
     "useSystemFont": "Use the system font",
+    "uiScale": "UI scale",
     "useVersionCodeAsOSVersion": "Use app versionCode as OS-detected version",
     "requestHeader": "Request header",
     "useLatestAssetDateAsReleaseDate": "Use latest asset upload as release date",

@@ -723,6 +723,108 @@ class _SettingsPageState extends State<SettingsPage> {
                                 },
                                 future: _androidInfo,
                               ),
+                              // ── UI scale slider ─────────────────────────
+                              // Lets users dial the in-app text/layout size
+                              // up or down. The slider is the sole knob -
+                              // when it's at 1.0 the MediaQuery override in
+                              // main.dart is a true no-op. Visual design
+                              // mirrors the [intervalSlider] above (gapped
+                              // track + vertical-bar thumb + tick marks)
+                              // for consistency across the settings page.
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  8,
+                                  8,
+                                  8,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.format_size_rounded,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Padding(
+                                            padding:
+                                                const EdgeInsets.symmetric(
+                                                  horizontal: 8,
+                                                ),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(tr('uiScale')),
+                                                ),
+                                                Text(
+                                                  '${(settingsProvider.appUiScale * 100).round()}%',
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          SliderTheme(
+                                            data: SliderTheme.of(context)
+                                                .copyWith(
+                                                  trackHeight: 16,
+                                                  trackShape:
+                                                      const _GappedTrackShape(),
+                                                  thumbShape:
+                                                      const _VerticalBarThumbShape(),
+                                                  tickMarkShape:
+                                                      const RoundSliderTickMarkShape(
+                                                        tickMarkRadius: 3,
+                                                      ),
+                                                  activeTickMarkColor:
+                                                      Theme.of(
+                                                        context,
+                                                      ).colorScheme.onPrimary,
+                                                  inactiveTickMarkColor:
+                                                      Theme.of(
+                                                        context,
+                                                      ).colorScheme.primary,
+                                                  overlayShape:
+                                                      const RoundSliderOverlayShape(
+                                                        overlayRadius: 20,
+                                                      ),
+                                                ),
+                                            child: Slider(
+                                              min: SettingsProvider
+                                                  .appUiScaleMin,
+                                              max: SettingsProvider
+                                                  .appUiScaleMax,
+                                              // 0.05 increments between
+                                              // [appUiScaleMin]..[appUiScaleMax].
+                                              divisions:
+                                                  ((SettingsProvider
+                                                                          .appUiScaleMax -
+                                                                      SettingsProvider
+                                                                          .appUiScaleMin) /
+                                                              0.05)
+                                                          .round(),
+                                              label:
+                                                  '${(settingsProvider.appUiScale * 100).round()}%',
+                                              value: settingsProvider
+                                                  .appUiScale,
+                                              onChanged: (double value) {
+                                                settingsProvider.appUiScale =
+                                                    value;
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                               SwitchListTile(
                                 title: Text(tr('showWebInAppView')),
                                 value: settingsProvider.showAppWebpage,

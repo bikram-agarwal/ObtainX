@@ -187,6 +187,29 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // ── App UI scale ────────────────────────────────────────────────────────
+  // User-tunable multiplier applied to the effective text scale used by the
+  // top-level MediaQuery override in main.dart. Combined with the OS-level
+  // textScaler clamp at 1.2, this gives users a range from very compact
+  // (0.75x) to slightly enlarged (1.25x) regardless of their Android font
+  // size / system font choice. 1.0 is the no-op default.
+  static const double appUiScaleMin = 0.75;
+  static const double appUiScaleMax = 1.25;
+  static const double appUiScaleDefault = 1.0;
+
+  double get appUiScale {
+    final double raw =
+        prefs?.getDouble('appUiScale') ?? appUiScaleDefault;
+    if (raw.isNaN || raw <= 0) return appUiScaleDefault;
+    return raw.clamp(appUiScaleMin, appUiScaleMax);
+  }
+
+  set appUiScale(double scale) {
+    final double clamped = scale.clamp(appUiScaleMin, appUiScaleMax);
+    prefs?.setDouble('appUiScale', clamped);
+    notifyListeners();
+  }
+
   // 'stock' = default Android installer, 'shizuku' = Shizuku, 'Third-Party' = third-party installer (user-chosen app; stored value unchanged for prefs compatibility)
   String get installerMode {
     return prefs?.getString('installerMode') ?? 'stock';
