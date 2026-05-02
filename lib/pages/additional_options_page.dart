@@ -39,7 +39,9 @@ Future<bool> persistAdditionalOptionsForm({
   final Map<String, dynamic> originalSettings = Map<String, dynamic>.from(
     app.additionalSettings,
   );
+  syncVersionStringSourceSettings(originalSettings);
   app.additionalSettings = {...originalSettings, ...formValues};
+  syncVersionStringSourceSettings(app.additionalSettings);
 
   if (source.enforceTrackOnly) {
     app.additionalSettings['trackOnly'] = true;
@@ -57,27 +59,13 @@ Future<bool> persistAdditionalOptionsForm({
   final bool releaseDateVersionDisabled =
       app.additionalSettings['releaseDateAsVersion'] != true &&
       originalSettings['releaseDateAsVersion'] == true;
-  final bool releaseTitleVersionEnabled =
-      app.additionalSettings['releaseTitleAsVersion'] == true &&
-      originalSettings['releaseTitleAsVersion'] != true;
-  final bool assetNameVersionEnabled =
-      app.additionalSettings['extractVersionFromAssetName'] == true &&
-      originalSettings['extractVersionFromAssetName'] != true;
-
-  if (assetNameVersionEnabled) {
-    app.additionalSettings['releaseTitleAsVersion'] = false;
-  } else if (releaseTitleVersionEnabled ||
-      (app.additionalSettings['releaseTitleAsVersion'] == true &&
-          app.additionalSettings['extractVersionFromAssetName'] == true)) {
-    app.additionalSettings['extractVersionFromAssetName'] = false;
-  }
 
   if (releaseDateVersionEnabled && app.releaseDate != null) {
     final bool isUpdated =
         app.installedVersion == app.latestVersion ||
         (app.installedVersion != null &&
             versionsEffectivelyEqual(app.installedVersion!, app.latestVersion));
-    app.latestVersion = app.releaseDate!.microsecondsSinceEpoch.toString();
+    app.latestVersion = app.releaseDate!.toUtc().toIso8601String();
     if (isUpdated) app.installedVersion = app.latestVersion;
   } else if (releaseDateVersionDisabled) {
     app.installedVersion =
@@ -86,7 +74,11 @@ Future<bool> persistAdditionalOptionsForm({
 
   if (versionDetectionEnabled) {
     app.additionalSettings['versionDetection'] = true;
-    app.additionalSettings['releaseDateAsVersion'] = false;
+    if (app.additionalSettings['releaseDateAsVersion'] == true) {
+      app.additionalSettings['versionStringSource'] =
+          versionStringSourceDefault;
+      syncVersionStringSourceSettings(app.additionalSettings);
+    }
   }
 
   await appsProvider.saveApps([app]);
@@ -141,6 +133,9 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       return;
     }
     final App app = appInMem.app;
+    final Map<String, dynamic> appAdditionalSettings =
+        Map<String, dynamic>.from(app.additionalSettings);
+    syncVersionStringSourceSettings(appAdditionalSettings);
     final AppSource source = SourceProvider().getSource(
       app.url,
       overrideSource: app.overrideSource,
@@ -148,8 +143,8 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     _items = cloneFormItems(source.combinedAppSpecificSettingFormItems);
     for (final List<GeneratedFormItem> row in _items) {
       for (final GeneratedFormItem element in row) {
-        if (app.additionalSettings[element.key] != null) {
-          element.defaultValue = app.additionalSettings[element.key];
+        if (appAdditionalSettings[element.key] != null) {
+          element.defaultValue = appAdditionalSettings[element.key];
         }
       }
     }
@@ -162,6 +157,27 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       rawLatestVersionFromSource: app.rawLatestVersionFromSource,
       rawApkNamesFromSource: app.rawApkNamesFromSource,
       rawReleaseTitlesFromSource: app.rawReleaseTitlesFromSource,
+      resolveRawLatestVersionFromValues:
+          (Map<String, dynamic> currentValues) async {
+            final Map<String, dynamic> settings = <String, dynamic>{
+              ...appAdditionalSettings,
+              ...currentValues,
+            };
+            syncVersionStringSourceSettings(settings);
+            settings['versionExtractionRegEx'] = '';
+            settings['matchGroupToUse'] = '';
+            try {
+              final App resolvedApp = await SourceProvider().getApp(
+                source,
+                app.url,
+                settings,
+                currentApp: app,
+              );
+              return resolvedApp.rawLatestVersionFromSource;
+            } catch (_) {
+              return null;
+            }
+          },
     );
     _valid = _items.isEmpty;
   }

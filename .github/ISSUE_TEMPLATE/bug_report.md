@@ -23,11 +23,12 @@ assignees: ''
 4. See error -->
 
 **Screenshots and Logs**
-<!-- If applicable, add screenshots, logs, and any other artifacts (like some/all files under `/Android/data/dev.imranr.obtainium/`) that you think may help troubleshoot the issue. -->
+<!-- If applicable, add screenshots, and logs. Go to ObtainX settings, scroll to the bottom, tap the 🐞 bug icon, "share as file". Attach that log file here. -->
 
 **Please complete the following information:**
  - Device: <!-- [e.g. Pixel 7] -->
  - OS: <!-- [e.g. GrapheneOS] -->
+ - Display size & font size: <!-- Check at Android Settings -> Display → Display size & text -->
  - ObtainX Version: <!-- [e.g. 0.14.6-beta] -->
 
 **Additional context**

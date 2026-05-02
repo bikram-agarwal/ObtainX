@@ -2891,14 +2891,11 @@ class AppsProvider with ChangeNotifier {
         var app = a.deepCopy();
         clearStaleSkippedLatestVersionInPlace(app);
         PackageInfo? info = await getInstalledInfo(app.id);
-        // Reuse the cached icon and OS label whenever the installed package
+        // Reuse the cached icon whenever the installed package
         // hasn't changed since the last save. [getAppIcon] returns large PNG
-        // bytes via a JNI hop and [getAppLabel] is another platform-channel
-        // round-trip; doing them per-app on every checkUpdate run (50+ apps
-        // on a pull-to-refresh) is the second-largest source of UI-isolate
-        // jank after the rebuild storm. We still call [getInstalledInfo]
-        // unconditionally - it's cheap and we need the current versionName
-        // to detect external uninstalls / updates.
+        // bytes via a JNI hop. We still call [getInstalledInfo]
+        // unconditionally because it is cheap and we need the current
+        // versionName to detect external uninstalls / updates.
         final AppInMemory? cachedInMemory = this.apps[app.id];
         final bool installedUnchanged =
             cachedInMemory != null &&
@@ -2908,12 +2905,15 @@ class AppsProvider with ChangeNotifier {
         Uint8List? icon;
         if (installedUnchanged) {
           icon = cachedInMemory.icon;
-          // Preserve the previously-saved name (which already reflects the
-          // OS label from the last save, if one was available).
           app.name = cachedInMemory.app.name;
         } else {
           icon = await info?.applicationInfo?.getAppIcon();
-          app.name = await (info?.applicationInfo?.getAppLabel()) ?? app.name;
+          final String? appLabel = info?.applicationInfo?.nonLocalizedLabel
+              ?.toString()
+              .trim();
+          if (appLabel?.isNotEmpty == true) {
+            app.name = appLabel!;
+          }
         }
         if (attemptToCorrectInstallStatus) {
           app = getCorrectedInstallStatusAppIfPossible(app, info) ?? app;
@@ -3517,7 +3517,6 @@ class AppsProvider with ChangeNotifier {
     isAuto = false,
     SettingsProvider? sp,
   }) async {
-    final SettingsProvider settingsProvider = sp ?? this.settingsProvider;
     // Auto exports get debounced - bursts of saveApps calls coalesce into a
     // single trailing-edge fire 2s after the last call. Manual exports
     // (pickOnly or user-triggered Save) bypass the debounce and run inline

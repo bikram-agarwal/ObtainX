@@ -20,6 +20,7 @@ class GitHub extends AppSource {
     showReleaseDateAsVersionToggle = true;
     showReleaseTitleAsVersionToggle = true;
     showExtractVersionFromAssetNameToggle = true;
+    showReleaseCommitShaAsVersionToggle = true;
     this.hostChanged = hostChanged;
     allowIncludeZips = true;
 
@@ -373,6 +374,53 @@ class GitHub extends AppSource {
   String? changeLogPageFromStandardUrl(String standardUrl) =>
       '$standardUrl/releases';
 
+  Future<String?> getReleaseCommitSha(
+    dynamic release,
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    final String? tagName = release['tag_name'] as String?;
+    if (tagName == null || tagName.trim().isEmpty) {
+      return null;
+    }
+    final String apiUrl = await convertStandardUrlToAPIUrl(
+      standardUrl,
+      additionalSettings,
+    );
+    final Response refResponse = await sourceRequest(
+      '$apiUrl/git/ref/tags/${Uri.encodeComponent(tagName)}',
+      additionalSettings,
+    );
+    if (refResponse.statusCode != 200) {
+      return null;
+    }
+    final dynamic refBody = jsonDecode(refResponse.body);
+    final dynamic refObject = refBody['object'];
+    final String? objectSha = refObject?['sha'] as String?;
+    final String? objectType = refObject?['type'] as String?;
+    if (objectSha == null || objectSha.isEmpty) {
+      return null;
+    }
+    if (objectType == 'commit') {
+      return objectSha;
+    }
+    if (objectType != 'tag') {
+      return null;
+    }
+    final Response tagResponse = await sourceRequest(
+      '$apiUrl/git/tags/$objectSha',
+      additionalSettings,
+    );
+    if (tagResponse.statusCode != 200) {
+      return null;
+    }
+    final dynamic tagBody = jsonDecode(tagResponse.body);
+    final dynamic tagObject = tagBody['object'];
+    final String? commitSha = tagObject?['sha'] as String?;
+    final String? commitType = tagObject?['type'] as String?;
+    return commitType == 'commit' ? commitSha : null;
+  }
+
   Future<APKDetails> getLatestAPKDetailsCommon(
     String requestUrl,
     String standardUrl,
@@ -644,18 +692,31 @@ class GitHub extends AppSource {
         targetRelease = releases[i];
         targetRelease['apkUrls'] = filteredApkUrls;
         targetRelease['filteredAssets'] = filteredApks;
-        String? assetNameVersionSource;
-        if (additionalSettings['extractVersionFromAssetName'] == true) {
+        final String versionStringSource = getVersionStringSource(
+          additionalSettings,
+        );
+        String? selectedVersionSource;
+        if (versionStringSource == versionStringSourceAssetName) {
           if (filteredApkUrls.isEmpty) {
             throw NoVersionError();
           }
-          assetNameVersionSource = filteredApkUrls.last.key;
+          selectedVersionSource = filteredApkUrls.last.key;
+        } else if (versionStringSource == versionStringSourceReleaseTitle) {
+          selectedVersionSource = nameToFilter;
+        } else if (versionStringSource == versionStringSourceReleaseCommitSha) {
+          selectedVersionSource = await getReleaseCommitSha(
+            targetRelease,
+            standardUrl,
+            additionalSettings,
+          );
+          if (selectedVersionSource == null) {
+            throw NoVersionError();
+          }
         }
         targetRelease['version'] =
-            assetNameVersionSource ??
-            (additionalSettings['releaseTitleAsVersion'] == true
-                ? nameToFilter
-                : targetRelease['tag_name'] ?? targetRelease['name']);
+            selectedVersionSource ??
+            targetRelease['tag_name'] ??
+            targetRelease['name'];
         if (targetRelease['tarball_url'] != null) {
           allAssetUrls.add(
             MapEntry(

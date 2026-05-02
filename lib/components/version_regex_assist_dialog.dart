@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
+typedef RegexAssistRawVersionResolver =
+    Future<String?> Function(Map<String, dynamic> currentValues);
+
 /// Removes segments that are alphabet-only (e.g. pixel, beta, release).
 String stripLetterOnlySegmentsFromVersionRaw(String raw) {
   final List<String> parts = raw
@@ -85,6 +88,14 @@ String? _digitWildcardCapturePattern(String desired) {
   return '(${fragments.join(r'\.')})';
 }
 
+String? _hexWildcardCapturePattern(String desired) {
+  final String trimmed = desired.trim();
+  if (trimmed.length < 6 || !RegExp(r'^[0-9a-fA-F]+$').hasMatch(trimmed)) {
+    return null;
+  }
+  return '([0-9a-fA-F]{${trimmed.length}})';
+}
+
 List<String> candidateVersionStringsFromRaw(String raw) {
   final String trimmed = raw.trim();
   if (trimmed.isEmpty) return <String>[];
@@ -133,6 +144,30 @@ Map<String, String>? tryBuildRegexForExtractedVersion({
       wildcardPattern,
       '.*$wildcardPattern',
     ]) {
+      try {
+        final String? out = extractVersion(pattern, r'$1', raw);
+        if (out == trimmedDesired) {
+          return <String, String>{
+            'versionExtractionRegEx': pattern,
+            'matchGroupToUse': r'$1',
+          };
+        }
+      } catch (_) {}
+    }
+  }
+
+  final String? hexWildcardPattern = _hexWildcardCapturePattern(trimmedDesired);
+  if (hexWildcardPattern != null) {
+    final int desiredStart = raw.indexOf(trimmedDesired);
+    final List<String> hexPatterns = <String>[];
+    if (desiredStart == 0) {
+      hexPatterns.add('^$hexWildcardPattern.*');
+    }
+    if (desiredStart + trimmedDesired.length == raw.length) {
+      hexPatterns.add('.*$hexWildcardPattern\$');
+    }
+    hexPatterns.add('.*?$hexWildcardPattern.*');
+    for (final String pattern in hexPatterns) {
       try {
         final String? out = extractVersion(pattern, r'$1', raw);
         if (out == trimmedDesired) {
@@ -234,6 +269,7 @@ List<List<GeneratedFormItem>> attachRegexAssistToItems(
   required String? rawLatestVersionFromSource,
   required String? rawApkNamesFromSource,
   required String? rawReleaseTitlesFromSource,
+  RegexAssistRawVersionResolver? resolveRawLatestVersionFromValues,
 }) {
   final List<String> apkRawLines = regexAssistLinesFromSnapshot(
     rawApkNamesFromSource,
@@ -252,23 +288,48 @@ List<List<GeneratedFormItem>> attachRegexAssistToItems(
               BuildContext context,
               FormValuesTextPatch patch,
               Map<String, dynamic> currentValues,
-            ) {
-              final bool useAssetName =
-                  currentValues['extractVersionFromAssetName'] == true;
-              final bool useReleaseTitle =
-                  currentValues['releaseTitleAsVersion'] == true;
-              final List<String> versionRawLines = useAssetName
+            ) async {
+              final String versionStringSource = getVersionStringSource(
+                currentValues,
+              );
+              final List<String> versionRawLines =
+                  versionStringSource == versionStringSourceAssetName
                   ? apkRawLines
-                  : useReleaseTitle
+                  : versionStringSource == versionStringSourceReleaseTitle
                   ? titleRawLines
                   : const <String>[];
               final String? versionInitialRaw = versionRawLines.isNotEmpty
                   ? versionRawLines.first
                   : rawLatestVersionFromSource;
+              String? resolvedInitialRaw = versionInitialRaw;
+              if (resolveRawLatestVersionFromValues != null) {
+                final String? liveRaw = await resolveRawLatestVersionFromValues(
+                  currentValues,
+                );
+                if (liveRaw?.trim().isNotEmpty == true) {
+                  resolvedInitialRaw = liveRaw;
+                }
+              }
+              String? initialDesired;
+              if (resolvedInitialRaw?.trim().isNotEmpty == true) {
+                try {
+                  initialDesired = extractVersion(
+                    currentValues['versionExtractionRegEx'] as String?,
+                    currentValues['matchGroupToUse'] as String?,
+                    resolvedInitialRaw!,
+                  );
+                } catch (_) {
+                  initialDesired = null;
+                }
+              }
+              if (!context.mounted) {
+                return;
+              }
               return showRegexAssistDialog(
                 context: context,
                 kind: RegexAssistKind.versionExtraction,
-                initialRaw: versionInitialRaw,
+                initialRaw: resolvedInitialRaw,
+                initialDesired: initialDesired,
                 rawLineSuggestions: versionRawLines,
                 filterFieldKey: null,
                 patch: patch,
@@ -342,6 +403,7 @@ List<List<GeneratedFormItem>> attachLatestVersionRegexAssistToItems(
     rawLatestVersionFromSource: rawLatestVersionFromSource,
     rawApkNamesFromSource: null,
     rawReleaseTitlesFromSource: null,
+    resolveRawLatestVersionFromValues: null,
   );
 }
 
@@ -364,6 +426,7 @@ Future<void> showRegexAssistDialog({
   required BuildContext context,
   required RegexAssistKind kind,
   required String? initialRaw,
+  String? initialDesired,
   required List<String> rawLineSuggestions,
   required String? filterFieldKey,
   required FormValuesTextPatch patch,
@@ -374,6 +437,7 @@ Future<void> showRegexAssistDialog({
       return _RegexAssistDialogBody(
         kind: kind,
         initialRaw: initialRaw,
+        initialDesired: initialDesired,
         rawLineSuggestions: rawLineSuggestions,
         filterFieldKey: filterFieldKey,
         patch: patch,
@@ -386,6 +450,7 @@ class _RegexAssistDialogBody extends StatefulWidget {
   const _RegexAssistDialogBody({
     required this.kind,
     required this.initialRaw,
+    required this.initialDesired,
     required this.rawLineSuggestions,
     required this.filterFieldKey,
     required this.patch,
@@ -393,6 +458,7 @@ class _RegexAssistDialogBody extends StatefulWidget {
 
   final RegexAssistKind kind;
   final String? initialRaw;
+  final String? initialDesired;
   final List<String> rawLineSuggestions;
   final String? filterFieldKey;
   final FormValuesTextPatch patch;
@@ -423,6 +489,16 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
       }
     }
     _rebuildCandidates();
+    final String desired = widget.initialDesired?.trim() ?? '';
+    if (desired.isNotEmpty && _rawController.text.contains(desired)) {
+      final bool matchesSuggestion = _candidates.contains(desired);
+      if (matchesSuggestion) {
+        _selectedCandidate = desired;
+      } else {
+        _selectedCandidate = null;
+        _customController.text = desired;
+      }
+    }
   }
 
   void _onCustomFocusChange() {
@@ -442,6 +518,15 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
     _candidates = candidateVersionStringsFromRaw(_rawController.text);
     _selectedCandidate = _candidates.isNotEmpty ? _candidates.first : null;
     _customController.clear();
+  }
+
+  void _selectCustomSubstring() {
+    if (_customController.text.isEmpty &&
+        _rawController.text.trim().isNotEmpty) {
+      _customController.text = _rawController.text.trim();
+    }
+    _selectedCandidate = null;
+    _customFocusNode.requestFocus();
   }
 
   @override
@@ -635,10 +720,24 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
               ),
             ],
             const SizedBox(height: 12),
-            Text(
-              tr('versionRegexAssistCustomLabel'),
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
+            RadioGroup<String>(
+              groupValue: _customController.text.trim().isNotEmpty
+                  ? 'custom'
+                  : null,
+              onChanged: (String? value) {
+                if (value == null) return;
+                setState(_selectCustomSubstring);
+              },
+              child: RadioListTile<String>(
+                value: 'custom',
+                title: Text(
+                  tr('versionRegexAssistCustomLabel'),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
               ),
             ),
             const SizedBox(height: 8),
@@ -649,7 +748,11 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
                 border: const OutlineInputBorder(),
                 hintText: tr('versionRegexAssistCustomHint'),
               ),
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) {
+                setState(() {
+                  _selectedCandidate = null;
+                });
+              },
             ),
           ],
         ),
