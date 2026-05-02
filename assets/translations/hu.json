@@ -140,6 +140,7 @@
     "appLogs": "Alkalmazásnaplók",
     "close": "Bezárás",
     "share": "Megosztás",
+    "shareAsFile": "Share as file",
     "appNotFound": "Az alkalmazás nem található",
     "obtainiumExportHyphenatedLowercase": "obtainium-adat",
     "pickAnAPK": "Válasszon ki egy APK-t",

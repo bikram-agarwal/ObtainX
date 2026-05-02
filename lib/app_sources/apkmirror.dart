@@ -7,8 +7,41 @@ import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+
+// TEMP APKMIRROR SIZE DEBUG: keep enabled until APKMirror size refresh is confirmed.
+const bool apkMirrorSizeDebugLoggingEnabled = true;
+const String _apkMirrorSizeDebugPrefix = 'OBTAINX-APK-SIZE-DEBUG';
+
+class _ApkMirrorSizeCandidate {
+  final String key;
+  final String url;
+  final int sizeBytes;
+  final bool isBundle;
+
+  const _ApkMirrorSizeCandidate({
+    required this.key,
+    required this.url,
+    required this.sizeBytes,
+    required this.isBundle,
+  });
+}
+
+Future<void> _logApkMirrorSizeDebug(String message) async {
+  if (!apkMirrorSizeDebugLoggingEnabled) {
+    return;
+  }
+  try {
+    await LogsProvider(runDefaultClear: false).add(
+      '$_apkMirrorSizeDebugPrefix APKMirror: $message',
+      level: LogLevels.debug,
+    );
+  } catch (_) {
+    // Debug logging must never affect update checks.
+  }
+}
 
 /// Image and static asset URL suffixes that appear in page HTML after a string
 /// that looks like `com.vendor.app`, e.g. `com.google.android.calendar.png`.
@@ -153,20 +186,28 @@ int? apkSizeBytesFromApkMirrorSizeText(String sizeText) {
 
 int? apkSizeBytesFromApkMirrorReleasePageHtml(String html) {
   final pageText = parse(html).body?.text ?? html;
+  final exactBytesMatch = RegExp(
+    r'\(([0-9][0-9,]*)\s*bytes\)',
+    caseSensitive: false,
+  ).firstMatch(pageText);
+  if (exactBytesMatch != null) {
+    return int.tryParse(exactBytesMatch.group(1)!.replaceAll(',', ''));
+  }
+
   final directDownloadSizeTexts = RegExp(
     r'Download[^\n]*,\s*([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB)',
     caseSensitive: false,
   ).allMatches(pageText).map((match) => match.group(0)!).toSet().toList();
-  if (directDownloadSizeTexts.length == 1) {
-    return apkSizeBytesFromApkMirrorSizeText(directDownloadSizeTexts.single);
+  if (directDownloadSizeTexts.isNotEmpty) {
+    return apkSizeBytesFromApkMirrorSizeText(directDownloadSizeTexts.first);
   }
 
   final fileSizeTexts = RegExp(
     r'File size:\s*([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB)',
     caseSensitive: false,
   ).allMatches(pageText).map((match) => match.group(0)!).toSet().toList();
-  if (fileSizeTexts.length == 1) {
-    return apkSizeBytesFromApkMirrorSizeText(fileSizeTexts.single);
+  if (fileSizeTexts.isNotEmpty) {
+    return apkSizeBytesFromApkMirrorSizeText(fileSizeTexts.first);
   }
   return null;
 }
@@ -180,7 +221,11 @@ String? _apkMirrorSameReleaseDownloadPageUrlFromElement(
     return null;
   }
   final releaseUri = Uri.parse(releasePageUrl);
-  final resolved = releaseUri.resolve(href).toString();
+  final resolvedUri = releaseUri.resolve(href).removeFragment();
+  final resolvedPathWithSlash = resolvedUri.path.endsWith('/')
+      ? resolvedUri.path
+      : '${resolvedUri.path}/';
+  final resolved = resolvedUri.replace(path: resolvedPathWithSlash).toString();
   final releasePrefix = releasePageUrl.endsWith('/')
       ? releasePageUrl
       : '$releasePageUrl/';
@@ -192,15 +237,48 @@ String? _apkMirrorSameReleaseDownloadPageUrlFromElement(
       !resolvedPath.endsWith('-apk-download')) {
     return null;
   }
-  return resolved.endsWith('/') ? resolved : '$resolved/';
+  return resolved;
 }
 
-List<String> apkMirrorDownloadPageUrlsFromReleasePageHtml(
+String _apkMirrorNormalizedText(String text) {
+  return text.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+bool _apkMirrorTextIncludesVariantHint(String text) {
+  return RegExp(
+    r'\b(APK|BUNDLE|arm64-v8a|armeabi-v7a|arm-v7a|x86_64|x86)\b',
+    caseSensitive: false,
+  ).hasMatch(text);
+}
+
+String _apkMirrorDownloadPageKeyFromLinkElement(html_dom.Element linkElement) {
+  final linkText = _apkMirrorNormalizedText(linkElement.text);
+  html_dom.Element? parent = linkElement.parent;
+  String bestText = linkText;
+  for (int depth = 0; depth < 6 && parent != null; depth++) {
+    final candidateText = _apkMirrorNormalizedText('$linkText ${parent.text}');
+    if (RegExp(
+      r'\b(arm64-v8a|armeabi-v7a|arm-v7a|x86_64|x86)\b',
+      caseSensitive: false,
+    ).hasMatch(candidateText)) {
+      return candidateText;
+    }
+    if (_apkMirrorTextIncludesVariantHint(candidateText)) {
+      bestText = candidateText;
+    }
+    parent = parent.parent;
+  }
+  return bestText.isNotEmpty ? bestText : linkElement.outerHtml;
+}
+
+List<MapEntry<String, String>>
+_apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
   String html,
   String releasePageUrl,
 ) {
   final doc = parse(html);
   final Map<String, int> weightedUrls = {};
+  final Map<String, String> urlKeys = {};
   for (final linkElement in doc.querySelectorAll('a[href]')) {
     final resolved = _apkMirrorSameReleaseDownloadPageUrlFromElement(
       linkElement,
@@ -209,13 +287,9 @@ List<String> apkMirrorDownloadPageUrlsFromReleasePageHtml(
     if (resolved == null) {
       continue;
     }
-    var parentText = linkElement.text;
-    html_dom.Element? parent = linkElement.parent;
-    for (int depth = 0; depth < 4 && parent != null; depth++) {
-      parentText = '$parentText ${parent.text}';
-      parent = parent.parent;
-    }
-    final normalizedParentText = parentText.replaceAll(RegExp(r'\s+'), ' ');
+    final normalizedParentText = _apkMirrorDownloadPageKeyFromLinkElement(
+      linkElement,
+    );
     var weight = 50;
     if (RegExp(r'(^|\s)APK(\s|$)').hasMatch(normalizedParentText)) {
       weight -= 20;
@@ -226,6 +300,7 @@ List<String> apkMirrorDownloadPageUrlsFromReleasePageHtml(
     final existingWeight = weightedUrls[resolved];
     if (existingWeight == null || weight < existingWeight) {
       weightedUrls[resolved] = weight;
+      urlKeys[resolved] = normalizedParentText;
     }
   }
   final sortedEntries = weightedUrls.entries.toList()
@@ -236,7 +311,122 @@ List<String> apkMirrorDownloadPageUrlsFromReleasePageHtml(
       }
       return left.key.compareTo(right.key);
     });
-  return sortedEntries.map((entry) => entry.key).toList();
+  return sortedEntries
+      .map((entry) => MapEntry(urlKeys[entry.key] ?? entry.key, entry.key))
+      .toList();
+}
+
+List<String> apkMirrorDownloadPageUrlsFromReleasePageHtml(
+  String html,
+  String releasePageUrl,
+) {
+  return _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
+    html,
+    releasePageUrl,
+  ).map((entry) => entry.value).toList();
+}
+
+List<String> apkMirrorFallbackDownloadPageUrlsFromReleasePageUrl(
+  String releasePageUrl,
+) {
+  final releaseUri = Uri.parse(releasePageUrl);
+  if (releaseUri.pathSegments.isEmpty) {
+    return [];
+  }
+  final releaseSlug = releaseUri.pathSegments.reversed.firstWhere(
+    (pathSegment) {
+      return pathSegment.isNotEmpty;
+    },
+    orElse: () {
+      return '';
+    },
+  );
+  if (releaseSlug.isEmpty) {
+    return [];
+  }
+  final downloadSlugBase = releaseSlug.endsWith('-release')
+      ? releaseSlug.substring(0, releaseSlug.length - '-release'.length)
+      : releaseSlug;
+  final releasePagePrefix = releasePageUrl.endsWith('/')
+      ? releasePageUrl
+      : '$releasePageUrl/';
+  final List<String> candidates = [];
+  for (var candidateIndex = 1; candidateIndex <= 20; candidateIndex++) {
+    final suffix = candidateIndex == 1 ? '' : '-$candidateIndex';
+    candidates.add(
+      '$releasePagePrefix$downloadSlugBase$suffix-android-apk-download/',
+    );
+  }
+  return candidates;
+}
+
+bool apkMirrorDownloadPageHtmlIsBundle(String html) {
+  final pageText = parse(html).body?.text ?? html;
+  return RegExp(
+    r'Download\s+APK\s+Bundle',
+    caseSensitive: false,
+  ).hasMatch(pageText);
+}
+
+String _apkMirrorDownloadPageKeyFromHtml(String html, String url) {
+  final doc = parse(html);
+  final titleText = doc.querySelector('title')?.text;
+  final headingText =
+      doc.querySelector('h1')?.text ?? doc.querySelector('h2')?.text;
+  final pageText = doc.body?.text ?? html;
+  final key = _apkMirrorNormalizedText(
+    [?titleText, ?headingText, pageText].join(' '),
+  );
+  return key.isNotEmpty ? key : url;
+}
+
+Future<List<MapEntry<String, String>>> _filterApkMirrorDownloadPageEntries(
+  List<MapEntry<String, String>> downloadPageEntries,
+  Map<String, dynamic> additionalSettings,
+) async {
+  var filteredEntries = filterApks(
+    downloadPageEntries,
+    additionalSettings['apkFilterRegEx'],
+    additionalSettings['invertAPKFilter'],
+  );
+  if (additionalSettings['autoApkFilterByArch'] == true) {
+    filteredEntries = await filterApksByArch(filteredEntries);
+  }
+  return filteredEntries;
+}
+
+Future<List<_ApkMirrorSizeCandidate>> _filterApkMirrorSizeCandidates(
+  List<_ApkMirrorSizeCandidate> candidates,
+  Map<String, dynamic> additionalSettings,
+) async {
+  if (candidates.isEmpty) {
+    return candidates;
+  }
+  final filteredEntries = await _filterApkMirrorDownloadPageEntries(
+    candidates
+        .map((candidate) => MapEntry(candidate.key, candidate.url))
+        .toList(),
+    additionalSettings,
+  );
+  final filteredUrls = filteredEntries.map((entry) => entry.value).toSet();
+  return candidates.where((candidate) {
+    return filteredUrls.contains(candidate.url);
+  }).toList();
+}
+
+_ApkMirrorSizeCandidate? _pickApkMirrorSizeCandidate(
+  List<_ApkMirrorSizeCandidate> candidates,
+) {
+  if (candidates.isEmpty) {
+    return null;
+  }
+  final apkCandidates = candidates.where((candidate) {
+    return !candidate.isBundle;
+  }).toList();
+  if (apkCandidates.isNotEmpty) {
+    return apkCandidates.first;
+  }
+  return candidates.first;
 }
 
 DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
@@ -296,8 +486,11 @@ class APKMirror extends AppSource {
     bool forAPKDownload = false,
   }) async {
     return {
-      "User-Agent":
-          "ObtainX/${(await getInstalledInfo(obtainiumId))?.versionName ?? '1.0.0'}",
+      'User-Agent':
+          'Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36 ObtainX/${(await getInstalledInfo(obtainiumId))?.versionName ?? '1.0.0'}',
+      'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
     };
   }
 
@@ -314,12 +507,9 @@ class APKMirror extends AppSource {
     final standardizedUrl = match.group(0)!;
     final lowerStandardizedUrl = standardizedUrl.toLowerCase();
     for (final aliasEntry in _apkMirrorCanonicalAppSlugByAlias.entries) {
-      if (lowerStandardizedUrl.endsWith('/${aliasEntry.key}')) {
-        return standardizedUrl.substring(
-              0,
-              standardizedUrl.length - aliasEntry.key.length,
-            ) +
-            aliasEntry.value;
+      final aliasSuffix = '/${aliasEntry.key}';
+      if (lowerStandardizedUrl.endsWith(aliasSuffix)) {
+        return '${standardizedUrl.substring(0, standardizedUrl.length - aliasSuffix.length)}/${aliasEntry.value}';
       }
     }
     return standardizedUrl;
@@ -369,11 +559,17 @@ class APKMirror extends AppSource {
       '$standardUrl/feed/',
       additionalSettings,
     );
+    await _logApkMirrorSizeDebug(
+      'start standardUrl=$standardUrl feedStatus=${res.statusCode} feedBytes=${res.body.length} fallbackToOlderReleases=$fallbackToOlderReleases filter=${regexFilter ?? "<none>"}',
+    );
     if (res.statusCode == 200) {
       final itemInnerBlocks = RegExp(
         r'<item>([\s\S]*?)</item>',
         caseSensitive: false,
       ).allMatches(res.body).map((match) => match.group(1)!).toList();
+      await _logApkMirrorSizeDebug(
+        'feed parsed itemInnerBlocks=${itemInnerBlocks.length}',
+      );
 
       final List<String> rawReleaseTitleCandidates = <String>[];
       void collectReleaseTitleCandidate(String? title) {
@@ -471,10 +667,14 @@ class APKMirror extends AppSource {
           );
         }
       }
+      final String? releasePageUrlBeforeValidation = releasePageUrl;
       if (releasePageUrl != null &&
           !releasePageUrl.startsWith('$standardUrl/')) {
         releasePageUrl = null;
       }
+      await _logApkMirrorSizeDebug(
+        'selected title=${titleString ?? "<null>"} releasePageUrlRaw=${releasePageUrlBeforeValidation ?? "<null>"} releasePageUrl=${releasePageUrl ?? "<null>"} releaseDate=${releaseDate?.toIso8601String() ?? "<null>"}',
+      );
       String? version = titleString
           ?.substring(
             RegExp('[0-9]').firstMatch(titleString)?.start ?? 0,
@@ -490,40 +690,158 @@ class APKMirror extends AppSource {
 
       int? apkSizeBytes;
       String? downloadPageUrl;
+      final List<_ApkMirrorSizeCandidate> sizeCandidates = [];
       if (releasePageUrl != null) {
         try {
+          var releasePageProvidedDownloadEntries = false;
+          var filteredReleaseDownloadEntries = <MapEntry<String, String>>[];
           final releasePageResponse = await sourceRequest(
             releasePageUrl,
             additionalSettings,
+          );
+          await _logApkMirrorSizeDebug(
+            'release page status=${releasePageResponse.statusCode} bytes=${releasePageResponse.body.length} url=$releasePageUrl',
           );
           if (releasePageResponse.statusCode == 200) {
             apkSizeBytes = apkSizeBytesFromApkMirrorReleasePageHtml(
               releasePageResponse.body,
             );
-            final downloadPageUrls =
-                apkMirrorDownloadPageUrlsFromReleasePageHtml(
+            await _logApkMirrorSizeDebug(
+              'release page parsedSize=${apkSizeBytes?.toString() ?? "<null>"}',
+            );
+            final downloadPageEntries =
+                _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
                   releasePageResponse.body,
                   releasePageUrl,
                 );
-            for (final candidateDownloadPageUrl in downloadPageUrls) {
+            releasePageProvidedDownloadEntries = downloadPageEntries.isNotEmpty;
+            filteredReleaseDownloadEntries =
+                await _filterApkMirrorDownloadPageEntries(
+                  downloadPageEntries,
+                  additionalSettings,
+                );
+            await _logApkMirrorSizeDebug(
+              'download candidates count=${downloadPageEntries.length} filtered=${filteredReleaseDownloadEntries.length} first=${filteredReleaseDownloadEntries.take(5).map((entry) => entry.value).join(" | ")}',
+            );
+            var checkedDownloadCandidates = 0;
+            for (final candidateDownloadPageEntry
+                in filteredReleaseDownloadEntries) {
+              checkedDownloadCandidates += 1;
               final downloadPageResponse = await sourceRequest(
-                candidateDownloadPageUrl,
+                candidateDownloadPageEntry.value,
                 additionalSettings,
               );
+              if (checkedDownloadCandidates <= 8) {
+                await _logApkMirrorSizeDebug(
+                  'download candidate #$checkedDownloadCandidates status=${downloadPageResponse.statusCode} bytes=${downloadPageResponse.body.length} key=${candidateDownloadPageEntry.key} url=${candidateDownloadPageEntry.value}',
+                );
+              }
               if (downloadPageResponse.statusCode != 200) {
                 continue;
               }
               final candidateSize = apkSizeBytesFromApkMirrorReleasePageHtml(
                 downloadPageResponse.body,
               );
-              if (candidateSize != null) {
-                apkSizeBytes = candidateSize;
-                downloadPageUrl = candidateDownloadPageUrl;
-                break;
+              if (checkedDownloadCandidates <= 8) {
+                await _logApkMirrorSizeDebug(
+                  'download candidate #$checkedDownloadCandidates parsedSize=${candidateSize?.toString() ?? "<null>"}',
+                );
               }
+              if (candidateSize == null) {
+                continue;
+              }
+              final candidateIsBundle = apkMirrorDownloadPageHtmlIsBundle(
+                downloadPageResponse.body,
+              );
+              sizeCandidates.add(
+                _ApkMirrorSizeCandidate(
+                  key: candidateDownloadPageEntry.key,
+                  url: candidateDownloadPageEntry.value,
+                  sizeBytes: candidateSize,
+                  isBundle: candidateIsBundle,
+                ),
+              );
             }
           }
-        } catch (_) {
+          if (sizeCandidates.isEmpty &&
+              (!releasePageProvidedDownloadEntries ||
+                  filteredReleaseDownloadEntries.isNotEmpty)) {
+            final fallbackDownloadPageUrls =
+                apkMirrorFallbackDownloadPageUrlsFromReleasePageUrl(
+                  releasePageUrl,
+                );
+            await _logApkMirrorSizeDebug(
+              'fallback download candidates count=${fallbackDownloadPageUrls.length} first=${fallbackDownloadPageUrls.take(5).join(" | ")}',
+            );
+            var consecutiveMissedFallbackCandidates = 0;
+            var checkedFallbackDownloadCandidates = 0;
+            for (final fallbackDownloadPageUrl in fallbackDownloadPageUrls) {
+              checkedFallbackDownloadCandidates += 1;
+              final fallbackDownloadPageResponse = await sourceRequest(
+                fallbackDownloadPageUrl,
+                additionalSettings,
+              );
+              if (checkedFallbackDownloadCandidates <= 8) {
+                await _logApkMirrorSizeDebug(
+                  'fallback download candidate #$checkedFallbackDownloadCandidates status=${fallbackDownloadPageResponse.statusCode} bytes=${fallbackDownloadPageResponse.body.length} url=$fallbackDownloadPageUrl',
+                );
+              }
+              if (fallbackDownloadPageResponse.statusCode != 200) {
+                consecutiveMissedFallbackCandidates += 1;
+                final missLimit = sizeCandidates.isEmpty ? 5 : 3;
+                if (consecutiveMissedFallbackCandidates >= missLimit) {
+                  break;
+                }
+                continue;
+              }
+              consecutiveMissedFallbackCandidates = 0;
+              final fallbackCandidateSize =
+                  apkSizeBytesFromApkMirrorReleasePageHtml(
+                    fallbackDownloadPageResponse.body,
+                  );
+              if (checkedFallbackDownloadCandidates <= 8) {
+                await _logApkMirrorSizeDebug(
+                  'fallback download candidate #$checkedFallbackDownloadCandidates parsedSize=${fallbackCandidateSize?.toString() ?? "<null>"}',
+                );
+              }
+              if (fallbackCandidateSize == null) {
+                continue;
+              }
+              final fallbackCandidateIsBundle =
+                  apkMirrorDownloadPageHtmlIsBundle(
+                    fallbackDownloadPageResponse.body,
+                  );
+              sizeCandidates.add(
+                _ApkMirrorSizeCandidate(
+                  key: _apkMirrorDownloadPageKeyFromHtml(
+                    fallbackDownloadPageResponse.body,
+                    fallbackDownloadPageUrl,
+                  ),
+                  url: fallbackDownloadPageUrl,
+                  sizeBytes: fallbackCandidateSize,
+                  isBundle: fallbackCandidateIsBundle,
+                ),
+              );
+            }
+          }
+          final filteredSizeCandidates = await _filterApkMirrorSizeCandidates(
+            sizeCandidates,
+            additionalSettings,
+          );
+          final pickedSizeCandidate = _pickApkMirrorSizeCandidate(
+            filteredSizeCandidates,
+          );
+          if (pickedSizeCandidate != null) {
+            apkSizeBytes = pickedSizeCandidate.sizeBytes;
+            downloadPageUrl = pickedSizeCandidate.url;
+            await _logApkMirrorSizeDebug(
+              'picked download candidate bundle=${pickedSizeCandidate.isBundle} filteredCandidates=${filteredSizeCandidates.length} size=${pickedSizeCandidate.sizeBytes} key=${pickedSizeCandidate.key} url=${pickedSizeCandidate.url}',
+            );
+          }
+        } catch (error) {
+          await _logApkMirrorSizeDebug(
+            'release/download size path error=${error.toString()}',
+          );
           // Size is optional; keep track-only update checks resilient.
         }
       }
@@ -532,12 +850,25 @@ class APKMirror extends AppSource {
       String? iconUrl;
       try {
         final pageRes = await sourceRequest(standardUrl, additionalSettings);
+        await _logApkMirrorSizeDebug(
+          'listing page status=${pageRes.statusCode} bytes=${pageRes.body.length} url=$standardUrl',
+        );
         if (pageRes.statusCode == 200) {
           iconUrl = iconUrlFromApkMirrorAppPageHtml(pageRes.body, standardUrl);
+          await _logApkMirrorSizeDebug(
+            'listing page iconUrl=${iconUrl ?? "<null>"}',
+          );
         }
-      } catch (_) {
+      } catch (error) {
+        await _logApkMirrorSizeDebug(
+          'listing page path error=${error.toString()}',
+        );
         // Icon is optional – ignore errors.
       }
+
+      await _logApkMirrorSizeDebug(
+        'return version=$version changeLog=${downloadPageUrl ?? releasePageUrl ?? "<null>"} finalSize=${apkSizeBytes?.toString() ?? "<null>"}',
+      );
 
       return APKDetails(
         version,

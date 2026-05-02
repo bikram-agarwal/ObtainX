@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
@@ -22,16 +23,15 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
-
 IconData _swipeActionIcon(SwipeAction action) => switch (action) {
-  SwipeAction.update   => Icons.system_update_alt_rounded,
-  SwipeAction.pin      => Icons.push_pin_rounded,
+  SwipeAction.update => Icons.system_update_alt_rounded,
+  SwipeAction.pin => Icons.push_pin_rounded,
   SwipeAction.appOptions => Icons.tune_rounded,
-  SwipeAction.delete   => Icons.delete_rounded,
-  SwipeAction.open     => Icons.open_in_new_rounded,
-  SwipeAction.appInfo  => Icons.info_rounded,
-  SwipeAction.edit     => Icons.edit_rounded,
-  SwipeAction.none     => Icons.block_rounded,
+  SwipeAction.delete => Icons.delete_rounded,
+  SwipeAction.open => Icons.open_in_new_rounded,
+  SwipeAction.appInfo => Icons.info_rounded,
+  SwipeAction.edit => Icons.edit_rounded,
+  SwipeAction.none => Icons.block_rounded,
 };
 
 class SettingsPage extends StatefulWidget {
@@ -44,8 +44,14 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
-
-
+  static const List<String> _settingsSectionKeys = [
+    'updates',
+    'sourceSpecific',
+    'themes',
+    'appearance',
+    'gestures',
+    'categories',
+  ];
 
   List<int> updateIntervalNodes = [
     15,
@@ -90,7 +96,8 @@ class _SettingsPageState extends State<SettingsPage> {
     Widget updatesIntervalHead,
   ) {
     final List<Widget> rows = <Widget>[updatesIntervalHead];
-    final bool showBgControls = (settingsProvider.updateInterval > 0) &&
+    final bool showBgControls =
+        (settingsProvider.updateInterval > 0) &&
         (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
             settingsProvider.useShizuku);
     if (showBgControls) {
@@ -99,9 +106,7 @@ class _SettingsPageState extends State<SettingsPage> {
           title: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: Text(tr('foregroundServiceForUpdateChecking')),
-              ),
+              Expanded(child: Text(tr('foregroundServiceForUpdateChecking'))),
               Tooltip(
                 message: tr('foregroundServiceReliabilityNote'),
                 triggerMode: TooltipTriggerMode.tap,
@@ -129,9 +134,7 @@ class _SettingsPageState extends State<SettingsPage> {
           title: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: Text(tr('enableBackgroundUpdates')),
-              ),
+              Expanded(child: Text(tr('enableBackgroundUpdates'))),
               Tooltip(
                 message:
                     '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
@@ -297,10 +300,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               context,
                             );
                           case 'denied':
-                            showError(
-                              ObtainiumError(tr('cancelled')),
-                              context,
-                            );
+                            showError(ObtainiumError(tr('cancelled')), context);
                         }
                       }
                     });
@@ -358,16 +358,13 @@ class _SettingsPageState extends State<SettingsPage> {
           }
         },
         dropdownMenuEntries: [
-          DropdownMenuEntry<Locale?>(
-            value: null,
-            label: tr('followSystem'),
-          ),
+          DropdownMenuEntry<Locale?>(value: null, label: tr('followSystem')),
           ...supportedLocales.map(
             (MapEntry<Locale, String> localeEntry) =>
                 DropdownMenuEntry<Locale?>(
-              value: localeEntry.key,
-              label: localeEntry.value,
-            ),
+                  value: localeEntry.key,
+                  label: localeEntry.value,
+                ),
           ),
         ],
       ),
@@ -384,9 +381,10 @@ class _SettingsPageState extends State<SettingsPage> {
         overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
       ),
       child: Slider(
-        value: settingsProvider.updateIntervalSliderVal
-            .roundToDouble()
-            .clamp(0, updateIntervalNodes.length.toDouble()),
+        value: settingsProvider.updateIntervalSliderVal.roundToDouble().clamp(
+          0,
+          updateIntervalNodes.length.toDouble(),
+        ),
         max: updateIntervalNodes.length.toDouble(),
         divisions: updateIntervalNodes.length,
         label: updateIntervalLabel,
@@ -442,10 +440,7 @@ class _SettingsPageState extends State<SettingsPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(
-            Icons.update_rounded,
-            color: cs.onSurfaceVariant,
-          ),
+          Icon(Icons.update_rounded, color: cs.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -455,9 +450,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: Row(
                     children: [
-                      Expanded(
-                        child: Text(tr('bgUpdateCheckInterval')),
-                      ),
+                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
                       Text(updateIntervalLabel),
                     ],
                   ),
@@ -525,6 +518,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final bool expanded =
           settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
       return ClipRect(
+        clipper: _SettingsSectionShadowClipper(expanded: expanded),
         child: AnimatedAlign(
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeInOut,
@@ -533,6 +527,32 @@ class _SettingsPageState extends State<SettingsPage> {
           child: settingsCard(children),
         ),
       );
+    }
+
+    final List<String> visibleSettingsSectionKeys = [
+      'updates',
+      if (sourceProvider.sources.any(
+        (source) => source.sourceConfigSettingFormItems.isNotEmpty,
+      ))
+        'sourceSpecific',
+      'themes',
+      'appearance',
+      'gestures',
+      'categories',
+    ];
+    final bool allSettingsSectionsExpanded = visibleSettingsSectionKeys.every(
+      (sectionKey) =>
+          settingsProvider.prefs?.getBool('settingsSection_$sectionKey') ??
+          true,
+    );
+
+    void setAllSettingsSectionsExpanded(bool expanded) {
+      for (final sectionKey in _settingsSectionKeys) {
+        settingsProvider.setSettingBool(
+          'settingsSection_$sectionKey',
+          expanded,
+        );
+      }
     }
 
     return Scaffold(
@@ -559,316 +579,422 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           CustomScrollView(
+            key: const PageStorageKey<String>('settings-tab-scroll'),
             cacheExtent: 1600,
             slivers: <Widget>[
-          CustomAppBar(title: tr('settings')),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: settingsProvider.prefs == null
-                  ? const SizedBox()
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // ── Updates ──────────────────────────────────────────
-                        sectionHeader(tr('updates'), Icons.update_rounded, 'updates'),
-                        FutureBuilder<AndroidDeviceInfo>(
-                          future: _androidInfo,
-                          builder: (
-                            BuildContext context,
-                            AsyncSnapshot<AndroidDeviceInfo> snapshot,
-                          ) {
-                            return collapsibleCard(
+              CustomAppBar(
+                title: tr('settings'),
+                actions: [
+                  IconButton(
+                    tooltip: allSettingsSectionsExpanded
+                        ? tr('collapseAll')
+                        : tr('expandAll'),
+                    icon: Icon(
+                      allSettingsSectionsExpanded
+                          ? Icons.unfold_less_rounded
+                          : Icons.unfold_more_rounded,
+                    ),
+                    onPressed: () {
+                      setAllSettingsSectionsExpanded(
+                        !allSettingsSectionsExpanded,
+                      );
+                    },
+                  ),
+                ],
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: settingsProvider.prefs == null
+                      ? const SizedBox()
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // ── Updates ──────────────────────────────────────────
+                            sectionHeader(
+                              tr('updates'),
+                              Icons.update_rounded,
                               'updates',
-                              _updatesCardItemList(
-                                context,
-                                cs,
-                                settingsProvider,
-                                snapshot,
-                                updatesIntervalHead,
+                            ),
+                            FutureBuilder<AndroidDeviceInfo>(
+                              future: _androidInfo,
+                              builder:
+                                  (
+                                    BuildContext context,
+                                    AsyncSnapshot<AndroidDeviceInfo> snapshot,
+                                  ) {
+                                    return collapsibleCard(
+                                      'updates',
+                                      _updatesCardItemList(
+                                        context,
+                                        cs,
+                                        settingsProvider,
+                                        snapshot,
+                                        updatesIntervalHead,
+                                      ),
+                                    );
+                                  },
+                            ),
+                            // ── Source-specific ──────────────────────────────────
+                            if (sourceProvider.sources.any(
+                              (s) => s.sourceConfigSettingFormItems.isNotEmpty,
+                            )) ...[
+                              sectionHeader(
+                                tr('sourceSpecific'),
+                                Icons.dns_rounded,
+                                'sourceSpecific',
                               ),
+                              collapsibleCard('sourceSpecific', [
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    8,
+                                    16,
+                                    8,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      for (
+                                        int i = 0;
+                                        i < sourceSpecificForms.length;
+                                        i++
+                                      ) ...[
+                                        if (i > 0) const SizedBox(height: 12),
+                                        sourceSpecificForms[i],
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ]),
+                            ],
+                            // ── Themes ────────────────────────────────────────────
+                            sectionHeader(
+                              tr('settingsThemesSection'),
+                              Icons.palette_rounded,
+                              'themes',
+                            ),
+                            collapsibleCard(
+                              'themes',
+                              buildThemesSettingsCardItems(
+                                context,
+                                _androidInfo,
+                              ),
+                            ),
+                            // ── Appearance ────────────────────────────────────────
+                            sectionHeader(
+                              tr('appearance'),
+                              Icons.tune_rounded,
+                              'appearance',
+                            ),
+                            collapsibleCard('appearance', [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  12,
+                                  16,
+                                  4,
+                                ),
+                                child: localeMenu,
+                              ),
+                              FutureBuilder(
+                                builder: (ctx, val) {
+                                  return (val.data?.version.sdkInt ?? 0) >= 29
+                                      ? SwitchListTile(
+                                          title: Text(tr('useSystemFont')),
+                                          value: settingsProvider.useSystemFont,
+                                          onChanged: (useSystemFont) {
+                                            if (useSystemFont) {
+                                              NativeFeatures.loadSystemFont()
+                                                  .then((val) {
+                                                    settingsProvider
+                                                            .useSystemFont =
+                                                        true;
+                                                  });
+                                            } else {
+                                              settingsProvider.useSystemFont =
+                                                  false;
+                                            }
+                                          },
+                                        )
+                                      : const SizedBox.shrink();
+                                },
+                                future: _androidInfo,
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('showWebInAppView')),
+                                value: settingsProvider.showAppWebpage,
+                                onChanged: (value) {
+                                  settingsProvider.showAppWebpage = value;
+                                },
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('showFolderedAppsOnMainPage')),
+                                value:
+                                    settingsProvider.showFolderedAppsOnMainPage,
+                                onChanged: (value) {
+                                  settingsProvider.showFolderedAppsOnMainPage =
+                                      value;
+                                },
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('dontShowTrackOnlyWarnings')),
+                                value: settingsProvider.hideTrackOnlyWarning,
+                                onChanged: (value) {
+                                  settingsProvider.hideTrackOnlyWarning = value;
+                                },
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('dontShowAPKOriginWarnings')),
+                                value: settingsProvider.hideAPKOriginWarning,
+                                onChanged: (value) {
+                                  settingsProvider.hideAPKOriginWarning = value;
+                                },
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('disablePageTransitions')),
+                                value: settingsProvider.disablePageTransitions,
+                                onChanged: (value) {
+                                  settingsProvider.disablePageTransitions =
+                                      value;
+                                },
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('reversePageTransitions')),
+                                value: settingsProvider.reversePageTransitions,
+                                onChanged:
+                                    settingsProvider.disablePageTransitions
+                                    ? null
+                                    : (value) {
+                                        settingsProvider
+                                                .reversePageTransitions =
+                                            value;
+                                      },
+                              ),
+                              SwitchListTile(
+                                title: Text(tr('highlightTouchTargets')),
+                                value: settingsProvider.highlightTouchTargets,
+                                onChanged: (value) {
+                                  settingsProvider.highlightTouchTargets =
+                                      value;
+                                },
+                              ),
+                            ]),
+                            // ── Gestures ──────────────────────────────────────────
+                            sectionHeader(
+                              tr('gestures'),
+                              Icons.swipe_rounded,
+                              'gestures',
+                            ),
+                            collapsibleCard('gestures', [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  12,
+                                  16,
+                                  12,
+                                ),
+                                child: m3eCompactDropdownScope(
+                                  context: context,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      DropdownMenu<SwipeAction>(
+                                        key: ValueKey(
+                                          settingsProvider.rightSwipeAction,
+                                        ),
+                                        initialSelection:
+                                            settingsProvider.rightSwipeAction,
+                                        label: Text(tr('rightSwipeAction')),
+                                        expandedInsets: EdgeInsets.zero,
+                                        onSelected: (SwipeAction? value) {
+                                          if (value != null) {
+                                            settingsProvider.rightSwipeAction =
+                                                value;
+                                          }
+                                        },
+                                        dropdownMenuEntries:
+                                            swipeActionsSortedByLocalizedLabel()
+                                                .map(
+                                                  (SwipeAction action) =>
+                                                      DropdownMenuEntry<
+                                                        SwipeAction
+                                                      >(
+                                                        value: action,
+                                                        label: tr(
+                                                          'swipeAction_${action.name}',
+                                                        ),
+                                                        leadingIcon: Icon(
+                                                          _swipeActionIcon(
+                                                            action,
+                                                          ),
+                                                          size: 18,
+                                                        ),
+                                                      ),
+                                                )
+                                                .toList(),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      DropdownMenu<SwipeAction>(
+                                        key: ValueKey(
+                                          settingsProvider.leftSwipeAction,
+                                        ),
+                                        initialSelection:
+                                            settingsProvider.leftSwipeAction,
+                                        label: Text(tr('leftSwipeAction')),
+                                        expandedInsets: EdgeInsets.zero,
+                                        onSelected: (SwipeAction? value) {
+                                          if (value != null) {
+                                            settingsProvider.leftSwipeAction =
+                                                value;
+                                          }
+                                        },
+                                        dropdownMenuEntries:
+                                            swipeActionsSortedByLocalizedLabel()
+                                                .map(
+                                                  (SwipeAction action) =>
+                                                      DropdownMenuEntry<
+                                                        SwipeAction
+                                                      >(
+                                                        value: action,
+                                                        label: tr(
+                                                          'swipeAction_${action.name}',
+                                                        ),
+                                                        leadingIcon: Icon(
+                                                          _swipeActionIcon(
+                                                            action,
+                                                          ),
+                                                          size: 18,
+                                                        ),
+                                                      ),
+                                                )
+                                                .toList(),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ]),
+                            // ── Categories ────────────────────────────────────────
+                            sectionHeader(
+                              tr('categories'),
+                              Icons.label_rounded,
+                              'categories',
+                            ),
+                            collapsibleCard('categories', [
+                              Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: CategoryEditorSelector(
+                                  showLabelWhenNotEmpty: false,
+                                ),
+                              ),
+                            ]),
+                          ],
+                        ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Column(
+                  children: [
+                    const Divider(height: 32),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        IconButton(
+                          onPressed: () {
+                            launchUrlString(
+                              settingsProvider.sourceUrl,
+                              mode: LaunchMode.externalApplication,
                             );
                           },
+                          icon: const Icon(Icons.code),
+                          tooltip: tr('appSource'),
                         ),
-                        // ── Source-specific ──────────────────────────────────
-                        if (sourceProvider.sources.any(
-                          (s) => s.sourceConfigSettingFormItems.isNotEmpty,
-                        )) ...[
-                          sectionHeader(tr('sourceSpecific'), Icons.dns_rounded, 'sourceSpecific'),
-                          collapsibleCard('sourceSpecific', [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  for (int i = 0;
-                                      i < sourceSpecificForms.length;
-                                      i++) ...[
-                                    if (i > 0) const SizedBox(height: 12),
-                                    sourceSpecificForms[i],
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ]),
-                        ],
-                        // ── Themes ────────────────────────────────────────────
-                        sectionHeader(
-                          tr('settingsThemesSection'),
-                          Icons.palette_rounded,
-                          'themes',
+                        IconButton(
+                          onPressed: () {
+                            launchUrlString(
+                              'https://wiki.obtainium.imranr.dev/',
+                              mode: LaunchMode.externalApplication,
+                            );
+                          },
+                          icon: const Icon(Icons.open_in_new_rounded),
+                          tooltip: tr('wiki'),
                         ),
-                        collapsibleCard(
-                          'themes',
-                          buildThemesSettingsCardItems(context, _androidInfo),
+                        IconButton(
+                          onPressed: () {
+                            launchUrlString(
+                              'https://apps.obtainium.imranr.dev/',
+                              mode: LaunchMode.externalApplication,
+                            );
+                          },
+                          icon: const Icon(Icons.apps_rounded),
+                          tooltip: tr('crowdsourcedConfigsLabel'),
                         ),
-                        // ── Appearance ────────────────────────────────────────
-                        sectionHeader(tr('appearance'), Icons.tune_rounded, 'appearance'),
-                        collapsibleCard('appearance', [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                            child: localeMenu,
-                          ),
-                          FutureBuilder(
-                            builder: (ctx, val) {
-                              return (val.data?.version.sdkInt ?? 0) >= 29
-                                  ? SwitchListTile(
-                                      title: Text(tr('useSystemFont')),
-                                      value: settingsProvider.useSystemFont,
-                                      onChanged: (useSystemFont) {
-                                        if (useSystemFont) {
-                                          NativeFeatures.loadSystemFont().then((val) {
-                                            settingsProvider.useSystemFont = true;
-                                          });
-                                        } else {
-                                          settingsProvider.useSystemFont = false;
-                                        }
-                                      },
-                                    )
-                                  : const SizedBox.shrink();
-                            },
-                            future: _androidInfo,
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('showWebInAppView')),
-                            value: settingsProvider.showAppWebpage,
-                            onChanged: (value) {
-                              settingsProvider.showAppWebpage = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('showFolderedAppsOnMainPage')),
-                            value: settingsProvider.showFolderedAppsOnMainPage,
-                            onChanged: (value) {
-                              settingsProvider.showFolderedAppsOnMainPage =
-                                  value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('dontShowTrackOnlyWarnings')),
-                            value: settingsProvider.hideTrackOnlyWarning,
-                            onChanged: (value) {
-                              settingsProvider.hideTrackOnlyWarning = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('dontShowAPKOriginWarnings')),
-                            value: settingsProvider.hideAPKOriginWarning,
-                            onChanged: (value) {
-                              settingsProvider.hideAPKOriginWarning = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('disablePageTransitions')),
-                            value: settingsProvider.disablePageTransitions,
-                            onChanged: (value) {
-                              settingsProvider.disablePageTransitions = value;
-                            },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('reversePageTransitions')),
-                            value: settingsProvider.reversePageTransitions,
-                            onChanged: settingsProvider.disablePageTransitions
-                                ? null
-                                : (value) {
-                                    settingsProvider.reversePageTransitions = value;
+                        IconButton(
+                          onPressed: () {
+                            context.read<LogsProvider>().get().then((logs) {
+                              if (!context.mounted) return;
+                              if (logs.isEmpty) {
+                                showMessage(
+                                  ObtainiumError(tr('noLogs')),
+                                  context,
+                                );
+                              } else {
+                                showDialog(
+                                  context: context,
+                                  builder: (BuildContext ctx) {
+                                    return const LogsDialog();
                                   },
-                          ),
-                          SwitchListTile(
-                            title: Text(tr('highlightTouchTargets')),
-                            value: settingsProvider.highlightTouchTargets,
-                            onChanged: (value) {
-                              settingsProvider.highlightTouchTargets = value;
-                            },
-                          ),
-                        ]),
-                        // ── Gestures ──────────────────────────────────────────
-                        sectionHeader(
-                          tr('gestures'),
-                          Icons.swipe_rounded,
-                          'gestures',
+                                );
+                              }
+                            });
+                          },
+                          icon: const Icon(Icons.bug_report_outlined),
+                          tooltip: tr('appLogs'),
                         ),
-                        collapsibleCard('gestures', [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                            child: m3eCompactDropdownScope(
-                              context: context,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  DropdownMenu<SwipeAction>(
-                                    key: ValueKey(
-                                      settingsProvider.rightSwipeAction,
-                                    ),
-                                    initialSelection:
-                                        settingsProvider.rightSwipeAction,
-                                    label: Text(tr('rightSwipeAction')),
-                                    expandedInsets: EdgeInsets.zero,
-                                    onSelected: (SwipeAction? value) {
-                                      if (value != null) {
-                                        settingsProvider.rightSwipeAction = value;
-                                      }
-                                    },
-                                    dropdownMenuEntries:
-                                        swipeActionsSortedByLocalizedLabel()
-                                            .map(
-                                              (SwipeAction action) =>
-                                                  DropdownMenuEntry<SwipeAction>(
-                                                value: action,
-                                                label: tr(
-                                                  'swipeAction_${action.name}',
-                                                ),
-                                                leadingIcon: Icon(
-                                                  _swipeActionIcon(action),
-                                                  size: 18,
-                                                ),
-                                              ),
-                                            )
-                                            .toList(),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  DropdownMenu<SwipeAction>(
-                                    key: ValueKey(
-                                      settingsProvider.leftSwipeAction,
-                                    ),
-                                    initialSelection:
-                                        settingsProvider.leftSwipeAction,
-                                    label: Text(tr('leftSwipeAction')),
-                                    expandedInsets: EdgeInsets.zero,
-                                    onSelected: (SwipeAction? value) {
-                                      if (value != null) {
-                                        settingsProvider.leftSwipeAction = value;
-                                      }
-                                    },
-                                    dropdownMenuEntries:
-                                        swipeActionsSortedByLocalizedLabel()
-                                            .map(
-                                              (SwipeAction action) =>
-                                                  DropdownMenuEntry<SwipeAction>(
-                                                value: action,
-                                                label: tr(
-                                                  'swipeAction_${action.name}',
-                                                ),
-                                                leadingIcon: Icon(
-                                                  _swipeActionIcon(action),
-                                                  size: 18,
-                                                ),
-                                              ),
-                                            )
-                                            .toList(),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ]),
-                        // ── Categories ────────────────────────────────────────
-                        sectionHeader(tr('categories'), Icons.label_rounded, 'categories'),
-                        collapsibleCard('categories', [
-                          Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: CategoryEditorSelector(
-                              showLabelWhenNotEmpty: false,
-                            ),
-                          ),
-                        ]),
                       ],
                     ),
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Column(
-              children: [
-                const Divider(height: 32),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    IconButton(
-                      onPressed: () {
-                        launchUrlString(
-                          settingsProvider.sourceUrl,
-                          mode: LaunchMode.externalApplication,
-                        );
-                      },
-                      icon: const Icon(Icons.code),
-                      tooltip: tr('appSource'),
-                    ),
-                    IconButton(
-                      onPressed: () {
-                        launchUrlString(
-                          'https://wiki.obtainium.imranr.dev/',
-                          mode: LaunchMode.externalApplication,
-                        );
-                      },
-                      icon: const Icon(Icons.open_in_new_rounded),
-                      tooltip: tr('wiki'),
-                    ),
-                    IconButton(
-                      onPressed: () {
-                        launchUrlString(
-                          'https://apps.obtainium.imranr.dev/',
-                          mode: LaunchMode.externalApplication,
-                        );
-                      },
-                      icon: const Icon(Icons.apps_rounded),
-                      tooltip: tr('crowdsourcedConfigsLabel'),
-                    ),
-                    IconButton(
-                      onPressed: () {
-                        context.read<LogsProvider>().get().then((logs) {
-                          if (!context.mounted) return;
-                          if (logs.isEmpty) {
-                            showMessage(ObtainiumError(tr('noLogs')), context);
-                          } else {
-                            showDialog(
-                              context: context,
-                              builder: (BuildContext ctx) {
-                                return const LogsDialog();
-                              },
-                            );
-                          }
-                        });
-                      },
-                      icon: const Icon(Icons.bug_report_outlined),
-                      tooltip: tr('appLogs'),
-                    ),
+                    const SizedBox(height: 16),
                   ],
                 ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
-          if (settingsProvider.progressiveBlurEnabled)
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: MediaQuery.paddingOf(context).bottom,
               ),
-            ),
+              if (settingsProvider.progressiveBlurEnabled)
+                SliverToBoxAdapter(
+                  child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
+                ),
             ],
           ),
         ],
       ),
     );
+  }
+}
+
+class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
+  const _SettingsSectionShadowClipper({required this.expanded});
+
+  final bool expanded;
+
+  static const double shadowPaintAllowance = 32;
+
+  @override
+  Rect getClip(Size size) {
+    if (!expanded) {
+      return Offset.zero & size;
+    }
+    return Rect.fromLTRB(
+      -shadowPaintAllowance,
+      -shadowPaintAllowance,
+      size.width + shadowPaintAllowance,
+      size.height + shadowPaintAllowance,
+    );
+  }
+
+  @override
+  bool shouldReclip(_SettingsSectionShadowClipper oldClipper) {
+    return oldClipper.expanded != expanded;
   }
 }
 
@@ -923,41 +1049,84 @@ class _LogsDialogState extends State<LogsDialog> {
         ],
       ),
       actions: [
-        TextButton(
-          onPressed: () async {
-            var cont =
-                (await showDialog<Map<String, dynamic>?>(
-                  context: context,
-                  builder: (BuildContext ctx) {
-                    return GeneratedFormModal(
-                      title: tr('appLogs'),
-                      items: const [],
-                      initValid: true,
-                      message: tr('removeFromObtainX'),
-                    );
-                  },
-                )) !=
-                null;
-            if (cont) {
-              logsProvider.clear();
-              if (!context.mounted) return;
-              Navigator.of(context).pop();
-            }
-          },
-          child: Text(tr('remove')),
-        ),
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: Text(tr('close')),
-        ),
-        TextButton(
-          onPressed: () {
-            SharePlus.instance.share(ShareParams(text: logString ?? '', subject: tr('appLogs')));
-            Navigator.of(context).pop();
-          },
-          child: Text(tr('share')),
+        SizedBox(
+          width: double.maxFinite,
+          child: Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: () async {
+                      var cont =
+                          (await showDialog<Map<String, dynamic>?>(
+                            context: context,
+                            builder: (BuildContext ctx) {
+                              return GeneratedFormModal(
+                                title: tr('appLogs'),
+                                items: const [],
+                                initValid: true,
+                                message: tr('removeFromObtainX'),
+                              );
+                            },
+                          )) !=
+                          null;
+                      if (cont) {
+                        logsProvider.clear();
+                        if (!context.mounted) return;
+                        Navigator.of(context).pop();
+                      }
+                    },
+                    child: Text(tr('remove')),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    child: Text(tr('close')),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      SharePlus.instance.share(
+                        ShareParams(
+                          text: logString ?? '',
+                          subject: tr('appLogs'),
+                        ),
+                      );
+                      Navigator.of(context).pop();
+                    },
+                    child: Text(tr('share')),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final timestampForFilename = DateTime.now()
+                          .toIso8601String()
+                          .replaceAll(':', '-');
+                      final logFileName =
+                          'obtainx-logs-$timestampForFilename.txt';
+                      final logFile = XFile.fromData(
+                        Uint8List.fromList(utf8.encode(logString ?? '')),
+                        mimeType: 'text/plain',
+                        name: logFileName,
+                      );
+                      await SharePlus.instance.share(
+                        ShareParams(
+                          files: [logFile],
+                          fileNameOverrides: [logFileName],
+                          subject: tr('appLogs'),
+                        ),
+                      );
+                      if (!context.mounted) return;
+                      Navigator.of(context).pop();
+                    },
+                    child: Text(tr('shareAsFile')),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ],
     );
@@ -967,11 +1136,10 @@ class _LogsDialogState extends State<LogsDialog> {
 /// Canonical JSON for [GeneratedForm] key (prefs key order can vary).
 String _stableCategoriesMapJson(Map<String, int> categories) {
   final List<MapEntry<String, int>> sorted =
-      List<MapEntry<String, int>>.from(categories.entries)
-        ..sort(
-          (MapEntry<String, int> left, MapEntry<String, int> right) =>
-              left.key.compareTo(right.key),
-        );
+      List<MapEntry<String, int>>.from(categories.entries)..sort(
+        (MapEntry<String, int> left, MapEntry<String, int> right) =>
+            left.key.compareTo(right.key),
+      );
   return jsonEncode(Map<String, int>.fromEntries(sorted));
 }
 
@@ -1003,6 +1171,7 @@ class CategoryEditorSelector extends StatefulWidget {
   final Set<String> preselected;
   final WrapAlignment alignment;
   final bool showLabelWhenNotEmpty;
+
   /// When false, only chips are shown (toggle selection). Add / edit / remove
   /// controls for the global category list are hidden.
   final bool allowCategoryManagement;
@@ -1026,8 +1195,8 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
   @override
   Widget build(BuildContext context) {
     final settingsProvider = context.watch<SettingsProvider>();
-    final appsProvider =
-        context.read<AppsProvider>(); // not watch: saveApps would rebuild form
+    final appsProvider = context
+        .read<AppsProvider>(); // not watch: saveApps would rebuild form
     final Map<String, int> fromPrefs = settingsProvider.categories;
     final Map<String, MapEntry<int, bool>> merged = _mergeCategoryEditorMaps(
       fromPrefs,
@@ -1061,10 +1230,12 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
           final Map<String, MapEntry<int, bool>> catMap =
               values['categories'] as Map<String, MapEntry<int, bool>>;
           storedValues = cloneCategoryTagInputValueMap(catMap);
-          final Map<String, int> colorsByName =
-              catMap.map((key, value) => MapEntry(key, value.key));
-          final List<String> selected =
-              catMap.keys.where((k) => catMap[k]!.value).toList();
+          final Map<String, int> colorsByName = catMap.map(
+            (key, value) => MapEntry(key, value.key),
+          );
+          final List<String> selected = catMap.keys
+              .where((k) => catMap[k]!.value)
+              .toList();
           widget.onSelected?.call(selected);
           settingsProvider.setCategories(
             colorsByName,
@@ -1085,7 +1256,8 @@ class _ThirdPartyInstallerSelector extends StatefulWidget {
       _ThirdPartyInstallerSelectorState();
 }
 
-class _ThirdPartyInstallerSelectorState extends State<_ThirdPartyInstallerSelector> {
+class _ThirdPartyInstallerSelectorState
+    extends State<_ThirdPartyInstallerSelector> {
   List<installer.InstallerAppInfo>? _installerApps;
   bool _loading = true;
 
@@ -1110,8 +1282,9 @@ class _ThirdPartyInstallerSelectorState extends State<_ThirdPartyInstallerSelect
 
     final currentPkg = widget.settingsProvider.legacyInstallerPackage;
     final currentAct = widget.settingsProvider.legacyInstallerActivity;
-    final currentValue =
-        (currentPkg != null && currentAct != null) ? '$currentPkg|$currentAct' : null;
+    final currentValue = (currentPkg != null && currentAct != null)
+        ? '$currentPkg|$currentAct'
+        : null;
 
     showModalBottomSheet(
       context: context,
@@ -1158,7 +1331,8 @@ class _ThirdPartyInstallerSelectorState extends State<_ThirdPartyInstallerSelect
                             final radioValue =
                                 '${app.packageName}|${app.activityName}';
                             return RadioListTile<String>(
-                              secondary: app.icon != null && app.icon!.isNotEmpty
+                              secondary:
+                                  app.icon != null && app.icon!.isNotEmpty
                                   ? ClipRRect(
                                       borderRadius: BorderRadius.circular(8),
                                       child: Image.memory(
@@ -1311,7 +1485,11 @@ class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
     canvas.drawRRect(
       RRect.fromRectAndCorners(
         Rect.fromLTRB(
-            trackRect.left, trackRect.top, thumbCenter.dx - _gap, trackRect.bottom),
+          trackRect.left,
+          trackRect.top,
+          thumbCenter.dx - _gap,
+          trackRect.bottom,
+        ),
         topLeft: const Radius.circular(_radius),
         bottomLeft: const Radius.circular(_radius),
       ),
@@ -1322,7 +1500,11 @@ class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
     canvas.drawRRect(
       RRect.fromRectAndCorners(
         Rect.fromLTRB(
-            thumbCenter.dx + _gap, trackRect.top, trackRect.right, trackRect.bottom),
+          thumbCenter.dx + _gap,
+          trackRect.top,
+          trackRect.right,
+          trackRect.bottom,
+        ),
         topRight: const Radius.circular(_radius),
         bottomRight: const Radius.circular(_radius),
       ),

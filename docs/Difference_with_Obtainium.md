@@ -102,7 +102,7 @@ Instead of one long wall of options, settings are grouped into **separate boxes*
 <img src="https://github.com/user-attachments/assets/6fff2569-44f5-4bdb-902f-ce5e1121d21b" alt="Obtainium add app options" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../assets/screenshots/Compare_Settings.webp" alt="ObtainX add app URL and options" width="300" /><br /><strong>ObtainX</strong>
+<img src="https://github.com/user-attachments/assets/1ac42b5c-2825-441d-b4ff-a73e8c455042" alt="ObtainX add app URL and options" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>
@@ -120,7 +120,7 @@ Everything happens on one page. All stores are visible from the start. Tap Searc
 <img src="https://github.com/user-attachments/assets/cf630d89-e4c9-4bb6-8a7e-bbc96c1c05af" alt="Obtainium add app entry" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/75a245a4-b1e7-422b-bc27-46b320a0880d" alt="ObtainX add app modes and URL" width="300" /><br /><strong>ObtainX</strong>
+<img src="https://github.com/user-attachments/assets/bba7f987-3408-4954-8ec8-eea14cf8edee" alt="ObtainX add app modes and URL" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 <tr>
@@ -128,7 +128,7 @@ Everything happens on one page. All stores are visible from the start. Tap Searc
 <img src="https://github.com/user-attachments/assets/b187f6a3-1776-4d15-b9d4-21ea3b060d56" alt="Obtainium add app search results" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/bd246f32-dcdb-4726-915f-937bf622fbae" alt="ObtainX add app search" width="300" /><br /><strong>ObtainX</strong>
+<img src="https://github.com/user-attachments/assets/0c5b7c42-f85a-40d9-961b-9deb3d92616f" alt="ObtainX add app search" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>
@@ -147,7 +147,7 @@ Settings gets the **same card-based layout** as the rest of the app: related opt
 <img src="https://github.com/user-attachments/assets/4ba8a63b-8aaf-4fc2-a447-14e119199148" alt="Obtainium settings" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/9e26f369-eb01-4dad-8306-f27f5f83291d" alt="ObtainX settings" width="300" /><br /><strong>ObtainX</strong>
+<img src="../assets/screenshots/Compare_Settings.webp" alt="ObtainX settings" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>

@@ -140,6 +140,7 @@
     "appLogs": "日志",
     "close": "关闭",
     "share": "分享",
+    "shareAsFile": "Share as file",
     "appNotFound": "未找到应用",
     "obtainiumExportHyphenatedLowercase": "obtainx-export",
     "pickAnAPK": "选择一个 APK 文件",

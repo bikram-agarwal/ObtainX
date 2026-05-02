@@ -40,8 +40,7 @@ Color _appsListGroupHeaderColor(ColorScheme scheme) {
     scheme.primary,
     0.11,
   )!;
-  if ((header.computeLuminance() - rowFill.computeLuminance()).abs() <
-      0.032) {
+  if ((header.computeLuminance() - rowFill.computeLuminance()).abs() < 0.032) {
     header = Color.lerp(
       header,
       scheme.surfaceBright,
@@ -54,18 +53,18 @@ Color _appsListGroupHeaderColor(ColorScheme scheme) {
 /// Collapsed group card; expanded header row uses inner radius on bottom edge.
 const RoundedRectangleBorder _appsExpansionTileCollapsedShape =
     RoundedRectangleBorder(
-  borderRadius: BorderRadius.all(Radius.circular(_appsListGroupCardRadius)),
-);
+      borderRadius: BorderRadius.all(Radius.circular(_appsListGroupCardRadius)),
+    );
 
 const RoundedRectangleBorder _appsExpansionTileExpandedShape =
     RoundedRectangleBorder(
-  borderRadius: BorderRadius.only(
-    topLeft: Radius.circular(_appsListGroupCardRadius),
-    topRight: Radius.circular(_appsListGroupCardRadius),
-    bottomLeft: Radius.circular(kM3eInnerRadius),
-    bottomRight: Radius.circular(kM3eInnerRadius),
-  ),
-);
+      borderRadius: BorderRadius.only(
+        topLeft: Radius.circular(_appsListGroupCardRadius),
+        topRight: Radius.circular(_appsListGroupCardRadius),
+        bottomLeft: Radius.circular(kM3eInnerRadius),
+        bottomRight: Radius.circular(kM3eInnerRadius),
+      ),
+    );
 
 Widget _appsGroupedExpansionListBody({
   required ColorScheme scheme,
@@ -505,45 +504,45 @@ class _AppListItem extends StatelessWidget {
         tileColor: app.app.pinned
             ? Colors.grey.withValues(alpha: 0.1)
             : Colors.transparent,
-          selectedTileColor: colorScheme.primary.withValues(
-            alpha: app.app.pinned ? 0.2 : 0.1,
-          ),
-          selected: isSelected,
-          onLongPress: onLongPress,
-          leading: leadingWidget,
-          title: Text(
-            app.name,
-            maxLines: 1,
-            style: TextStyle(
-              overflow: TextOverflow.ellipsis,
-              fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-          subtitle: Text(
-            tr('byX', args: [app.author]),
-            maxLines: 1,
-            style: TextStyle(
-              overflow: TextOverflow.ellipsis,
-              fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-          trailing: downloadProgress != null
-              ? SizedBox(
-                  child: Text(
-                    downloadProgress >= 0
-                        ? tr(
-                            'percentProgress',
-                            args: [downloadProgress.toInt().toString()],
-                          )
-                        : tr('installing'),
-                    textAlign: downloadProgress >= 0
-                        ? TextAlign.start
-                        : TextAlign.end,
-                  ),
-                )
-              : trailingRow,
-          onTap: onTap,
+        selectedTileColor: colorScheme.primary.withValues(
+          alpha: app.app.pinned ? 0.2 : 0.1,
         ),
+        selected: isSelected,
+        onLongPress: onLongPress,
+        leading: leadingWidget,
+        title: Text(
+          app.name,
+          maxLines: 1,
+          style: TextStyle(
+            overflow: TextOverflow.ellipsis,
+            fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+        subtitle: Text(
+          tr('byX', args: [app.author]),
+          maxLines: 1,
+          style: TextStyle(
+            overflow: TextOverflow.ellipsis,
+            fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+        trailing: downloadProgress != null
+            ? SizedBox(
+                child: Text(
+                  downloadProgress >= 0
+                      ? tr(
+                          'percentProgress',
+                          args: [downloadProgress.toInt().toString()],
+                        )
+                      : tr('installing'),
+                  textAlign: downloadProgress >= 0
+                      ? TextAlign.start
+                      : TextAlign.end,
+                ),
+              )
+            : trailingRow,
+        onTap: onTap,
+      ),
     );
 
     if (itemBorderRadius != null) {
@@ -1813,9 +1812,7 @@ class AppsPageState extends State<AppsPage> {
       if (widget.onDemandOnlyList) {
         refreshFuture = appsProvider.checkUpdates(
           specificIds: appsProvider.apps.values
-              .where(
-                (a) => a.app.additionalSettings['onDemandOnly'] == true,
-              )
+              .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
               .map((a) => a.app.id)
               .toList(),
         );
@@ -2372,14 +2369,14 @@ class AppsPageState extends State<AppsPage> {
       final int folderMemberCountForProgress = progressFolderId == null
           ? 0
           : appsProvider.apps.values
-                .where(
-                  (a) => folderIdsForApp(a.app).contains(progressFolderId),
-                )
+                .where((a) => folderIdsForApp(a.app).contains(progressFolderId))
                 .length;
       final int progressDenominator = widget.onDemandOnlyList
           ? (onDemandOnlyAppCount > 0 ? onDemandOnlyAppCount : 1)
           : progressFolderId != null
-          ? (folderMemberCountForProgress > 0 ? folderMemberCountForProgress : 1)
+          ? (folderMemberCountForProgress > 0
+                ? folderMemberCountForProgress
+                : 1)
           : (appsProvider.apps.isNotEmpty ? appsProvider.apps.length : 1);
       return [
         if (listedApps.isEmpty)
@@ -2422,9 +2419,9 @@ class AppsPageState extends State<AppsPage> {
                             .where(
                               (element) =>
                                   progressFolderId == null ||
-                                  folderIdsForApp(element.app).contains(
-                                    progressFolderId,
-                                  ),
+                                  folderIdsForApp(
+                                    element.app,
+                                  ).contains(progressFolderId),
                             )
                             .length /
                         progressDenominator,
@@ -2568,10 +2565,10 @@ class AppsPageState extends State<AppsPage> {
               groupPosition: runLength == 1
                   ? M3eListGroupPosition.only
                   : indexInRun == 0
-                      ? M3eListGroupPosition.first
-                      : indexInRun == runLength - 1
-                          ? M3eListGroupPosition.last
-                          : M3eListGroupPosition.middle,
+                  ? M3eListGroupPosition.first
+                  : indexInRun == runLength - 1
+                  ? M3eListGroupPosition.last
+                  : M3eListGroupPosition.middle,
               flatListBody: true,
             ),
             if (indexInRun == runLength - 1) ...[
@@ -2594,10 +2591,10 @@ class AppsPageState extends State<AppsPage> {
             groupPosition: n == 1
                 ? M3eListGroupPosition.only
                 : i == 0
-                    ? M3eListGroupPosition.first
-                    : i == n - 1
-                        ? M3eListGroupPosition.last
-                        : M3eListGroupPosition.middle,
+                ? M3eListGroupPosition.first
+                : i == n - 1
+                ? M3eListGroupPosition.last
+                : M3eListGroupPosition.middle,
           ),
         ],
       ];
@@ -3139,10 +3136,7 @@ class AppsPageState extends State<AppsPage> {
                       Navigator.of(context).pop();
                       _showFolderAssignDialog(context, selectedApps);
                     },
-                    child: Text(
-                      tr('addToFolder'),
-                      textAlign: TextAlign.center,
-                    ),
+                    child: Text(tr('addToFolder'), textAlign: TextAlign.center),
                   ),
                   const Divider(),
                   TextButton(
@@ -3764,8 +3758,7 @@ class AppsPageState extends State<AppsPage> {
                   nonUpdatesIndices[index],
                   index,
                   nonUpdatesIndices.length,
-                  spacerAfterLastRow:
-                      index == nonUpdatesIndices.length - 1,
+                  spacerAfterLastRow: index == nonUpdatesIndices.length - 1,
                 );
               }
               return getUpdatesCollapsibleTile();
@@ -3838,12 +3831,12 @@ class AppsPageState extends State<AppsPage> {
                                 end: Alignment.bottomCenter,
                                 stops: const [0, 0.38, 0.72, 1],
                                 colors: [
-                                  Theme.of(context)
-                                      .colorScheme
-                                      .schemePageGradientTopColor,
-                                  Theme.of(context)
-                                      .colorScheme
-                                      .schemePageGradientMidColor,
+                                  Theme.of(
+                                    context,
+                                  ).colorScheme.schemePageGradientTopColor,
+                                  Theme.of(
+                                    context,
+                                  ).colorScheme.schemePageGradientMidColor,
                                   Theme.of(context).colorScheme.surface,
                                   Theme.of(context).colorScheme.surface,
                                 ],
@@ -3852,6 +3845,9 @@ class AppsPageState extends State<AppsPage> {
                           ),
                         ),
                       CustomScrollView(
+                        key: PageStorageKey<String>(
+                          'apps-scroll-${widget.folderId ?? (widget.onDemandOnlyList ? 'on-demand' : 'main')}',
+                        ),
                         physics: const AlwaysScrollableScrollPhysics(
                           parent: ClampingScrollPhysics(),
                         ),

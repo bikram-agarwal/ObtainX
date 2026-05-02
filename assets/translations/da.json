@@ -140,6 +140,7 @@
     "appLogs": "App-logs",
     "close": "Luk",
     "share": "Del",
+    "shareAsFile": "Share as file",
     "appNotFound": "App ikke fundet",
     "obtainiumExportHyphenatedLowercase": "obtainium-eksport",
     "pickAnAPK": "Vælg en APK",

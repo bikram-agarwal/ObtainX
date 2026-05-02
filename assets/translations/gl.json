@@ -140,6 +140,7 @@
     "appLogs": "Rexistros da app",
     "close": "Fechar",
     "share": "Compartir",
+    "shareAsFile": "Share as file",
     "appNotFound": "Non se atopa a app",
     "obtainiumExportHyphenatedLowercase": "exportación-obtainium",
     "pickAnAPK": "Selecciona un APK",

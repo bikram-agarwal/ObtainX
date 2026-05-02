@@ -19,7 +19,7 @@ Features that don't exist in Obtainium at all.
 
 - **🖼️ Custom app icons** — Not happy with an app's icon or a blank placeholder? Tap the icon on any app's detail page to set your own — pick from your gallery or grab one from the web.
 
-- **⚖️ Know the update size beforehand** — See the exact download size for every update a - across all supported stores — before you even hit the update button.
+- **⚖️ Know the update size beforehand** — See the exact download size for every update - across supported stores - before you even hit the update button.
 
 - **⏭️ Skip Version** — Pass on a specific release you don't want without marking the app as "updated." The next release will still show up normally.
 

@@ -140,6 +140,7 @@
     "appLogs": "Registres de l'aplicació",
     "close": "Tanca",
     "share": "Comparteix",
+    "shareAsFile": "Share as file",
     "appNotFound": "No s'ha trobat l'aplicació",
     "obtainiumExportHyphenatedLowercase": "Exportació d'ObtainX",
     "pickAnAPK": "Escull una APK",

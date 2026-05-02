@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
@@ -17,6 +19,7 @@ import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
@@ -37,6 +40,20 @@ String _formatBytes(int bytes) {
   } else {
     return '$bytes B';
   }
+}
+
+// TEMP APKMIRROR SIZE DEBUG: remove before production.
+void _logApkMirrorSizeDebugFromAppPage(String message) {
+  if (!apkMirrorSizeDebugLoggingEnabled) {
+    return;
+  }
+  unawaited(() async {
+    try {
+      await LogsProvider(
+        runDefaultClear: false,
+      ).add('OBTAINX-APK-SIZE-DEBUG AppPage: $message', level: LogLevels.debug);
+    } catch (_) {}
+  }());
 }
 
 Color _labelColorOnCategoryFill(Color categoryFill) {
@@ -75,8 +92,9 @@ String? _resolveStoreUrl({
   // Key absent means this store was never explicitly checked for this app
   // (either no scan at all, or a different store's check ran first).
   // In both cases show the fallback URL — don't suppress unverified stores.
-  if (storeData == null || !storeData.containsKey(storeName))
+  if (storeData == null || !storeData.containsKey(storeName)) {
     return fallbackUrl;
+  }
   final entry = storeData[storeName]!;
   if (entry.isEmpty) return null; // confirmed absent (empty string sentinel)
   return entry; // confirmed present
@@ -177,6 +195,7 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
     packageInfo?.versionName,
     packageInfo?.packageName,
     model.iconUrl,
+    model.apkSizeBytes,
   ]);
 }
 
@@ -2742,7 +2761,7 @@ class _AppPageState extends State<AppPage> {
       final int? knownApkSizeBytes = app?.app.apkSizeBytes;
       // Appends "· 43 MB" to install/update labels when size is known.
       String sizeAnnotated(String base) {
-        if (knownApkSizeBytes == null || trackOnly) {
+        if (knownApkSizeBytes == null) {
           return base;
         }
         return '$base · ${_formatBytes(knownApkSizeBytes)}';
@@ -2750,6 +2769,8 @@ class _AppPageState extends State<AppPage> {
 
       final String updateLabel = sizeAnnotated(tr('update'));
       final String installLabel = sizeAnnotated(tr('install'));
+      final String markInstalledLabel = sizeAnnotated(tr('markInstalled'));
+      final String markUpdatedLabel = sizeAnnotated(tr('markUpdated'));
 
       // #2 — inline progress button replaces the action button while downloading/installing.
       if (app?.downloadProgress != null) {
@@ -2839,6 +2860,14 @@ class _AppPageState extends State<AppPage> {
           !actionBlocked &&
           (installedVersionIsNull ||
               ((actionableUpdate || uncertainUpdate) && !skipActive));
+      final bool trackedFromApkMirror =
+          Uri.tryParse(app?.app.url ?? '')?.host.contains('apkmirror.com') ==
+          true;
+      if (trackedFromApkMirror) {
+        _logApkMirrorSizeDebugFromAppPage(
+          'button id=${app?.app.id ?? "<null>"} url=${app?.app.url ?? "<null>"} size=${knownApkSizeBytes?.toString() ?? "<null>"} trackOnly=$trackOnly installed=${installedVersion ?? "<null>"} latest=${app?.app.latestVersion ?? "<null>"} actionable=$actionableUpdate uncertain=$uncertainUpdate skip=$skipActive trackOnlyHasVersionUpdate=$trackOnlyHasVersionUpdate installedVersionIsNull=$installedVersionIsNull primaryActionEnabled=$primaryActionEnabled updateLabel="$updateLabel" markUpdatedLabel="$markUpdatedLabel"',
+        );
+      }
 
       Widget wrapPrimaryBarWithSkip(Widget primaryBar) {
         final App? appForSkip = app?.app;
@@ -3063,8 +3092,8 @@ class _AppPageState extends State<AppPage> {
           alignment: Alignment.center,
           child: Text(
             installedVersionIsNull
-                ? (!trackOnly ? installLabel : tr('markInstalled'))
-                : (!trackOnly ? updateLabel : tr('markUpdated')),
+                ? (!trackOnly ? installLabel : markInstalledLabel)
+                : (!trackOnly ? updateLabel : markUpdatedLabel),
             maxLines: 1,
             textAlign: TextAlign.center,
           ),
@@ -3080,181 +3109,73 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getBottomSheetMenu(BuildContext themeContext) => Padding(
-      padding: EdgeInsets.fromLTRB(
-        0,
-        0,
-        0,
-        MediaQuery.of(themeContext).padding.bottom,
-      ),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(themeContext).brightness == Brightness.dark
-              ? Theme.of(themeContext).colorScheme.surfaceContainerHigh
-              : Theme.of(themeContext).colorScheme.surfaceContainerHighest,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border(
-            top: BorderSide(
-              color: Theme.of(themeContext).brightness == Brightness.dark
-                  ? Theme.of(
-                      themeContext,
-                    ).colorScheme.outlineVariant.withAlpha(140)
-                  : Theme.of(
-                      themeContext,
-                    ).colorScheme.outlineVariant.withAlpha(70),
-            ),
+    getBottomSheetMenu(BuildContext themeContext) => Container(
+      decoration: BoxDecoration(
+        color: Theme.of(themeContext).brightness == Brightness.dark
+            ? Theme.of(themeContext).colorScheme.surfaceContainerHigh
+            : Theme.of(themeContext).colorScheme.surfaceContainerHighest,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(
+          top: BorderSide(
+            color: Theme.of(themeContext).brightness == Brightness.dark
+                ? Theme.of(
+                    themeContext,
+                  ).colorScheme.outlineVariant.withAlpha(140)
+                : Theme.of(
+                    themeContext,
+                  ).colorScheme.outlineVariant.withAlpha(70),
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Theme.of(themeContext).colorScheme.shadow.withAlpha(
-                Theme.of(themeContext).brightness == Brightness.dark ? 130 : 40,
-              ),
-              blurRadius: Theme.of(themeContext).brightness == Brightness.dark
-                  ? 18
-                  : 12,
-              offset: const Offset(0, -3),
-            ),
-          ],
         ),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Builder(
-                  builder: (BuildContext _) {
-                    final List<Widget> bottomBarActions = <Widget>[];
-                    if (app != null && app.installedInfo != null) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: () {
-                            appsProvider.openAppSettings(app.app.id);
-                          },
-                          icon: const Icon(Icons.info_outline),
-                          tooltip: tr('appPageAppInfo'),
-                        ),
-                      );
-                    }
-                    if (app != null &&
-                        !_editMode &&
-                        app.downloadProgress == null &&
-                        !updating) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: () => _startEdit(app, appsProvider),
-                          icon: const Icon(Icons.edit_outlined),
-                          tooltip: tr('editAppInfo'),
-                        ),
-                      );
-                    }
-                    if (source != null) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: app?.downloadProgress != null || updating
-                              ? null
-                              : () async {
-                                  await Navigator.push<void>(
-                                    context,
-                                    slideUpPageRoute(
-                                      (_) => AdditionalOptionsPage(
-                                        appId: widget.appId,
-                                        onAfterSave:
-                                            (
-                                              String savedAppId,
-                                              bool versionDetectionJustEnabled,
-                                            ) async {
-                                              await _runCheckUpdate(
-                                                savedAppId,
-                                                resetVersion:
-                                                    versionDetectionJustEnabled,
-                                              );
-                                            },
-                                      ),
-                                    ),
-                                  );
-                                },
-                          tooltip: tr('appOptions'),
-                          icon: const Icon(Icons.tune),
-                        ),
-                      );
-                    }
-                    if (app != null && showAppWebpageFinal) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: () {
-                            showDialog<void>(
-                              context: context,
-                              builder: (BuildContext dialogRouteContext) {
-                                return Theme(
-                                  data: pageThemeForPage,
-                                  child: Builder(
-                                    builder:
-                                        (BuildContext dialogThemedContext) {
-                                          return AlertDialog(
-                                            scrollable: true,
-                                            content: getFullInfoColumn(
-                                              dialogThemedContext,
-                                              small: true,
-                                            ),
-                                            title: Text(app.name),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () {
-                                                  Navigator.of(
-                                                    dialogRouteContext,
-                                                  ).pop();
-                                                },
-                                                child: Text(tr('continue')),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                          icon: const Icon(Icons.more_horiz),
-                          tooltip: tr('more'),
-                        ),
-                      );
-                    }
-                    if ((!isVersionDetectionStandard || trackOnly) &&
-                        app?.app.installedVersion != null) {
-                      final String ins = app!.app.installedVersion!;
-                      final String lat = app.app.latestVersion;
-                      final bool showResetInstall =
-                          ins == lat ||
-                          versionsEffectivelyEqual(ins, lat) ||
-                          (installedVersionIsNewerOrEqual(ins, lat) &&
-                              !versionOrderIsUnclear(ins, lat));
-                      if (showResetInstall) {
-                        bottomBarActions.add(
-                          IconButton(
-                            color: Theme.of(themeContext).colorScheme.primary,
-                            iconSize: 24,
-                            onPressed: updating
-                                ? null
-                                : () {
-                                    app.app.installedVersion = null;
-                                    appsProvider.saveApps([app.app]);
-                                  },
-                            icon: const Icon(Icons.restore_rounded),
-                            tooltip: tr('resetInstallStatus'),
-                          ),
-                        );
-                      }
-                    }
+        boxShadow: [
+          BoxShadow(
+            color: Theme.of(themeContext).colorScheme.shadow.withAlpha(
+              Theme.of(themeContext).brightness == Brightness.dark ? 130 : 40,
+            ),
+            blurRadius: Theme.of(themeContext).brightness == Brightness.dark
+                ? 18
+                : 12,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Builder(
+                builder: (BuildContext _) {
+                  final List<Widget> bottomBarActions = <Widget>[];
+                  if (app != null && app.installedInfo != null) {
+                    bottomBarActions.add(
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: () {
+                          appsProvider.openAppSettings(app.app.id);
+                        },
+                        icon: const Icon(Icons.info_outline),
+                        tooltip: tr('appPageAppInfo'),
+                      ),
+                    );
+                  }
+                  if (app != null &&
+                      !_editMode &&
+                      app.downloadProgress == null &&
+                      !updating) {
+                    bottomBarActions.add(
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: () => _startEdit(app, appsProvider),
+                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: tr('editAppInfo'),
+                      ),
+                    );
+                  }
+                  if (source != null) {
                     bottomBarActions.add(
                       IconButton(
                         color: Theme.of(themeContext).colorScheme.primary,
@@ -3262,61 +3183,160 @@ class _AppPageState extends State<AppPage> {
                         onPressed: app?.downloadProgress != null || updating
                             ? null
                             : () async {
-                                final ScaffoldMessengerState? messenger =
-                                    scaffoldMessengerKey.currentState;
-                                final AppInMemory? appRow = app;
-                                if (appRow == null) return;
-                                final RemoveAppsWithModalResult removeResult =
-                                    await appsProvider.removeAppsWithModal(
-                                      themeContext,
-                                      [appRow.app],
-                                    );
-                                if (removeResult.shouldShowSnackBar &&
-                                    messenger != null) {
-                                  final Set<String> undoAppIds =
-                                      removeResult.deferredUndoAppIds;
-                                  messenger
-                                    ..clearSnackBars()
-                                    ..showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          tr('xAppsRemoved', args: ['1']),
-                                        ),
-                                        persist: false,
-                                        duration: const Duration(seconds: 5),
-                                        behavior: SnackBarBehavior.floating,
-                                        action: undoAppIds.isNotEmpty
-                                            ? SnackBarAction(
-                                                label: tr('undo'),
-                                                onPressed: () => appsProvider
-                                                    .undoDeferredObtainiumRemovals(
-                                                      undoAppIds,
-                                                    ),
-                                              )
-                                            : null,
-                                      ),
-                                    );
-                                }
-                                if (removeResult
-                                        .obtainiumEntryRemovedOrScheduled &&
-                                    themeContext.mounted) {
-                                  Navigator.of(themeContext).pop();
-                                }
+                                await Navigator.push<void>(
+                                  context,
+                                  slideUpPageRoute(
+                                    (_) => AdditionalOptionsPage(
+                                      appId: widget.appId,
+                                      onAfterSave:
+                                          (
+                                            String savedAppId,
+                                            bool versionDetectionJustEnabled,
+                                          ) async {
+                                            await _runCheckUpdate(
+                                              savedAppId,
+                                              resetVersion:
+                                                  versionDetectionJustEnabled,
+                                            );
+                                          },
+                                    ),
+                                  ),
+                                );
                               },
-                        tooltip: tr('remove'),
-                        icon: const Icon(Icons.delete_outline),
+                        tooltip: tr('appOptions'),
+                        icon: const Icon(Icons.tune),
                       ),
                     );
-                    return Row(
-                      children: [
-                        for (final Widget actionWidget in bottomBarActions)
-                          Expanded(child: Center(child: actionWidget)),
-                      ],
+                  }
+                  if (app != null && showAppWebpageFinal) {
+                    bottomBarActions.add(
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (BuildContext dialogRouteContext) {
+                              return Theme(
+                                data: pageThemeForPage,
+                                child: Builder(
+                                  builder: (BuildContext dialogThemedContext) {
+                                    return AlertDialog(
+                                      scrollable: true,
+                                      content: getFullInfoColumn(
+                                        dialogThemedContext,
+                                        small: true,
+                                      ),
+                                      title: Text(app.name),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () {
+                                            Navigator.of(
+                                              dialogRouteContext,
+                                            ).pop();
+                                          },
+                                          child: Text(tr('continue')),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          );
+                        },
+                        icon: const Icon(Icons.more_horiz),
+                        tooltip: tr('more'),
+                      ),
                     );
-                  },
-                ),
-              ],
-            ),
+                  }
+                  if ((!isVersionDetectionStandard || trackOnly) &&
+                      app?.app.installedVersion != null) {
+                    final String ins = app!.app.installedVersion!;
+                    final String lat = app.app.latestVersion;
+                    final bool showResetInstall =
+                        ins == lat ||
+                        versionsEffectivelyEqual(ins, lat) ||
+                        (installedVersionIsNewerOrEqual(ins, lat) &&
+                            !versionOrderIsUnclear(ins, lat));
+                    if (showResetInstall) {
+                      bottomBarActions.add(
+                        IconButton(
+                          color: Theme.of(themeContext).colorScheme.primary,
+                          iconSize: 24,
+                          onPressed: updating
+                              ? null
+                              : () {
+                                  app.app.installedVersion = null;
+                                  appsProvider.saveApps([app.app]);
+                                },
+                          icon: const Icon(Icons.restore_rounded),
+                          tooltip: tr('resetInstallStatus'),
+                        ),
+                      );
+                    }
+                  }
+                  bottomBarActions.add(
+                    IconButton(
+                      color: Theme.of(themeContext).colorScheme.primary,
+                      iconSize: 24,
+                      onPressed: app?.downloadProgress != null || updating
+                          ? null
+                          : () async {
+                              final ScaffoldMessengerState? messenger =
+                                  scaffoldMessengerKey.currentState;
+                              final AppInMemory? appRow = app;
+                              if (appRow == null) return;
+                              final RemoveAppsWithModalResult removeResult =
+                                  await appsProvider.removeAppsWithModal(
+                                    themeContext,
+                                    [appRow.app],
+                                  );
+                              if (removeResult.shouldShowSnackBar &&
+                                  messenger != null) {
+                                final Set<String> undoAppIds =
+                                    removeResult.deferredUndoAppIds;
+                                messenger
+                                  ..clearSnackBars()
+                                  ..showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        tr('xAppsRemoved', args: ['1']),
+                                      ),
+                                      persist: false,
+                                      duration: const Duration(seconds: 5),
+                                      behavior: SnackBarBehavior.floating,
+                                      action: undoAppIds.isNotEmpty
+                                          ? SnackBarAction(
+                                              label: tr('undo'),
+                                              onPressed: () => appsProvider
+                                                  .undoDeferredObtainiumRemovals(
+                                                    undoAppIds,
+                                                  ),
+                                            )
+                                          : null,
+                                    ),
+                                  );
+                              }
+                              if (removeResult
+                                      .obtainiumEntryRemovedOrScheduled &&
+                                  themeContext.mounted) {
+                                Navigator.of(themeContext).pop();
+                              }
+                            },
+                      tooltip: tr('remove'),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                  );
+                  return Row(
+                    children: [
+                      for (final Widget actionWidget in bottomBarActions)
+                        Expanded(child: Center(child: actionWidget)),
+                    ],
+                  );
+                },
+              ),
+            ],
           ),
         ),
       ),

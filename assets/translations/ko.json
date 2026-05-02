@@ -140,6 +140,7 @@
     "appLogs": "앱 로그",
     "close": "닫기",
     "share": "공유",
+    "shareAsFile": "Share as file",
     "appNotFound": "앱을 찾을 수 없습니다",
     "obtainiumExportHyphenatedLowercase": "obtainx-export",
     "pickAnAPK": "APK 선택",

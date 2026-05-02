@@ -140,6 +140,7 @@
     "appLogs": "Journaux de l'application",
     "close": "Fermer",
     "share": "Partager",
+    "shareAsFile": "Share as file",
     "appNotFound": "Application introuvable",
     "obtainiumExportHyphenatedLowercase": "obtainium-export",
     "pickAnAPK": "Choisir un APK",

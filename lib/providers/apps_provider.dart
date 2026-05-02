@@ -45,6 +45,9 @@ import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:obtainium/folders/app_folder.dart';
 
+// TEMP APKMIRROR SIZE DEBUG: remove before production.
+const bool _apkMirrorSizeDebugLoggingEnabledForAppsProvider = true;
+
 final pm = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
 
@@ -3224,6 +3227,18 @@ class AppsProvider with ChangeNotifier {
       newApp.preferredApkIndex = currentApp.preferredApkIndex;
     }
     await saveApps([newApp]);
+    if (_apkMirrorSizeDebugLoggingEnabledForAppsProvider &&
+        currentApp.url.contains('apkmirror.com')) {
+      final App? savedApp = apps[appId]?.app;
+      try {
+        await LogsProvider(runDefaultClear: false).add(
+          'OBTAINX-APK-SIZE-DEBUG AppsProvider: checkUpdate id=$appId oldLatest=${currentApp.latestVersion} newLatest=${newApp.latestVersion} returnedSize=${newApp.apkSizeBytes?.toString() ?? "<null>"} savedSize=${savedApp?.apkSizeBytes?.toString() ?? "<null>"} savedInstalled=${savedApp?.installedVersion ?? "<null>"} savedTrackOnly=${savedApp?.additionalSettings['trackOnly'] == true}',
+          level: LogLevels.debug,
+        );
+      } catch (_) {
+        // Debug logging must never affect update checks.
+      }
+    }
     return newApp.latestVersion != currentApp.latestVersion ? newApp : null;
   }
 

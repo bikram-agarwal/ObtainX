@@ -140,6 +140,7 @@
     "appLogs": "App-Logs",
     "close": "Schließen",
     "share": "Teilen",
+    "shareAsFile": "Share as file",
     "appNotFound": "App nicht gefunden",
     "obtainiumExportHyphenatedLowercase": "ObtainX-Export",
     "pickAnAPK": "APK auswählen",

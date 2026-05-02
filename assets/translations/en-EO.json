@@ -140,6 +140,7 @@
     "appLogs": "Apoprotokoloj",
     "close": "Fermi",
     "share": "Diskonigi",
+    "shareAsFile": "Share as file",
     "appNotFound": "Netrovebla apo",
     "obtainiumExportHyphenatedLowercase": "eksporto-obtainium",
     "pickAnAPK": "Selektu APKn",
@@ -413,7 +414,9 @@
         "one": "Certificate Hash",
         "other": "Certificate Hashes"
     },
+    "collapseAll": "Maletendi ĉion",
     "deselectAll": "Malelekti ĉion",
+    "expandAll": "Etendi ĉion",
     "removeFromObtainX": "Forigi el ObtainX",
     "onDemandOnly": "On-Demand Only",
     "onDemandOnlyDescription": "Hide from the main apps list. Update checks run only when you pull to refresh on the On-Demand Only screen or on this app detail page.",

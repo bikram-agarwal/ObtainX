@@ -140,6 +140,7 @@
     "appLogs": "Protokoly aplikace",
     "close": "Zavřít",
     "share": "Sdílet",
+    "shareAsFile": "Share as file",
     "appNotFound": "Aplikace nenalezena",
     "obtainiumExportHyphenatedLowercase": "obtainx-export",
     "pickAnAPK": "Vybrat APK",

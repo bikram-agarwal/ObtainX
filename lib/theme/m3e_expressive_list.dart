@@ -22,41 +22,41 @@ BorderRadius m3eListGroupItemRadius(
   if (flatListBody) {
     return switch (position) {
       M3eListGroupPosition.first => const BorderRadius.only(
-          topLeft: Radius.circular(kM3eOuterRadius),
-          topRight: Radius.circular(kM3eOuterRadius),
-          bottomLeft: Radius.circular(kM3eInnerRadius),
-          bottomRight: Radius.circular(kM3eInnerRadius),
-        ),
+        topLeft: Radius.circular(kM3eOuterRadius),
+        topRight: Radius.circular(kM3eOuterRadius),
+        bottomLeft: Radius.circular(kM3eInnerRadius),
+        bottomRight: Radius.circular(kM3eInnerRadius),
+      ),
       M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
       M3eListGroupPosition.last => const BorderRadius.only(
-          topLeft: Radius.circular(kM3eInnerRadius),
-          topRight: Radius.circular(kM3eInnerRadius),
-          bottomLeft: Radius.circular(kM3eOuterRadius),
-          bottomRight: Radius.circular(kM3eOuterRadius),
-        ),
+        topLeft: Radius.circular(kM3eInnerRadius),
+        topRight: Radius.circular(kM3eInnerRadius),
+        bottomLeft: Radius.circular(kM3eOuterRadius),
+        bottomRight: Radius.circular(kM3eOuterRadius),
+      ),
       M3eListGroupPosition.only => const BorderRadius.only(
-          topLeft: Radius.circular(kM3eOuterRadius),
-          topRight: Radius.circular(kM3eOuterRadius),
-          bottomLeft: Radius.circular(kM3eOuterRadius),
-          bottomRight: Radius.circular(kM3eOuterRadius),
-        ),
+        topLeft: Radius.circular(kM3eOuterRadius),
+        topRight: Radius.circular(kM3eOuterRadius),
+        bottomLeft: Radius.circular(kM3eOuterRadius),
+        bottomRight: Radius.circular(kM3eOuterRadius),
+      ),
     };
   }
   return switch (position) {
     M3eListGroupPosition.first => BorderRadius.circular(kM3eInnerRadius),
     M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
     M3eListGroupPosition.last => const BorderRadius.only(
-        topLeft: Radius.circular(kM3eInnerRadius),
-        topRight: Radius.circular(kM3eInnerRadius),
-        bottomLeft: Radius.circular(kM3eOuterRadius),
-        bottomRight: Radius.circular(kM3eOuterRadius),
-      ),
+      topLeft: Radius.circular(kM3eInnerRadius),
+      topRight: Radius.circular(kM3eInnerRadius),
+      bottomLeft: Radius.circular(kM3eOuterRadius),
+      bottomRight: Radius.circular(kM3eOuterRadius),
+    ),
     M3eListGroupPosition.only => const BorderRadius.only(
-        topLeft: Radius.circular(kM3eInnerRadius),
-        topRight: Radius.circular(kM3eInnerRadius),
-        bottomLeft: Radius.circular(kM3eOuterRadius),
-        bottomRight: Radius.circular(kM3eOuterRadius),
-      ),
+      topLeft: Radius.circular(kM3eInnerRadius),
+      topRight: Radius.circular(kM3eInnerRadius),
+      bottomLeft: Radius.circular(kM3eOuterRadius),
+      bottomRight: Radius.circular(kM3eOuterRadius),
+    ),
   };
 }
 
@@ -67,11 +67,8 @@ M3eListGroupPosition m3eFlatStackSlotPosition(int index, int itemCount) {
   return M3eListGroupPosition.middle;
 }
 
-Color m3eGroupedListRowFill(ColorScheme scheme) => Color.lerp(
-      scheme.surfaceContainer,
-      scheme.primary,
-      0.08,
-    )!;
+Color m3eGroupedListRowFill(ColorScheme scheme) =>
+    Color.lerp(scheme.surfaceContainer, scheme.primary, 0.08)!;
 
 Color m3eGroupedListBackdropFill(ColorScheme scheme) => scheme.surface;
 
@@ -91,10 +88,7 @@ Widget m3eCompactDropdownScope({
   required BuildContext context,
   required Widget child,
 }) {
-  return Theme(
-    data: m3eCompactDropdownTheme(Theme.of(context)),
-    child: child,
-  );
+  return Theme(data: m3eCompactDropdownTheme(Theme.of(context)), child: child);
 }
 
 /// Elevated group card matching apps tab [Material] (no outline border).
@@ -118,16 +112,16 @@ Widget m3eExpressiveSettingsCard({
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (int i = 0; i < items.length; i++) ...[
-            if (i > 0) SizedBox(height: itemGap),
+          for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
+            if (itemIndex > 0) SizedBox(height: itemGap),
             ClipRRect(
               borderRadius: m3eListGroupItemRadius(
-                m3eFlatStackSlotPosition(i, items.length),
+                m3eFlatStackSlotPosition(itemIndex, items.length),
                 flatListBody: true,
               ),
               child: Material(
                 color: m3eGroupedListRowFill(colorScheme),
-                child: items[i],
+                child: items[itemIndex],
               ),
             ),
           ],

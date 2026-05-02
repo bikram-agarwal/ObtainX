@@ -140,6 +140,7 @@
     "appLogs": "Nhật ký ứng dụng",
     "close": "Đóng",
     "share": "Chia sẻ",
+    "shareAsFile": "Share as file",
     "appNotFound": "Không tìm thấy ứng dụng",
     "obtainiumExportHyphenatedLowercase": "obtainx-export",
     "pickAnAPK": "Chọn một APK",

@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:obtainium/theme/app_segmented_button_theme.dart';
+import 'package:obtainium/theme/app_switch_theme.dart';
 
 /// Surfaces from [ColorScheme.fromImageProvider] are often very dark in dark mode;
 /// blend them toward [ColorScheme.primary] so the hue reads clearly on the app page.
@@ -17,13 +19,13 @@ ColorScheme appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
       surface: tintTowardPrimary(scheme.surface),
       surfaceDim: tintTowardPrimary(scheme.surfaceDim),
       surfaceBright: tintTowardPrimary(scheme.surfaceBright),
-      surfaceContainerLowest:
-          tintTowardPrimary(scheme.surfaceContainerLowest),
+      surfaceContainerLowest: tintTowardPrimary(scheme.surfaceContainerLowest),
       surfaceContainerLow: tintTowardPrimary(scheme.surfaceContainerLow),
       surfaceContainer: tintTowardPrimary(scheme.surfaceContainer),
       surfaceContainerHigh: tintTowardPrimary(scheme.surfaceContainerHigh),
-      surfaceContainerHighest:
-          tintTowardPrimary(scheme.surfaceContainerHighest),
+      surfaceContainerHighest: tintTowardPrimary(
+        scheme.surfaceContainerHighest,
+      ),
       outline: tintOutline(scheme.outline),
       outlineVariant: tintOutline(scheme.outlineVariant),
     );
@@ -31,8 +33,7 @@ ColorScheme appPageSurfacesWithVisibleAccent(ColorScheme scheme) {
   return scheme.copyWith(
     surfaceContainer: tintTowardPrimary(scheme.surfaceContainer),
     surfaceContainerHigh: tintTowardPrimary(scheme.surfaceContainerHigh),
-    surfaceContainerHighest:
-        tintTowardPrimary(scheme.surfaceContainerHighest),
+    surfaceContainerHighest: tintTowardPrimary(scheme.surfaceContainerHighest),
     outlineVariant: tintOutline(scheme.outlineVariant),
   );
 }
@@ -106,6 +107,8 @@ ThemeData buildAppPageThemedData(
       pageColorScheme.surfaceContainerHighest,
       pageColorScheme.brightness,
     ),
+    segmentedButtonTheme: appSegmentedButtonTheme(pageColorScheme),
+    switchTheme: appSwitchTheme(pageColorScheme),
     // Dropdown menus and other overlays sometimes fall back to canvasColor.
     canvasColor: pageColorScheme.surfaceContainerHigh,
     focusColor: pageColorScheme.primary.withValues(alpha: 0.12),
@@ -135,15 +138,13 @@ BoxDecoration appPageSectionCardDecoration(BuildContext context) {
   final Color defaultSectionFill = isDark
       ? colorScheme.surfaceContainerHighest
       : colorScheme.surfaceContainer;
-  final Color fill = Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
+  final Color fill =
+      Color.lerp(defaultSectionFill, Colors.black, sectionDeepen) ??
       defaultSectionFill;
   return BoxDecoration(
     color: fill,
     borderRadius: BorderRadius.circular(28),
-    border: Border.all(
-      color: colorScheme.outlineVariant,
-      width: 1,
-    ),
+    border: Border.all(color: colorScheme.outlineVariant, width: 1),
     boxShadow: [
       if (isDark)
         BoxShadow(

@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/pages/home.dart';
+import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/theme/app_switch_theme.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/native_provider.dart';
@@ -158,8 +160,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (context) =>
-              AppsProvider(sharedSettings: settingsProvider),
+          create: (context) => AppsProvider(sharedSettings: settingsProvider),
         ),
         ChangeNotifierProvider.value(value: settingsProvider),
         Provider(create: (context) => np),
@@ -392,10 +393,11 @@ class _ObtainiumState extends State<Obtainium> {
           // Boost surface containers toward primary — ports FilePipe's
           // boostSurfaceContainersTowardPrimary* logic that makes surfaces vivid.
           final bool useGradient = settingsProvider.useGradientBackground;
-          lightColorScheme = lightColorScheme.boostSurfaceContainersTowardPrimary(
-            darkTheme: false,
-            useGradient: useGradient,
-          );
+          lightColorScheme = lightColorScheme
+              .boostSurfaceContainersTowardPrimary(
+                darkTheme: false,
+                useGradient: useGradient,
+              );
           darkColorScheme = darkColorScheme.boostSurfaceContainersTowardPrimary(
             darkTheme: true,
             useGradient: useGradient,
@@ -405,24 +407,27 @@ class _ObtainiumState extends State<Obtainium> {
 
           final ColorScheme themeColorScheme =
               settingsProvider.theme == ThemeSettings.dark
-                  ? darkColorScheme
-                  : lightColorScheme;
+              ? darkColorScheme
+              : lightColorScheme;
           final ColorScheme darkThemeColorScheme =
               settingsProvider.theme == ThemeSettings.light
-                  ? lightColorScheme
-                  : darkColorScheme;
+              ? lightColorScheme
+              : darkColorScheme;
 
           NavigationBarThemeData navigationBarThemeFor(ColorScheme scheme) {
             // Use labelMedium as base so nav labels keep M3 size (bare color-only TextStyle inherits body scale and can wrap).
-            final TextStyle navLabelBase =
-                Theme.of(context).textTheme.labelMedium!;
+            final TextStyle navLabelBase = Theme.of(
+              context,
+            ).textTheme.labelMedium!;
             return NavigationBarThemeData(
               backgroundColor: scheme.surface,
               surfaceTintColor: Colors.transparent,
               elevation: 0,
               shadowColor: Colors.transparent,
               indicatorColor: scheme.primary.withValues(alpha: 0.14),
-              iconTheme: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+              iconTheme: WidgetStateProperty.resolveWith((
+                Set<WidgetState> states,
+              ) {
                 if (states.contains(WidgetState.selected)) {
                   return IconThemeData(color: scheme.primary);
                 }
@@ -442,9 +447,7 @@ class _ObtainiumState extends State<Obtainium> {
                     fontWeight: FontWeight.w600,
                   );
                 }
-                return navLabelBase.copyWith(
-                  color: scheme.onSurfaceVariant,
-                );
+                return navLabelBase.copyWith(color: scheme.onSurfaceVariant);
               }),
             );
           }
@@ -460,14 +463,24 @@ class _ObtainiumState extends State<Obtainium> {
             theme: ThemeData(
               useMaterial3: true,
               colorScheme: themeColorScheme,
-              fontFamily: settingsProvider.useSystemFont ? 'SystemFont' : 'Montserrat',
+              fontFamily: settingsProvider.useSystemFont
+                  ? 'SystemFont'
+                  : 'Montserrat',
               navigationBarTheme: navigationBarThemeFor(themeColorScheme),
+              segmentedButtonTheme: appSegmentedButtonTheme(themeColorScheme),
+              switchTheme: appSwitchTheme(themeColorScheme),
             ),
             darkTheme: ThemeData(
               useMaterial3: true,
               colorScheme: darkThemeColorScheme,
-              fontFamily: settingsProvider.useSystemFont ? 'SystemFont' : 'Montserrat',
+              fontFamily: settingsProvider.useSystemFont
+                  ? 'SystemFont'
+                  : 'Montserrat',
               navigationBarTheme: navigationBarThemeFor(darkThemeColorScheme),
+              segmentedButtonTheme: appSegmentedButtonTheme(
+                darkThemeColorScheme,
+              ),
+              switchTheme: appSwitchTheme(darkThemeColorScheme),
             ),
             home: Shortcuts(
               shortcuts: <LogicalKeySet, Intent>{

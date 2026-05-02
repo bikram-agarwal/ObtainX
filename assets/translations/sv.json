@@ -140,6 +140,7 @@
     "appLogs": "Apploggar",
     "close": "Stäng",
     "share": "Dela",
+    "shareAsFile": "Share as file",
     "appNotFound": "App ej funnen",
     "obtainiumExportHyphenatedLowercase": "obtainx-export",
     "pickAnAPK": "Välj en APK",

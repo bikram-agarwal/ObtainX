@@ -25,8 +25,9 @@ String apkSaveTreeUriDisplayLabel(Uri uri) {
     return Uri.decodeComponent(path.substring('/tree/'.length));
   }
   if (path.isNotEmpty) {
-    final String withoutLeadingSlash =
-        path.startsWith('/') ? path.substring(1) : path;
+    final String withoutLeadingSlash = path.startsWith('/')
+        ? path.substring(1)
+        : path;
     return Uri.decodeComponent(withoutLeadingSlash);
   }
   return uri.toString();
@@ -408,13 +409,26 @@ class _ImportExportPageState extends State<ImportExportPage> {
     final ColorScheme impScheme = Theme.of(context).colorScheme;
 
     /// Folder picker rows with a title + subtitle (more vertical air).
-    const EdgeInsets importPageCardFolderRowPadding =
-        EdgeInsets.fromLTRB(16, 12, 16, 12);
+    const EdgeInsets importPageCardFolderRowPadding = EdgeInsets.fromLTRB(
+      16,
+      12,
+      16,
+      12,
+    );
+
     /// Other padded rows inside [importPageCard] (dropdowns, buttons, batch grid).
-    const EdgeInsets importPageCardRowPadding =
-        EdgeInsets.fromLTRB(16, 8, 16, 8);
-    const EdgeInsets importPageCardSwitchTilePadding =
-        EdgeInsets.fromLTRB(16, 0, 16, 4);
+    const EdgeInsets importPageCardRowPadding = EdgeInsets.fromLTRB(
+      16,
+      8,
+      16,
+      8,
+    );
+    const EdgeInsets importPageCardSwitchTilePadding = EdgeInsets.fromLTRB(
+      16,
+      0,
+      16,
+      4,
+    );
     const double importPageCardRowItemGap = 12;
     const double importPageBatchCellGap = 4;
 
@@ -454,6 +468,22 @@ class _ImportExportPageState extends State<ImportExportPage> {
       );
     }
 
+    Widget resettableImportPageRow({
+      required Widget child,
+      required VoidCallback? onReset,
+    }) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: onReset == null
+            ? null
+            : () {
+                HapticFeedback.mediumImpact();
+                onReset();
+              },
+        child: child,
+      );
+    }
+
     final ButtonStyle folderPickOutlineStyle = outlineButtonStyle.merge(
       ButtonStyle(
         padding: WidgetStateProperty.all(const EdgeInsets.all(10)),
@@ -471,10 +501,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
         child: TextButton(
           style: folderPickOutlineStyle,
           onPressed: onPressed,
-          child: Icon(
-            Icons.folder_open_rounded,
-            color: impScheme.primary,
-          ),
+          child: Icon(Icons.folder_open_rounded, color: impScheme.primary),
         ),
       );
     }
@@ -487,41 +514,30 @@ class _ImportExportPageState extends State<ImportExportPage> {
             : () async {
                 var searchSourceName =
                     await showDialog<List<String>?>(
-                          context: context,
-                          builder: (BuildContext ctx) {
-                            return SelectionModal(
-                              title: tr(
-                                'selectX',
-                                args: [
-                                  tr(
-                                    'source',
-                                  ).toLowerCase(),
-                                ],
-                              ),
-                              entries: sourceStrings,
-                              selectedByDefault: false,
-                              onlyOneSelectionAllowed: true,
-                              titlesAreLinks: false,
-                            );
-                          },
-                        ) ??
-                        [];
+                      context: context,
+                      builder: (BuildContext ctx) {
+                        return SelectionModal(
+                          title: tr(
+                            'selectX',
+                            args: [tr('source').toLowerCase()],
+                          ),
+                          entries: sourceStrings,
+                          selectedByDefault: false,
+                          onlyOneSelectionAllowed: true,
+                          titlesAreLinks: false,
+                        );
+                      },
+                    ) ??
+                    [];
                 var searchSource = sourceProvider.sources
-                    .where(
-                      (e) => searchSourceName.contains(e.name),
-                    )
+                    .where((e) => searchSourceName.contains(e.name))
                     .toList();
                 if (searchSource.isNotEmpty) {
                   runSourceSearch(searchSource[0]);
                 }
               },
         child: Text(
-          tr(
-            'searchX',
-            args: [
-              lowerCaseIfEnglish(tr('source')),
-            ],
-          ),
+          tr('searchX', args: [lowerCaseIfEnglish(tr('source'))]),
           textAlign: TextAlign.center,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -563,7 +579,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
             textAlign: TextAlign.center,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(fontSize: 13),
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(fontSize: 13),
           ),
         ),
       ),
@@ -593,6 +611,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
               ),
             ),
           CustomScrollView(
+            key: const PageStorageKey<String>('import-export-tab-scroll'),
             cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(title: tr('importExport')),
@@ -623,60 +642,74 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                     apkSaveSnapshot.data!,
                                   );
                             return importPageCard([
-                              Padding(
-                                padding: importPageCardFolderRowPadding,
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            apkFolderTitle,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleSmall,
-                                            maxLines: 3,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            tr('apkSaveFolderDescription'),
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodySmall
-                                                ?.copyWith(
-                                                  color: impScheme
-                                                      .onSurfaceVariant,
-                                                ),
-                                          ),
-                                        ],
+                              resettableImportPageRow(
+                                onReset:
+                                    importInProgress ||
+                                        apkSaveSnapshot.data == null
+                                    ? null
+                                    : () async {
+                                        await settingsProvider.pickApkSaveDir(
+                                          remove: true,
+                                        );
+                                        if (context.mounted) {
+                                          setState(() {});
+                                        }
+                                      },
+                                child: Padding(
+                                  padding: importPageCardFolderRowPadding,
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              apkFolderTitle,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.titleSmall,
+                                              maxLines: 3,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              tr('apkSaveFolderDescription'),
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodySmall
+                                                  ?.copyWith(
+                                                    color: impScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                    ),
-                                    folderOutlineIconButton(
-                                      tooltipMessage: tr('pickApkSaveDir'),
-                                      onPressed: importInProgress
-                                          ? null
-                                          : () async {
-                                              await settingsProvider
-                                                  .pickApkSaveDir();
-                                              if (context.mounted) {
-                                                setState(() {});
-                                              }
-                                            },
-                                    ),
-                                  ],
+                                      folderOutlineIconButton(
+                                        tooltipMessage: tr('pickApkSaveDir'),
+                                        onPressed: importInProgress
+                                            ? null
+                                            : () async {
+                                                await settingsProvider
+                                                    .pickApkSaveDir();
+                                                if (context.mounted) {
+                                                  setState(() {});
+                                                }
+                                              },
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                               SwitchListTile(
                                 visualDensity: VisualDensity.compact,
                                 contentPadding: importPageCardSwitchTilePadding,
                                 title: Text(tr('saveDownloadedApkCopies')),
-                                value:
-                                    settingsProvider.saveDownloadedApkCopies,
+                                value: settingsProvider.saveDownloadedApkCopies,
                                 onChanged: importInProgress
                                     ? null
                                     : (bool enabled) {
@@ -697,52 +730,68 @@ class _ImportExportPageState extends State<ImportExportPage> {
                         future: settingsProvider.getExportDir(),
                         builder: (context, exportSnapshot) {
                           return importPageCard([
-                            Padding(
-                              padding: importPageCardFolderRowPadding,
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          exportSnapshot.data == null
-                                              ? tr('pickConfigExportFolder')
-                                              : folderDisplayPathFromTreeUri(
-                                                  exportSnapshot.data!,
+                            resettableImportPageRow(
+                              onReset:
+                                  importInProgress ||
+                                      exportSnapshot.data == null
+                                  ? null
+                                  : () async {
+                                      await settingsProvider.pickExportDir(
+                                        remove: true,
+                                      );
+                                      if (context.mounted) {
+                                        setState(() {});
+                                      }
+                                    },
+                              child: Padding(
+                                padding: importPageCardFolderRowPadding,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            exportSnapshot.data == null
+                                                ? tr('pickConfigExportFolder')
+                                                : folderDisplayPathFromTreeUri(
+                                                    exportSnapshot.data!,
+                                                  ),
+                                            style: Theme.of(
+                                              context,
+                                            ).textTheme.titleSmall,
+                                            maxLines: 3,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            tr('configExportFolderDescription'),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(
+                                                  color: impScheme
+                                                      .onSurfaceVariant,
                                                 ),
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall,
-                                          maxLines: 3,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          tr('configExportFolderDescription'),
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall
-                                              ?.copyWith(
-                                                color: impScheme
-                                                    .onSurfaceVariant,
-                                              ),
-                                        ),
-                                      ],
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                  folderOutlineIconButton(
-                                    tooltipMessage: tr('pickExportDir'),
-                                    onPressed: importInProgress
-                                        ? null
-                                        : () {
-                                            runObtainiumExport(pickOnly: true);
-                                          },
-                                  ),
-                                ],
+                                    folderOutlineIconButton(
+                                      tooltipMessage: tr('pickExportDir'),
+                                      onPressed: importInProgress
+                                          ? null
+                                          : () {
+                                              runObtainiumExport(
+                                                pickOnly: true,
+                                              );
+                                            },
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                             Padding(
@@ -754,7 +803,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                     padding: const EdgeInsets.only(
                                       right: importPageCardRowItemGap,
                                     ),
-                                    child: Text(tr('importExportIncludeInBackup')),
+                                    child: Text(
+                                      tr('importExportIncludeInBackup'),
+                                    ),
                                   ),
                                   Expanded(
                                     child: m3eCompactDropdownScope(
@@ -829,7 +880,8 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                   Expanded(
                                     child: TextButton(
                                       style: outlineButtonStyle,
-                                      onPressed: importInProgress ||
+                                      onPressed:
+                                          importInProgress ||
                                               exportSnapshot.data == null
                                           ? null
                                           : runObtainiumExport,
@@ -864,14 +916,17 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                 rowStart += 2
                               ) ...[
                                 if (rowStart > 0)
-                                  const SizedBox(height: importPageBatchCellGap),
+                                  const SizedBox(
+                                    height: importPageBatchCellGap,
+                                  ),
                                 Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Expanded(child: batchImportCells[rowStart]),
                                     SizedBox(width: importPageBatchCellGap),
                                     Expanded(
-                                      child: rowStart + 1 < batchImportCells.length
+                                      child:
+                                          rowStart + 1 < batchImportCells.length
                                           ? batchImportCells[rowStart + 1]
                                           : const SizedBox.shrink(),
                                     ),
@@ -986,8 +1041,10 @@ class SelectionModal extends StatefulWidget {
   List<String> deselectThese;
   bool onlyOneSelectionAllowed;
   bool titlesAreLinks;
+
   /// When true, [build] returns sheet content for [showModalBottomSheet] (drag handle, rounded top).
   bool presentAsBottomSheet;
+
   /// When false, the regex filter field is hidden (for short lists such as searchable sources).
   bool showFilterField;
 
@@ -1116,130 +1173,128 @@ class _SelectionModalState extends State<SelectionModal> {
           )
         : null;
 
-    final List<Widget> entryTileWidgets =
-        filteredEntrySelections.keys.map((entry) {
-        selectThis(bool? value) {
-          setState(() {
-            value ??= false;
-            if (value! && widget.onlyOneSelectionAllowed) {
-              selectOnlyOne(entry.key);
-            } else {
-              entrySelections[entry] = value!;
-            }
-          });
-        }
+    final List<Widget> entryTileWidgets = filteredEntrySelections.keys.map((
+      entry,
+    ) {
+      selectThis(bool? value) {
+        setState(() {
+          value ??= false;
+          if (value! && widget.onlyOneSelectionAllowed) {
+            selectOnlyOne(entry.key);
+          } else {
+            entrySelections[entry] = value!;
+          }
+        });
+      }
 
-        var urlLink = GestureDetector(
-              onTap: !widget.titlesAreLinks
-                  ? null
-                  : () {
-                      launchUrlString(
-                        entry.key,
-                        mode: LaunchMode.externalApplication,
-                      );
-                    },
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    entry.value.isEmpty ? entry.key : entry.value[0],
-                    style: TextStyle(
-                      decoration: widget.titlesAreLinks
-                          ? TextDecoration.underline
-                          : null,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.start,
-                  ),
-                  if (widget.titlesAreLinks)
-                    Text(
-                      Uri.parse(entry.key).host,
-                      style: const TextStyle(
-                        decoration: TextDecoration.underline,
-                        fontSize: 12,
-                      ),
-                    ),
-                ],
-              ),
-            );
-
-            var descriptionText = entry.value.length <= 1
-                ? const SizedBox.shrink()
-                : Text(
-                    entry.value[1].length > 128
-                        ? '${entry.value[1].substring(0, 128)}...'
-                        : entry.value[1],
-                    style: const TextStyle(
-                      fontStyle: FontStyle.italic,
-                      fontSize: 12,
-                    ),
-                  );
-
-            var selectedEntries = entrySelections.entries
-                .where((e) => e.value)
-                .toList();
-
-            var singleSelectTile = RadioGroup<String>(
-              groupValue: selectedEntries.isEmpty
-                  ? null
-                  : selectedEntries.first.key.key,
-              onChanged: (String? value) {
-                if (value != null) {
-                  setState(() {
-                    selectOnlyOne(value);
-                  });
-                }
+      var urlLink = GestureDetector(
+        onTap: !widget.titlesAreLinks
+            ? null
+            : () {
+                launchUrlString(
+                  entry.key,
+                  mode: LaunchMode.externalApplication,
+                );
               },
-              child: ListTile(
-                title: GestureDetector(
-                  onTap: widget.titlesAreLinks
-                      ? null
-                      : () {
-                          selectThis(!(entrySelections[entry] ?? false));
-                        },
-                  child: urlLink,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              entry.value.isEmpty ? entry.key : entry.value[0],
+              style: TextStyle(
+                decoration: widget.titlesAreLinks
+                    ? TextDecoration.underline
+                    : null,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.start,
+            ),
+            if (widget.titlesAreLinks)
+              Text(
+                Uri.parse(entry.key).host,
+                style: const TextStyle(
+                  decoration: TextDecoration.underline,
+                  fontSize: 12,
                 ),
-                subtitle: entry.value.length <= 1
-                    ? null
-                    : GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            selectOnlyOne(entry.key);
-                          });
-                        },
-                        child: descriptionText,
-                      ),
-                leading: Radio<String>(value: entry.key),
               ),
+          ],
+        ),
+      );
+
+      var descriptionText = entry.value.length <= 1
+          ? const SizedBox.shrink()
+          : Text(
+              entry.value[1].length > 128
+                  ? '${entry.value[1].substring(0, 128)}...'
+                  : entry.value[1],
+              style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 12),
             );
 
-            var multiSelectTile = SwitchListTile(
-              title: GestureDetector(
-                onTap: widget.titlesAreLinks
-                    ? null
-                    : () {
-                        selectThis(!(entrySelections[entry] ?? false));
-                      },
-                child: urlLink,
-              ),
-              subtitle: entry.value.length <= 1
-                  ? null
-                  : GestureDetector(
-                      onTap: () {
-                        selectThis(!(entrySelections[entry] ?? false));
-                      },
-                      child: descriptionText,
-                    ),
-              value: entrySelections[entry] ?? false,
-              onChanged: (bool value) {
-                selectThis(value);
-              },
-            );
+      var selectedEntries = entrySelections.entries
+          .where((e) => e.value)
+          .toList();
 
-        return widget.onlyOneSelectionAllowed
-            ? singleSelectTile
-            : multiSelectTile;
-      }).toList();
+      var singleSelectTile = RadioGroup<String>(
+        groupValue: selectedEntries.isEmpty
+            ? null
+            : selectedEntries.first.key.key,
+        onChanged: (String? value) {
+          if (value != null) {
+            setState(() {
+              selectOnlyOne(value);
+            });
+          }
+        },
+        child: ListTile(
+          title: GestureDetector(
+            onTap: widget.titlesAreLinks
+                ? null
+                : () {
+                    selectThis(!(entrySelections[entry] ?? false));
+                  },
+            child: urlLink,
+          ),
+          subtitle: entry.value.length <= 1
+              ? null
+              : GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      selectOnlyOne(entry.key);
+                    });
+                  },
+                  child: descriptionText,
+                ),
+          leading: Radio<String>(value: entry.key),
+        ),
+      );
+
+      var multiSelectTile = SwitchListTile(
+        title: GestureDetector(
+          onTap: widget.titlesAreLinks
+              ? null
+              : () {
+                  selectThis(!(entrySelections[entry] ?? false));
+                },
+          child: urlLink,
+        ),
+        subtitle: entry.value.length <= 1
+            ? null
+            : GestureDetector(
+                onTap: () {
+                  selectThis(!(entrySelections[entry] ?? false));
+                },
+                child: descriptionText,
+              ),
+        value: entrySelections[entry] ?? false,
+        onChanged: (bool value) {
+          selectThis(value);
+        },
+      );
+
+      return widget.onlyOneSelectionAllowed
+          ? singleSelectTile
+          : multiSelectTile;
+    }).toList();
 
     final List<Widget> sheetColumnChildren = [
       ?filterFormWidget,
@@ -1288,31 +1343,27 @@ class _SelectionModalState extends State<SelectionModal> {
       void popWithSelectedKeys() {
         Navigator.of(context).pop(
           entrySelections.entries
-              .where((MapEntry<MapEntry<String, List<String>>, bool> e) =>
-                  e.value)
-              .map((MapEntry<MapEntry<String, List<String>>, bool> e) =>
-                  e.key.key)
+              .where(
+                (MapEntry<MapEntry<String, List<String>>, bool> e) => e.value,
+              )
+              .map(
+                (MapEntry<MapEntry<String, List<String>>, bool> e) => e.key.key,
+              )
               .toList(),
         );
       }
 
-      final bool hasSelection =
-          entrySelections.values.any((bool selected) => selected);
+      final bool hasSelection = entrySelections.values.any(
+        (bool selected) => selected,
+      );
 
-      final double sheetBottomInset =
-          MediaQuery.paddingOf(context).bottom + 20;
+      final double sheetBottomInset = MediaQuery.paddingOf(context).bottom + 20;
 
       Widget sheetIconBar() {
-        Widget slot(Widget child) =>
-            Expanded(child: Center(child: child));
+        Widget slot(Widget child) => Expanded(child: Center(child: child));
         if (widget.onlyOneSelectionAllowed) {
           return Padding(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              12,
-              20,
-              sheetBottomInset,
-            ),
+            padding: EdgeInsets.fromLTRB(20, 12, 20, sheetBottomInset),
             child: Row(
               children: [
                 slot(
@@ -1342,12 +1393,7 @@ class _SelectionModalState extends State<SelectionModal> {
           );
         }
         return Padding(
-          padding: EdgeInsets.fromLTRB(
-            20,
-            12,
-            20,
-            sheetBottomInset,
-          ),
+          padding: EdgeInsets.fromLTRB(20, 12, 20, sheetBottomInset),
           child: Row(
             children: [
               slot(
@@ -1436,8 +1482,8 @@ class _SelectionModalState extends State<SelectionModal> {
                     child: Text(
                       widget.title ?? tr('pick'),
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   if (filterFormWidget != null) ...[
@@ -1466,9 +1512,7 @@ class _SelectionModalState extends State<SelectionModal> {
     return AlertDialog(
       scrollable: true,
       title: Text(widget.title ?? tr('pick')),
-      content: Column(
-        children: sheetColumnChildren,
-      ),
+      content: Column(children: sheetColumnChildren),
       actions: selectionActions,
     );
   }

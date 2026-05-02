@@ -178,7 +178,8 @@ class AddAppPageState extends State<AddAppPage> {
             (prevHost != null && prevHost != source?.hosts[0])) {
           pickedSource = source;
           pickedSource?.runOnAddAppInputChange(userInput);
-          final dynamic preservedOnDemandOnly = additionalSettings['onDemandOnly'];
+          final dynamic preservedOnDemandOnly =
+              additionalSettings['onDemandOnly'];
           additionalSettings = source != null
               ? getDefaultValuesFromFormItems(
                   source.combinedAppSpecificSettingFormItems,
@@ -331,8 +332,8 @@ class AddAppPageState extends State<AddAppPage> {
               if (installedInfo != null) {
                 app.installedVersion =
                     app.additionalSettings['useVersionCodeAsOSVersion'] == true
-                        ? installedInfo.versionCode.toString()
-                        : installedInfo.versionName;
+                    ? installedInfo.versionCode.toString()
+                    : installedInfo.versionName;
                 app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
                     false;
               } else {
@@ -503,11 +504,10 @@ class AddAppPageState extends State<AddAppPage> {
 
     Widget getAdditionalOptsCol() {
       final ColorScheme colorScheme = Theme.of(context).colorScheme;
-      final TextStyle? sectionIntroStyle =
-          Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: colorScheme.primary,
-              );
+      final TextStyle? sectionIntroStyle = Theme.of(context)
+          .textTheme
+          .titleSmall
+          ?.copyWith(fontWeight: FontWeight.w600, color: colorScheme.primary);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -540,7 +540,10 @@ class AddAppPageState extends State<AddAppPage> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              tr('additionalOptsFor', args: [pickedSource?.name ?? tr('source')]),
+              tr(
+                'additionalOptsFor',
+                args: [pickedSource?.name ?? tr('source')],
+              ),
               style: sectionIntroStyle,
             ),
           ),
@@ -727,8 +730,9 @@ class AddAppPageState extends State<AddAppPage> {
 
     // ── Search mode widgets ────────────────────────────────────────────
 
-    final Set<String> searchSelectedStores =
-        _getSearchSelectedStores(settingsProvider);
+    final Set<String> searchSelectedStores = _getSearchSelectedStores(
+      settingsProvider,
+    );
 
     // ── Inline search runner ───────────────────────────────────────────
 
@@ -753,8 +757,8 @@ class AddAppPageState extends State<AddAppPage> {
           throw ObtainiumError(tr('noResults'));
         }
 
-        List<MapEntry<String, Map<String, List<String>>>?> results =
-            (await Future.wait(
+        List<MapEntry<String, Map<String, List<String>>>?>
+        results = (await Future.wait(
           sourceProvider.sources
               .where((e) => selectedSourceNames.contains(e.name))
               .map((e) async {
@@ -793,8 +797,9 @@ class AddAppPageState extends State<AddAppPage> {
                                         return '${uri.origin}${uri.path}';
                                       }),
                                 ],
-                                defaultValue:
-                                    e.hosts.isNotEmpty ? e.hosts[0] : '',
+                                defaultValue: e.hosts.isNotEmpty
+                                    ? e.hosts[0]
+                                    : '',
                                 required: true,
                               ),
                             ],
@@ -821,9 +826,7 @@ class AddAppPageState extends State<AddAppPage> {
                   }
                 }
               }),
-        ))
-                .where((a) => a != null)
-                .toList();
+        )).where((a) => a != null).toList();
 
         // Interleave results from multiple sources
         Map<String, MapEntry<String, List<String>>> res = {};
@@ -941,7 +944,9 @@ class AddAppPageState extends State<AddAppPage> {
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(30),
                   borderSide: BorderSide(
-                    color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.55),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.outline.withValues(alpha: 0.55),
                   ),
                 ),
                 focusedBorder: OutlineInputBorder(
@@ -965,8 +970,9 @@ class AddAppPageState extends State<AddAppPage> {
     }
 
     Widget getSearchStoreChips() {
-      final searchableSources =
-          sourceProvider.sources.where((e) => e.canSearch).toList();
+      final searchableSources = sourceProvider.sources
+          .where((e) => e.canSearch)
+          .toList();
       if (searchableSources.isEmpty) return const SizedBox.shrink();
       return Wrap(
         spacing: 8,
@@ -975,10 +981,7 @@ class AddAppPageState extends State<AddAppPage> {
           final selected = searchSelectedStores.contains(source.name);
           return FilterChip(
             avatar: source.hosts.isNotEmpty
-                ? StoreSourceChipAvatar(
-                    host: source.hosts.first,
-                    size: 16,
-                  )
+                ? StoreSourceChipAvatar(host: source.hosts.first, size: 16)
                 : null,
             showCheckmark: false,
             label: Row(
@@ -1037,9 +1040,9 @@ class AddAppPageState extends State<AddAppPage> {
             child: Text(
               tr('addAppSearchResultsTitle'),
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           TextField(
@@ -1082,9 +1085,7 @@ class AddAppPageState extends State<AddAppPage> {
               child: ListTile(
                 leading: SizedBox(
                   width: 32,
-                  child: Center(
-                    child: _searchSourceIcon(sourceName),
-                  ),
+                  child: Center(child: _searchSourceIcon(sourceName)),
                 ),
                 title: subtitleLines.isNotEmpty
                     ? Text(
@@ -1157,9 +1158,7 @@ class AddAppPageState extends State<AddAppPage> {
               _mode = selection.first;
             });
           },
-          style: const ButtonStyle(
-            visualDensity: VisualDensity.compact,
-          ),
+          style: const ButtonStyle(visualDensity: VisualDensity.compact),
         ),
       );
     }
@@ -1228,6 +1227,7 @@ class AddAppPageState extends State<AddAppPage> {
               ),
             ),
           CustomScrollView(
+            key: const PageStorageKey<String>('add-app-tab-scroll'),
             cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(title: tr('addApp')),
@@ -1263,9 +1263,9 @@ class AddAppPageState extends State<AddAppPage> {
                                           val.data!.isNotEmpty
                                       ? Text(
                                           val.data!,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
                                         )
                                       : const SizedBox();
                                 },
@@ -1281,13 +1281,11 @@ class AddAppPageState extends State<AddAppPage> {
                             const SizedBox(height: 12),
                             Text(
                               tr('storesToSearch'),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelMedium
+                              style: Theme.of(context).textTheme.labelMedium
                                   ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
                                   ),
                             ),
                             const SizedBox(height: 6),
@@ -1302,9 +1300,7 @@ class AddAppPageState extends State<AddAppPage> {
               ),
               if (settingsProvider.progressiveBlurEnabled)
                 SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: MediaQuery.paddingOf(context).bottom,
-                  ),
+                  child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
                 ),
             ],
           ),
@@ -1345,10 +1341,7 @@ class _PaddedWidgetDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: child,
-    );
+    return Material(color: Theme.of(context).colorScheme.surface, child: child);
   }
 
   @override

@@ -46,7 +46,9 @@ class Log {
 
 class LogsProvider {
   LogsProvider({bool runDefaultClear = true}) {
-    clear(before: DateTime.now().subtract(const Duration(days: 7)));
+    if (runDefaultClear) {
+      clear(before: DateTime.now().subtract(const Duration(days: 7)));
+    }
   }
 
   Database? db;
