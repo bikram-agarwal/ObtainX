@@ -59,6 +59,14 @@ class AddAppPageState extends State<AddAppPage> {
       _mode == _AddMode.fromDevice &&
       (_bulkWidgetKey.currentState?.isAdding ?? false);
 
+  Future<bool> confirmCancelBulkScanForNavigation() async {
+    if (_mode != _AddMode.fromDevice) return true;
+    return _bulkWidgetKey.currentState?.confirmCancelScanForNavigation(
+          context,
+        ) ??
+        true;
+  }
+
   /// Called by [HomePageState] when the user presses back while this tab is
   /// active. Returns true if the bulk flow consumed the event (moved one step
   /// back). Returns false so the caller falls through to normal tab navigation.
@@ -1167,10 +1175,16 @@ class AddAppPageState extends State<AddAppPage> {
             ),
           ],
           selected: {_mode},
-          onSelectionChanged: (Set<_AddMode> selection) {
+          onSelectionChanged: (Set<_AddMode> selection) async {
+            final _AddMode nextMode = selection.first;
+            if (nextMode == _mode) return;
+            if (!await confirmCancelBulkScanForNavigation()) {
+              return;
+            }
+            if (!mounted) return;
             setState(() {
               _byUrlOpenedFromSearchPick = false;
-              _mode = selection.first;
+              _mode = nextMode;
             });
           },
           style: const ButtonStyle(visualDensity: VisualDensity.compact),

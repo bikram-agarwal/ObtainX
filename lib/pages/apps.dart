@@ -1119,7 +1119,6 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
                     Divider(color: colorScheme.outlineVariant),
                     const SizedBox(height: 8),
                     sectionLabel(tr('sortBy')),
@@ -1256,60 +1255,61 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                       ],
                     ),
-                    // Switched from a custom [_GroupToggleRow] to
-                    // [SwitchListTile] for two reasons: (1) consistency
-                    // with the [pinUpdates] / [moveNonInstalledAppsToBottom]
-                    // / [showFolderedAppsOnMainPage] rows in this same
-                    // sheet which already use SwitchListTile, and (2)
-                    // SwitchListTile's built-in InkWell makes the entire
-                    // row tappable - a tap anywhere on the label or the
-                    // tooltip column toggles the value, matching the
-                    // behaviour of the other rows. The previous custom
-                    // row only accepted taps on the Switch itself.
                     if (effectiveGroupBy != AppsListGroupBy.none)
-                      SwitchListTile(
+                      ListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
+                        title: Text(tr('groupNonInstalledSeparately')),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Expanded(
-                              child: Text(
-                                tr('groupNonInstalledSeparately'),
-                              ),
-                            ),
                             HelpHintIcon(
                               message: tr(
                                 'groupNonInstalledSeparatelyDescription',
                               ),
+                              padding: EdgeInsets.zero,
+                            ),
+                            Switch(
+                              value: effectiveGroupNonInstalledSeparately,
+                              onChanged: (value) {
+                                setEffectiveGroupNonInstalledSeparately(value);
+                                setSheetState(() {});
+                              },
                             ),
                           ],
                         ),
-                        value: effectiveGroupNonInstalledSeparately,
-                        onChanged: (value) {
-                          setEffectiveGroupNonInstalledSeparately(value);
+                        onTap: () {
+                          setEffectiveGroupNonInstalledSeparately(
+                            !effectiveGroupNonInstalledSeparately,
+                          );
                           setSheetState(() {});
                         },
                       ),
-                    SwitchListTile(
+                    ListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
+                      title: Text(tr('groupUpdatesSeparately')),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Expanded(
-                            child: Text(tr('groupUpdatesSeparately')),
-                          ),
                           HelpHintIcon(
                             message: tr('groupUpdatesSeparatelyDescription'),
+                            padding: EdgeInsets.zero,
+                          ),
+                          Switch(
+                            value: effectiveGroupUpdatesSeparately,
+                            onChanged: (value) {
+                              setEffectiveGroupUpdatesSeparately(value);
+                              setSheetState(() {});
+                            },
                           ),
                         ],
                       ),
-                      value: effectiveGroupUpdatesSeparately,
-                      onChanged: (value) {
-                        setEffectiveGroupUpdatesSeparately(value);
+                      onTap: () {
+                        setEffectiveGroupUpdatesSeparately(
+                          !effectiveGroupUpdatesSeparately,
+                        );
                         setSheetState(() {});
                       },
                     ),
-                    const SizedBox(height: 16),
                     Divider(color: colorScheme.outlineVariant),
                     const SizedBox(height: 4),
                     SwitchListTile(
@@ -1336,24 +1336,30 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                     // view because the toggle has no meaning there - a
                     // folder always shows its own apps.
                     if (folderId == null)
-                      SwitchListTile(
+                      ListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
+                        title: Text(tr('showFolderedAppsOnMainPage')),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Expanded(
-                              child: Text(tr('showFolderedAppsOnMainPage')),
-                            ),
                             HelpHintIcon(
-                              message: tr(
-                                'showFolderedAppsOnMainPageTooltip',
-                              ),
+                              message: tr('showFolderedAppsOnMainPageTooltip'),
+                              padding: EdgeInsets.zero,
+                            ),
+                            Switch(
+                              value:
+                                  settingsProvider.showFolderedAppsOnMainPage,
+                              onChanged: (value) {
+                                settingsProvider.showFolderedAppsOnMainPage =
+                                    value;
+                                setSheetState(() {});
+                              },
                             ),
                           ],
                         ),
-                        value: settingsProvider.showFolderedAppsOnMainPage,
-                        onChanged: (value) {
-                          settingsProvider.showFolderedAppsOnMainPage = value;
+                        onTap: () {
+                          settingsProvider.showFolderedAppsOnMainPage =
+                              !settingsProvider.showFolderedAppsOnMainPage;
                           setSheetState(() {});
                         },
                       ),

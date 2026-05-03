@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart'
     show buildThemeAccentSettingsCardItems;
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 
 enum _ThemeBrightnessSegment { system, light, dark, black }
@@ -111,19 +112,14 @@ List<Widget> buildThemesSettingsCardItems(
               icon: const Icon(Icons.square_outlined, size: 18),
             ),
           ],
-          selected: <_ThemeBrightnessSegment>{
-            _segmentForSettings(settings),
-          },
+          selected: <_ThemeBrightnessSegment>{_segmentForSettings(settings)},
           onSelectionChanged: (Set<_ThemeBrightnessSegment> selected) {
             if (selected.isEmpty) return;
             _applyThemeSegment(settings, selected.first);
           },
           showSelectedIcon: false,
           style: SegmentedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(
-              vertical: 10,
-              horizontal: 4,
-            ),
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
             visualDensity: VisualDensity.standard,
             tapTargetSize: MaterialTapTargetSize.padded,
           ),
@@ -138,19 +134,33 @@ List<Widget> buildThemesSettingsCardItems(
         settings.useGradientBackground = value;
       },
     ),
-    SwitchListTile(
+    ListTile(
       title: Text(tr('settingsProgressiveBlur')),
-      // Caption hints at the perf cost so users understand why this is
-      // off-by-default and can decide whether to opt in.
-      subtitle: Text(tr('settingsProgressiveBlurSubtitle')),
-      value: settings.progressiveBlurEnabled,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HelpHintIcon(
+            message: tr('settingsProgressiveBlurSubtitle'),
+            padding: EdgeInsets.zero,
+          ),
+          Switch(
+            value: settings.progressiveBlurEnabled,
+            onChanged: settings.reduceVisualEffects
+                ? null
+                : (bool value) {
+                    settings.progressiveBlurEnabled = value;
+                  },
+          ),
+        ],
+      ),
       // Hard-disabled when the master "reduce visual effects" switch is
       // on - no point letting users toggle a control that won't take
       // effect.
-      onChanged: settings.reduceVisualEffects
+      onTap: settings.reduceVisualEffects
           ? null
-          : (bool value) {
-              settings.progressiveBlurEnabled = value;
+          : () {
+              settings.progressiveBlurEnabled =
+                  !settings.progressiveBlurEnabled;
             },
     ),
     SwitchListTile(
@@ -164,12 +174,25 @@ List<Widget> buildThemesSettingsCardItems(
     // OpenContainer container-transform morph for apps-list -> AppPage
     // navigation. Single-switch escape hatch for users on weaker
     // hardware who report frame-rate drops.
-    SwitchListTile(
+    ListTile(
       title: Text(tr('settingsReduceVisualEffects')),
-      subtitle: Text(tr('settingsReduceVisualEffectsSubtitle')),
-      value: settings.reduceVisualEffects,
-      onChanged: (bool value) {
-        settings.reduceVisualEffects = value;
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HelpHintIcon(
+            message: tr('settingsReduceVisualEffectsSubtitle'),
+            padding: EdgeInsets.zero,
+          ),
+          Switch(
+            value: settings.reduceVisualEffects,
+            onChanged: (bool value) {
+              settings.reduceVisualEffects = value;
+            },
+          ),
+        ],
+      ),
+      onTap: () {
+        settings.reduceVisualEffects = !settings.reduceVisualEffects;
       },
     ),
   ];

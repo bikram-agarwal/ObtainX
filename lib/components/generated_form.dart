@@ -1170,34 +1170,24 @@ class _GeneratedFormState extends State<GeneratedForm> {
           final Widget? switchHelpIcon =
               switchItem.labelTooltip != null &&
                   switchItem.labelTooltip!.isNotEmpty
-              ? HelpHintIcon(message: switchItem.labelTooltip!)
+              ? HelpHintIcon(
+                  message: switchItem.labelTooltip!,
+                  padding: EdgeInsets.zero,
+                )
               : null;
           formInputs[r][e] = Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    // [Expanded] (was [Flexible]) so the label fills the
-                    // remaining inner-row width and the [HelpHintIcon]
-                    // sits in a consistent column at the right edge -
-                    // same alignment rule as the SwitchListTile rows
-                    // elsewhere. Style pinned to [bodyLarge] to match
-                    // SwitchListTile's title font (avoids the smaller
-                    // bodyMedium that the inherited DefaultTextStyle
-                    // produced for these in-form toggles).
-                    Expanded(
-                      child: Text(
-                        switchItem.label,
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                    ),
-                    ...[?switchHelpIcon],
-                  ],
+                child: Text(
+                  switchItem.label,
+                  style: Theme.of(context).textTheme.bodyLarge,
                 ),
               ),
-              const SizedBox(width: 8),
+              if (switchHelpIcon != null)
+                switchHelpIcon
+              else
+                const SizedBox(width: 8),
               Switch(
                 value: values[fieldKey],
                 onChanged: switchItem.disabled

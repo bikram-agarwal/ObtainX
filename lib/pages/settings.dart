@@ -104,35 +104,50 @@ class _SettingsPageState extends State<SettingsPage> {
             settingsProvider.useShizuku);
     if (showBgControls) {
       rows.add(
-        SwitchListTile(
-          title: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+        ListTile(
+          title: Text(tr('foregroundServiceForUpdateChecking')),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(child: Text(tr('foregroundServiceForUpdateChecking'))),
-              HelpHintIcon(message: tr('foregroundServiceReliabilityNote')),
+              HelpHintIcon(
+                message: tr('foregroundServiceReliabilityNote'),
+                padding: EdgeInsets.zero,
+              ),
+              Switch(
+                value: settingsProvider.useFGService,
+                onChanged: (bool value) {
+                  settingsProvider.useFGService = value;
+                },
+              ),
             ],
           ),
-          value: settingsProvider.useFGService,
-          onChanged: (bool value) {
-            settingsProvider.useFGService = value;
+          onTap: () {
+            settingsProvider.useFGService = !settingsProvider.useFGService;
           },
         ),
       );
       rows.add(
-        SwitchListTile(
-          title: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+        ListTile(
+          title: Text(tr('enableBackgroundUpdates')),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(child: Text(tr('enableBackgroundUpdates'))),
               HelpHintIcon(
                 message:
                     '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
+                padding: EdgeInsets.zero,
+              ),
+              Switch(
+                value: settingsProvider.enableBackgroundUpdates,
+                onChanged: (bool value) {
+                  settingsProvider.enableBackgroundUpdates = value;
+                },
               ),
             ],
           ),
-          value: settingsProvider.enableBackgroundUpdates,
-          onChanged: (bool value) {
-            settingsProvider.enableBackgroundUpdates = value;
+          onTap: () {
+            settingsProvider.enableBackgroundUpdates =
+                !settingsProvider.enableBackgroundUpdates;
           },
         ),
       );
@@ -715,15 +730,9 @@ class _SettingsPageState extends State<SettingsPage> {
                               // track + vertical-bar thumb + tick marks)
                               // for consistency across the settings page.
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  8,
-                                  8,
-                                  8,
-                                ),
+                                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                                 child: Row(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     Icon(
                                       Icons.format_size_rounded,
@@ -738,10 +747,9 @@ class _SettingsPageState extends State<SettingsPage> {
                                             CrossAxisAlignment.start,
                                         children: [
                                           Padding(
-                                            padding:
-                                                const EdgeInsets.symmetric(
-                                                  horizontal: 8,
-                                                ),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                            ),
                                             child: Row(
                                               children: [
                                                 Expanded(
@@ -754,30 +762,27 @@ class _SettingsPageState extends State<SettingsPage> {
                                             ),
                                           ),
                                           SliderTheme(
-                                            data: SliderTheme.of(context)
-                                                .copyWith(
-                                                  trackHeight: 16,
-                                                  trackShape:
-                                                      const _GappedTrackShape(),
-                                                  thumbShape:
-                                                      const _VerticalBarThumbShape(),
-                                                  tickMarkShape:
-                                                      const RoundSliderTickMarkShape(
-                                                        tickMarkRadius: 3,
-                                                      ),
-                                                  activeTickMarkColor:
-                                                      Theme.of(
-                                                        context,
-                                                      ).colorScheme.onPrimary,
-                                                  inactiveTickMarkColor:
-                                                      Theme.of(
-                                                        context,
-                                                      ).colorScheme.primary,
-                                                  overlayShape:
-                                                      const RoundSliderOverlayShape(
-                                                        overlayRadius: 20,
-                                                      ),
-                                                ),
+                                            data: SliderTheme.of(context).copyWith(
+                                              trackHeight: 16,
+                                              trackShape:
+                                                  const _GappedTrackShape(),
+                                              thumbShape:
+                                                  const _VerticalBarThumbShape(),
+                                              tickMarkShape:
+                                                  const RoundSliderTickMarkShape(
+                                                    tickMarkRadius: 3,
+                                                  ),
+                                              activeTickMarkColor: Theme.of(
+                                                context,
+                                              ).colorScheme.onPrimary,
+                                              inactiveTickMarkColor: Theme.of(
+                                                context,
+                                              ).colorScheme.primary,
+                                              overlayShape:
+                                                  const RoundSliderOverlayShape(
+                                                    overlayRadius: 20,
+                                                  ),
+                                            ),
                                             child: Slider(
                                               min: SettingsProvider
                                                   .appUiScaleMin,
@@ -785,15 +790,15 @@ class _SettingsPageState extends State<SettingsPage> {
                                                   .appUiScaleMax,
                                               divisions:
                                                   ((SettingsProvider
-                                                                          .appUiScaleMax -
-                                                                      SettingsProvider
-                                                                          .appUiScaleMin) /
-                                                              0.05)
-                                                          .round(),
+                                                                  .appUiScaleMax -
+                                                              SettingsProvider
+                                                                  .appUiScaleMin) /
+                                                          0.05)
+                                                      .round(),
                                               label:
                                                   '${(settingsProvider.appUiScale * 100).round()}%',
-                                              value: settingsProvider
-                                                  .appUiScale,
+                                              value:
+                                                  settingsProvider.appUiScale,
                                               onChanged: (double value) {
                                                 settingsProvider.appUiScale =
                                                     value;
@@ -1490,10 +1495,10 @@ class _ThirdPartyInstallerSelectorState
                       width: 36,
                       height: 36,
                       fit: BoxFit.contain,
-                      cacheWidth:
-                          (36 * MediaQuery.devicePixelRatioOf(context)).round(),
-                      cacheHeight:
-                          (36 * MediaQuery.devicePixelRatioOf(context)).round(),
+                      cacheWidth: (36 * MediaQuery.devicePixelRatioOf(context))
+                          .round(),
+                      cacheHeight: (36 * MediaQuery.devicePixelRatioOf(context))
+                          .round(),
                       errorBuilder: (_, _, _) =>
                           const Icon(Icons.android, size: 36),
                     ),
@@ -1577,11 +1582,7 @@ class _VerticalBarThumbShape extends SliderComponentShape {
       ..color = sliderTheme.thumbColor ?? Colors.white
       ..style = PaintingStyle.fill;
     final rrect = RRect.fromRectAndRadius(
-      Rect.fromCenter(
-        center: alignedCenter,
-        width: _width,
-        height: _height,
-      ),
+      Rect.fromCenter(center: alignedCenter, width: _width, height: _height),
       const Radius.circular(_radius),
     );
     canvas.drawRRect(rrect, paint);
@@ -1627,8 +1628,7 @@ class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
     final double trackHeight = trackRect.height;
     final double trackWidth = trackRect.width;
     if (trackWidth > trackHeight) {
-      final double valueRatio = ((thumbCenter.dx - trackRect.left) /
-              trackWidth)
+      final double valueRatio = ((thumbCenter.dx - trackRect.left) / trackWidth)
           .clamp(0.0, 1.0);
       thumbX =
           trackRect.left +

@@ -334,6 +334,13 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    if (!await _confirmActivePageCanNavigateAway(activeIndex)) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+
     pageSwitchRequestId += 1;
     final int currentRequestId = pageSwitchRequestId;
 
@@ -364,6 +371,15 @@ class _HomePageState extends State<HomePage> {
         selectedIndexHistory.add(index);
       });
     }
+  }
+
+  Future<bool> _confirmActivePageCanNavigateAway(int activeIndex) async {
+    final currentKey = pages[activeIndex].widget.key;
+    if (currentKey is GlobalKey<AddAppPageState>) {
+      return currentKey.currentState?.confirmCancelBulkScanForNavigation() ??
+          true;
+    }
+    return true;
   }
 
   @override
@@ -417,14 +433,23 @@ class _HomePageState extends State<HomePage> {
           isLinkActivity &&
           selectedIndexHistory.length == 1 &&
           selectedIndexHistory.last == 1,
-      onPopInvokedWithResult: (bool didPop, dynamic result) {
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
         if (didPop) return;
         final int activeIndex = selectedIndexHistory.isEmpty
             ? 0
             : selectedIndexHistory.last;
         final currentKey = pages[activeIndex].widget.key;
         if (currentKey is GlobalKey<AddAppPageState>) {
-          if (currentKey.currentState?.handleBack() == true) return;
+          final AddAppPageState? addAppPageState = currentKey.currentState;
+          if (addAppPageState != null) {
+            if (!await addAppPageState.confirmCancelBulkScanForNavigation()) {
+              return;
+            }
+            if (!mounted || !addAppPageState.mounted) {
+              return;
+            }
+            if (addAppPageState.handleBack()) return;
+          }
         }
         if (currentKey is GlobalKey<AppsPageState>) {
           if (currentKey.currentState?.handleBack() == true) return;

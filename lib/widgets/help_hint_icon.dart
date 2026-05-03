@@ -48,6 +48,7 @@ class _HelpHintIconState extends State<HelpHintIcon> {
 
   @override
   Widget build(BuildContext context) {
+    final double buttonSize = widget.size + 12;
     return Padding(
       padding: widget.padding,
       child: Tooltip(
@@ -62,17 +63,14 @@ class _HelpHintIconState extends State<HelpHintIcon> {
           // 48dp tap target which would otherwise push other row items
           // around.
           iconSize: widget.size,
-          padding: EdgeInsets.zero,
-          visualDensity: VisualDensity.compact,
-          constraints: BoxConstraints(
-            minWidth: widget.size + 12,
-            minHeight: widget.size + 12,
+          style: IconButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+            padding: const EdgeInsets.all(4),
+            minimumSize: Size(buttonSize, buttonSize),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
           ),
-          icon: Icon(
-            Icons.help_outline_rounded,
-            size: widget.size,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          icon: Icon(Icons.help_outline_rounded, size: widget.size),
           onPressed: () {
             _tooltipKey.currentState?.ensureTooltipVisible();
           },

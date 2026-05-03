@@ -161,6 +161,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       <String, Set<String>>{};
   List<String> _bulkScanPackageNames = <String>[];
   bool _bulkScanResultsCommitted = false;
+  Future<bool>? _navigationConfirmationFuture;
 
   late AppsProvider _appsProvider;
   static const List<String> _storeIconPriority = [
@@ -196,6 +197,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   @override
   void dispose() {
+    if (isScanning) {
+      _abandonActiveScan();
+    }
     _searchDebounceTimer?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -402,8 +406,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     final List<String> ordered = _orderedStoreKeysForBadge(
       sourcesByStore.keys.toSet(),
     );
-    final List<String> keys =
-        ordered.length > 5 ? ordered.sublist(0, 5) : ordered;
+    final List<String> keys = ordered.length > 5
+        ? ordered.sublist(0, 5)
+        : ordered;
     final List<Widget> badgeWidgets = <Widget>[];
     for (final String storeKey in keys) {
       final String? url = sourcesByStore[storeKey];
@@ -414,10 +419,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       badgeWidgets.add(
         Opacity(
           opacity: isSelected ? 1.0 : 0.4,
-          child: StoreSourceChipAvatar(
-            host: host,
-            size: isSelected ? 20 : 14,
-          ),
+          child: StoreSourceChipAvatar(host: host, size: isSelected ? 20 : 14),
         ),
       );
     }
@@ -660,9 +662,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     if (_iconCache.containsKey(packageName)) return Future<void>.value();
     return _iconLoadFutures.putIfAbsent(packageName, () async {
       try {
-        final Uint8List? icon = await BulkImportService.getAppIcon(
-          packageName,
-        );
+        final Uint8List? icon = await BulkImportService.getAppIcon(packageName);
         if (!mounted) return;
         _iconCache.putIfAbsent(packageName, () => icon ?? false);
       } catch (_) {
@@ -927,13 +927,11 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       final bool coveredAllSelectedStores = _selectedStores.every(
         (String storeLabel) => doneForPackage?.contains(storeLabel) ?? false,
       );
-      if (!coveredAllSelectedStores) {
-        cancelledApps.add(info);
-        continue;
-      }
       final Map<String, String>? sources = _bulkScanCombined[pkg];
       if (sources != null && sources.isNotEmpty) {
         found.add(BulkFoundApp(info: info, sources: sources));
+      } else if (!coveredAllSelectedStores) {
+        cancelledApps.add(info);
       } else {
         notFound.add(info);
       }
@@ -1052,9 +1050,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           }
           mirrorResults.forEach((String pkg, String? url) {
             if (url != null) {
-              _bulkScanCombined
-                  .putIfAbsent(pkg, () => <String, String>{})['APKMirror'] =
-                  url;
+              _bulkScanCombined.putIfAbsent(
+                pkg,
+                () => <String, String>{},
+              )['APKMirror'] = url;
             }
           });
         case 'APKPure':
@@ -1099,8 +1098,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           }
           pureResults.forEach((String pkg, String? url) {
             if (url != null) {
-              _bulkScanCombined
-                  .putIfAbsent(pkg, () => <String, String>{})['APKPure'] = url;
+              _bulkScanCombined.putIfAbsent(
+                pkg,
+                () => <String, String>{},
+              )['APKPure'] = url;
             }
           });
         case 'F-Droid':
@@ -1145,8 +1146,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           }
           fdroidResults.forEach((String pkg, String? url) {
             if (url != null) {
-              _bulkScanCombined
-                  .putIfAbsent(pkg, () => <String, String>{})['F-Droid'] = url;
+              _bulkScanCombined.putIfAbsent(
+                pkg,
+                () => <String, String>{},
+              )['F-Droid'] = url;
             }
           });
         case 'IzzyOnDroid':
@@ -1191,9 +1194,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           }
           izzyResults.forEach((String pkg, String? url) {
             if (url != null) {
-              _bulkScanCombined
-                  .putIfAbsent(pkg, () => <String, String>{})['IzzyOnDroid'] =
-                  url;
+              _bulkScanCombined.putIfAbsent(
+                pkg,
+                () => <String, String>{},
+              )['IzzyOnDroid'] = url;
             }
           });
         case 'GitHub':
@@ -1238,8 +1242,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           }
           githubResults.forEach((String pkg, String? url) {
             if (url != null) {
-              _bulkScanCombined
-                  .putIfAbsent(pkg, () => <String, String>{})['GitHub'] = url;
+              _bulkScanCombined.putIfAbsent(
+                pkg,
+                () => <String, String>{},
+              )['GitHub'] = url;
             }
           });
         default:
@@ -1278,11 +1284,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           if (_selectedStores.contains('F-Droid'))
             _buildStoreCard('F-Droid', _fdroidDone, _fdroidTotal),
           if (_selectedStores.contains('IzzyOnDroid'))
-            _buildStoreCard(
-              'IzzyOnDroid',
-              _izzyOnDroidDone,
-              _izzyOnDroidTotal,
-            ),
+            _buildStoreCard('IzzyOnDroid', _izzyOnDroidDone, _izzyOnDroidTotal),
           if (_selectedStores.contains('GitHub'))
             _buildStoreCard('GitHub', _githubDone, _githubTotal),
           const SizedBox(height: 24),
@@ -1848,7 +1850,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     bool failedResult = false,
   }) {
     final Widget leadingIcon = _lazyBulkAppIcon(app.info.packageName);
-    final Widget storeBadgesColumn = _buildBulkResultStoreBadgeColumn(app.sources);
+    final Widget storeBadgesColumn = _buildBulkResultStoreBadgeColumn(
+      app.sources,
+    );
 
     if (selectable && !tracked) {
       final bool isSelected = _selectedNewFoundPackages.contains(
@@ -2132,6 +2136,62 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   /// before they have reviewed the results.
   bool get isAdding => _addingApps || _addingDone;
 
+  bool get isScanning =>
+      _step == BulkStep.scanning && !_bulkScanResultsCommitted;
+
+  void _abandonActiveScan() {
+    _scanCancelRequested = true;
+    _bulkScanResultsCommitted = true;
+  }
+
+  Future<bool> confirmCancelScanForNavigation(
+    BuildContext dialogContext,
+  ) async {
+    if (!isScanning) return true;
+    if (_navigationConfirmationFuture != null) {
+      return _navigationConfirmationFuture!;
+    }
+    _navigationConfirmationFuture =
+        _confirmCancelScanForNavigation(dialogContext).whenComplete(() {
+          _navigationConfirmationFuture = null;
+        });
+    return _navigationConfirmationFuture!;
+  }
+
+  Future<bool> _confirmCancelScanForNavigation(
+    BuildContext dialogContext,
+  ) async {
+    if (!dialogContext.mounted) return false;
+    final bool cancelSearch =
+        await showDialog<bool>(
+          context: dialogContext,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              title: Text(tr('bulkScanNavigationCancelTitle')),
+              content: Text(tr('bulkScanNavigationCancelBody')),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: Text(tr('bulkScanStay')),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: Text(tr('cancelBulkScan')),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+    if (cancelSearch) {
+      _abandonActiveScan();
+      if (mounted) {
+        setState(() {});
+      }
+    }
+    return cancelSearch;
+  }
+
   /// Called by [AddAppPageState.handleBack] when the Device tab is active.
   /// Returns true if the back press was consumed (moved to previous step).
   bool handleBack() {
@@ -2199,8 +2259,18 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     if (widget.standalone) {
       return PopScope(
         canPop: _step == BulkStep.selectApps,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && _canGoBack()) {
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop) return;
+          if (isScanning) {
+            final bool shouldLeave = await confirmCancelScanForNavigation(
+              context,
+            );
+            if (shouldLeave && context.mounted) {
+              Navigator.of(context).pop();
+            }
+            return;
+          }
+          if (_canGoBack()) {
             _goBack();
           }
         },
@@ -2220,17 +2290,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       );
     }
 
-    // Embedded mode: no Scaffold; back navigation handled via PopScope so
-    // Android back moves through steps instead of popping AddAppPage.
-    return PopScope(
-      canPop: _step == BulkStep.selectApps,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _canGoBack()) {
-          _goBack();
-        }
-      },
-      child: _buildStepContent(),
-    );
+    // Embedded mode is hosted by HomePage, which owns back/tab navigation.
+    return _buildStepContent();
   }
 }
 
