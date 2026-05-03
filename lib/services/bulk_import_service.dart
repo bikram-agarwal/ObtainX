@@ -86,10 +86,18 @@ class BulkImportService {
     if (packageNames.isEmpty) {
       return const <String, String>{};
     }
-    final labelsByPackageName = await _deviceAppsChannel
-        .invokeMapMethod<String, String>('getApplicationLabels', {
-          'packageNames': packageNames,
-        });
+    Map<String, String>? labelsByPackageName;
+    try {
+      labelsByPackageName = await _deviceAppsChannel
+          .invokeMapMethod<String, String>('getApplicationLabels', {
+            'packageNames': packageNames,
+          });
+    } on MissingPluginException {
+      // Background update engines do not run MainActivity.configureFlutterEngine,
+      // where this app-owned channel is registered. Labels are cosmetic, so let
+      // callers fall back to ApplicationInfo/package names instead of failing the check.
+      return const <String, String>{};
+    }
     return Map<String, String>.from(
       labelsByPackageName ?? const <String, String>{},
     );

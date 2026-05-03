@@ -1,5 +1,6 @@
 # Miscellaneous
 *.class
+*.lnk
 *.log
 *.pyc
 *.swp

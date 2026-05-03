@@ -1072,6 +1072,9 @@ class AppsProvider with ChangeNotifier {
   Completer<void>? _loadingCompleter;
   bool gettingUpdates = false;
   LogsProvider logs = LogsProvider();
+  final Set<String> _detailPageAutoChecksInFlight = <String>{};
+  final Map<String, DateTime> _lastDetailPageAutoCheckStartedAt =
+      <String, DateTime>{};
 
   // Debounce timer for download-progress notifications so widgets that watch
   // the whole provider (e.g. AppPage) don't get hammered on every byte chunk.
@@ -1106,6 +1109,41 @@ class AppsProvider with ChangeNotifier {
   late SettingsProvider settingsProvider;
 
   Iterable<AppInMemory> getAppValues() => apps.values.map((a) => a.deepCopy());
+
+  void _pruneStaleDetailPageAutoCheckStarts(DateTime now, Duration cooldown) {
+    _lastDetailPageAutoCheckStartedAt.removeWhere(
+      (String appId, DateTime startedAt) =>
+          !_detailPageAutoChecksInFlight.contains(appId) &&
+          now.difference(startedAt) >= cooldown,
+    );
+  }
+
+  bool tryBeginDetailPageAutoCheck({
+    required String appId,
+    required DateTime now,
+    required Duration cooldown,
+    required DateTime? lastUpdateCheckAt,
+  }) {
+    _pruneStaleDetailPageAutoCheckStarts(now, cooldown);
+    final DateTime? lastStartedAt = _lastDetailPageAutoCheckStartedAt[appId];
+    final bool recentlyCompleted =
+        lastUpdateCheckAt != null &&
+        now.difference(lastUpdateCheckAt) < cooldown;
+    final bool recentlyStarted =
+        lastStartedAt != null && now.difference(lastStartedAt) < cooldown;
+    if (recentlyCompleted ||
+        recentlyStarted ||
+        _detailPageAutoChecksInFlight.contains(appId)) {
+      return false;
+    }
+    _detailPageAutoChecksInFlight.add(appId);
+    _lastDetailPageAutoCheckStartedAt[appId] = now;
+    return true;
+  }
+
+  void finishDetailPageAutoCheck(String appId) {
+    _detailPageAutoChecksInFlight.remove(appId);
+  }
 
   void cancelDownload(String appId) {
     _downloadCancelTokens[appId]?.cancel();
@@ -3370,14 +3408,38 @@ class AppsProvider with ChangeNotifier {
         overrideSource: currentApp.overrideSource,
       ),
       currentApp.url,
-      currentApp.additionalSettings,
+      Map<String, dynamic>.from(currentApp.additionalSettings),
       currentApp: currentApp,
     );
-    if (currentApp.preferredApkIndex < newApp.apkUrls.length) {
-      newApp.preferredApkIndex = currentApp.preferredApkIndex;
+    final App? latestAppBeforeSave = apps[appId]?.app;
+    if (latestAppBeforeSave == null) {
+      return null;
     }
+    if (latestAppBeforeSave.url != currentApp.url ||
+        latestAppBeforeSave.overrideSource != currentApp.overrideSource) {
+      return null;
+    }
+    final App appToSave = latestAppBeforeSave.deepCopy()
+      ..author = newApp.author
+      ..name = newApp.name
+      ..latestVersion = newApp.latestVersion
+      ..apkUrls = newApp.apkUrls
+      ..preferredApkIndex =
+          latestAppBeforeSave.preferredApkIndex < newApp.apkUrls.length
+          ? latestAppBeforeSave.preferredApkIndex
+          : newApp.preferredApkIndex
+      ..lastUpdateCheck = newApp.lastUpdateCheck
+      ..releaseDate = newApp.releaseDate
+      ..changeLog = newApp.changeLog
+      ..otherAssetUrls = newApp.otherAssetUrls
+      ..iconUrl = newApp.iconUrl
+      ..rawLatestVersionFromSource = newApp.rawLatestVersionFromSource
+      ..rawApkNamesFromSource = newApp.rawApkNamesFromSource
+      ..rawReleaseTitlesFromSource = newApp.rawReleaseTitlesFromSource
+      ..apkSizeBytes = newApp.apkSizeBytes
+      ..pendingRepoRenameUrl = newApp.pendingRepoRenameUrl;
     await saveApps(
-      [newApp],
+      [appToSave],
       notifyListenersAfterSave: notifyListenersAfterSave,
       autoExportAfterSave: autoExportAfterSave,
     );
@@ -3392,7 +3454,9 @@ class AppsProvider with ChangeNotifier {
         // Debug logging must never affect update checks.
       }
     }
-    return newApp.latestVersion != currentApp.latestVersion ? newApp : null;
+    return appToSave.latestVersion != currentApp.latestVersion
+        ? appToSave
+        : null;
   }
 
   List<String> getAppsSortedByUpdateCheckTime({

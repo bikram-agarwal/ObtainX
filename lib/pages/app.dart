@@ -236,9 +236,6 @@ class AppPage extends StatefulWidget {
 
 class _AppPageState extends State<AppPage> {
   static const Duration _detailPageAutoCheckCooldown = Duration(minutes: 1);
-  static final Set<String> _detailPageAutoChecksInFlight = <String>{};
-  static final Map<String, DateTime> _lastDetailPageAutoCheckStartedAt =
-      <String, DateTime>{};
   static const double _versionRowLabelWidth = 120;
 
   late final WebViewController _webViewController;
@@ -251,6 +248,11 @@ class _AppPageState extends State<AppPage> {
   bool _attemptedApkMirrorSizeResolution = false;
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
+  int _updateCheckRunToken = 0;
+  Timer? _detailPageAutoCheckDelayTimer;
+  String? _pendingDetailPageAutoCheckAppId;
+  AppsProvider? _pendingDetailPageAutoCheckAppsProvider;
+  bool _detailPageAutoCheckRunning = false;
 
   ColorScheme? _iconDerivedColorScheme;
   String? _iconSchemeCacheKey;
@@ -293,10 +295,23 @@ class _AppPageState extends State<AppPage> {
   bool _editStagedClearOverride = false;
   Uint8List? _editNonUserIconPreview;
 
+  void _cancelPendingDetailPageAutoCheck() {
+    final String? appId = _pendingDetailPageAutoCheckAppId;
+    if (appId != null &&
+        _detailPageAutoCheckDelayTimer?.isActive == true &&
+        !_detailPageAutoCheckRunning) {
+      _detailPageAutoCheckDelayTimer?.cancel();
+      _pendingDetailPageAutoCheckAppsProvider?.finishDetailPageAutoCheck(appId);
+      _pendingDetailPageAutoCheckAppId = null;
+      _pendingDetailPageAutoCheckAppsProvider = null;
+    }
+  }
+
   @override
   void didUpdateWidget(covariant AppPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.appId != widget.appId) {
+      _cancelPendingDetailPageAutoCheck();
       _iconDerivedColorScheme = null;
       _iconSchemeCacheKey = null;
       _iconSchemeLoadingForKey = null;
@@ -324,6 +339,7 @@ class _AppPageState extends State<AppPage> {
 
   @override
   void dispose() {
+    _cancelPendingDetailPageAutoCheck();
     _nameController.dispose();
     _authorController.dispose();
     _urlController.dispose();
@@ -399,8 +415,9 @@ class _AppPageState extends State<AppPage> {
   // --- Unsaved changes dialog ---
   Future<_UnsavedAction?> _showUnsavedChangesDialog(
     BuildContext context,
-    ThemeData dialogTheme,
-  ) {
+    ThemeData dialogTheme, {
+    required bool canSave,
+  }) {
     return showDialog<_UnsavedAction>(
       context: context,
       builder: (BuildContext dialogContext) {
@@ -421,8 +438,12 @@ class _AppPageState extends State<AppPage> {
                 child: Text(tr('keepEditing')),
               ),
               FilledButton(
-                onPressed: () =>
-                    Navigator.pop(dialogContext, _UnsavedAction.saveAndExit),
+                onPressed: canSave
+                    ? () => Navigator.pop(
+                        dialogContext,
+                        _UnsavedAction.saveAndExit,
+                      )
+                    : null,
                 child: Text(tr('saveAndExit')),
               ),
             ],
@@ -444,6 +465,7 @@ class _AppPageState extends State<AppPage> {
     final _UnsavedAction? action = await _showUnsavedChangesDialog(
       actionContext,
       dialogTheme,
+      canSave: !updating && appData?.downloadProgress == null,
     );
 
     if (!actionContext.mounted || appData == null) return;
@@ -453,6 +475,9 @@ class _AppPageState extends State<AppPage> {
         _exitEditWithoutSaving();
         break;
       case _UnsavedAction.saveAndExit:
+        if (appData.downloadProgress != null || updating) {
+          break;
+        }
         final appsProvider = Provider.of<AppsProvider>(
           actionContext,
           listen: false,
@@ -487,7 +512,7 @@ class _AppPageState extends State<AppPage> {
         FloatingActionButton(
           heroTag: 'app_page_edit_save',
           tooltip: tr('save'),
-          onPressed: appData.downloadProgress != null
+          onPressed: appData.downloadProgress != null || updating
               ? null
               : () => _saveEdit(appData, appsProvider),
           child: const Icon(Icons.check),
@@ -528,7 +553,10 @@ class _AppPageState extends State<AppPage> {
   }
 
   Future<void> _saveEdit(AppInMemory appData, AppsProvider appsProvider) async {
-    final updatedApp = appData.app.deepCopy();
+    if (appData.downloadProgress != null || updating) return;
+    final updatedApp =
+        appsProvider.apps[widget.appId]?.app.deepCopy() ??
+        appData.app.deepCopy();
     final newName = _nameController.text.trim();
     if (newName.isEmpty) {
       updatedApp.additionalSettings.remove('appName');
@@ -1219,17 +1247,16 @@ class _AppPageState extends State<AppPage> {
   /// Play Store) for this single app concurrently, skipping any store already
   /// cached or already tracked from that source. Caches results and triggers a
   /// FutureBuilder rebuild so the Other Sources row updates in place.
-  Future<void> _maybeCheckAndCacheAllStores() async {
-    final pid = widget.appId;
-    if (pid.isEmpty) return;
+  Future<void> _maybeCheckAndCacheAllStores(String appId) async {
+    if (appId.isEmpty) return;
 
     final trackedUrl = Provider.of<AppsProvider>(
       context,
       listen: false,
-    ).apps[pid]?.app.url;
+    ).apps[appId]?.app.url;
 
     final cache = await BulkScanCache.load();
-    final storeData = cache[pid] ?? {};
+    final storeData = cache[appId] ?? {};
 
     final futures = <Future<MapEntry<String, String?>>>[];
 
@@ -1237,31 +1264,31 @@ class _AppPageState extends State<AppPage> {
         !storeData.containsKey('APKMirror')) {
       futures.add(
         BulkImportService.checkApkMirror([
-          pid,
-        ]).then((r) => MapEntry('APKMirror', r[pid])),
+          appId,
+        ]).then((result) => MapEntry('APKMirror', result[appId])),
       );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
         !storeData.containsKey('F-Droid')) {
       futures.add(
         BulkImportService.checkFDroid([
-          pid,
-        ]).then((r) => MapEntry('F-Droid', r[pid])),
+          appId,
+        ]).then((result) => MapEntry('F-Droid', result[appId])),
       );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
         !storeData.containsKey('APKPure')) {
       futures.add(
         BulkImportService.checkApkPure([
-          pid,
-        ]).then((r) => MapEntry('APKPure', r[pid])),
+          appId,
+        ]).then((result) => MapEntry('APKPure', result[appId])),
       );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
         !storeData.containsKey('PlayStore')) {
       futures.add(
         _checkPlayStoreAvailability(
-          pid,
+          appId,
         ).then((url) => MapEntry('PlayStore', url)),
       );
     }
@@ -1270,15 +1297,15 @@ class _AppPageState extends State<AppPage> {
 
     final results = await Future.wait(futures);
 
-    final entry = cache.putIfAbsent(pid, () => {});
-    for (final r in results) {
-      entry[r.key] = r.value ?? '';
+    final entry = cache.putIfAbsent(appId, () => {});
+    for (final result in results) {
+      entry[result.key] = result.value ?? '';
     }
     await BulkScanCache.save(cache);
 
-    if (mounted) {
+    if (mounted && widget.appId == appId) {
       setState(() {
-        _storeAvailabilityCacheFuture = Future.value(cache[pid]);
+        _storeAvailabilityCacheFuture = Future.value(cache[appId]);
       });
     }
   }
@@ -1347,6 +1374,7 @@ class _AppPageState extends State<AppPage> {
   }
 
   Future<void> _runCheckUpdate(String id, {bool resetVersion = false}) async {
+    final int updateCheckRunToken = ++_updateCheckRunToken;
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
       context,
       listen: false,
@@ -1356,6 +1384,7 @@ class _AppPageState extends State<AppPage> {
         updating = true;
       });
       await appsProvider.checkUpdate(id);
+      if (!mounted || widget.appId != id) return;
       // saveApps (called inside checkUpdate) replaces the in-memory icon with
       // null for non-installed apps.  Reset the one-shot flag so the rebuild
       // that follows will re-invoke updateAppIcon and restore any user icon.
@@ -1365,13 +1394,13 @@ class _AppPageState extends State<AppPage> {
       setState(() {
         _requestedMissingIconLoad = false;
         _storeAvailabilityCacheFuture = BulkScanCache.load().then(
-          (cache) => cache[widget.appId],
+          (cache) => cache[id],
         );
       });
       // Independently check Play Store in the background so other store
       // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
       // without waiting for the Play Store network round-trip.
-      _maybeCheckAndCacheAllStores();
+      _maybeCheckAndCacheAllStores(id);
       // The version may have just bumped, in which case [SourceProvider.getApp]
       // cleared the cached size and we need to walk APKMirror again. The
       // resolver is a no-op when the size is still present.
@@ -1387,6 +1416,7 @@ class _AppPageState extends State<AppPage> {
         appsProvider.saveApps([appsProvider.apps[id]!.app]);
       }
     } catch (err) {
+      if (!mounted || widget.appId != id) return;
       if (err is RepositoryRenamedError && context.mounted) {
         await appsProvider.updatePendingRepoRename(id, err.newUrl);
       } else if (context.mounted) {
@@ -1394,7 +1424,7 @@ class _AppPageState extends State<AppPage> {
         _showPageError(err, context);
       }
     } finally {
-      if (context.mounted) {
+      if (context.mounted && _updateCheckRunToken == updateCheckRunToken) {
         setState(() {
           updating = false;
         });
@@ -1591,53 +1621,51 @@ class _AppPageState extends State<AppPage> {
     }
     final ThemeData pageThemeForPage = _cachedPageTheme!;
 
-    final String? detailPageAutoCheckAppId = app?.app.id;
-    final DateTime detailPageAutoCheckNow = DateTime.now();
-    final DateTime? lastAppUpdateCheckAt = app?.app.lastUpdateCheck;
-    final DateTime? lastAutoCheckStartedAt = detailPageAutoCheckAppId == null
-        ? null
-        : _lastDetailPageAutoCheckStartedAt[detailPageAutoCheckAppId];
-    final bool detailPageAutoCheckRecentlyCompleted =
-        lastAppUpdateCheckAt != null &&
-        detailPageAutoCheckNow.difference(lastAppUpdateCheckAt) <
-            _detailPageAutoCheckCooldown;
-    final bool detailPageAutoCheckRecentlyStarted =
-        lastAutoCheckStartedAt != null &&
-        detailPageAutoCheckNow.difference(lastAutoCheckStartedAt) <
-            _detailPageAutoCheckCooldown;
-    final bool detailPageAutoCheckAlreadyRunning =
-        detailPageAutoCheckAppId != null &&
-        _detailPageAutoChecksInFlight.contains(detailPageAutoCheckAppId);
-
     if (!_scheduledDetailPageRefresh &&
         app != null &&
         settingsProvider.checkUpdateOnDetailPage &&
         app.app.additionalSettings['onDemandOnly'] != true &&
         !areDownloadsRunning &&
-        !detailPageAutoCheckRecentlyCompleted &&
-        !detailPageAutoCheckRecentlyStarted &&
-        !detailPageAutoCheckAlreadyRunning) {
+        appsProvider.tryBeginDetailPageAutoCheck(
+          appId: app.app.id,
+          now: DateTime.now(),
+          cooldown: _detailPageAutoCheckCooldown,
+          lastUpdateCheckAt: app.app.lastUpdateCheck,
+        )) {
       _scheduledDetailPageRefresh = true;
       final String refreshAppId = app.app.id;
-      _detailPageAutoChecksInFlight.add(refreshAppId);
-      _lastDetailPageAutoCheckStartedAt[refreshAppId] = detailPageAutoCheckNow;
+      _pendingDetailPageAutoCheckAppId = refreshAppId;
+      _pendingDetailPageAutoCheckAppsProvider = appsProvider;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) {
-          _detailPageAutoChecksInFlight.remove(refreshAppId);
+        if (!mounted || widget.appId != refreshAppId) {
+          appsProvider.finishDetailPageAutoCheck(refreshAppId);
+          _pendingDetailPageAutoCheckAppId = null;
+          _pendingDetailPageAutoCheckAppsProvider = null;
           return;
         }
         // Let the push transition start before network + notifyListeners churn.
-        Future<void>.delayed(const Duration(milliseconds: 320), () async {
-          if (!mounted) {
-            _detailPageAutoChecksInFlight.remove(refreshAppId);
-            return;
-          }
-          try {
-            await _runCheckUpdate(refreshAppId);
-          } finally {
-            _detailPageAutoChecksInFlight.remove(refreshAppId);
-          }
-        });
+        _detailPageAutoCheckDelayTimer = Timer(
+          const Duration(milliseconds: 320),
+          () async {
+            if (!mounted || widget.appId != refreshAppId) {
+              appsProvider.finishDetailPageAutoCheck(refreshAppId);
+              _pendingDetailPageAutoCheckAppId = null;
+              _pendingDetailPageAutoCheckAppsProvider = null;
+              return;
+            }
+            _detailPageAutoCheckRunning = true;
+            try {
+              await _runCheckUpdate(refreshAppId);
+            } finally {
+              _detailPageAutoCheckRunning = false;
+              appsProvider.finishDetailPageAutoCheck(refreshAppId);
+              if (_pendingDetailPageAutoCheckAppId == refreshAppId) {
+                _pendingDetailPageAutoCheckAppId = null;
+                _pendingDetailPageAutoCheckAppsProvider = null;
+              }
+            }
+          },
+        );
       });
     }
     var trackOnly = app?.app.additionalSettings['trackOnly'] == true;
@@ -3527,6 +3555,7 @@ class _AppPageState extends State<AppPage> {
               final _UnsavedAction? action = await _showUnsavedChangesDialog(
                 themedPageContext,
                 pageThemeForPage,
+                canSave: !updating && freshApp?.downloadProgress == null,
               );
 
               if (!themedPageContext.mounted || freshApp == null) return;
@@ -3541,6 +3570,9 @@ class _AppPageState extends State<AppPage> {
                   }
                   break;
                 case _UnsavedAction.saveAndExit:
+                  if (freshApp.downloadProgress != null || updating) {
+                    break;
+                  }
                   final appsProvider = Provider.of<AppsProvider>(
                     themedPageContext,
                     listen: false,
