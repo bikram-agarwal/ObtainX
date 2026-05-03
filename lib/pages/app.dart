@@ -235,6 +235,10 @@ class AppPage extends StatefulWidget {
 }
 
 class _AppPageState extends State<AppPage> {
+  static const Duration _detailPageAutoCheckCooldown = Duration(minutes: 1);
+  static final Set<String> _detailPageAutoChecksInFlight = <String>{};
+  static final Map<String, DateTime> _lastDetailPageAutoCheckStartedAt =
+      <String, DateTime>{};
   static const double _versionRowLabelWidth = 120;
 
   late final WebViewController _webViewController;
@@ -475,20 +479,15 @@ class _AppPageState extends State<AppPage> {
         FloatingActionButton.small(
           heroTag: 'app_page_edit_cancel',
           tooltip: tr('cancel'),
-          onPressed: updating
-              ? null
-              : () => _onCancelEditPressed(
-                  themeContext,
-                  appData,
-                  pageThemeForDialogs,
-                ),
+          onPressed: () =>
+              _onCancelEditPressed(themeContext, appData, pageThemeForDialogs),
           child: const Icon(Icons.close),
         ),
         const SizedBox(height: 12),
         FloatingActionButton(
           heroTag: 'app_page_edit_save',
           tooltip: tr('save'),
-          onPressed: appData.downloadProgress != null || updating
+          onPressed: appData.downloadProgress != null
               ? null
               : () => _saveEdit(appData, appsProvider),
           child: const Icon(Icons.check),
@@ -793,9 +792,7 @@ class _AppPageState extends State<AppPage> {
               ),
               if (showResetIconButton)
                 OutlinedButton(
-                  onPressed: updating
-                      ? null
-                      : () => _onResetEditIconPressed(appsProvider),
+                  onPressed: () => _onResetEditIconPressed(appsProvider),
                   child: Text(tr('resetAppIcon')),
                 ),
             ],
@@ -1594,19 +1591,51 @@ class _AppPageState extends State<AppPage> {
     }
     final ThemeData pageThemeForPage = _cachedPageTheme!;
 
+    final String? detailPageAutoCheckAppId = app?.app.id;
+    final DateTime detailPageAutoCheckNow = DateTime.now();
+    final DateTime? lastAppUpdateCheckAt = app?.app.lastUpdateCheck;
+    final DateTime? lastAutoCheckStartedAt = detailPageAutoCheckAppId == null
+        ? null
+        : _lastDetailPageAutoCheckStartedAt[detailPageAutoCheckAppId];
+    final bool detailPageAutoCheckRecentlyCompleted =
+        lastAppUpdateCheckAt != null &&
+        detailPageAutoCheckNow.difference(lastAppUpdateCheckAt) <
+            _detailPageAutoCheckCooldown;
+    final bool detailPageAutoCheckRecentlyStarted =
+        lastAutoCheckStartedAt != null &&
+        detailPageAutoCheckNow.difference(lastAutoCheckStartedAt) <
+            _detailPageAutoCheckCooldown;
+    final bool detailPageAutoCheckAlreadyRunning =
+        detailPageAutoCheckAppId != null &&
+        _detailPageAutoChecksInFlight.contains(detailPageAutoCheckAppId);
+
     if (!_scheduledDetailPageRefresh &&
         app != null &&
         settingsProvider.checkUpdateOnDetailPage &&
         app.app.additionalSettings['onDemandOnly'] != true &&
-        !areDownloadsRunning) {
+        !areDownloadsRunning &&
+        !detailPageAutoCheckRecentlyCompleted &&
+        !detailPageAutoCheckRecentlyStarted &&
+        !detailPageAutoCheckAlreadyRunning) {
       _scheduledDetailPageRefresh = true;
       final String refreshAppId = app.app.id;
+      _detailPageAutoChecksInFlight.add(refreshAppId);
+      _lastDetailPageAutoCheckStartedAt[refreshAppId] = detailPageAutoCheckNow;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
+        if (!mounted) {
+          _detailPageAutoChecksInFlight.remove(refreshAppId);
+          return;
+        }
         // Let the push transition start before network + notifyListeners churn.
-        Future<void>.delayed(const Duration(milliseconds: 320), () {
-          if (mounted) {
-            _runCheckUpdate(refreshAppId);
+        Future<void>.delayed(const Duration(milliseconds: 320), () async {
+          if (!mounted) {
+            _detailPageAutoChecksInFlight.remove(refreshAppId);
+            return;
+          }
+          try {
+            await _runCheckUpdate(refreshAppId);
+          } finally {
+            _detailPageAutoChecksInFlight.remove(refreshAppId);
           }
         });
       });
@@ -3255,10 +3284,7 @@ class _AppPageState extends State<AppPage> {
                     ),
                   );
                 }
-                if (app != null &&
-                    !_editMode &&
-                    app.downloadProgress == null &&
-                    !updating) {
+                if (app != null && !_editMode && app.downloadProgress == null) {
                   bottomBarActions.add(
                     IconButton(
                       color: Theme.of(themeContext).colorScheme.primary,
@@ -3374,7 +3400,7 @@ class _AppPageState extends State<AppPage> {
                   IconButton(
                     color: Theme.of(themeContext).colorScheme.primary,
                     iconSize: 24,
-                    onPressed: app?.downloadProgress != null || updating
+                    onPressed: app?.downloadProgress != null
                         ? null
                         : () async {
                             final ScaffoldMessengerState? messenger =
