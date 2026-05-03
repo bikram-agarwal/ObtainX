@@ -19,7 +19,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show kDebugMode, listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
@@ -999,14 +999,25 @@ Future<PackageInfo?> getInstalledInfo(
   bool printErr = true,
 }) async {
   if (packageName != null) {
-    try {
-      return await pm.getPackageInfo(
-        packageName: packageName,
-        flags: packageInfoFlags,
+    final List<String> packageNamesToTry = <String>[packageName];
+    if (kDebugMode && packageName == obtainiumId) {
+      packageNamesToTry.insert(
+        0,
+        fdroid ? '$obtainiumId.fdroid.debug' : '$obtainiumId.debug',
       );
-    } catch (e) {
-      if (printErr) {
-        debugPrint(e.toString()); // OK
+    } else if (kDebugMode && packageName == '$obtainiumId.fdroid') {
+      packageNamesToTry.insert(0, '$obtainiumId.fdroid.debug');
+    }
+    for (final String packageNameToTry in packageNamesToTry) {
+      try {
+        return await pm.getPackageInfo(
+          packageName: packageNameToTry,
+          flags: packageInfoFlags,
+        );
+      } catch (e) {
+        if (printErr && packageNameToTry == packageNamesToTry.last) {
+          debugPrint(e.toString()); // OK
+        }
       }
     }
   }

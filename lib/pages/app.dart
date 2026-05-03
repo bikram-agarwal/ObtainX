@@ -212,34 +212,6 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
 
 enum _UnsavedAction { keepEditing, discard, saveAndExit }
 
-class _MeasureSize extends StatefulWidget {
-  const _MeasureSize({required this.child, required this.onChanged});
-
-  final Widget child;
-  final ValueChanged<Size> onChanged;
-
-  @override
-  State<_MeasureSize> createState() => _MeasureSizeState();
-}
-
-class _MeasureSizeState extends State<_MeasureSize> {
-  Size? _previousSize;
-
-  @override
-  Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final Size? newSize = context.size;
-      if (newSize == null || newSize == _previousSize) {
-        return;
-      }
-      _previousSize = newSize;
-      widget.onChanged(newSize);
-    });
-    return widget.child;
-  }
-}
-
 class AppPage extends StatefulWidget {
   const AppPage({
     super.key,
@@ -302,7 +274,6 @@ class _AppPageState extends State<AppPage> {
   final ScrollController _appPageScrollController = ScrollController();
   final FocusNode _notesEditFocusNode = FocusNode();
   final GlobalKey _notesEditSectionKey = GlobalKey();
-  double _bottomSheetMenuHeight = 0;
   List<String> _editCategories = [];
 
   String _editBaselineName = '';
@@ -497,35 +468,32 @@ class _AppPageState extends State<AppPage> {
     ThemeData pageThemeForDialogs,
   ) {
     if (!_editMode || appData == null) return null;
-    return Padding(
-      padding: EdgeInsets.only(bottom: _bottomSheetMenuHeight),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'app_page_edit_cancel',
-            tooltip: tr('cancel'),
-            onPressed: updating
-                ? null
-                : () => _onCancelEditPressed(
-                    themeContext,
-                    appData,
-                    pageThemeForDialogs,
-                  ),
-            child: const Icon(Icons.close),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton(
-            heroTag: 'app_page_edit_save',
-            tooltip: tr('save'),
-            onPressed: appData.downloadProgress != null || updating
-                ? null
-                : () => _saveEdit(appData, appsProvider),
-            child: const Icon(Icons.check),
-          ),
-        ],
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        FloatingActionButton.small(
+          heroTag: 'app_page_edit_cancel',
+          tooltip: tr('cancel'),
+          onPressed: updating
+              ? null
+              : () => _onCancelEditPressed(
+                  themeContext,
+                  appData,
+                  pageThemeForDialogs,
+                ),
+          child: const Icon(Icons.close),
+        ),
+        const SizedBox(height: 12),
+        FloatingActionButton(
+          heroTag: 'app_page_edit_save',
+          tooltip: tr('save'),
+          onPressed: appData.downloadProgress != null || updating
+              ? null
+              : () => _saveEdit(appData, appsProvider),
+          child: const Icon(Icons.check),
+        ),
+      ],
     );
   }
 
@@ -1090,8 +1058,8 @@ class _AppPageState extends State<AppPage> {
     // resolution even when displayed at 56 logical px. Sizing the cache
     // here keeps RAM usage bounded for the AppPage's hero icon and the
     // large-format dialog preview.
-    final int iconCachePx =
-        (size * MediaQuery.devicePixelRatioOf(themeContext)).round();
+    final int iconCachePx = (size * MediaQuery.devicePixelRatioOf(themeContext))
+        .round();
     Widget iconChild;
     if (bytesForImage != null) {
       iconChild = GestureDetector(
@@ -3263,16 +3231,211 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getBottomSheetMenu(BuildContext themeContext) => _MeasureSize(
-      onChanged: (Size size) {
-        if ((_bottomSheetMenuHeight - size.height).abs() < 0.5) {
-          return;
-        }
-        setState(() {
-          _bottomSheetMenuHeight = size.height;
-        });
-      },
-      child: Container(
+    Widget getBottomActionBar(BuildContext themeContext) {
+      final bool gestureNavigationActive =
+          MediaQuery.systemGestureInsetsOf(themeContext).bottom > 0;
+      Widget actionBarContent = Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Builder(
+              builder: (BuildContext _) {
+                final List<Widget> bottomBarActions = <Widget>[];
+                if (app != null && app.installedInfo != null) {
+                  bottomBarActions.add(
+                    IconButton(
+                      color: Theme.of(themeContext).colorScheme.primary,
+                      iconSize: 24,
+                      onPressed: () {
+                        appsProvider.openAppSettings(app.app.id);
+                      },
+                      icon: const Icon(Icons.info_outline),
+                      tooltip: tr('appPageAppInfo'),
+                    ),
+                  );
+                }
+                if (app != null &&
+                    !_editMode &&
+                    app.downloadProgress == null &&
+                    !updating) {
+                  bottomBarActions.add(
+                    IconButton(
+                      color: Theme.of(themeContext).colorScheme.primary,
+                      iconSize: 24,
+                      onPressed: () => _startEdit(app, appsProvider),
+                      icon: const Icon(Icons.edit_outlined),
+                      tooltip: tr('editAppInfo'),
+                    ),
+                  );
+                }
+                if (source != null) {
+                  bottomBarActions.add(
+                    IconButton(
+                      color: Theme.of(themeContext).colorScheme.primary,
+                      iconSize: 24,
+                      onPressed: app?.downloadProgress != null || updating
+                          ? null
+                          : () async {
+                              await Navigator.push<void>(
+                                context,
+                                slideUpPageRoute(
+                                  (_) => AdditionalOptionsPage(
+                                    appId: widget.appId,
+                                    onAfterSave:
+                                        (
+                                          String savedAppId,
+                                          bool versionDetectionJustEnabled,
+                                        ) async {
+                                          await _runCheckUpdate(
+                                            savedAppId,
+                                            resetVersion:
+                                                versionDetectionJustEnabled,
+                                          );
+                                        },
+                                  ),
+                                ),
+                              );
+                            },
+                      tooltip: tr('appOptions'),
+                      icon: const Icon(Icons.tune),
+                    ),
+                  );
+                }
+                if (app != null && showAppWebpageFinal) {
+                  bottomBarActions.add(
+                    IconButton(
+                      color: Theme.of(themeContext).colorScheme.primary,
+                      iconSize: 24,
+                      onPressed: () {
+                        showDialog<void>(
+                          context: context,
+                          builder: (BuildContext dialogRouteContext) {
+                            return Theme(
+                              data: pageThemeForPage,
+                              child: Builder(
+                                builder: (BuildContext dialogThemedContext) {
+                                  return AlertDialog(
+                                    scrollable: true,
+                                    content: getFullInfoColumn(
+                                      dialogThemedContext,
+                                      small: true,
+                                    ),
+                                    title: Text(app.name),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () {
+                                          Navigator.of(
+                                            dialogRouteContext,
+                                          ).pop();
+                                        },
+                                        child: Text(tr('continue')),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        );
+                      },
+                      icon: const Icon(Icons.more_horiz),
+                      tooltip: tr('more'),
+                    ),
+                  );
+                }
+                if ((!isVersionDetectionStandard || trackOnly) &&
+                    app?.app.installedVersion != null) {
+                  final String ins = app!.app.installedVersion!;
+                  final String lat = app.app.latestVersion;
+                  final bool showResetInstall =
+                      ins == lat ||
+                      versionsEffectivelyEqual(ins, lat) ||
+                      (installedVersionIsNewerOrEqual(ins, lat) &&
+                          !versionOrderIsUnclear(ins, lat));
+                  if (showResetInstall) {
+                    bottomBarActions.add(
+                      IconButton(
+                        color: Theme.of(themeContext).colorScheme.primary,
+                        iconSize: 24,
+                        onPressed: updating
+                            ? null
+                            : () {
+                                app.app.installedVersion = null;
+                                appsProvider.saveApps([app.app]);
+                              },
+                        icon: const Icon(Icons.restore_rounded),
+                        tooltip: tr('resetInstallStatus'),
+                      ),
+                    );
+                  }
+                }
+                bottomBarActions.add(
+                  IconButton(
+                    color: Theme.of(themeContext).colorScheme.primary,
+                    iconSize: 24,
+                    onPressed: app?.downloadProgress != null || updating
+                        ? null
+                        : () async {
+                            final ScaffoldMessengerState? messenger =
+                                scaffoldMessengerKey.currentState;
+                            final AppInMemory? appRow = app;
+                            if (appRow == null) return;
+                            final RemoveAppsWithModalResult removeResult =
+                                await appsProvider.removeAppsWithModal(
+                                  themeContext,
+                                  [appRow.app],
+                                );
+                            if (removeResult.shouldShowSnackBar &&
+                                messenger != null) {
+                              final Set<String> undoAppIds =
+                                  removeResult.deferredUndoAppIds;
+                              messenger
+                                ..clearSnackBars()
+                                ..showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      tr('xAppsRemoved', args: ['1']),
+                                    ),
+                                    persist: false,
+                                    duration: const Duration(seconds: 5),
+                                    behavior: SnackBarBehavior.floating,
+                                    action: undoAppIds.isNotEmpty
+                                        ? SnackBarAction(
+                                            label: tr('undo'),
+                                            onPressed: () => appsProvider
+                                                .undoDeferredObtainiumRemovals(
+                                                  undoAppIds,
+                                                ),
+                                          )
+                                        : null,
+                                  ),
+                                );
+                            }
+                            if (removeResult.obtainiumEntryRemovedOrScheduled &&
+                                themeContext.mounted) {
+                              Navigator.of(themeContext).pop();
+                            }
+                          },
+                    tooltip: tr('remove'),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                );
+                return Row(
+                  children: [
+                    for (final Widget actionWidget in bottomBarActions)
+                      Expanded(child: Center(child: actionWidget)),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      );
+      if (gestureNavigationActive) {
+        actionBarContent = SafeArea(top: false, child: actionBarContent);
+      }
+      final Widget actionBarSurface = Container(
         decoration: BoxDecoration(
           color: Theme.of(themeContext).brightness == Brightness.dark
               ? Theme.of(themeContext).colorScheme.surfaceContainerHigh
@@ -3301,211 +3464,13 @@ class _AppPageState extends State<AppPage> {
             ),
           ],
         ),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Builder(
-                  builder: (BuildContext _) {
-                    final List<Widget> bottomBarActions = <Widget>[];
-                    if (app != null && app.installedInfo != null) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: () {
-                            appsProvider.openAppSettings(app.app.id);
-                          },
-                          icon: const Icon(Icons.info_outline),
-                          tooltip: tr('appPageAppInfo'),
-                        ),
-                      );
-                    }
-                    if (app != null &&
-                        !_editMode &&
-                        app.downloadProgress == null &&
-                        !updating) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: () => _startEdit(app, appsProvider),
-                          icon: const Icon(Icons.edit_outlined),
-                          tooltip: tr('editAppInfo'),
-                        ),
-                      );
-                    }
-                    if (source != null) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: app?.downloadProgress != null || updating
-                              ? null
-                              : () async {
-                                  await Navigator.push<void>(
-                                    context,
-                                    slideUpPageRoute(
-                                      (_) => AdditionalOptionsPage(
-                                        appId: widget.appId,
-                                        onAfterSave:
-                                            (
-                                              String savedAppId,
-                                              bool versionDetectionJustEnabled,
-                                            ) async {
-                                              await _runCheckUpdate(
-                                                savedAppId,
-                                                resetVersion:
-                                                    versionDetectionJustEnabled,
-                                              );
-                                            },
-                                      ),
-                                    ),
-                                  );
-                                },
-                          tooltip: tr('appOptions'),
-                          icon: const Icon(Icons.tune),
-                        ),
-                      );
-                    }
-                    if (app != null && showAppWebpageFinal) {
-                      bottomBarActions.add(
-                        IconButton(
-                          color: Theme.of(themeContext).colorScheme.primary,
-                          iconSize: 24,
-                          onPressed: () {
-                            showDialog<void>(
-                              context: context,
-                              builder: (BuildContext dialogRouteContext) {
-                                return Theme(
-                                  data: pageThemeForPage,
-                                  child: Builder(
-                                    builder:
-                                        (BuildContext dialogThemedContext) {
-                                          return AlertDialog(
-                                            scrollable: true,
-                                            content: getFullInfoColumn(
-                                              dialogThemedContext,
-                                              small: true,
-                                            ),
-                                            title: Text(app.name),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () {
-                                                  Navigator.of(
-                                                    dialogRouteContext,
-                                                  ).pop();
-                                                },
-                                                child: Text(tr('continue')),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                          icon: const Icon(Icons.more_horiz),
-                          tooltip: tr('more'),
-                        ),
-                      );
-                    }
-                    if ((!isVersionDetectionStandard || trackOnly) &&
-                        app?.app.installedVersion != null) {
-                      final String ins = app!.app.installedVersion!;
-                      final String lat = app.app.latestVersion;
-                      final bool showResetInstall =
-                          ins == lat ||
-                          versionsEffectivelyEqual(ins, lat) ||
-                          (installedVersionIsNewerOrEqual(ins, lat) &&
-                              !versionOrderIsUnclear(ins, lat));
-                      if (showResetInstall) {
-                        bottomBarActions.add(
-                          IconButton(
-                            color: Theme.of(themeContext).colorScheme.primary,
-                            iconSize: 24,
-                            onPressed: updating
-                                ? null
-                                : () {
-                                    app.app.installedVersion = null;
-                                    appsProvider.saveApps([app.app]);
-                                  },
-                            icon: const Icon(Icons.restore_rounded),
-                            tooltip: tr('resetInstallStatus'),
-                          ),
-                        );
-                      }
-                    }
-                    bottomBarActions.add(
-                      IconButton(
-                        color: Theme.of(themeContext).colorScheme.primary,
-                        iconSize: 24,
-                        onPressed: app?.downloadProgress != null || updating
-                            ? null
-                            : () async {
-                                final ScaffoldMessengerState? messenger =
-                                    scaffoldMessengerKey.currentState;
-                                final AppInMemory? appRow = app;
-                                if (appRow == null) return;
-                                final RemoveAppsWithModalResult removeResult =
-                                    await appsProvider.removeAppsWithModal(
-                                      themeContext,
-                                      [appRow.app],
-                                    );
-                                if (removeResult.shouldShowSnackBar &&
-                                    messenger != null) {
-                                  final Set<String> undoAppIds =
-                                      removeResult.deferredUndoAppIds;
-                                  messenger
-                                    ..clearSnackBars()
-                                    ..showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          tr('xAppsRemoved', args: ['1']),
-                                        ),
-                                        persist: false,
-                                        duration: const Duration(seconds: 5),
-                                        behavior: SnackBarBehavior.floating,
-                                        action: undoAppIds.isNotEmpty
-                                            ? SnackBarAction(
-                                                label: tr('undo'),
-                                                onPressed: () => appsProvider
-                                                    .undoDeferredObtainiumRemovals(
-                                                      undoAppIds,
-                                                    ),
-                                              )
-                                            : null,
-                                      ),
-                                    );
-                                }
-                                if (removeResult
-                                        .obtainiumEntryRemovedOrScheduled &&
-                                    themeContext.mounted) {
-                                  Navigator.of(themeContext).pop();
-                                }
-                              },
-                        tooltip: tr('remove'),
-                        icon: const Icon(Icons.delete_outline),
-                      ),
-                    );
-                    return Row(
-                      children: [
-                        for (final Widget actionWidget in bottomBarActions)
-                          Expanded(child: Center(child: actionWidget)),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+        child: actionBarContent,
+      );
+      if (gestureNavigationActive) {
+        return actionBarSurface;
+      }
+      return SafeArea(top: false, child: actionBarSurface);
+    }
 
     return Theme(
       data: pageThemeForPage,
@@ -3627,11 +3592,9 @@ class _AppPageState extends State<AppPage> {
                                           color: pageThemeForPage
                                               .colorScheme
                                               .primary,
-                                          onPressed: updating
-                                              ? null
-                                              : () => Navigator.of(
-                                                  themedPageContext,
-                                                ).maybePop(),
+                                          onPressed: () => Navigator.of(
+                                            themedPageContext,
+                                          ).maybePop(),
                                           tooltip: MaterialLocalizations.of(
                                             themedPageContext,
                                           ).backButtonTooltip,
@@ -3673,7 +3636,6 @@ class _AppPageState extends State<AppPage> {
                                       ),
                                     ),
                                     if (_editMode) const SizedBox(height: 104),
-                                    SizedBox(height: _bottomSheetMenuHeight),
                                   ],
                                 ),
                               ),
@@ -3688,7 +3650,7 @@ class _AppPageState extends State<AppPage> {
                   }
                 },
               ),
-              bottomSheet: getBottomSheetMenu(themedPageContext),
+              bottomNavigationBar: getBottomActionBar(themedPageContext),
             ),
           );
         },
