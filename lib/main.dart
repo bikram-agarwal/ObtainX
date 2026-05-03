@@ -245,7 +245,7 @@ class _ObtainiumState extends State<Obtainium> {
         serviceId: 666,
         notificationTitle: tr('foregroundService'),
         notificationText: tr('fgServiceNotice'),
-        notificationIcon: NotificationIcon(
+        notificationIcon: const NotificationIcon(
           metaDataName: 'dev.imranr.obtainium.service.NOTIFICATION_ICON',
         ),
         callback: startCallback,
@@ -298,7 +298,29 @@ class _ObtainiumState extends State<Obtainium> {
 
   @override
   Widget build(BuildContext context) {
-    SettingsProvider settingsProvider = context.watch<SettingsProvider>();
+    // Same pattern as on the apps page: subscribe to a hash of the
+    // SettingsProvider fields this build actually reads, then grab the
+    // instance via [context.read] for non-reactive access. Without this,
+    // every notify (categories, swipe actions, sort columns, folders,
+    // …) rebuilds the entire MaterialApp tree even though those settings
+    // don't affect anything inside this build method.
+    context.select<SettingsProvider, int>(
+      (s) => Object.hash(
+        s.updateInterval,
+        s.useFGService,
+        s.prefs == null,
+        s.forcedLocale,
+        s.appAccentColorSource,
+        s.appThemePaletteStyle,
+        s.activeCustomSeedHex,
+        s.useBlackTheme,
+        s.useGradientBackground,
+        s.useSystemFont,
+        s.theme,
+        s.appUiScale,
+      ),
+    );
+    SettingsProvider settingsProvider = context.read<SettingsProvider>();
     AppsProvider appsProvider = context.read<AppsProvider>();
     LogsProvider logs = context.read<LogsProvider>();
     NotificationsProvider notifs = context.read<NotificationsProvider>();

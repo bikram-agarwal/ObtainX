@@ -857,7 +857,7 @@ Future<File> downloadFile(
     bool shouldReturn = false;
     while (isDownloading) {
       cancelToken?.throwIfCancelled();
-      await Future.delayed(Duration(seconds: 7));
+      await Future.delayed(const Duration(seconds: 7));
       cancelToken?.throwIfCancelled();
       if (tempDownloadedFile.existsSync()) {
         int newTempFileSize = await tempDownloadedFile.length();
@@ -3961,8 +3961,7 @@ class _APKOriginWarningDialogState extends State<APKOriginWarningDialog> {
 /// If there is an error, the user is notified.
 ///
 Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
-  // ignore: avoid_print
-  print('BG task started $taskId: ${params.toString()}');
+  debugPrint('BG task started $taskId: ${params.toString()}');
   WidgetsFlutterBinding.ensureInitialized();
   await EasyLocalization.ensureInitialized();
   await loadTranslations();
@@ -4059,8 +4058,7 @@ Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
             )
             .isBefore(DateTime.now());
     if (!enoughTimePassed) {
-      // ignore: avoid_print
-      print(
+      debugPrint(
         'BG update task: Too early for another check (last check was ${appsProvider.settingsProvider.lastCompletedBGCheckTime.toIso8601String()}, interval is ${appsProvider.settingsProvider.updateInterval}).',
       );
       return;

@@ -88,9 +88,9 @@ class _HomePageState extends State<HomePage> {
                         mode: LaunchMode.externalApplication,
                       );
                     },
-                    child: Text(
+                    child: const Text(
                       'https://github.com/bikram-agarwal/ObtainX/blob/main/README.md',
-                      style: const TextStyle(
+                      style: TextStyle(
                         decoration: TextDecoration.underline,
                         fontWeight: FontWeight.bold,
                       ),
@@ -242,7 +242,7 @@ class _HomePageState extends State<HomePage> {
                     items: const [],
                     additionalWidgets: [
                       ExpansionTile(
-                        title: const Text('Raw JSON'),
+                        title: Text(tr('rawJson')),
                         children: [
                           Text(
                             dataStr,
@@ -385,7 +385,18 @@ class _HomePageState extends State<HomePage> {
                 .length,
           ),
         );
-    SettingsProvider settingsProvider = context.watch<SettingsProvider>();
+    // Subscribe only to the three settings home.dart actually reads in
+    // build (blur toggle, page-transition disable, reverse direction).
+    // Without this, every notify on SettingsProvider rebuilt the entire
+    // navigation shell — including the apps page IndexedStack child.
+    context.select<SettingsProvider, int>(
+      (s) => Object.hash(
+        s.progressiveBlurEnabled,
+        s.disablePageTransitions,
+        s.reversePageTransitions,
+      ),
+    );
+    SettingsProvider settingsProvider = context.read<SettingsProvider>();
 
     final AddAppPageState? addPageState =
         (pages[1].widget.key as GlobalKey<AddAppPageState>).currentState;

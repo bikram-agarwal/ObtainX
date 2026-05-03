@@ -20,7 +20,7 @@ class DirectAPKLink extends AppSource {
           'defaultPseudoVersioningMethod',
           [
             MapEntry('partialAPKHash', tr('partialAPKHash')),
-            MapEntry('ETag', 'ETag'),
+            const MapEntry('ETag', 'ETag'),
           ],
           label: tr('defaultPseudoVersioningMethod'),
           defaultValue: 'partialAPKHash',

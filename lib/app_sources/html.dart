@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:html/parser.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -332,7 +331,7 @@ class HTML extends AppSource {
           [
             MapEntry('partialAPKHash', tr('partialAPKHash')),
             MapEntry('APKLinkHash', tr('APKLinkHash')),
-            MapEntry('ETag', 'ETag'),
+            const MapEntry('ETag', 'ETag'),
           ],
           label: tr('defaultPseudoVersioningMethod'),
           defaultValue: 'partialAPKHash',

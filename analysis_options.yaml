@@ -24,5 +24,32 @@ linter:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
 
+    # ── Performance-oriented rules ──────────────────────────────────────
+    # Each missed `const` allocates a new widget tree on every parent
+    # rebuild; a single missed const inside a list can rebuild every row
+    # below it. These two rules are the highest-leverage perf lints.
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+
+    # ── Hygiene rules ───────────────────────────────────────────────────
+    # `Container()` with only `child:` should be the child directly. Saves
+    # a layer in the widget tree and one element in the diff phase.
+    avoid_unnecessary_containers: true
+    # Children should be the last named arg in a widget constructor —
+    # makes diff hunks cleaner and matches Flutter convention.
+    sort_child_properties_last: true
+
+    # ── Deliberately disabled ───────────────────────────────────────────
+    # `unnecessary_lambdas` and `avoid_redundant_argument_values` produced
+    # ~140 info-level diagnostics across the codebase on first turn-on.
+    # Both are pure style with no runtime impact, and ObtainX is
+    # maintained as a fork that periodically merges from upstream — every
+    # mechanical edit those lints would force is a potential merge
+    # conflict. Leaving them off keeps the diff small. The perf-relevant
+    # rules (prefer_const_*, avoid_unnecessary_containers) stay on
+    # because each missed const allocates a widget on every rebuild.
+    unnecessary_lambdas: false
+    avoid_redundant_argument_values: false
+
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

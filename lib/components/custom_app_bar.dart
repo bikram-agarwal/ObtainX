@@ -93,8 +93,13 @@ class _CustomAppBarState extends State<CustomAppBar> {
                 titleBaseLarge)
             .copyWith(color: colorScheme.onSurface);
 
-    final bool blurEnabled =
-        context.watch<SettingsProvider>().progressiveBlurEnabled;
+    // [Selector] instead of [context.watch] so that the persistent app
+    // bar — which sits on every page — only rebuilds when this single
+    // setting flips, not on every unrelated SettingsProvider notify
+    // (categories, swipe actions, sort changes, etc.).
+    final bool blurEnabled = context.select<SettingsProvider, bool>(
+      (s) => s.progressiveBlurEnabled,
+    );
 
     final Color solidHeaderColor = colorScheme.surface;
 

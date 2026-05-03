@@ -1007,7 +1007,7 @@ class _AppPageState extends State<AppPage> {
                             color: colorScheme.outlineVariant,
                           ),
                         ),
-                        elevation: WidgetStatePropertyAll(0),
+                        elevation: const WidgetStatePropertyAll(0),
                         overlayColor: WidgetStateProperty.fromMap({
                           WidgetState.disabled: colorScheme.onSurfaceVariant
                               .withAlpha(0),
@@ -1039,7 +1039,7 @@ class _AppPageState extends State<AppPage> {
                   Expanded(
                     child: FilledButton.tonal(
                       style: ButtonStyle(
-                        elevation: WidgetStatePropertyAll(0),
+                        elevation: const WidgetStatePropertyAll(0),
                         textStyle: WidgetStatePropertyAll(
                           textTheme.labelLarge?.copyWith(
                             fontWeight: FontWeight.w600,
@@ -1084,6 +1084,14 @@ class _AppPageState extends State<AppPage> {
     final Uint8List? bytesForImage = exclusiveIconMemoryBytes
         ? iconMemoryBytes
         : (iconMemoryBytes ?? appInMemory?.icon);
+    // Cap the decoded bitmap at the rendered logical size × DPR. Without
+    // this hint, [Image.memory] decodes the full source PNG (often 512×512
+    // for a launcher icon) and keeps it in the raster cache at full
+    // resolution even when displayed at 56 logical px. Sizing the cache
+    // here keeps RAM usage bounded for the AppPage's hero icon and the
+    // large-format dialog preview.
+    final int iconCachePx =
+        (size * MediaQuery.devicePixelRatioOf(themeContext)).round();
     Widget iconChild;
     if (bytesForImage != null) {
       iconChild = GestureDetector(
@@ -1096,6 +1104,8 @@ class _AppPageState extends State<AppPage> {
             width: size,
             fit: BoxFit.cover,
             gaplessPlayback: true,
+            cacheWidth: iconCachePx,
+            cacheHeight: iconCachePx,
           ),
         ),
       );
@@ -1123,6 +1133,8 @@ class _AppPageState extends State<AppPage> {
                     width: size,
                     fit: BoxFit.cover,
                     gaplessPlayback: true,
+                    cacheWidth: iconCachePx,
+                    cacheHeight: iconCachePx,
                   ),
                 );
               }
@@ -2632,7 +2644,7 @@ class _AppPageState extends State<AppPage> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 iconWidget,
-                SizedBox(width: 12 * heroScale),
+                const SizedBox(width: 12 * heroScale),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2677,7 +2689,7 @@ class _AppPageState extends State<AppPage> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
-                      SizedBox(height: 2 * heroScale),
+                      const SizedBox(height: 2 * heroScale),
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
                         style: bylineStyle?.copyWith(

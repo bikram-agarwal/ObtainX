@@ -49,7 +49,19 @@ List<Widget> buildThemesSettingsCardItems(
   BuildContext context,
   Future<AndroidDeviceInfo> androidInfoFuture,
 ) {
-  final SettingsProvider settings = context.watch<SettingsProvider>();
+  // Narrow watch: this section only reflects six theme-related toggles.
+  // Without this, every settings notify rebuilt the whole themes card.
+  context.select<SettingsProvider, int>(
+    (s) => Object.hash(
+      s.useBlackTheme,
+      s.theme,
+      s.useGradientBackground,
+      s.progressiveBlurEnabled,
+      s.matchAppPageToIconColors,
+      s.reduceVisualEffects,
+    ),
+  );
+  final SettingsProvider settings = context.read<SettingsProvider>();
 
   return [
     Padding(

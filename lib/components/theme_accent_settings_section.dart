@@ -25,7 +25,17 @@ class _ThemeAccentSwatchesItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final SettingsProvider settings = context.watch<SettingsProvider>();
+    // Narrow subscription — only rebuilds the swatches grid when a
+    // custom-seed hex is added/removed/selected or the accent source
+    // changes.
+    context.select<SettingsProvider, int>(
+      (s) => Object.hash(
+        s.appAccentColorSource,
+        s.activeCustomSeedHex,
+        Object.hashAll(s.savedCustomSeedHexes),
+      ),
+    );
+    final SettingsProvider settings = context.read<SettingsProvider>();
 
     Future<void> showAddHexDialog() async {
       final TextEditingController controller = TextEditingController();
@@ -212,7 +222,12 @@ class _ThemeAccentPaletteItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final SettingsProvider settings = context.watch<SettingsProvider>();
+    // Narrow watch: this section reflects only the accent source and
+    // palette-style selector.
+    context.select<SettingsProvider, int>(
+      (s) => Object.hash(s.appAccentColorSource, s.appThemePaletteStyle),
+    );
+    final SettingsProvider settings = context.read<SettingsProvider>();
     final bool paletteEnabled =
         settings.appAccentColorSource != AppAccentColorSource.materialYou;
 

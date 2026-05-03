@@ -76,12 +76,16 @@ class _StoreSourceChipAvatarState extends State<StoreSourceChipAvatar> {
             snapshot.data == null) {
           return SizedBox(width: widget.size, height: widget.size);
         }
+        final int cachePx =
+            (widget.size * MediaQuery.devicePixelRatioOf(context)).round();
         return Image.memory(
           snapshot.data!,
           width: widget.size,
           height: widget.size,
           fit: BoxFit.contain,
           gaplessPlayback: true,
+          cacheWidth: cachePx,
+          cacheHeight: cachePx,
         );
       },
     );
@@ -240,12 +244,16 @@ class _StoreSourceIconForUrlState extends State<StoreSourceIconForUrl> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done &&
             snapshot.data != null) {
+          final int cachePx =
+              (widget.size * MediaQuery.devicePixelRatioOf(context)).round();
           return Image.memory(
             snapshot.data!,
             width: widget.size,
             height: widget.size,
             fit: BoxFit.contain,
             gaplessPlayback: true,
+            cacheWidth: cachePx,
+            cacheHeight: cachePx,
           );
         }
         return Icon(
@@ -313,12 +321,16 @@ class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
               snapshot.data == null) {
             return const SizedBox.shrink();
           }
+          final int cachePx =
+              (13 * MediaQuery.devicePixelRatioOf(context)).round();
           return Image.memory(
             snapshot.data!,
             width: 13,
             height: 13,
             fit: BoxFit.contain,
             gaplessPlayback: true,
+            cacheWidth: cachePx,
+            cacheHeight: cachePx,
           );
         },
       );

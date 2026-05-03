@@ -672,5 +672,6 @@
     "deleteFolderConfirm": "Delete folder \"{name}\"?\n\nApps will be moved back to the main list.",
     "ruleMatchesXApps": "Rule matches {count} app(s) currently",
     "manageFolders": "Manage folders",
-    "noFolders": "No folders yet"
+    "noFolders": "No folders yet",
+    "rawJson": "Raw JSON"
 }

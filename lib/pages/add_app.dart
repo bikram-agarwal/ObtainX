@@ -201,7 +201,22 @@ class AddAppPageState extends State<AddAppPage> {
   @override
   Widget build(BuildContext context) {
     AppsProvider appsProvider = context.read<AppsProvider>();
-    SettingsProvider settingsProvider = context.watch<SettingsProvider>();
+    // Narrow subscription to only the settings this page actually reads
+    // in build. The previous broad watch rebuilt the (long, expensive)
+    // add-app form on every settings notify, including ones unrelated to
+    // this page (categories, sort, swipe actions, etc.).
+    context.select<SettingsProvider, int>(
+      (s) => Object.hash(
+        // [searchDeselected] is a List<String>; hash its contents,
+        // because the getter returns a fresh list every call so reference
+        // hashing would either always re-trigger or never trigger.
+        Object.hashAll(s.searchDeselected),
+        s.hideTrackOnlyWarning,
+        s.useGradientBackground,
+        s.progressiveBlurEnabled,
+      ),
+    );
+    SettingsProvider settingsProvider = context.read<SettingsProvider>();
     NotificationsProvider notificationsProvider = context
         .read<NotificationsProvider>();
 

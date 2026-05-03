@@ -968,8 +968,8 @@ class _SettingsPageState extends State<SettingsPage> {
                               'categories',
                             ),
                             collapsibleCard('categories', [
-                              Padding(
-                                padding: const EdgeInsets.all(16),
+                              const Padding(
+                                padding: EdgeInsets.all(16),
                                 child: CategoryEditorSelector(
                                   showLabelWhenNotEmpty: false,
                                 ),
@@ -1424,6 +1424,22 @@ class _ThirdPartyInstallerSelectorState
                                         width: 40,
                                         height: 40,
                                         fit: BoxFit.contain,
+                                        // Decode at the rendered size × DPR
+                                        // so a 512×512 launcher icon doesn't
+                                        // sit at full resolution in the
+                                        // raster cache for a 40-px row.
+                                        cacheWidth:
+                                            (40 *
+                                                    MediaQuery.devicePixelRatioOf(
+                                                      context,
+                                                    ))
+                                                .round(),
+                                        cacheHeight:
+                                            (40 *
+                                                    MediaQuery.devicePixelRatioOf(
+                                                      context,
+                                                    ))
+                                                .round(),
                                         errorBuilder: (_, _, _) =>
                                             const Icon(Icons.android, size: 40),
                                       ),
@@ -1474,6 +1490,10 @@ class _ThirdPartyInstallerSelectorState
                       width: 36,
                       height: 36,
                       fit: BoxFit.contain,
+                      cacheWidth:
+                          (36 * MediaQuery.devicePixelRatioOf(context)).round(),
+                      cacheHeight:
+                          (36 * MediaQuery.devicePixelRatioOf(context)).round(),
                       errorBuilder: (_, _, _) =>
                           const Icon(Icons.android, size: 36),
                     ),

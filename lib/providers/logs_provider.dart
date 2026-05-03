@@ -74,7 +74,7 @@ create table if not exists $logTable (
     Log l = Log(message, level);
     l.id = await (await getDB()).insert(logTable, l.toMap());
     if (kDebugMode) {
-      print(l);
+      debugPrint(l.toString());
     }
     return l;
   }
@@ -90,7 +90,8 @@ create table if not exists $logTable (
 
   Future<int> clear({DateTime? before, DateTime? after}) async {
     var where = getWhereDates(before: before, after: after);
-    var res = await (await getDB()).delete(
+    final database = await getDB();
+    var res = await database.delete(
       logTable,
       where: where.key,
       whereArgs: where.value,
@@ -104,6 +105,20 @@ create table if not exists $logTable (
           name: 'n',
         ),
       );
+    }
+    // SQLite reclaims free pages internally on DELETE but does not shrink the
+    // file. Without VACUUM, a months-old debug-log run can leave logs.db
+    // multi-megabyte even though it's mostly tombstones. Run VACUUM only
+    // when the delete was meaningful — VACUUM on every constructor call
+    // (which fires on every app startup at minimum) would be wasted I/O.
+    if (res >= 100) {
+      try {
+        await database.execute('VACUUM');
+      } catch (_) {
+        // VACUUM can fail mid-write or on an already-locked DB. Silent
+        // failure is fine: the file just stays oversized until the next
+        // successful prune.
+      }
     }
     return res;
   }
