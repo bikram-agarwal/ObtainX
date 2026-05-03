@@ -11,8 +11,15 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
 
-// TEMP APKMIRROR SIZE DEBUG: keep enabled until APKMirror size refresh is confirmed.
-const bool apkMirrorSizeDebugLoggingEnabled = true;
+/// Single consolidated debug-logging flag for the APKMirror size code path.
+///
+/// One global, referenced by the lazy size resolver here, by
+/// [SourceProvider.getApp] (to log the size that survived the update-check
+/// merge), and by the AppPage button-rendering code (to log how the size
+/// surfaces in the UI). When `false`, every guarded block short-circuits
+/// without doing any work, so leaving the flag turned off has zero cost
+/// in release builds.
+const bool apkMirrorSizeDebug = false;
 const String _apkMirrorSizeDebugPrefix = 'OBTAINX-APK-SIZE-DEBUG';
 
 class _ApkMirrorSizeCandidate {
@@ -30,7 +37,7 @@ class _ApkMirrorSizeCandidate {
 }
 
 Future<void> _logApkMirrorSizeDebug(String message) async {
-  if (!apkMirrorSizeDebugLoggingEnabled) {
+  if (!apkMirrorSizeDebug) {
     return;
   }
   try {
@@ -39,7 +46,7 @@ Future<void> _logApkMirrorSizeDebug(String message) async {
       level: LogLevels.debug,
     );
   } catch (_) {
-    // Debug logging must never affect update checks.
+    // Debug logging must never affect callers.
   }
 }
 
@@ -329,61 +336,12 @@ Future<List<String>> apkMirrorDownloadPageUrlsFromReleasePageHtml(
   )).map((entry) => entry.value).toList();
 }
 
-List<String> apkMirrorFallbackDownloadPageUrlsFromReleasePageUrl(
-  String releasePageUrl,
-) {
-  final releaseUri = Uri.parse(releasePageUrl);
-  if (releaseUri.pathSegments.isEmpty) {
-    return [];
-  }
-  final releaseSlug = releaseUri.pathSegments.reversed.firstWhere(
-    (pathSegment) {
-      return pathSegment.isNotEmpty;
-    },
-    orElse: () {
-      return '';
-    },
-  );
-  if (releaseSlug.isEmpty) {
-    return [];
-  }
-  final downloadSlugBase = releaseSlug.endsWith('-release')
-      ? releaseSlug.substring(0, releaseSlug.length - '-release'.length)
-      : releaseSlug;
-  final releasePagePrefix = releasePageUrl.endsWith('/')
-      ? releasePageUrl
-      : '$releasePageUrl/';
-  final List<String> candidates = [];
-  for (var candidateIndex = 1; candidateIndex <= 20; candidateIndex++) {
-    final suffix = candidateIndex == 1 ? '' : '-$candidateIndex';
-    candidates.add(
-      '$releasePagePrefix$downloadSlugBase$suffix-android-apk-download/',
-    );
-  }
-  return candidates;
-}
-
 Future<bool> apkMirrorDownloadPageHtmlIsBundle(String html) async {
   final pageText = (await parseHtmlOffIsolate(html)).body?.text ?? html;
   return RegExp(
     r'Download\s+APK\s+Bundle',
     caseSensitive: false,
   ).hasMatch(pageText);
-}
-
-Future<String> _apkMirrorDownloadPageKeyFromHtml(
-  String html,
-  String url,
-) async {
-  final doc = await parseHtmlOffIsolate(html);
-  final titleText = doc.querySelector('title')?.text;
-  final headingText =
-      doc.querySelector('h1')?.text ?? doc.querySelector('h2')?.text;
-  final pageText = doc.body?.text ?? html;
-  final key = _apkMirrorNormalizedText(
-    [?titleText, ?headingText, pageText].join(' '),
-  );
-  return key.isNotEmpty ? key : url;
 }
 
 Future<List<MapEntry<String, String>>> _filterApkMirrorDownloadPageEntries(
@@ -565,341 +523,268 @@ class APKMirror extends AppSource {
       '$standardUrl/feed/',
       additionalSettings,
     );
-    await _logApkMirrorSizeDebug(
-      'start standardUrl=$standardUrl feedStatus=${res.statusCode} feedBytes=${res.body.length} fallbackToOlderReleases=$fallbackToOlderReleases filter=${regexFilter ?? "<none>"}',
-    );
-    if (res.statusCode == 200) {
-      final itemInnerBlocks = RegExp(
-        r'<item>([\s\S]*?)</item>',
-        caseSensitive: false,
-      ).allMatches(res.body).map((match) => match.group(1)!).toList();
-      await _logApkMirrorSizeDebug(
-        'feed parsed itemInnerBlocks=${itemInnerBlocks.length}',
-      );
-
-      final List<String> rawReleaseTitleCandidates = <String>[];
-      void collectReleaseTitleCandidate(String? title) {
-        if (title == null) {
-          return;
-        }
-        final String trimmed = title.trim();
-        if (trimmed.isEmpty) {
-          return;
-        }
-        if (rawReleaseTitleCandidates.length >= 40) {
-          return;
-        }
-        if (!rawReleaseTitleCandidates.contains(trimmed)) {
-          rawReleaseTitleCandidates.add(trimmed);
-        }
-      }
-
-      String? titleString;
-      String? releasePageUrl;
-      DateTime? releaseDate;
-
-      if (itemInnerBlocks.isNotEmpty) {
-        for (
-          int scanIndex = 0;
-          scanIndex < itemInnerBlocks.length;
-          scanIndex++
-        ) {
-          collectReleaseTitleCandidate(
-            titleFromApkMirrorRssItemInner(itemInnerBlocks[scanIndex]),
-          );
-        }
-        final RegExp? titleFilterPattern = regexFilter != null
-            ? RegExp(regexFilter)
-            : null;
-        String? chosenBlock;
-        for (
-          int itemIndex = 0;
-          itemIndex < itemInnerBlocks.length;
-          itemIndex++
-        ) {
-          if (!fallbackToOlderReleases && itemIndex > 0) break;
-          final block = itemInnerBlocks[itemIndex];
-          final nameToFilter = titleFromApkMirrorRssItemInner(block);
-          if (titleFilterPattern != null &&
-              nameToFilter != null &&
-              !titleFilterPattern.hasMatch(nameToFilter.trim())) {
-            continue;
-          }
-          chosenBlock = block;
-          titleString = nameToFilter;
-          break;
-        }
-        if (chosenBlock != null) {
-          releasePageUrl = releaseUrlFromApkMirrorRssItemInner(chosenBlock);
-          releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
-        }
-      } else {
-        final parsedItems = (await parseHtmlOffIsolate(
-          res.body,
-        )).querySelectorAll('item');
-        for (int scanIndex = 0; scanIndex < parsedItems.length; scanIndex++) {
-          collectReleaseTitleCandidate(
-            parsedItems[scanIndex].querySelector('title')?.innerHtml,
-          );
-        }
-        dynamic targetRelease;
-        int chosenParsedItemIndex = -1;
-        for (int itemIndex = 0; itemIndex < parsedItems.length; itemIndex++) {
-          if (!fallbackToOlderReleases && itemIndex > 0) break;
-          final nameToFilter = parsedItems[itemIndex]
-              .querySelector('title')
-              ?.innerHtml;
-          if (regexFilter != null &&
-              nameToFilter != null &&
-              !RegExp(regexFilter).hasMatch(nameToFilter.trim())) {
-            continue;
-          }
-          targetRelease = parsedItems[itemIndex];
-          chosenParsedItemIndex = itemIndex;
-          break;
-        }
-        titleString = targetRelease?.querySelector('title')?.innerHtml;
-        final dateString = targetRelease
-            ?.querySelector('pubDate')
-            ?.innerHtml
-            .split(' ')
-            .sublist(0, 5)
-            .join(' ');
-        releaseDate = dateString != null
-            ? HttpDate.parse('$dateString GMT')
-            : null;
-        if (chosenParsedItemIndex >= 0) {
-          releasePageUrl = releaseUrlFromApkMirrorFeedBodyForItemIndex(
-            res.body,
-            chosenParsedItemIndex,
-          );
-        }
-      }
-      final String? releasePageUrlBeforeValidation = releasePageUrl;
-      if (releasePageUrl != null &&
-          !releasePageUrl.startsWith('$standardUrl/')) {
-        releasePageUrl = null;
-      }
-      await _logApkMirrorSizeDebug(
-        'selected title=${titleString ?? "<null>"} releasePageUrlRaw=${releasePageUrlBeforeValidation ?? "<null>"} releasePageUrl=${releasePageUrl ?? "<null>"} releaseDate=${releaseDate?.toIso8601String() ?? "<null>"}',
-      );
-      String? version = titleString
-          ?.substring(
-            RegExp('[0-9]').firstMatch(titleString)?.start ?? 0,
-            RegExp(' by ').allMatches(titleString).last.start,
-          )
-          .trim();
-      if (version == null || version.isEmpty) {
-        version = titleString;
-      }
-      if (version == null || version.isEmpty) {
-        throw NoVersionError();
-      }
-
-      int? apkSizeBytes;
-      String? downloadPageUrl;
-      final List<_ApkMirrorSizeCandidate> sizeCandidates = [];
-      if (releasePageUrl != null) {
-        try {
-          var releasePageProvidedDownloadEntries = false;
-          var filteredReleaseDownloadEntries = <MapEntry<String, String>>[];
-          final releasePageResponse = await sourceRequest(
-            releasePageUrl,
-            additionalSettings,
-          );
-          await _logApkMirrorSizeDebug(
-            'release page status=${releasePageResponse.statusCode} bytes=${releasePageResponse.body.length} url=$releasePageUrl',
-          );
-          if (releasePageResponse.statusCode == 200) {
-            apkSizeBytes = await apkSizeBytesFromApkMirrorReleasePageHtml(
-              releasePageResponse.body,
-            );
-            await _logApkMirrorSizeDebug(
-              'release page parsedSize=${apkSizeBytes?.toString() ?? "<null>"}',
-            );
-            final downloadPageEntries =
-                await _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
-                  releasePageResponse.body,
-                  releasePageUrl,
-                );
-            releasePageProvidedDownloadEntries = downloadPageEntries.isNotEmpty;
-            filteredReleaseDownloadEntries =
-                await _filterApkMirrorDownloadPageEntries(
-                  downloadPageEntries,
-                  additionalSettings,
-                );
-            await _logApkMirrorSizeDebug(
-              'download candidates count=${downloadPageEntries.length} filtered=${filteredReleaseDownloadEntries.length} first=${filteredReleaseDownloadEntries.take(5).map((entry) => entry.value).join(" | ")}',
-            );
-            var checkedDownloadCandidates = 0;
-            for (final candidateDownloadPageEntry
-                in filteredReleaseDownloadEntries) {
-              checkedDownloadCandidates += 1;
-              final downloadPageResponse = await sourceRequest(
-                candidateDownloadPageEntry.value,
-                additionalSettings,
-              );
-              if (checkedDownloadCandidates <= 8) {
-                await _logApkMirrorSizeDebug(
-                  'download candidate #$checkedDownloadCandidates status=${downloadPageResponse.statusCode} bytes=${downloadPageResponse.body.length} key=${candidateDownloadPageEntry.key} url=${candidateDownloadPageEntry.value}',
-                );
-              }
-              if (downloadPageResponse.statusCode != 200) {
-                continue;
-              }
-              final candidateSize =
-                  await apkSizeBytesFromApkMirrorReleasePageHtml(
-                    downloadPageResponse.body,
-                  );
-              if (checkedDownloadCandidates <= 8) {
-                await _logApkMirrorSizeDebug(
-                  'download candidate #$checkedDownloadCandidates parsedSize=${candidateSize?.toString() ?? "<null>"}',
-                );
-              }
-              if (candidateSize == null) {
-                continue;
-              }
-              final candidateIsBundle = await apkMirrorDownloadPageHtmlIsBundle(
-                downloadPageResponse.body,
-              );
-              sizeCandidates.add(
-                _ApkMirrorSizeCandidate(
-                  key: candidateDownloadPageEntry.key,
-                  url: candidateDownloadPageEntry.value,
-                  sizeBytes: candidateSize,
-                  isBundle: candidateIsBundle,
-                ),
-              );
-            }
-          }
-          if (sizeCandidates.isEmpty &&
-              (!releasePageProvidedDownloadEntries ||
-                  filteredReleaseDownloadEntries.isNotEmpty)) {
-            final fallbackDownloadPageUrls =
-                apkMirrorFallbackDownloadPageUrlsFromReleasePageUrl(
-                  releasePageUrl,
-                );
-            await _logApkMirrorSizeDebug(
-              'fallback download candidates count=${fallbackDownloadPageUrls.length} first=${fallbackDownloadPageUrls.take(5).join(" | ")}',
-            );
-            var consecutiveMissedFallbackCandidates = 0;
-            var checkedFallbackDownloadCandidates = 0;
-            for (final fallbackDownloadPageUrl in fallbackDownloadPageUrls) {
-              checkedFallbackDownloadCandidates += 1;
-              final fallbackDownloadPageResponse = await sourceRequest(
-                fallbackDownloadPageUrl,
-                additionalSettings,
-              );
-              if (checkedFallbackDownloadCandidates <= 8) {
-                await _logApkMirrorSizeDebug(
-                  'fallback download candidate #$checkedFallbackDownloadCandidates status=${fallbackDownloadPageResponse.statusCode} bytes=${fallbackDownloadPageResponse.body.length} url=$fallbackDownloadPageUrl',
-                );
-              }
-              if (fallbackDownloadPageResponse.statusCode != 200) {
-                consecutiveMissedFallbackCandidates += 1;
-                final missLimit = sizeCandidates.isEmpty ? 5 : 3;
-                if (consecutiveMissedFallbackCandidates >= missLimit) {
-                  break;
-                }
-                continue;
-              }
-              consecutiveMissedFallbackCandidates = 0;
-              final fallbackCandidateSize =
-                  await apkSizeBytesFromApkMirrorReleasePageHtml(
-                    fallbackDownloadPageResponse.body,
-                  );
-              if (checkedFallbackDownloadCandidates <= 8) {
-                await _logApkMirrorSizeDebug(
-                  'fallback download candidate #$checkedFallbackDownloadCandidates parsedSize=${fallbackCandidateSize?.toString() ?? "<null>"}',
-                );
-              }
-              if (fallbackCandidateSize == null) {
-                continue;
-              }
-              final fallbackCandidateIsBundle =
-                  await apkMirrorDownloadPageHtmlIsBundle(
-                    fallbackDownloadPageResponse.body,
-                  );
-              sizeCandidates.add(
-                _ApkMirrorSizeCandidate(
-                  key: await _apkMirrorDownloadPageKeyFromHtml(
-                    fallbackDownloadPageResponse.body,
-                    fallbackDownloadPageUrl,
-                  ),
-                  url: fallbackDownloadPageUrl,
-                  sizeBytes: fallbackCandidateSize,
-                  isBundle: fallbackCandidateIsBundle,
-                ),
-              );
-            }
-          }
-          final filteredSizeCandidates = await _filterApkMirrorSizeCandidates(
-            sizeCandidates,
-            additionalSettings,
-          );
-          final pickedSizeCandidate = _pickApkMirrorSizeCandidate(
-            filteredSizeCandidates,
-          );
-          if (pickedSizeCandidate != null) {
-            apkSizeBytes = pickedSizeCandidate.sizeBytes;
-            downloadPageUrl = pickedSizeCandidate.url;
-            await _logApkMirrorSizeDebug(
-              'picked download candidate bundle=${pickedSizeCandidate.isBundle} filteredCandidates=${filteredSizeCandidates.length} size=${pickedSizeCandidate.sizeBytes} key=${pickedSizeCandidate.key} url=${pickedSizeCandidate.url}',
-            );
-          }
-        } catch (error) {
-          await _logApkMirrorSizeDebug(
-            'release/download size path error=${error.toString()}',
-          );
-          // Size is optional; keep track-only update checks resilient.
-        }
-      }
-
-      // Fetch icon from the app's main listing page (optional).
-      String? iconUrl;
-      try {
-        final pageRes = await sourceRequest(standardUrl, additionalSettings);
-        await _logApkMirrorSizeDebug(
-          'listing page status=${pageRes.statusCode} bytes=${pageRes.body.length} url=$standardUrl',
-        );
-        if (pageRes.statusCode == 200) {
-          iconUrl = await iconUrlFromApkMirrorAppPageHtml(
-            pageRes.body,
-            standardUrl,
-          );
-          await _logApkMirrorSizeDebug(
-            'listing page iconUrl=${iconUrl ?? "<null>"}',
-          );
-        }
-      } catch (error) {
-        await _logApkMirrorSizeDebug(
-          'listing page path error=${error.toString()}',
-        );
-        // Icon is optional – ignore errors.
-      }
-
-      await _logApkMirrorSizeDebug(
-        'return version=$version changeLog=${downloadPageUrl ?? releasePageUrl ?? "<null>"} finalSize=${apkSizeBytes?.toString() ?? "<null>"}',
-      );
-
-      return APKDetails(
-        version,
-        [],
-        getAppNames(standardUrl),
-        releaseDate: releaseDate,
-        changeLog: downloadPageUrl ?? releasePageUrl,
-        iconUrl: iconUrl,
-        rawReleaseTitleCandidates: rawReleaseTitleCandidates,
-        apkSizeBytes: apkSizeBytes,
-      );
-    } else {
+    if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
+    final itemInnerBlocks = RegExp(
+      r'<item>([\s\S]*?)</item>',
+      caseSensitive: false,
+    ).allMatches(res.body).map((match) => match.group(1)!).toList();
+
+    final List<String> rawReleaseTitleCandidates = <String>[];
+    void collectReleaseTitleCandidate(String? title) {
+      if (title == null) {
+        return;
+      }
+      final String trimmed = title.trim();
+      if (trimmed.isEmpty) {
+        return;
+      }
+      if (rawReleaseTitleCandidates.length >= 40) {
+        return;
+      }
+      if (!rawReleaseTitleCandidates.contains(trimmed)) {
+        rawReleaseTitleCandidates.add(trimmed);
+      }
+    }
+
+    String? titleString;
+    String? releasePageUrl;
+    DateTime? releaseDate;
+
+    if (itemInnerBlocks.isNotEmpty) {
+      for (
+        int scanIndex = 0;
+        scanIndex < itemInnerBlocks.length;
+        scanIndex++
+      ) {
+        collectReleaseTitleCandidate(
+          titleFromApkMirrorRssItemInner(itemInnerBlocks[scanIndex]),
+        );
+      }
+      final RegExp? titleFilterPattern = regexFilter != null
+          ? RegExp(regexFilter)
+          : null;
+      String? chosenBlock;
+      for (
+        int itemIndex = 0;
+        itemIndex < itemInnerBlocks.length;
+        itemIndex++
+      ) {
+        if (!fallbackToOlderReleases && itemIndex > 0) break;
+        final block = itemInnerBlocks[itemIndex];
+        final nameToFilter = titleFromApkMirrorRssItemInner(block);
+        if (titleFilterPattern != null &&
+            nameToFilter != null &&
+            !titleFilterPattern.hasMatch(nameToFilter.trim())) {
+          continue;
+        }
+        chosenBlock = block;
+        titleString = nameToFilter;
+        break;
+      }
+      if (chosenBlock != null) {
+        releasePageUrl = releaseUrlFromApkMirrorRssItemInner(chosenBlock);
+        releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
+      }
+    } else {
+      final parsedItems = (await parseHtmlOffIsolate(
+        res.body,
+      )).querySelectorAll('item');
+      for (int scanIndex = 0; scanIndex < parsedItems.length; scanIndex++) {
+        collectReleaseTitleCandidate(
+          parsedItems[scanIndex].querySelector('title')?.innerHtml,
+        );
+      }
+      dynamic targetRelease;
+      int chosenParsedItemIndex = -1;
+      for (int itemIndex = 0; itemIndex < parsedItems.length; itemIndex++) {
+        if (!fallbackToOlderReleases && itemIndex > 0) break;
+        final nameToFilter = parsedItems[itemIndex]
+            .querySelector('title')
+            ?.innerHtml;
+        if (regexFilter != null &&
+            nameToFilter != null &&
+            !RegExp(regexFilter).hasMatch(nameToFilter.trim())) {
+          continue;
+        }
+        targetRelease = parsedItems[itemIndex];
+        chosenParsedItemIndex = itemIndex;
+        break;
+      }
+      titleString = targetRelease?.querySelector('title')?.innerHtml;
+      final dateString = targetRelease
+          ?.querySelector('pubDate')
+          ?.innerHtml
+          .split(' ')
+          .sublist(0, 5)
+          .join(' ');
+      releaseDate = dateString != null
+          ? HttpDate.parse('$dateString GMT')
+          : null;
+      if (chosenParsedItemIndex >= 0) {
+        releasePageUrl = releaseUrlFromApkMirrorFeedBodyForItemIndex(
+          res.body,
+          chosenParsedItemIndex,
+        );
+      }
+    }
+    if (releasePageUrl != null && !releasePageUrl.startsWith('$standardUrl/')) {
+      releasePageUrl = null;
+    }
+    String? version = titleString
+        ?.substring(
+          RegExp('[0-9]').firstMatch(titleString)?.start ?? 0,
+          RegExp(' by ').allMatches(titleString).last.start,
+        )
+        .trim();
+    if (version == null || version.isEmpty) {
+      version = titleString;
+    }
+    if (version == null || version.isEmpty) {
+      throw NoVersionError();
+    }
+
+    // Icon resolution is intentionally decoupled from size resolution. Size
+    // resolution requires walking the release page + N download pages and
+    // is now done lazily on the AppPage. The icon, by contrast, is one
+    // cheap GET against the listing page and is fine to do here.
+    String? iconUrl;
+    try {
+      final pageRes = await sourceRequest(standardUrl, additionalSettings);
+      if (pageRes.statusCode == 200) {
+        iconUrl = await iconUrlFromApkMirrorAppPageHtml(
+          pageRes.body,
+          standardUrl,
+        );
+      }
+    } catch (_) {
+      // Icon is optional - ignore errors.
+    }
+
+    // [apkSizeBytes] is intentionally not resolved here. The APKMirror size
+    // walk is expensive (1 release page + 1 GET per download candidate, per
+    // app, per refresh) and the result is only ever shown as " · 43 MB" on
+    // the AppPage. It is therefore resolved lazily by AppPage on first
+    // open via [resolveLatestApkSizeBytes], and persisted onto the App via
+    // [AppsProvider.saveApps] so subsequent opens hit the in-memory copy.
+    return APKDetails(
+      version,
+      [],
+      getAppNames(standardUrl),
+      releaseDate: releaseDate,
+      changeLog: releasePageUrl,
+      iconUrl: iconUrl,
+      rawReleaseTitleCandidates: rawReleaseTitleCandidates,
+    );
   }
 
   AppNames getAppNames(String standardUrl) {
     String temp = standardUrl.substring(standardUrl.indexOf('://') + 3);
     List<String> names = temp.substring(temp.indexOf('/') + 1).split('/');
     return AppNames(names[1], names[2]);
+  }
+
+  /// Lazy resolver: walks the release page → ranked download pages → picks
+  /// the smallest non-bundle APK and returns its size in bytes. The result
+  /// is intended to be persisted onto the app's [App.apkSizeBytes] and
+  /// stays valid until [App.latestVersion] changes - at which point
+  /// [SourceProvider.getApp] clears the size and the next AppPage open
+  /// re-runs this walk.
+  ///
+  /// Returns null when:
+  /// - [releasePageUrl] is null or empty (e.g. older app records that
+  ///   haven't run an update check since the new schema landed),
+  /// - the release page returns non-200,
+  /// - none of the download candidates resolve a size, or
+  /// - any HTTP error along the walk surfaces (caught and logged).
+  ///
+  /// Honors the same per-app filtering as the install path
+  /// (`apkFilterRegEx`, `invertAPKFilter`, `autoApkFilterByArch`) so the
+  /// reported size matches what the user would actually download.
+  Future<int?> resolveLatestApkSizeBytes({
+    required String? releasePageUrl,
+    required Map<String, dynamic> additionalSettings,
+  }) async {
+    if (releasePageUrl == null || releasePageUrl.isEmpty) {
+      return null;
+    }
+    try {
+      final releasePageResponse = await sourceRequest(
+        releasePageUrl,
+        additionalSettings,
+      );
+      await _logApkMirrorSizeDebug(
+        'lazy release page status=${releasePageResponse.statusCode} bytes=${releasePageResponse.body.length} url=$releasePageUrl',
+      );
+      if (releasePageResponse.statusCode != 200) {
+        return null;
+      }
+      // Best-effort: a release page often lists the picked APK's size
+      // directly without us having to walk the per-variant download pages.
+      int? releasePageSize = await apkSizeBytesFromApkMirrorReleasePageHtml(
+        releasePageResponse.body,
+      );
+      final downloadPageEntries =
+          await _apkMirrorDownloadPageUrlEntriesFromReleasePageHtml(
+            releasePageResponse.body,
+            releasePageUrl,
+          );
+      final filteredEntries = await _filterApkMirrorDownloadPageEntries(
+        downloadPageEntries,
+        additionalSettings,
+      );
+      // No actual download links on the release page → only what we found
+      // textually counts. We DO NOT fall back to URL-pattern guessing -
+      // that path made up to 20 speculative HTTP requests per app per
+      // refresh and the success rate was abysmal.
+      if (filteredEntries.isEmpty) {
+        return releasePageSize;
+      }
+      final List<_ApkMirrorSizeCandidate> sizeCandidates = [];
+      for (final candidateDownloadPageEntry in filteredEntries) {
+        final downloadPageResponse = await sourceRequest(
+          candidateDownloadPageEntry.value,
+          additionalSettings,
+        );
+        if (downloadPageResponse.statusCode != 200) {
+          continue;
+        }
+        final candidateSize = await apkSizeBytesFromApkMirrorReleasePageHtml(
+          downloadPageResponse.body,
+        );
+        if (candidateSize == null) {
+          continue;
+        }
+        final candidateIsBundle = await apkMirrorDownloadPageHtmlIsBundle(
+          downloadPageResponse.body,
+        );
+        sizeCandidates.add(
+          _ApkMirrorSizeCandidate(
+            key: candidateDownloadPageEntry.key,
+            url: candidateDownloadPageEntry.value,
+            sizeBytes: candidateSize,
+            isBundle: candidateIsBundle,
+          ),
+        );
+      }
+      final filteredSizeCandidates = await _filterApkMirrorSizeCandidates(
+        sizeCandidates,
+        additionalSettings,
+      );
+      final pickedSizeCandidate = _pickApkMirrorSizeCandidate(
+        filteredSizeCandidates,
+      );
+      if (pickedSizeCandidate != null) {
+        await _logApkMirrorSizeDebug(
+          'lazy picked bundle=${pickedSizeCandidate.isBundle} size=${pickedSizeCandidate.sizeBytes} key=${pickedSizeCandidate.key} url=${pickedSizeCandidate.url}',
+        );
+        return pickedSizeCandidate.sizeBytes;
+      }
+      return releasePageSize;
+    } catch (error) {
+      await _logApkMirrorSizeDebug('lazy resolver error=${error.toString()}');
+      return null;
+    }
   }
 }

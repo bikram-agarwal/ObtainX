@@ -42,9 +42,10 @@ String _formatBytes(int bytes) {
   }
 }
 
-// TEMP APKMIRROR SIZE DEBUG: remove before production.
+/// Optional debug logger — guarded by the consolidated [apkMirrorSizeDebug]
+/// flag so it short-circuits in release builds.
 void _logApkMirrorSizeDebugFromAppPage(String message) {
-  if (!apkMirrorSizeDebugLoggingEnabled) {
+  if (!apkMirrorSizeDebug) {
     return;
   }
   unawaited(() async {
@@ -268,6 +269,10 @@ class _AppPageState extends State<AppPage> {
   bool _webViewUrlLoaded = false;
   bool _scheduledDetailPageRefresh = false;
   bool _requestedMissingIconLoad = false;
+  // Once true, the lazy APKMirror size resolver has fired for this AppPage
+  // mount and won't run again until the user navigates to a different app.
+  // Re-resets in [didUpdateWidget] when [widget.appId] changes.
+  bool _attemptedApkMirrorSizeResolution = false;
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
 
@@ -326,12 +331,17 @@ class _AppPageState extends State<AppPage> {
       _webViewUrlLoaded = false;
       _scheduledDetailPageRefresh = false;
       _requestedMissingIconLoad = false;
+      _attemptedApkMirrorSizeResolution = false;
       _lastWebViewSurfaceColorApplied = null;
       _scheduledOpenInEditMode = false;
       _clearEditIconStaging();
       _storeAvailabilityCacheFuture = BulkScanCache.load().then(
         (cache) => cache[widget.appId],
       );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_maybeLazyResolveApkMirrorSize());
+      });
     } else if (oldWidget.openInEditMode != widget.openInEditMode) {
       _scheduledOpenInEditMode = false;
     }
@@ -1176,6 +1186,12 @@ class _AppPageState extends State<AppPage> {
     _storeAvailabilityCacheFuture = BulkScanCache.load().then(
       (cache) => cache[widget.appId],
     );
+    // Defer to post-frame so the first paint isn't competing with our
+    // SourceProvider lookup. The actual HTTP walk inside is fully async.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_maybeLazyResolveApkMirrorSize());
+    });
     _notesEditFocusNode.addListener(() {
       if (!_notesEditFocusNode.hasFocus || !mounted) return;
       void scrollNotesIntoView() {
@@ -1290,6 +1306,69 @@ class _AppPageState extends State<AppPage> {
     }
   }
 
+  /// Lazily fills in [App.apkSizeBytes] for APKMirror apps the first time
+  /// the user opens the AppPage after a refresh that bumped the version.
+  ///
+  /// Why this lives here and not in the update-check pipeline:
+  /// resolving an APKMirror size requires walking the release page plus
+  /// one GET per ranked download candidate, so doing it on every refresh
+  /// for every APKMirror app — just to display " · 43 MB" next to the
+  /// install/update button — was the worst single offender in the update
+  /// path. Doing it lazily on AppPage open means at most one app pays
+  /// the cost, and only when the user actually looks at it.
+  ///
+  /// The resolved value is persisted onto the App via [AppsProvider.saveApps];
+  /// [SourceProvider.getApp] preserves it across refreshes that don't
+  /// change [App.latestVersion] and clears it when the version changes,
+  /// so the cache key is effectively `(appId, latestVersion)`.
+  Future<void> _maybeLazyResolveApkMirrorSize() async {
+    if (_attemptedApkMirrorSizeResolution) return;
+    final AppsProvider appsProvider = Provider.of<AppsProvider>(
+      context,
+      listen: false,
+    );
+    final App? currentApp = appsProvider.apps[widget.appId]?.app;
+    if (currentApp == null) return;
+    if (currentApp.apkSizeBytes != null) {
+      // Already cached on the App itself.
+      _attemptedApkMirrorSizeResolution = true;
+      return;
+    }
+    final AppSource source = SourceProvider().getSource(
+      currentApp.url,
+      overrideSource: currentApp.overrideSource,
+    );
+    if (source is! APKMirror) return;
+    _attemptedApkMirrorSizeResolution = true;
+    try {
+      final int? resolvedSize = await source.resolveLatestApkSizeBytes(
+        releasePageUrl: currentApp.changeLog,
+        additionalSettings: currentApp.additionalSettings,
+      );
+      if (!mounted || resolvedSize == null) return;
+      final App? freshApp = appsProvider.apps[widget.appId]?.app;
+      if (freshApp == null) return;
+      // The user may have navigated away or the app may have been
+      // refreshed onto a new version while the network walk was running;
+      // in either case we want to skip the stale write.
+      if (freshApp.latestVersion != currentApp.latestVersion) return;
+      if (freshApp.apkSizeBytes == resolvedSize) return;
+      final App updated = freshApp.deepCopy()..apkSizeBytes = resolvedSize;
+      await appsProvider.saveApps(
+        [updated],
+        // No need to re-export to disk just because we filled in a size.
+        autoExportAfterSave: false,
+      );
+      _logApkMirrorSizeDebugFromAppPage(
+        'lazy resolve persisted id=${widget.appId} size=$resolvedSize',
+      );
+    } catch (error) {
+      _logApkMirrorSizeDebugFromAppPage(
+        'lazy resolve error id=${widget.appId} error=${error.toString()}',
+      );
+    }
+  }
+
   Future<void> _runCheckUpdate(String id, {bool resetVersion = false}) async {
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
       context,
@@ -1316,6 +1395,11 @@ class _AppPageState extends State<AppPage> {
       // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
       // without waiting for the Play Store network round-trip.
       _maybeCheckAndCacheAllStores();
+      // The version may have just bumped, in which case [SourceProvider.getApp]
+      // cleared the cached size and we need to walk APKMirror again. The
+      // resolver is a no-op when the size is still present.
+      _attemptedApkMirrorSizeResolution = false;
+      unawaited(_maybeLazyResolveApkMirrorSize());
       if (resetVersion) {
         appsProvider.apps[id]?.app.additionalSettings['versionDetection'] =
             true;

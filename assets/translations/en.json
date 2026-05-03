@@ -668,6 +668,7 @@
     "removeFromFolder": "Remove from folder",
     "saveAsFolder": "Save as folder",
     "showFolderedAppsOnMainPage": "Show foldered apps on main page",
+    "showFolderedAppsOnMainPageTooltip": "When off, foldered apps are hidden from the main tab and excluded from its pull-to-refresh. Each folder can be refreshed separately.",
     "deleteFolderConfirm": "Delete folder \"{name}\"?\n\nApps will be moved back to the main list.",
     "ruleMatchesXApps": "Rule matches {count} app(s) currently",
     "manageFolders": "Manage folders",

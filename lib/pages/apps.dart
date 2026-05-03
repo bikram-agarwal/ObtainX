@@ -26,6 +26,7 @@ import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -124,53 +125,10 @@ AppTypeGroup classifyAppType(AppInMemory app) {
 }
 
 /// A labeled row with an info tooltip and a [Switch], used in the view-options sheet.
-class _GroupToggleRow extends StatelessWidget {
-  const _GroupToggleRow({
-    required this.label,
-    required this.tooltip,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String label;
-  final String tooltip;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Flexible(child: Text(label)),
-              Tooltip(
-                message: tooltip,
-                triggerMode: TooltipTriggerMode.tap,
-                waitDuration: Duration.zero,
-                showDuration: const Duration(seconds: 5),
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Icon(
-                    Icons.help_outline,
-                    size: 20,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 8),
-        Switch(value: value, onChanged: onChanged),
-      ],
-    );
-  }
-}
+// `_GroupToggleRow` was here. Removed in favour of [SwitchListTile] at
+// the call sites for consistency with the other rows in
+// [showAppsViewOptionsSheet] (whole-row tap target, built-in InkWell,
+// matching font and padding).
 
 /// Fingerprint so [AppsPage] rebuilds only when app-list data changes,
 /// not on every [AppsProvider.notifyListeners] (e.g. download-progress ticks
@@ -1298,22 +1256,53 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         ),
                       ],
                     ),
-                    if (effectiveGroupBy != AppsListGroupBy.none) ...[
-                      const SizedBox(height: 8),
-                      _GroupToggleRow(
-                        label: tr('groupNonInstalledSeparately'),
-                        tooltip: tr('groupNonInstalledSeparatelyDescription'),
+                    // Switched from a custom [_GroupToggleRow] to
+                    // [SwitchListTile] for two reasons: (1) consistency
+                    // with the [pinUpdates] / [moveNonInstalledAppsToBottom]
+                    // / [showFolderedAppsOnMainPage] rows in this same
+                    // sheet which already use SwitchListTile, and (2)
+                    // SwitchListTile's built-in InkWell makes the entire
+                    // row tappable - a tap anywhere on the label or the
+                    // tooltip column toggles the value, matching the
+                    // behaviour of the other rows. The previous custom
+                    // row only accepted taps on the Switch itself.
+                    if (effectiveGroupBy != AppsListGroupBy.none)
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                tr('groupNonInstalledSeparately'),
+                              ),
+                            ),
+                            HelpHintIcon(
+                              message: tr(
+                                'groupNonInstalledSeparatelyDescription',
+                              ),
+                            ),
+                          ],
+                        ),
                         value: effectiveGroupNonInstalledSeparately,
                         onChanged: (value) {
                           setEffectiveGroupNonInstalledSeparately(value);
                           setSheetState(() {});
                         },
                       ),
-                    ],
-                    const SizedBox(height: 8),
-                    _GroupToggleRow(
-                      label: tr('groupUpdatesSeparately'),
-                      tooltip: tr('groupUpdatesSeparatelyDescription'),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(tr('groupUpdatesSeparately')),
+                          ),
+                          HelpHintIcon(
+                            message: tr('groupUpdatesSeparatelyDescription'),
+                          ),
+                        ],
+                      ),
                       value: effectiveGroupUpdatesSeparately,
                       onChanged: (value) {
                         setEffectiveGroupUpdatesSeparately(value);
@@ -1341,6 +1330,33 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         setSheetState(() {});
                       },
                     ),
+                    // Main-tab-only toggle: shows / hides foldered apps on
+                    // this view AND scopes pull-to-refresh accordingly.
+                    // Hidden when this sheet is opened from inside a folder
+                    // view because the toggle has no meaning there - a
+                    // folder always shows its own apps.
+                    if (folderId == null)
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Text(tr('showFolderedAppsOnMainPage')),
+                            ),
+                            HelpHintIcon(
+                              message: tr(
+                                'showFolderedAppsOnMainPageTooltip',
+                              ),
+                            ),
+                          ],
+                        ),
+                        value: settingsProvider.showFolderedAppsOnMainPage,
+                        onChanged: (value) {
+                          settingsProvider.showFolderedAppsOnMainPage = value;
+                          setSheetState(() {});
+                        },
+                      ),
                   ],
                 ),
               ),
@@ -1858,7 +1874,60 @@ class AppsPageState extends State<AppsPage> {
       _appsPageAppsRebuildToken,
     );
     var appsProvider = context.read<AppsProvider>();
-    var settingsProvider = context.watch<SettingsProvider>();
+    // Narrow the SettingsProvider dependency to a hash of just the settings
+    // that actually affect this page's build. The previous
+    // `context.watch<SettingsProvider>()` subscribed to EVERY notification
+    // - including ones for settings the apps page doesn't read (e.g.
+    // useFGService, enableBackgroundUpdates, install-permission flags).
+    // Each of those rebuilt the entire 4000+-line apps tree, which on
+    // devices with many apps blocked the frame and made unrelated toggles
+    // (in the view options sheet AND elsewhere) feel laggy.
+    //
+    // [context.select] only rebuilds the page when the returned hash
+    // changes - so toggling foreground service in main settings, for
+    // example, no longer triggers an apps-page rebuild at all.
+    //
+    // We still call [context.read] below for non-reactive access to
+    // every other setting the page references (folder rule lookups,
+    // setter calls, etc.).
+    final String? watchedFolderId = widget.folderId;
+    context.select<SettingsProvider, int>(
+      (s) => Object.hash(
+        s.showFolderedAppsOnMainPage,
+        s.pinUpdates,
+        s.buryNonInstalled,
+        s.sortColumn,
+        s.sortOrder,
+        s.appsListGroupBy,
+        s.groupNonInstalledSeparately,
+        s.groupUpdatesSeparately,
+        // categories is a Map<String?, int>; hash by length + sorted entries.
+        Object.hashAll(s.categories.entries.map((e) => '${e.key}=${e.value}')),
+        s.showAppTypeBadge,
+        s.showTrackedStoreBadge,
+        s.highlightTouchTargets,
+        s.progressiveBlurEnabled,
+        s.reduceVisualEffects,
+        s.useGradientBackground,
+        s.leftSwipeAction,
+        s.rightSwipeAction,
+        s.appFolders.length,
+        // Folder-scoped overrides: only relevant when this page is a
+        // folder view; a hash-as-zero collapse for the main-page case.
+        watchedFolderId == null
+            ? 0
+            : Object.hash(
+                s.folderPinUpdates(watchedFolderId),
+                s.folderBuryNonInstalled(watchedFolderId),
+                s.folderSortColumn(watchedFolderId).index,
+                s.folderSortOrder(watchedFolderId).index,
+                s.folderGroupBy(watchedFolderId).index,
+                s.folderGroupNonInstalledSeparately(watchedFolderId),
+                s.folderGroupUpdatesSeparately(watchedFolderId),
+              ),
+      ),
+    );
+    final SettingsProvider settingsProvider = context.read<SettingsProvider>();
     if (!initialAppLoadCompleted && !appsProvider.loadingApps) {
       initialAppLoadCompleted = true;
     }
@@ -1935,9 +2004,31 @@ class AppsPageState extends State<AppsPage> {
               .toList(),
         );
       } else {
-        // Main list: all tracked apps (including those assigned to folders).
-        // [getAppsSortedByUpdateCheckTime] already skips on-demand-only apps.
-        refreshFuture = appsProvider.checkUpdates();
+        // Main list: refresh scope matches what's visible on this tab.
+        //
+        // The pull-to-refresh contract is "refresh what I see". When
+        // [SettingsProvider.showFolderedAppsOnMainPage] is on, foldered
+        // apps are visible on the main tab and are included in the
+        // refresh, just like before. When it's off, foldered apps are
+        // hidden from the main tab - users have organized them into
+        // folders specifically to declutter the main view - so we exclude
+        // them from the refresh too. Each folder still has its own
+        // pull-to-refresh that scans only that folder's apps.
+        // Foldered apps are still picked up by background update checks
+        // (when enabled), so they don't go indefinitely stale.
+        //
+        // [getAppsSortedByUpdateCheckTime] already skips on-demand-only
+        // apps; we don't have to filter those out here.
+        if (settingsProvider.showFolderedAppsOnMainPage) {
+          refreshFuture = appsProvider.checkUpdates();
+        } else {
+          refreshFuture = appsProvider.checkUpdates(
+            specificIds: appsProvider.apps.values
+                .where((a) => folderIdsForApp(a.app).isEmpty)
+                .map((a) => a.app.id)
+                .toList(),
+          );
+        }
       }
       return refreshFuture
           .catchError((e) {

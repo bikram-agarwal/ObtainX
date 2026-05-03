@@ -23,6 +23,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
+import 'package:obtainium/app_sources/apkmirror.dart' show apkMirrorSizeDebug;
 import 'package:obtainium/app_sources/direct_apk_link.dart';
 import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form.dart';
@@ -46,9 +47,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:obtainium/folders/app_folder.dart';
-
-// TEMP APKMIRROR SIZE DEBUG: remove before production.
-const bool _apkMirrorSizeDebugLoggingEnabledForAppsProvider = true;
 
 final pm = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
@@ -3372,8 +3370,7 @@ class AppsProvider with ChangeNotifier {
       notifyListenersAfterSave: notifyListenersAfterSave,
       autoExportAfterSave: autoExportAfterSave,
     );
-    if (_apkMirrorSizeDebugLoggingEnabledForAppsProvider &&
-        currentApp.url.contains('apkmirror.com')) {
+    if (apkMirrorSizeDebug && currentApp.url.contains('apkmirror.com')) {
       final App? savedApp = apps[appId]?.app;
       try {
         await LogsProvider(runDefaultClear: false).add(

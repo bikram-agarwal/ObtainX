@@ -414,6 +414,45 @@ class _ObtainiumState extends State<Obtainium> {
               ? lightColorScheme
               : darkColorScheme;
 
+          // Material 3 styled tooltips used app-wide. The default Flutter
+          // tooltip is a small dark rounded-rectangle with white text - a
+          // Material 2 holdover. Theming it lifts every Tooltip in the app
+          // (action button hover hints, settings help icons, IconButton
+          // tooltips on toolbars) to a consistent, M3-themed look without
+          // any per-call-site changes.
+          //
+          // Uses `inverseSurface` / `onInverseSurface` per the M3 spec for
+          // plain tooltips: a high-contrast block of colour against the
+          // surrounding app surface, so it reads clearly without competing
+          // with surrounding content. Auto-flips with light/dark mode
+          // because [inverseSurface] is dark in light themes and light in
+          // dark themes.
+          //
+          // [triggerMode] / [waitDuration] / [showDuration] are deliberately
+          // NOT theme-set: per-Tooltip overrides drive the interaction
+          // semantics (long-press for action buttons, tap for help icons),
+          // and we want each call site to keep its current behaviour.
+          TooltipThemeData tooltipThemeFor(ColorScheme scheme) {
+            return TooltipThemeData(
+              decoration: BoxDecoration(
+                color: scheme.inverseSurface,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              textStyle: TextStyle(
+                color: scheme.onInverseSurface,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              preferBelow: true,
+            );
+          }
+
           NavigationBarThemeData navigationBarThemeFor(ColorScheme scheme) {
             // Use labelMedium as base so nav labels keep M3 size (bare color-only TextStyle inherits body scale and can wrap).
             final TextStyle navLabelBase = Theme.of(
@@ -492,6 +531,17 @@ class _ObtainiumState extends State<Obtainium> {
               navigationBarTheme: navigationBarThemeFor(themeColorScheme),
               segmentedButtonTheme: appSegmentedButtonTheme(themeColorScheme),
               switchTheme: appSwitchTheme(themeColorScheme),
+              tooltipTheme: tooltipThemeFor(themeColorScheme),
+              // splashFactory: deliberately NOT overridden. Briefly tried
+              // [InkRipple.splashFactory] for a more visible
+              // expanding-circle ripple, but its longer animation
+              // duration (~1s confirmed expand) made toggles in the view
+              // options sheet feel laggy - the switch's state-change
+              // animation got visually conflated with the slower ripple,
+              // producing a "tap → wait → toggle" perception. Falling
+              // back to Flutter's M3 default ([InkSparkle]) keeps the
+              // snappy feel, at the cost of the ripple looking more like
+              // a quick fade-tint than a classic ripple.
             ),
             darkTheme: ThemeData(
               useMaterial3: true,
@@ -504,6 +554,7 @@ class _ObtainiumState extends State<Obtainium> {
                 darkThemeColorScheme,
               ),
               switchTheme: appSwitchTheme(darkThemeColorScheme),
+              tooltipTheme: tooltipThemeFor(darkThemeColorScheme),
             ),
             home: Shortcuts(
               shortcuts: <LogicalKeySet, Intent>{

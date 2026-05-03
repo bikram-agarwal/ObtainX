@@ -5,6 +5,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form.dart';
@@ -108,20 +109,7 @@ class _SettingsPageState extends State<SettingsPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(child: Text(tr('foregroundServiceForUpdateChecking'))),
-              Tooltip(
-                message: tr('foregroundServiceReliabilityNote'),
-                triggerMode: TooltipTriggerMode.tap,
-                waitDuration: Duration.zero,
-                showDuration: const Duration(seconds: 5),
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Icon(
-                    Icons.help_outline,
-                    size: 20,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
+              HelpHintIcon(message: tr('foregroundServiceReliabilityNote')),
             ],
           ),
           value: settingsProvider.useFGService,
@@ -136,20 +124,9 @@ class _SettingsPageState extends State<SettingsPage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(child: Text(tr('enableBackgroundUpdates'))),
-              Tooltip(
+              HelpHintIcon(
                 message:
                     '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
-                triggerMode: TooltipTriggerMode.tap,
-                waitDuration: Duration.zero,
-                showDuration: const Duration(seconds: 5),
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Icon(
-                    Icons.help_outline,
-                    size: 20,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
               ),
             ],
           ),
@@ -836,15 +813,15 @@ class _SettingsPageState extends State<SettingsPage> {
                                   settingsProvider.showAppWebpage = value;
                                 },
                               ),
-                              SwitchListTile(
-                                title: Text(tr('showFolderedAppsOnMainPage')),
-                                value:
-                                    settingsProvider.showFolderedAppsOnMainPage,
-                                onChanged: (value) {
-                                  settingsProvider.showFolderedAppsOnMainPage =
-                                      value;
-                                },
-                              ),
+                              // [showFolderedAppsOnMainPage] toggle moved
+                              // to the apps-list view options sheet (open
+                              // via the apps tab's filter / view-options
+                              // entry point) - it's a main-tab-scoped
+                              // setting and belongs alongside the other
+                              // view options (sort / group / pin updates
+                              // etc.) rather than in the global Settings
+                              // page where it competed with truly app-wide
+                              // controls. See [showAppsViewOptionsSheet].
                               SwitchListTile(
                                 title: Text(tr('dontShowTrackOnlyWarnings')),
                                 value: settingsProvider.hideTrackOnlyWarning,

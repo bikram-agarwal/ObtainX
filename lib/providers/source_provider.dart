@@ -1548,21 +1548,20 @@ class SourceProvider {
       rawLatestVersionFromSource: rawLatestVersionFromSource,
       rawApkNamesFromSource: rawApkNamesFromSource,
       rawReleaseTitlesFromSource: rawReleaseTitlesFromSource,
+      // Cache key for the size is effectively (appId, latestVersion):
+      // we keep the previously-resolved size when version is unchanged,
+      // and clear it whenever the source reports a new version. This
+      // applies uniformly to every source - including APKMirror, whose
+      // size is now resolved lazily on the AppPage. The previous
+      // `source is APKMirror ? null : ...` distrust treatment is gone:
+      // it was compensating for an unreliable in-update-check resolver
+      // that no longer exists.
       apkSizeBytes:
           apk.apkSizeBytes ??
-          (source is APKMirror ? null : currentApp?.apkSizeBytes),
+          (currentApp != null && currentApp.latestVersion == apk.version
+              ? currentApp.apkSizeBytes
+              : null),
     );
-    // TEMP APKMIRROR SIZE DEBUG: remove before production.
-    if (apkMirrorSizeDebugLoggingEnabled && source is APKMirror) {
-      try {
-        await LogsProvider(runDefaultClear: false).add(
-          'OBTAINX-APK-SIZE-DEBUG SourceProvider: id=${finalApp.id} standardUrl=$standardUrl rawSize=${apk.apkSizeBytes?.toString() ?? "<null>"} previousSize=${currentApp?.apkSizeBytes?.toString() ?? "<null>"} finalSize=${finalApp.apkSizeBytes?.toString() ?? "<null>"} currentLatest=${currentApp?.latestVersion ?? "<null>"} newLatest=${finalApp.latestVersion} installed=${finalApp.installedVersion ?? "<null>"} trackOnly=${finalApp.additionalSettings['trackOnly'] == true}',
-          level: LogLevels.debug,
-        );
-      } catch (_) {
-        // Debug logging must never affect source refreshes.
-      }
-    }
     return source.endOfGetAppChanges(finalApp);
   }
 
