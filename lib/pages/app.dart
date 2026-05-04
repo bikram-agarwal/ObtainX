@@ -307,11 +307,43 @@ class _AppPageState extends State<AppPage> {
     }
   }
 
+  Future<void> _runScheduledDetailPageAutoCheck(
+    String refreshAppId,
+    AppsProvider appsProvider,
+  ) async {
+    try {
+      await _runCheckUpdate(refreshAppId);
+    } finally {
+      _detailPageAutoCheckRunning = false;
+      appsProvider.finishDetailPageAutoCheck(refreshAppId);
+      if (_pendingDetailPageAutoCheckAppId == refreshAppId) {
+        _pendingDetailPageAutoCheckAppId = null;
+        _pendingDetailPageAutoCheckAppsProvider = null;
+      }
+    }
+  }
+
+  void _startScheduledDetailPageAutoCheck(
+    String refreshAppId,
+    AppsProvider appsProvider,
+  ) {
+    if (!mounted || widget.appId != refreshAppId) {
+      appsProvider.finishDetailPageAutoCheck(refreshAppId);
+      _pendingDetailPageAutoCheckAppId = null;
+      _pendingDetailPageAutoCheckAppsProvider = null;
+      return;
+    }
+    _detailPageAutoCheckRunning = true;
+    unawaited(_runScheduledDetailPageAutoCheck(refreshAppId, appsProvider));
+  }
+
   @override
   void didUpdateWidget(covariant AppPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.appId != widget.appId) {
       _cancelPendingDetailPageAutoCheck();
+      _updateCheckRunToken++;
+      updating = false;
       _iconDerivedColorScheme = null;
       _iconSchemeCacheKey = null;
       _iconSchemeLoadingForKey = null;
@@ -458,6 +490,7 @@ class _AppPageState extends State<AppPage> {
     AppInMemory? appData,
     ThemeData dialogTheme,
   ) async {
+    if (updating) return;
     if (!_isEditDirty(appData)) {
       _exitEditWithoutSaving();
       return;
@@ -504,8 +537,13 @@ class _AppPageState extends State<AppPage> {
         FloatingActionButton.small(
           heroTag: 'app_page_edit_cancel',
           tooltip: tr('cancel'),
-          onPressed: () =>
-              _onCancelEditPressed(themeContext, appData, pageThemeForDialogs),
+          onPressed: updating
+              ? null
+              : () => _onCancelEditPressed(
+                  themeContext,
+                  appData,
+                  pageThemeForDialogs,
+                ),
           child: const Icon(Icons.close),
         ),
         const SizedBox(height: 12),
@@ -1424,7 +1462,9 @@ class _AppPageState extends State<AppPage> {
         _showPageError(err, context);
       }
     } finally {
-      if (context.mounted && _updateCheckRunToken == updateCheckRunToken) {
+      if (context.mounted &&
+          widget.appId == id &&
+          _updateCheckRunToken == updateCheckRunToken) {
         setState(() {
           updating = false;
         });
@@ -1646,25 +1686,7 @@ class _AppPageState extends State<AppPage> {
         // Let the push transition start before network + notifyListeners churn.
         _detailPageAutoCheckDelayTimer = Timer(
           const Duration(milliseconds: 320),
-          () async {
-            if (!mounted || widget.appId != refreshAppId) {
-              appsProvider.finishDetailPageAutoCheck(refreshAppId);
-              _pendingDetailPageAutoCheckAppId = null;
-              _pendingDetailPageAutoCheckAppsProvider = null;
-              return;
-            }
-            _detailPageAutoCheckRunning = true;
-            try {
-              await _runCheckUpdate(refreshAppId);
-            } finally {
-              _detailPageAutoCheckRunning = false;
-              appsProvider.finishDetailPageAutoCheck(refreshAppId);
-              if (_pendingDetailPageAutoCheckAppId == refreshAppId) {
-                _pendingDetailPageAutoCheckAppId = null;
-                _pendingDetailPageAutoCheckAppsProvider = null;
-              }
-            }
-          },
+          () => _startScheduledDetailPageAutoCheck(refreshAppId, appsProvider),
         );
       });
     }

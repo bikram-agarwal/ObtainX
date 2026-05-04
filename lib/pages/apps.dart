@@ -478,6 +478,12 @@ class _AppListItem extends StatelessWidget {
       1,
     ];
     if (stops.length == 2) stops[0] = 0.9999;
+    final bool pinned = app.app.pinned;
+    final Color pinnedRowColor = Color.lerp(
+      m3eGroupedListRowFill(colorScheme),
+      colorScheme.primaryContainer,
+      colorScheme.brightness == Brightness.light ? 0.58 : 0.42,
+    )!;
 
     // App-type badge at bottom-right of icon — icon only, no background.
     final appType = classifyAppType(app);
@@ -526,6 +532,15 @@ class _AppListItem extends StatelessWidget {
 
     final Widget tile = Container(
       decoration: BoxDecoration(
+        color: pinned ? pinnedRowColor : null,
+        border: pinned
+            ? BorderDirectional(
+                start: BorderSide(
+                  color: colorScheme.primary.withValues(alpha: 0.82),
+                  width: 4,
+                ),
+              )
+            : null,
         gradient: LinearGradient(
           stops: stops,
           begin: const Alignment(-1, 0),
@@ -539,29 +554,42 @@ class _AppListItem extends StatelessWidget {
         ),
       ),
       child: ListTile(
-        tileColor: app.app.pinned
-            ? Colors.grey.withValues(alpha: 0.1)
-            : Colors.transparent,
+        tileColor: Colors.transparent,
         selectedTileColor: colorScheme.primary.withValues(
-          alpha: app.app.pinned ? 0.2 : 0.1,
+          alpha: pinned ? 0.24 : 0.1,
         ),
         selected: isSelected,
         onLongPress: onLongPress,
         leading: leadingWidget,
-        title: Text(
-          app.name,
-          maxLines: 1,
-          style: TextStyle(
-            overflow: TextOverflow.ellipsis,
-            fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
-          ),
+        title: Row(
+          children: [
+            if (pinned)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(end: 6),
+                child: Icon(
+                  Icons.push_pin_rounded,
+                  size: 16,
+                  color: colorScheme.primary,
+                ),
+              ),
+            Expanded(
+              child: Text(
+                app.name,
+                maxLines: 1,
+                style: TextStyle(
+                  overflow: TextOverflow.ellipsis,
+                  fontWeight: pinned ? FontWeight.w700 : FontWeight.normal,
+                ),
+              ),
+            ),
+          ],
         ),
         subtitle: Text(
           tr('byX', args: [app.author]),
           maxLines: 1,
           style: TextStyle(
             overflow: TextOverflow.ellipsis,
-            fontWeight: app.app.pinned ? FontWeight.bold : FontWeight.normal,
+            fontWeight: pinned ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
         trailing: downloadProgress != null
@@ -1068,335 +1096,317 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
           final EdgeInsets viewPadding = MediaQuery.viewPaddingOf(ctx);
           final double maxSheetHeight = screenHeight - viewPadding.top - 12;
 
-          return SafeArea(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxSheetHeight),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(20, 12, 20, 16 + bottomInset),
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 40,
-                          height: 4,
-                          margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: colorScheme.onSurfaceVariant.withAlpha(80),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxSheetHeight),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(20, 12, 20, 16 + bottomInset),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: colorScheme.onSurfaceVariant.withAlpha(80),
+                          borderRadius: BorderRadius.circular(999),
                         ),
                       ),
-                      Text(
-                        tr('appsViewOptions'),
-                        style: textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
+                    ),
+                    Text(
+                      tr('appsViewOptions'),
+                      style: textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          tr('showBadges'),
+                          style: Theme.of(context).textTheme.bodyMedium,
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            tr('showBadges'),
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              FilterChip(
-                                avatar: const Icon(
-                                  Icons.person_rounded,
-                                  size: 16,
-                                ),
-                                showCheckmark: false,
-                                label: Text(tr('showAppTypeBadge')),
-                                selected: settingsProvider.showAppTypeBadge,
-                                onSelected: (value) {
-                                  settingsProvider.showAppTypeBadge = value;
-                                  setSheetState(() {});
-                                },
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            FilterChip(
+                              avatar: const Icon(
+                                Icons.person_rounded,
+                                size: 16,
                               ),
-                              FilterChip(
-                                avatar: const Icon(
-                                  Icons.store_rounded,
-                                  size: 16,
-                                ),
-                                showCheckmark: false,
-                                label: Text(tr('showTrackedStoreBadge')),
-                                selected:
-                                    settingsProvider.showTrackedStoreBadge,
-                                onSelected: (value) {
-                                  settingsProvider.showTrackedStoreBadge =
-                                      value;
-                                  setSheetState(() {});
-                                },
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      Divider(color: colorScheme.outlineVariant),
-                      const SizedBox(height: 8),
-                      sectionLabel(tr('sortBy')),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          sortChip(
-                            label: tr('authorName'),
-                            selected:
-                                effectiveSortColumn ==
-                                SortColumnSettings.authorName,
-                            onTap: () {
-                              setEffectiveSortColumn(
-                                SortColumnSettings.authorName,
-                              );
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('nameAuthor'),
-                            selected:
-                                effectiveSortColumn ==
-                                SortColumnSettings.nameAuthor,
-                            onTap: () {
-                              setEffectiveSortColumn(
-                                SortColumnSettings.nameAuthor,
-                              );
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('asAdded'),
-                            selected:
-                                effectiveSortColumn == SortColumnSettings.added,
-                            onTap: () {
-                              setEffectiveSortColumn(SortColumnSettings.added);
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('releaseDate'),
-                            selected:
-                                effectiveSortColumn ==
-                                SortColumnSettings.releaseDate,
-                            onTap: () {
-                              setEffectiveSortColumn(
-                                SortColumnSettings.releaseDate,
-                              );
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('sortByLastUpdateCheck'),
-                            selected:
-                                effectiveSortColumn ==
-                                SortColumnSettings.lastUpdateCheck,
-                            onTap: () {
-                              setEffectiveSortColumn(
-                                SortColumnSettings.lastUpdateCheck,
-                              );
-                              setSheetState(() {});
-                            },
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      sectionLabel(tr('sortOrder')),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          sortChip(
-                            label: tr('ascending'),
-                            selected:
-                                effectiveSortOrder ==
-                                SortOrderSettings.ascending,
-                            onTap: () {
-                              setEffectiveSortOrder(
-                                SortOrderSettings.ascending,
-                              );
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('descending'),
-                            selected:
-                                effectiveSortOrder ==
-                                SortOrderSettings.descending,
-                            onTap: () {
-                              setEffectiveSortOrder(
-                                SortOrderSettings.descending,
-                              );
-                              setSheetState(() {});
-                            },
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Divider(color: colorScheme.outlineVariant),
-                      const SizedBox(height: 8),
-                      sectionLabel(tr('groupBy')),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          sortChip(
-                            label: tr('groupByNone'),
-                            selected: effectiveGroupBy == AppsListGroupBy.none,
-                            onTap: () {
-                              setEffectiveGroupBy(AppsListGroupBy.none);
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('category'),
-                            selected:
-                                effectiveGroupBy == AppsListGroupBy.category,
-                            onTap: () {
-                              setEffectiveGroupBy(AppsListGroupBy.category);
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('groupByTrackedSource'),
-                            selected:
-                                effectiveGroupBy == AppsListGroupBy.source,
-                            onTap: () {
-                              setEffectiveGroupBy(AppsListGroupBy.source);
-                              setSheetState(() {});
-                            },
-                          ),
-                          sortChip(
-                            label: tr('groupByAppType'),
-                            selected:
-                                effectiveGroupBy == AppsListGroupBy.appType,
-                            onTap: () {
-                              setEffectiveGroupBy(AppsListGroupBy.appType);
-                              setSheetState(() {});
-                            },
-                          ),
-                        ],
-                      ),
-                      if (effectiveGroupBy != AppsListGroupBy.none)
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(tr('groupNonInstalledSeparately')),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              HelpHintIcon(
-                                message: tr(
-                                  'groupNonInstalledSeparatelyDescription',
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                              Switch(
-                                value: effectiveGroupNonInstalledSeparately,
-                                onChanged: (value) {
-                                  setEffectiveGroupNonInstalledSeparately(
-                                    value,
-                                  );
-                                  setSheetState(() {});
-                                },
-                              ),
-                            ],
-                          ),
+                              showCheckmark: false,
+                              label: Text(tr('showAppTypeBadge')),
+                              selected: settingsProvider.showAppTypeBadge,
+                              onSelected: (value) {
+                                settingsProvider.showAppTypeBadge = value;
+                                setSheetState(() {});
+                              },
+                            ),
+                            FilterChip(
+                              avatar: const Icon(Icons.store_rounded, size: 16),
+                              showCheckmark: false,
+                              label: Text(tr('showTrackedStoreBadge')),
+                              selected: settingsProvider.showTrackedStoreBadge,
+                              onSelected: (value) {
+                                settingsProvider.showTrackedStoreBadge = value;
+                                setSheetState(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    Divider(color: colorScheme.outlineVariant),
+                    const SizedBox(height: 8),
+                    sectionLabel(tr('sortBy')),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        sortChip(
+                          label: tr('authorName'),
+                          selected:
+                              effectiveSortColumn ==
+                              SortColumnSettings.authorName,
                           onTap: () {
-                            setEffectiveGroupNonInstalledSeparately(
-                              !effectiveGroupNonInstalledSeparately,
+                            setEffectiveSortColumn(
+                              SortColumnSettings.authorName,
                             );
                             setSheetState(() {});
                           },
                         ),
+                        sortChip(
+                          label: tr('nameAuthor'),
+                          selected:
+                              effectiveSortColumn ==
+                              SortColumnSettings.nameAuthor,
+                          onTap: () {
+                            setEffectiveSortColumn(
+                              SortColumnSettings.nameAuthor,
+                            );
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('asAdded'),
+                          selected:
+                              effectiveSortColumn == SortColumnSettings.added,
+                          onTap: () {
+                            setEffectiveSortColumn(SortColumnSettings.added);
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('releaseDate'),
+                          selected:
+                              effectiveSortColumn ==
+                              SortColumnSettings.releaseDate,
+                          onTap: () {
+                            setEffectiveSortColumn(
+                              SortColumnSettings.releaseDate,
+                            );
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('sortByLastUpdateCheck'),
+                          selected:
+                              effectiveSortColumn ==
+                              SortColumnSettings.lastUpdateCheck,
+                          onTap: () {
+                            setEffectiveSortColumn(
+                              SortColumnSettings.lastUpdateCheck,
+                            );
+                            setSheetState(() {});
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    sectionLabel(tr('sortOrder')),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        sortChip(
+                          label: tr('ascending'),
+                          selected:
+                              effectiveSortOrder == SortOrderSettings.ascending,
+                          onTap: () {
+                            setEffectiveSortOrder(SortOrderSettings.ascending);
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('descending'),
+                          selected:
+                              effectiveSortOrder ==
+                              SortOrderSettings.descending,
+                          onTap: () {
+                            setEffectiveSortOrder(SortOrderSettings.descending);
+                            setSheetState(() {});
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Divider(color: colorScheme.outlineVariant),
+                    const SizedBox(height: 8),
+                    sectionLabel(tr('groupBy')),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        sortChip(
+                          label: tr('groupByNone'),
+                          selected: effectiveGroupBy == AppsListGroupBy.none,
+                          onTap: () {
+                            setEffectiveGroupBy(AppsListGroupBy.none);
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('category'),
+                          selected:
+                              effectiveGroupBy == AppsListGroupBy.category,
+                          onTap: () {
+                            setEffectiveGroupBy(AppsListGroupBy.category);
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('groupByTrackedSource'),
+                          selected: effectiveGroupBy == AppsListGroupBy.source,
+                          onTap: () {
+                            setEffectiveGroupBy(AppsListGroupBy.source);
+                            setSheetState(() {});
+                          },
+                        ),
+                        sortChip(
+                          label: tr('groupByAppType'),
+                          selected: effectiveGroupBy == AppsListGroupBy.appType,
+                          onTap: () {
+                            setEffectiveGroupBy(AppsListGroupBy.appType);
+                            setSheetState(() {});
+                          },
+                        ),
+                      ],
+                    ),
+                    if (effectiveGroupBy != AppsListGroupBy.none)
                       ListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: Text(tr('groupUpdatesSeparately')),
+                        title: Text(tr('groupNonInstalledSeparately')),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             HelpHintIcon(
-                              message: tr('groupUpdatesSeparatelyDescription'),
+                              message: tr(
+                                'groupNonInstalledSeparatelyDescription',
+                              ),
                               padding: EdgeInsets.zero,
                             ),
                             Switch(
-                              value: effectiveGroupUpdatesSeparately,
+                              value: effectiveGroupNonInstalledSeparately,
                               onChanged: (value) {
-                                setEffectiveGroupUpdatesSeparately(value);
+                                setEffectiveGroupNonInstalledSeparately(value);
                                 setSheetState(() {});
                               },
                             ),
                           ],
                         ),
                         onTap: () {
-                          setEffectiveGroupUpdatesSeparately(
-                            !effectiveGroupUpdatesSeparately,
+                          setEffectiveGroupNonInstalledSeparately(
+                            !effectiveGroupNonInstalledSeparately,
                           );
                           setSheetState(() {});
                         },
                       ),
-                      Divider(color: colorScheme.outlineVariant),
-                      const SizedBox(height: 4),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(tr('pinUpdates')),
-                        value: effectivePinUpdates,
-                        onChanged: (value) {
-                          setEffectivePinUpdates(value);
-                          setSheetState(() {});
-                        },
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(tr('moveNonInstalledAppsToBottom')),
-                        value: effectiveBuryNonInstalled,
-                        onChanged: (value) {
-                          setEffectiveBuryNonInstalled(value);
-                          setSheetState(() {});
-                        },
-                      ),
-                      // Main-tab-only toggle: shows / hides foldered apps on
-                      // this view AND scopes pull-to-refresh accordingly.
-                      // Hidden when this sheet is opened from inside a folder
-                      // view because the toggle has no meaning there - a
-                      // folder always shows its own apps.
-                      if (folderId == null)
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(tr('showFolderedAppsOnMainPage')),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              HelpHintIcon(
-                                message: tr(
-                                  'showFolderedAppsOnMainPageTooltip',
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                              Switch(
-                                value:
-                                    settingsProvider.showFolderedAppsOnMainPage,
-                                onChanged: (value) {
-                                  settingsProvider.showFolderedAppsOnMainPage =
-                                      value;
-                                  setSheetState(() {});
-                                },
-                              ),
-                            ],
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(tr('groupUpdatesSeparately')),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          HelpHintIcon(
+                            message: tr('groupUpdatesSeparatelyDescription'),
+                            padding: EdgeInsets.zero,
                           ),
-                          onTap: () {
-                            settingsProvider.showFolderedAppsOnMainPage =
-                                !settingsProvider.showFolderedAppsOnMainPage;
-                            setSheetState(() {});
-                          },
+                          Switch(
+                            value: effectiveGroupUpdatesSeparately,
+                            onChanged: (value) {
+                              setEffectiveGroupUpdatesSeparately(value);
+                              setSheetState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                      onTap: () {
+                        setEffectiveGroupUpdatesSeparately(
+                          !effectiveGroupUpdatesSeparately,
+                        );
+                        setSheetState(() {});
+                      },
+                    ),
+                    Divider(color: colorScheme.outlineVariant),
+                    const SizedBox(height: 4),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(tr('pinUpdates')),
+                      value: effectivePinUpdates,
+                      onChanged: (value) {
+                        setEffectivePinUpdates(value);
+                        setSheetState(() {});
+                      },
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(tr('moveNonInstalledAppsToBottom')),
+                      value: effectiveBuryNonInstalled,
+                      onChanged: (value) {
+                        setEffectiveBuryNonInstalled(value);
+                        setSheetState(() {});
+                      },
+                    ),
+                    // Main-tab-only toggle: shows / hides foldered apps on
+                    // this view AND scopes pull-to-refresh accordingly.
+                    // Hidden when this sheet is opened from inside a folder
+                    // view because the toggle has no meaning there - a
+                    // folder always shows its own apps.
+                    if (folderId == null)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(tr('showFolderedAppsOnMainPage')),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            HelpHintIcon(
+                              message: tr('showFolderedAppsOnMainPageTooltip'),
+                              padding: EdgeInsets.zero,
+                            ),
+                            Switch(
+                              value:
+                                  settingsProvider.showFolderedAppsOnMainPage,
+                              onChanged: (value) {
+                                settingsProvider.showFolderedAppsOnMainPage =
+                                    value;
+                                setSheetState(() {});
+                              },
+                            ),
+                          ],
                         ),
-                    ],
-                  ),
+                        onTap: () {
+                          settingsProvider.showFolderedAppsOnMainPage =
+                              !settingsProvider.showFolderedAppsOnMainPage;
+                          setSheetState(() {});
+                        },
+                      ),
+                  ],
                 ),
               ),
             ),
