@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
@@ -55,6 +56,38 @@ void _logApkMirrorSizeDebugFromAppPage(String message) {
       ).add('OBTAINX-APK-SIZE-DEBUG AppPage: $message', level: LogLevels.debug);
     } catch (_) {}
   }());
+}
+
+class _MeasureSize extends StatefulWidget {
+  const _MeasureSize({required this.child, required this.onChange});
+
+  final Widget child;
+  final ValueChanged<Size> onChange;
+
+  @override
+  State<_MeasureSize> createState() => _MeasureSizeState();
+}
+
+class _MeasureSizeState extends State<_MeasureSize> {
+  final GlobalKey _measureKey = GlobalKey();
+  Size? _lastReportedSize;
+
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reportSizeIfChanged();
+    });
+    return SizedBox(key: _measureKey, child: widget.child);
+  }
+
+  void _reportSizeIfChanged() {
+    final BuildContext? measuredContext = _measureKey.currentContext;
+    if (measuredContext == null) return;
+    final Size? currentSize = measuredContext.size;
+    if (currentSize == null || currentSize == _lastReportedSize) return;
+    _lastReportedSize = currentSize;
+    widget.onChange(currentSize);
+  }
 }
 
 Color _labelColorOnCategoryFill(Color categoryFill) {
@@ -249,6 +282,8 @@ class _AppPageState extends State<AppPage> {
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
   int _updateCheckRunToken = 0;
+  double _bottomActionBarHeight = 0;
+  double _editModeFloatingActionButtonsHeight = 0;
   Timer? _detailPageAutoCheckDelayTimer;
   String? _pendingDetailPageAutoCheckAppId;
   AppsProvider? _pendingDetailPageAutoCheckAppsProvider;
@@ -335,6 +370,28 @@ class _AppPageState extends State<AppPage> {
     }
     _detailPageAutoCheckRunning = true;
     unawaited(_runScheduledDetailPageAutoCheck(refreshAppId, appsProvider));
+  }
+
+  double get _editModeBottomSpacerHeight {
+    final double measuredHeight = math.max(
+      _bottomActionBarHeight,
+      _editModeFloatingActionButtonsHeight,
+    );
+    return measuredHeight > 0 ? measuredHeight : 104;
+  }
+
+  void _handleBottomActionBarSizeChanged(Size size) {
+    if (!mounted || _bottomActionBarHeight == size.height) return;
+    setState(() {
+      _bottomActionBarHeight = size.height;
+    });
+  }
+
+  void _handleEditModeFloatingActionButtonsSizeChanged(Size size) {
+    if (!mounted || _editModeFloatingActionButtonsHeight == size.height) return;
+    setState(() {
+      _editModeFloatingActionButtonsHeight = size.height;
+    });
   }
 
   @override
@@ -530,32 +587,35 @@ class _AppPageState extends State<AppPage> {
     ThemeData pageThemeForDialogs,
   ) {
     if (!_editMode || appData == null) return null;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        FloatingActionButton.small(
-          heroTag: 'app_page_edit_cancel',
-          tooltip: tr('cancel'),
-          onPressed: updating
-              ? null
-              : () => _onCancelEditPressed(
-                  themeContext,
-                  appData,
-                  pageThemeForDialogs,
-                ),
-          child: const Icon(Icons.close),
-        ),
-        const SizedBox(height: 12),
-        FloatingActionButton(
-          heroTag: 'app_page_edit_save',
-          tooltip: tr('save'),
-          onPressed: appData.downloadProgress != null || updating
-              ? null
-              : () => _saveEdit(appData, appsProvider),
-          child: const Icon(Icons.check),
-        ),
-      ],
+    return _MeasureSize(
+      onChange: _handleEditModeFloatingActionButtonsSizeChanged,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'app_page_edit_cancel',
+            tooltip: tr('cancel'),
+            onPressed: updating
+                ? null
+                : () => _onCancelEditPressed(
+                    themeContext,
+                    appData,
+                    pageThemeForDialogs,
+                  ),
+            child: const Icon(Icons.close),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            heroTag: 'app_page_edit_save',
+            tooltip: tr('save'),
+            onPressed: appData.downloadProgress != null || updating
+                ? null
+                : () => _saveEdit(appData, appsProvider),
+            child: const Icon(Icons.check),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3715,7 +3775,10 @@ class _AppPageState extends State<AppPage> {
                                         ],
                                       ),
                                     ),
-                                    if (_editMode) const SizedBox(height: 104),
+                                    if (_editMode)
+                                      SizedBox(
+                                        height: _editModeBottomSpacerHeight,
+                                      ),
                                   ],
                                 ),
                               ),
@@ -3730,7 +3793,10 @@ class _AppPageState extends State<AppPage> {
                   }
                 },
               ),
-              bottomNavigationBar: getBottomActionBar(themedPageContext),
+              bottomNavigationBar: _MeasureSize(
+                onChange: _handleBottomActionBarSizeChanged,
+                child: getBottomActionBar(themedPageContext),
+              ),
             ),
           );
         },
