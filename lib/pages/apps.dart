@@ -479,11 +479,25 @@ class _AppListItem extends StatelessWidget {
     ];
     if (stops.length == 2) stops[0] = 0.9999;
     final bool pinned = app.app.pinned;
-    final Color pinnedRowColor = Color.lerp(
-      m3eGroupedListRowFill(colorScheme),
-      colorScheme.primaryContainer,
-      colorScheme.brightness == Brightness.light ? 0.58 : 0.42,
-    )!;
+    // Pinned rows get a tonal fill (constant, persistent — pinning is a
+    // set-and-forget intent). Selected rows get an outline + a subtle
+    // 1dp lift + a checkmark on the leading icon (transient, action-mode
+    // affordance). The two states are on completely orthogonal axes —
+    // fill vs. stroke vs. icon-replacement — so a row that is BOTH
+    // pinned and selected reads as "filled, framed, and check-marked"
+    // with no visual collision.
+    //
+    // Alpha tuned per brightness: M3 secondaryContainer-ish saturation in
+    // light mode is naturally stronger than dark, so dark gets a touch
+    // more alpha to match perceptual contrast.
+    final Color rowFillColor = pinned
+        ? Color.alphaBlend(
+            colorScheme.primary.withValues(
+              alpha: colorScheme.brightness == Brightness.light ? 0.10 : 0.14,
+            ),
+            m3eGroupedListRowFill(colorScheme),
+          )
+        : m3eGroupedListRowFill(colorScheme);
 
     // App-type badge at bottom-right of icon — icon only, no background.
     final appType = classifyAppType(app);
@@ -507,14 +521,38 @@ class _AppListItem extends StatelessWidget {
           )
         : iconWidget;
 
-    // Leading = [icon+type-badge] + [store column] inside ListTile.leading.
+    // When the row is selected, the app icon is replaced with a primary
+    // circle + checkmark — Material's standard "selected list item" lead
+    // affordance, the same vocabulary M3 uses for selected contacts.
+    // This is the third orthogonal selection cue (alongside the row
+    // outline and 1dp lift) and is what makes selection unmistakable in
+    // multi-select mode without leaning on a fill that would collide
+    // with the pinned-row tonal fill.
+    final Widget leadingIconForSlot = isSelected
+        ? Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: colorScheme.primary,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+              Icons.check_rounded,
+              color: colorScheme.onPrimary,
+              size: 24,
+            ),
+          )
+        : iconWithBadge;
+
+    // Leading = [icon+type-badge or check] + [store column] inside ListTile.leading.
     // Store column always rendered (keeps title position stable); badge shown
     // only when showTrackedStoreBadge is true and sourceHost is known.
     final Widget leadingWidget = Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        iconWithBadge,
+        leadingIconForSlot,
         const SizedBox(width: 6),
         SizedBox(
           width: 20,
@@ -532,14 +570,33 @@ class _AppListItem extends StatelessWidget {
 
     final Widget tile = Container(
       decoration: BoxDecoration(
-        color: pinned ? pinnedRowColor : null,
-        border: pinned
-            ? BorderDirectional(
-                start: BorderSide(
-                  color: colorScheme.primary.withValues(alpha: 0.82),
-                  width: 4,
-                ),
+        color: rowFillColor,
+        // Match the per-row corner radius the parent grouped-list ClipRRect
+        // applies. Without this, the outline below paints to the
+        // rectangular bounds and gets clipped at the rounded edge.
+        borderRadius: itemBorderRadius,
+        // Outline-only treatment for SELECTED rows. [Border.all] paints
+        // inside the box bounds so the outline doesn't push neighbours
+        // around. ~0.7 alpha so the line reads as "framed" without
+        // looking as loud as a button. Pinned uses fill, so the two
+        // signals never collide — a selected pinned card cleanly shows
+        // tonal fill (pinned) plus outline (selected).
+        border: isSelected
+            ? Border.all(
+                color: colorScheme.primary.withValues(alpha: 0.7),
+                width: 1.5,
               )
+            : null,
+        // Subtle 1dp lift on selected rows. M3 elevation as a "this row
+        // is currently the action target" cue.
+        boxShadow: isSelected
+            ? [
+                BoxShadow(
+                  color: colorScheme.shadow.withValues(alpha: 0.06),
+                  offset: const Offset(0, 1),
+                  blurRadius: 2,
+                ),
+              ]
             : null,
         gradient: LinearGradient(
           stops: stops,
@@ -549,15 +606,20 @@ class _AppListItem extends StatelessWidget {
             ...app.app.categories.map(
               (e) => Color(categoryColors[e] ?? transparent).withAlpha(255),
             ),
+            // Always transparent now (no separate pinned fill); category
+            // strip simply fades into the row's normal background.
             Color(transparent),
           ],
         ),
       ),
       child: ListTile(
         tileColor: Colors.transparent,
-        selectedTileColor: colorScheme.primary.withValues(
-          alpha: pinned ? 0.24 : 0.1,
-        ),
+        // Selection no longer uses [selectedTileColor]; the visual
+        // treatment lives in the parent [Container] (outline + 1dp
+        // shadow) and on the leading icon (replaced with a checkmark
+        // when selected). Keeping the ListTile fill transparent on
+        // both states preserves the pinned-fill underneath.
+        selectedTileColor: Colors.transparent,
         selected: isSelected,
         onLongPress: onLongPress,
         leading: leadingWidget,
@@ -614,7 +676,7 @@ class _AppListItem extends StatelessWidget {
     if (itemBorderRadius != null) {
       return RepaintBoundary(
         child: Material(
-          color: m3eGroupedListRowFill(colorScheme),
+          color: rowFillColor,
           shape: RoundedRectangleBorder(borderRadius: itemBorderRadius!),
           clipBehavior: Clip.antiAlias,
           child: tile,
