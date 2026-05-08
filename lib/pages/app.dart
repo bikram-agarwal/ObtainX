@@ -919,7 +919,9 @@ class _AppPageState extends State<AppPage> {
               ),
               if (showResetIconButton)
                 OutlinedButton(
-                  onPressed: () => _onResetEditIconPressed(appsProvider),
+                  onPressed: updating
+                      ? null
+                      : () => _onResetEditIconPressed(appsProvider),
                   child: Text(tr('resetAppIcon')),
                 ),
             ],
@@ -3736,9 +3738,11 @@ class _AppPageState extends State<AppPage> {
                                           color: pageThemeForPage
                                               .colorScheme
                                               .primary,
-                                          onPressed: () => Navigator.of(
-                                            themedPageContext,
-                                          ).maybePop(),
+                                          onPressed: updating
+                                              ? null
+                                              : () => Navigator.of(
+                                                  themedPageContext,
+                                                ).maybePop(),
                                           tooltip: MaterialLocalizations.of(
                                             themedPageContext,
                                           ).backButtonTooltip,
