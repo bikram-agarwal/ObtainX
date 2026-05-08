@@ -639,7 +639,10 @@ class _ImportExportPageState extends State<ImportExportPage> {
             key: const PageStorageKey<String>('import-export-tab-scroll'),
             cacheExtent: 1600,
             slivers: <Widget>[
-              CustomAppBar(title: tr('importExport')),
+              CustomAppBar(
+                title: tr('importExport'),
+                matchGradientBackground: settingsProvider.useGradientBackground,
+              ),
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(
                   16,
@@ -948,7 +951,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Expanded(child: batchImportCells[rowStart]),
-                                    const SizedBox(width: importPageBatchCellGap),
+                                    const SizedBox(
+                                      width: importPageBatchCellGap,
+                                    ),
                                     Expanded(
                                       child:
                                           rowStart + 1 < batchImportCells.length

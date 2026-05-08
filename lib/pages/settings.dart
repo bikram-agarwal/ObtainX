@@ -583,6 +583,7 @@ class _SettingsPageState extends State<SettingsPage> {
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('settings'),
+                matchGradientBackground: settingsProvider.useGradientBackground,
                 actions: [
                   IconButton(
                     tooltip: allSettingsSectionsExpanded

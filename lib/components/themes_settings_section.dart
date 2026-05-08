@@ -127,11 +127,38 @@ List<Widget> buildThemesSettingsCardItems(
       ),
     ),
     ...buildThemeAccentSettingsCardItems(androidInfoFuture),
-    SwitchListTile(
+    ListTile(
       title: Text(tr('settingsGradientBackground')),
-      value: settings.useGradientBackground,
-      onChanged: (bool value) {
-        settings.useGradientBackground = value;
+      trailing: IgnorePointer(
+        ignoring: settings.useBlackTheme,
+        child: Switch(
+          value: settings.useBlackTheme
+              ? false
+              : settings.useGradientBackground,
+          onChanged: settings.useBlackTheme
+              ? null
+              : (bool value) {
+                  settings.useGradientBackground = value;
+                },
+        ),
+      ),
+      onTap: () {
+        if (settings.useBlackTheme) {
+          const String snackbarMessageKey =
+              'settingsGradientDisabledInBlackTheme';
+          final String snackbarMessage =
+              trExists(snackbarMessageKey, context: context)
+              ? tr(snackbarMessageKey)
+              : 'Can not enable in black theme';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(snackbarMessage),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+          return;
+        }
+        settings.useGradientBackground = !settings.useGradientBackground;
       },
     ),
     ListTile(

@@ -14,6 +14,7 @@ class CustomAppBar extends StatefulWidget {
     this.bottom,
     this.searchWidget,
     this.titleStyle,
+    this.matchGradientBackground = false,
   });
 
   final String title;
@@ -32,6 +33,9 @@ class CustomAppBar extends StatefulWidget {
 
   /// Optional style override for the compact layout title.
   final TextStyle? titleStyle;
+
+  /// Whether the non-blurred app bar should sample the page gradient behind it.
+  final bool matchGradientBackground;
 
   @override
   State<CustomAppBar> createState() => _CustomAppBarState();
@@ -69,15 +73,54 @@ class _CustomAppBarState extends State<CustomAppBar> {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [
-                      overlayColor,
-                      overlayColor.withValues(alpha: 0),
-                    ],
+                    colors: [overlayColor, overlayColor.withValues(alpha: 0)],
                   ),
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGradientBackground(
+    BuildContext context,
+    ColorScheme colorScheme,
+  ) {
+    final double pageHeight = MediaQuery.sizeOf(context).height;
+
+    return IgnorePointer(
+      child: ClipRect(
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            return OverflowBox(
+              alignment: Alignment.topCenter,
+              minWidth: constraints.maxWidth,
+              maxWidth: constraints.maxWidth,
+              minHeight: pageHeight,
+              maxHeight: pageHeight,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: const [0, 0.38, 0.72, 1],
+                    colors: [
+                      colorScheme.schemePageGradientTopColor,
+                      colorScheme.schemePageGradientMidColor,
+                      colorScheme.surface,
+                      colorScheme.surface,
+                    ],
+                  ),
+                ),
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: pageHeight,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -94,22 +137,23 @@ class _CustomAppBarState extends State<CustomAppBar> {
             .copyWith(color: colorScheme.onSurface);
 
     // [Selector] instead of [context.watch] so that the persistent app
-    // bar — which sits on every page — only rebuilds when this single
-    // setting flips, not on every unrelated SettingsProvider notify
+    // bar - which sits on every page - only rebuilds when these specific
+    // settings flip, not on every unrelated SettingsProvider notify
     // (categories, swipe actions, sort changes, etc.).
     final bool blurEnabled = context.select<SettingsProvider, bool>(
-      (s) => s.progressiveBlurEnabled,
+      (settings) => settings.progressiveBlurEnabled,
     );
-
-    final Color solidHeaderColor = colorScheme.surface;
-
-    Widget? blurWidget;
+    Widget? headerBackground;
     if (blurEnabled) {
-      blurWidget = _buildBlur(colorScheme.schemeProgressiveBlurOverlayTint);
+      headerBackground = _buildBlur(
+        colorScheme.schemeProgressiveBlurOverlayTint,
+      );
+    } else if (widget.matchGradientBackground) {
+      headerBackground = _buildGradientBackground(context, colorScheme);
     }
 
     if (widget.searchWidget != null) {
-      // Compact layout — blur passed straight as flexibleSpace so the
+      // Compact layout - draw the header background as flexibleSpace so the
       // toolbar title/actions render on top of it, not behind it.
       return SliverAppBar(
         pinned: true,
@@ -121,14 +165,16 @@ class _CustomAppBarState extends State<CustomAppBar> {
         elevation: 0,
         scrolledUnderElevation: 0,
         shadowColor: Colors.transparent,
-        backgroundColor:
-            blurEnabled ? Colors.transparent : solidHeaderColor,
-        surfaceTintColor:
-            blurEnabled ? Colors.transparent : colorScheme.surfaceTint,
+        backgroundColor: headerBackground != null
+            ? Colors.transparent
+            : colorScheme.surface,
+        surfaceTintColor: headerBackground != null
+            ? Colors.transparent
+            : colorScheme.surfaceTint,
         forceMaterialTransparency: blurEnabled,
         iconTheme: IconThemeData(color: colorScheme.onSurface),
         actionsIconTheme: IconThemeData(color: colorScheme.onSurface),
-        flexibleSpace: blurWidget,
+        flexibleSpace: headerBackground,
         title: Padding(
           padding: EdgeInsets.only(
             left: widget.leading != null ? 0 : 20,
@@ -170,8 +216,8 @@ class _CustomAppBarState extends State<CustomAppBar> {
       );
     }
 
-    // Default (large expanding title) — blur is the bottom layer of a Stack
-    // used as flexibleSpace. FlexibleSpaceBar sits on top and handles title
+    // Default (large expanding title) - header background is the bottom layer
+    // of a Stack used as flexibleSpace. FlexibleSpaceBar sits on top and handles title
     // animation. This avoids FlexibleSpaceBar.background's fade-out, which
     // would make the blur invisible as soon as the user starts scrolling.
     //
@@ -179,23 +225,23 @@ class _CustomAppBarState extends State<CustomAppBar> {
     // leading slot so it does not draw under the back button.
     final EdgeInsetsDirectional expandingTitlePadding =
         EdgeInsetsDirectional.only(
-      start: widget.leading != null ? kToolbarHeight + 8 : 20,
-      end: 20,
-      top: 16,
-      bottom: 16,
-    );
-    final Widget flexibleSpace = blurWidget != null
+          start: widget.leading != null ? kToolbarHeight + 8 : 20,
+          end: 20,
+          top: 16,
+          bottom: 16,
+        );
+    final Widget flexibleSpace = headerBackground != null
         ? Stack(
             fit: StackFit.expand,
             children: [
-              blurWidget,
+              headerBackground,
               FlexibleSpaceBar(
                 titlePadding: expandingTitlePadding,
                 title: Text(
                   widget.title,
                   style: Theme.of(context).textTheme.titleLarge!.copyWith(
-                        color: colorScheme.onSurface,
-                      ),
+                    color: colorScheme.onSurface,
+                  ),
                 ),
               ),
             ],
@@ -204,9 +250,9 @@ class _CustomAppBarState extends State<CustomAppBar> {
             titlePadding: expandingTitlePadding,
             title: Text(
               widget.title,
-              style: Theme.of(context).textTheme.titleLarge!.copyWith(
-                    color: colorScheme.onSurface,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge!.copyWith(color: colorScheme.onSurface),
             ),
           );
 
@@ -221,10 +267,12 @@ class _CustomAppBarState extends State<CustomAppBar> {
       elevation: 0,
       scrolledUnderElevation: 0,
       shadowColor: Colors.transparent,
-      backgroundColor:
-          blurEnabled ? Colors.transparent : solidHeaderColor,
-      surfaceTintColor:
-          blurEnabled ? Colors.transparent : colorScheme.surfaceTint,
+      backgroundColor: headerBackground != null
+          ? Colors.transparent
+          : colorScheme.surface,
+      surfaceTintColor: headerBackground != null
+          ? Colors.transparent
+          : colorScheme.surfaceTint,
       forceMaterialTransparency: blurEnabled,
       iconTheme: IconThemeData(color: colorScheme.onSurface),
       actionsIconTheme: IconThemeData(color: colorScheme.onSurface),

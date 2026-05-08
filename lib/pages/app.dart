@@ -15,6 +15,7 @@ import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/apps.dart';
@@ -1702,16 +1703,19 @@ class _AppPageState extends State<AppPage> {
     final ThemeData parentThemeForPage = Theme.of(context);
     final bool applyIconDerivedPageTheming =
         useIconPageColors && _iconDerivedColorScheme != null;
-    final ColorScheme pageColorSchemeForPage = !applyIconDerivedPageTheming
+    final ColorScheme themedPageColorScheme = !applyIconDerivedPageTheming
         ? parentThemeForPage.colorScheme
         : darkenIconPageSchemeInDarkMode(
             appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
           );
+    final ColorScheme pageColorSchemeForPage = settingsProvider.useBlackTheme
+        ? themedPageColorScheme.withPureBlackBackgrounds()
+        : themedPageColorScheme;
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
     // ThemeData.copyWith() is expensive — cache it and recompute only when the
     // icon scheme or parent brightness actually changes.
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}';
+        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${settingsProvider.useBlackTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(

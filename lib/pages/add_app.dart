@@ -1259,13 +1259,19 @@ class AddAppPageState extends State<AddAppPage> {
             key: const PageStorageKey<String>('add-app-tab-scroll'),
             cacheExtent: 1600,
             slivers: <Widget>[
-              CustomAppBar(title: tr('addApp')),
+              CustomAppBar(
+                title: tr('addApp'),
+                matchGradientBackground: settingsProvider.useGradientBackground,
+              ),
               // Mode selector pinned just below the app bar
               SliverPersistentHeader(
                 pinned: false,
                 delegate: _PaddedWidgetDelegate(
                   child: buildModeSelector(),
                   height: 60,
+                  backgroundColor: settingsProvider.useGradientBackground
+                      ? Colors.transparent
+                      : addScheme.surface,
                 ),
               ),
               SliverToBoxAdapter(
@@ -1355,8 +1361,13 @@ class AddAppPageState extends State<AddAppPage> {
 class _PaddedWidgetDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
   final double height;
+  final Color backgroundColor;
 
-  const _PaddedWidgetDelegate({required this.child, required this.height});
+  const _PaddedWidgetDelegate({
+    required this.child,
+    required this.height,
+    required this.backgroundColor,
+  });
 
   @override
   double get minExtent => height;
@@ -1370,10 +1381,12 @@ class _PaddedWidgetDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return Material(color: Theme.of(context).colorScheme.surface, child: child);
+    return Material(color: backgroundColor, child: child);
   }
 
   @override
   bool shouldRebuild(_PaddedWidgetDelegate oldDelegate) =>
-      oldDelegate.child != child || oldDelegate.height != height;
+      oldDelegate.child != child ||
+      oldDelegate.height != height ||
+      oldDelegate.backgroundColor != backgroundColor;
 }

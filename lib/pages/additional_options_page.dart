@@ -10,6 +10,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 
 import 'page_route_slide_up.dart';
@@ -350,8 +351,11 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
 
   @override
   Widget build(BuildContext context) {
-    context.select<SettingsProvider, bool>(
-      (SettingsProvider settings) => settings.matchAppPageToIconColors,
+    context.select<SettingsProvider, int>(
+      (SettingsProvider settings) => Object.hash(
+        settings.matchAppPageToIconColors,
+        settings.useBlackTheme,
+      ),
     );
     context.select<AppsProvider, int>((AppsProvider provider) {
       final AppInMemory? inMemory = provider.apps[widget.appId];
@@ -409,15 +413,18 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
 
     final bool applyIconDerivedPageTheming =
         useIconPageColors && _iconDerivedColorScheme != null;
-    final ColorScheme pageColorSchemeForPage = !applyIconDerivedPageTheming
+    final ColorScheme themedPageColorScheme = !applyIconDerivedPageTheming
         ? parentTheme.colorScheme
         : darkenIconPageSchemeInDarkMode(
             appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
           );
+    final ColorScheme pageColorSchemeForPage = settingsProvider.useBlackTheme
+        ? themedPageColorScheme.withPureBlackBackgrounds()
+        : themedPageColorScheme;
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
 
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}';
+        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${settingsProvider.useBlackTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(

@@ -488,6 +488,7 @@
     "settingsThemesSection": "Themes",
     "settingsMaterialYouHint": "Material You needs Android 12 or newer. On this device, accent falls back to the default seed.",
     "settingsGradientBackground": "Gradient background",
+    "settingsGradientDisabledInBlackTheme": "Can not enable in black theme",
     "settingsProgressiveBlur": "Progressive blur",
     "settingsProgressiveBlurSubtitle": "May reduce frame rate on older devices.",
     "settingsReduceVisualEffects": "Reduce visual effects",

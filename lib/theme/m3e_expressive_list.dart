@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 
 /// Material 3 expressive grouped-list radii and gaps (matches apps tab list).
 const double kM3eOuterRadius = 14.0;
@@ -67,10 +68,19 @@ M3eListGroupPosition m3eFlatStackSlotPosition(int index, int itemCount) {
   return M3eListGroupPosition.middle;
 }
 
-Color m3eGroupedListRowFill(ColorScheme scheme) =>
-    Color.lerp(scheme.surfaceContainer, scheme.primary, 0.08)!;
+Color m3eGroupedListRowFill(ColorScheme scheme) {
+  if (scheme.usesPureBlackBackgrounds) return Colors.black;
+  return Color.lerp(scheme.surfaceContainer, scheme.primary, 0.08)!;
+}
 
 Color m3eGroupedListBackdropFill(ColorScheme scheme) => scheme.surface;
+
+BorderSide m3ePureBlackOutlineSide(ColorScheme scheme, {double alpha = 0.18}) {
+  if (!scheme.usesPureBlackBackgrounds) {
+    return BorderSide.none;
+  }
+  return BorderSide(color: scheme.onSurface.withValues(alpha: alpha));
+}
 
 /// Tighter [DropdownMenu] anchor field (language, backup scope, etc.).
 ThemeData m3eCompactDropdownTheme(ThemeData base) {
@@ -91,7 +101,7 @@ Widget m3eCompactDropdownScope({
   return Theme(data: m3eCompactDropdownTheme(Theme.of(context)), child: child);
 }
 
-/// Elevated group card matching apps tab [Material] (no outline border).
+/// Elevated group card matching apps tab [Material].
 Widget m3eExpressiveSettingsCard({
   required BuildContext context,
   required ColorScheme colorScheme,
@@ -99,11 +109,18 @@ Widget m3eExpressiveSettingsCard({
   double itemGap = kM3eItemGap,
 }) {
   final ThemeData theme = Theme.of(context);
+  final BorderSide blackThemeOutlineSide = m3ePureBlackOutlineSide(
+    colorScheme,
+    alpha: 0.22,
+  );
   return Material(
     elevation: 3,
     shadowColor: colorScheme.shadow.withAlpha(100),
     surfaceTintColor: colorScheme.surfaceTint,
-    borderRadius: BorderRadius.circular(kM3eGroupCardRadius),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(kM3eGroupCardRadius),
+      side: blackThemeOutlineSide,
+    ),
     color: m3eGroupedListBackdropFill(colorScheme),
     clipBehavior: Clip.antiAlias,
     child: Theme(
@@ -114,15 +131,17 @@ Widget m3eExpressiveSettingsCard({
         children: [
           for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
             if (itemIndex > 0) SizedBox(height: itemGap),
-            ClipRRect(
-              borderRadius: m3eListGroupItemRadius(
-                m3eFlatStackSlotPosition(itemIndex, items.length),
-                flatListBody: true,
+            Material(
+              color: m3eGroupedListRowFill(colorScheme),
+              shape: RoundedRectangleBorder(
+                borderRadius: m3eListGroupItemRadius(
+                  m3eFlatStackSlotPosition(itemIndex, items.length),
+                  flatListBody: true,
+                ),
+                side: blackThemeOutlineSide,
               ),
-              child: Material(
-                color: m3eGroupedListRowFill(colorScheme),
-                child: items[itemIndex],
-              ),
+              clipBehavior: Clip.antiAlias,
+              child: items[itemIndex],
             ),
           ],
         ],

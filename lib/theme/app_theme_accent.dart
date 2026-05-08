@@ -55,8 +55,7 @@ extension AppAccentColorSourceX on AppAccentColorSource {
     }
   }
 
-  bool get isSeedBased =>
-      this != AppAccentColorSource.materialYou;
+  bool get isSeedBased => this != AppAccentColorSource.materialYou;
 
   static const List<AppAccentColorSource> accentPickerOrder = [
     AppAccentColorSource.appDefault,
@@ -235,28 +234,50 @@ extension ColorSchemeBoost on ColorScheme {
   }
 }
 
+extension ColorSchemeBlackTheme on ColorScheme {
+  bool get usesPureBlackBackgrounds {
+    return surface.toARGB32() == Colors.black.toARGB32() &&
+        surfaceContainer.toARGB32() == Colors.black.toARGB32() &&
+        surfaceContainerHighest.toARGB32() == Colors.black.toARGB32();
+  }
+
+  ColorScheme withPureBlackBackgrounds() {
+    const Color blackBackground = Colors.black;
+    return copyWith(
+      surface: blackBackground,
+      surfaceDim: blackBackground,
+      surfaceBright: blackBackground,
+      surfaceContainerLowest: blackBackground,
+      surfaceContainerLow: blackBackground,
+      surfaceContainer: blackBackground,
+      surfaceContainerHigh: blackBackground,
+      surfaceContainerHighest: blackBackground,
+      surfaceTint: Colors.transparent,
+      shadow: blackBackground,
+      scrim: blackBackground,
+    );
+  }
+}
+
 /// Page gradients and toolbar scrims: blend [primary] (not [primaryContainer]) at
 /// modest alpha so backgrounds keep hue without chalky pastels.
 extension ColorSchemePageScrims on ColorScheme {
   Color get schemePageGradientTopColor {
-    final double topAlpha =
-        brightness == Brightness.dark ? 0.22 : 0.16;
+    if (usesPureBlackBackgrounds) return Colors.black;
+    final double topAlpha = brightness == Brightness.dark ? 0.22 : 0.16;
     return Color.alphaBlend(primary.withValues(alpha: topAlpha), surface);
   }
 
   Color get schemePageGradientMidColor {
-    final double midAlpha =
-        brightness == Brightness.dark ? 0.12 : 0.08;
+    if (usesPureBlackBackgrounds) return Colors.black;
+    final double midAlpha = brightness == Brightness.dark ? 0.12 : 0.08;
     return Color.alphaBlend(primary.withValues(alpha: midAlpha), surface);
   }
 
   Color get schemeToolbarScrimBase {
-    final double primaryAlpha =
-        brightness == Brightness.dark ? 0.26 : 0.18;
-    return Color.alphaBlend(
-      primary.withValues(alpha: primaryAlpha),
-      surface,
-    );
+    if (usesPureBlackBackgrounds) return Colors.black;
+    final double primaryAlpha = brightness == Brightness.dark ? 0.26 : 0.18;
+    return Color.alphaBlend(primary.withValues(alpha: primaryAlpha), surface);
   }
 
   /// Translucent tint for progressive edge blur: low-alpha [surface] so chrome
@@ -267,7 +288,6 @@ extension ColorSchemePageScrims on ColorScheme {
   }
 }
 
-
 ColorScheme colorSchemeForAccentSettings({
   required Brightness brightness,
   required AppAccentColorSource accentSource,
@@ -276,19 +296,26 @@ ColorScheme colorSchemeForAccentSettings({
   required ColorScheme? darkDynamic,
   required String activeCustomSeedHex,
 }) {
-  final ColorScheme? dynamicScheme =
-      brightness == Brightness.light ? lightDynamic : darkDynamic;
+  final ColorScheme? dynamicScheme = brightness == Brightness.light
+      ? lightDynamic
+      : darkDynamic;
   final bool dynamicAvailable = dynamicScheme != null;
   if (accentSource == AppAccentColorSource.materialYou && dynamicAvailable) {
     return dynamicScheme;
   }
 
   final Color fallbackSeed = const Color(0xFF1B5EA8);
-  Color seed = accentSource.seedOrNull ??
-      colorFromNormalizedHex(normalizeCustomSeedHexOrNull(activeCustomSeedHex)) ??
+  Color seed =
+      accentSource.seedOrNull ??
+      colorFromNormalizedHex(
+        normalizeCustomSeedHexOrNull(activeCustomSeedHex),
+      ) ??
       fallbackSeed;
   if (accentSource == AppAccentColorSource.custom) {
-    seed = colorFromNormalizedHex(normalizeCustomSeedHexOrNull(activeCustomSeedHex)) ??
+    seed =
+        colorFromNormalizedHex(
+          normalizeCustomSeedHexOrNull(activeCustomSeedHex),
+        ) ??
         fallbackSeed;
   }
   if (accentSource == AppAccentColorSource.materialYou && !dynamicAvailable) {

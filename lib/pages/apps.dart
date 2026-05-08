@@ -38,6 +38,7 @@ const double _appsListGroupCardRadius = kM3eGroupCardRadius;
 /// row fill (common with Material You), nudge toward [surfaceBright] so the
 /// header still reads as its own band.
 Color _appsListGroupHeaderColor(ColorScheme scheme) {
+  if (scheme.usesPureBlackBackgrounds) return Colors.black;
   final Color rowFill = m3eGroupedListRowFill(scheme);
   Color header = Color.lerp(
     scheme.surfaceContainerHighest,
@@ -69,6 +70,13 @@ const RoundedRectangleBorder _appsExpansionTileExpandedShape =
         bottomRight: Radius.circular(kM3eInnerRadius),
       ),
     );
+
+RoundedRectangleBorder _appsExpansionGroupMaterialShape(ColorScheme scheme) {
+  return RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+    side: m3ePureBlackOutlineSide(scheme, alpha: 0.22),
+  );
+}
 
 Widget _appsGroupedExpansionListBody({
   required ColorScheme scheme,
@@ -490,7 +498,8 @@ class _AppListItem extends StatelessWidget {
     // Alpha tuned per brightness: M3 secondaryContainer-ish saturation in
     // light mode is naturally stronger than dark, so dark gets a touch
     // more alpha to match perceptual contrast.
-    final Color rowFillColor = pinned
+    final bool showBlackThemeOutline = colorScheme.usesPureBlackBackgrounds;
+    final Color rowFillColor = pinned && !showBlackThemeOutline
         ? Color.alphaBlend(
             colorScheme.primary.withValues(
               alpha: colorScheme.brightness == Brightness.light ? 0.10 : 0.14,
@@ -586,6 +595,8 @@ class _AppListItem extends StatelessWidget {
                 color: colorScheme.primary.withValues(alpha: 0.7),
                 width: 1.5,
               )
+            : showBlackThemeOutline
+            ? Border.fromBorderSide(m3ePureBlackOutlineSide(colorScheme))
             : null,
         // Subtle 1dp lift on selected rows. M3 elevation as a "this row
         // is currently the action target" cue.
@@ -2991,7 +3002,7 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
@@ -3045,7 +3056,7 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
@@ -3121,7 +3132,7 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
@@ -3176,7 +3187,7 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
@@ -4246,6 +4257,8 @@ class AppsPageState extends State<AppsPage> {
                             title: widget.onDemandOnlyList
                                 ? tr('onDemandOnlyAppsTitle')
                                 : currentFolderName ?? tr('appsString'),
+                            matchGradientBackground:
+                                settingsProvider.useGradientBackground,
                             titleStyle: _searchExpanded
                                 ? Theme.of(context).textTheme.titleSmall
                                 : null,

@@ -405,13 +405,6 @@ class _ObtainiumState extends State<Obtainium> {
             activeCustomSeedHex: settingsProvider.activeCustomSeedHex,
           );
 
-          // set the background and surface colors to pure black in the amoled theme
-          if (settingsProvider.useBlackTheme) {
-            darkColorScheme = darkColorScheme
-                .copyWith(surface: Colors.black)
-                .harmonized();
-          }
-
           // Boost surface containers toward primary — ports FilePipe's
           // boostSurfaceContainersTowardPrimary* logic that makes surfaces vivid.
           final bool useGradient = settingsProvider.useGradientBackground;
@@ -424,6 +417,9 @@ class _ObtainiumState extends State<Obtainium> {
             darkTheme: true,
             useGradient: useGradient,
           );
+          if (settingsProvider.useBlackTheme) {
+            darkColorScheme = darkColorScheme.withPureBlackBackgrounds();
+          }
 
           if (settingsProvider.useSystemFont) NativeFeatures.loadSystemFont();
 
@@ -466,10 +462,7 @@ class _ObtainiumState extends State<Obtainium> {
                 fontWeight: FontWeight.w500,
                 height: 1.4,
               ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 10,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               preferBelow: true,
             );
@@ -547,6 +540,9 @@ class _ObtainiumState extends State<Obtainium> {
             theme: ThemeData(
               useMaterial3: true,
               colorScheme: themeColorScheme,
+              scaffoldBackgroundColor: themeColorScheme.surface,
+              canvasColor: themeColorScheme.surface,
+              cardColor: themeColorScheme.surfaceContainer,
               fontFamily: settingsProvider.useSystemFont
                   ? 'SystemFont'
                   : 'Montserrat',
@@ -568,6 +564,9 @@ class _ObtainiumState extends State<Obtainium> {
             darkTheme: ThemeData(
               useMaterial3: true,
               colorScheme: darkThemeColorScheme,
+              scaffoldBackgroundColor: darkThemeColorScheme.surface,
+              canvasColor: darkThemeColorScheme.surface,
+              cardColor: darkThemeColorScheme.surfaceContainer,
               fontFamily: settingsProvider.useSystemFont
                   ? 'SystemFont'
                   : 'Montserrat',
