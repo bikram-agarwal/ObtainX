@@ -181,8 +181,25 @@ class MainActivity : FlutterActivity() {
                 "openPersistedDocumentTree" -> {
                     openPersistedDocumentTree(call.argument<String>("initialUri"), result)
                 }
+                "hasPersistedDocumentTreePermission" -> {
+                    result.success(
+                        hasPersistedDocumentTreePermission(call.argument<String>("uri")),
+                    )
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun hasPersistedDocumentTreePermission(uriString: String?): Boolean {
+        if (uriString.isNullOrBlank()) {
+            return false
+        }
+        val uri = Uri.parse(uriString)
+        return contentResolver.persistedUriPermissions.any { persistedPermission ->
+            persistedPermission.uri == uri &&
+                persistedPermission.isReadPermission &&
+                persistedPermission.isWritePermission
         }
     }
 

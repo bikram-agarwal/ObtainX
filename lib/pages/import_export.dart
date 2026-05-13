@@ -660,20 +660,33 @@ class _ImportExportPageState extends State<ImportExportPage> {
                           tr('importExportCardUpdateAssets'),
                           Icons.system_update_rounded,
                         ),
-                        FutureBuilder<Uri?>(
-                          future: settingsProvider.getApkSaveDir(),
+                        FutureBuilder<List<Uri?>>(
+                          future: Future.wait<Uri?>([
+                            settingsProvider.getApkSaveDir(
+                              requireAccess: false,
+                            ),
+                            settingsProvider.getApkSaveDir(),
+                          ]),
                           builder: (context, apkSaveSnapshot) {
+                            final Uri? savedApkSaveUri =
+                                apkSaveSnapshot.data?[0];
+                            final Uri? accessibleApkSaveUri =
+                                apkSaveSnapshot.data?[1];
+                            final bool apkSaveDirInaccessible =
+                                savedApkSaveUri != null &&
+                                accessibleApkSaveUri == null;
                             final String apkFolderTitle =
-                                apkSaveSnapshot.data == null
+                                savedApkSaveUri == null
                                 ? tr('pickApkSaveDir')
-                                : folderDisplayPathFromTreeUri(
-                                    apkSaveSnapshot.data!,
-                                  );
+                                : folderDisplayPathFromTreeUri(savedApkSaveUri);
+                            final Color apkFolderDescriptionColor =
+                                apkSaveDirInaccessible
+                                ? impScheme.error
+                                : impScheme.onSurfaceVariant;
                             return importPageCard([
                               resettableImportPageRow(
                                 onReset:
-                                    importInProgress ||
-                                        apkSaveSnapshot.data == null
+                                    importInProgress || savedApkSaveUri == null
                                     ? null
                                     : () async {
                                         await settingsProvider.pickApkSaveDir(
@@ -697,21 +710,31 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                           children: [
                                             Text(
                                               apkFolderTitle,
-                                              style: Theme.of(
-                                                context,
-                                              ).textTheme.titleSmall,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleSmall
+                                                  ?.copyWith(
+                                                    color:
+                                                        apkSaveDirInaccessible
+                                                        ? impScheme.error
+                                                        : null,
+                                                  ),
                                               maxLines: 3,
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                             const SizedBox(height: 4),
                                             Text(
-                                              tr('apkSaveFolderDescription'),
+                                              tr(
+                                                apkSaveDirInaccessible
+                                                    ? 'storagePermissionDenied'
+                                                    : 'apkSaveFolderDescription',
+                                              ),
                                               style: Theme.of(context)
                                                   .textTheme
                                                   .bodySmall
                                                   ?.copyWith(
-                                                    color: impScheme
-                                                        .onSurfaceVariant,
+                                                    color:
+                                                        apkFolderDescriptionColor,
                                                   ),
                                             ),
                                           ],
@@ -754,14 +777,26 @@ class _ImportExportPageState extends State<ImportExportPage> {
                         tr('importExportCardObtainxBackup'),
                         Icons.save_as_rounded,
                       ),
-                      FutureBuilder<Uri?>(
-                        future: settingsProvider.getExportDir(),
+                      FutureBuilder<List<Uri?>>(
+                        future: Future.wait<Uri?>([
+                          settingsProvider.getExportDir(requireAccess: false),
+                          settingsProvider.getExportDir(),
+                        ]),
                         builder: (context, exportSnapshot) {
+                          final Uri? savedExportUri = exportSnapshot.data?[0];
+                          final Uri? accessibleExportUri =
+                              exportSnapshot.data?[1];
+                          final bool exportDirInaccessible =
+                              savedExportUri != null &&
+                              accessibleExportUri == null;
+                          final Color exportFolderDescriptionColor =
+                              exportDirInaccessible
+                              ? impScheme.error
+                              : impScheme.onSurfaceVariant;
                           return importPageCard([
                             resettableImportPageRow(
                               onReset:
-                                  importInProgress ||
-                                      exportSnapshot.data == null
+                                  importInProgress || savedExportUri == null
                                   ? null
                                   : () async {
                                       await settingsProvider.pickExportDir(
@@ -783,26 +818,35 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Text(
-                                            exportSnapshot.data == null
+                                            savedExportUri == null
                                                 ? tr('pickConfigExportFolder')
                                                 : folderDisplayPathFromTreeUri(
-                                                    exportSnapshot.data!,
+                                                    savedExportUri,
                                                   ),
-                                            style: Theme.of(
-                                              context,
-                                            ).textTheme.titleSmall,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleSmall
+                                                ?.copyWith(
+                                                  color: exportDirInaccessible
+                                                      ? impScheme.error
+                                                      : null,
+                                                ),
                                             maxLines: 3,
                                             overflow: TextOverflow.ellipsis,
                                           ),
                                           const SizedBox(height: 4),
                                           Text(
-                                            tr('configExportFolderDescription'),
+                                            tr(
+                                              exportDirInaccessible
+                                                  ? 'storagePermissionDenied'
+                                                  : 'configExportFolderDescription',
+                                            ),
                                             style: Theme.of(context)
                                                 .textTheme
                                                 .bodySmall
                                                 ?.copyWith(
-                                                  color: impScheme
-                                                      .onSurfaceVariant,
+                                                  color:
+                                                      exportFolderDescriptionColor,
                                                 ),
                                           ),
                                         ],

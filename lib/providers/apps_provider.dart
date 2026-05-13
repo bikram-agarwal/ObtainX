@@ -1733,7 +1733,9 @@ class AppsProvider with ChangeNotifier {
     try {
       final App? appForSave = apps[dir.appId]?.app;
       final bool saveApkCopies = settingsProvider.saveDownloadedApkCopies;
-      final Uri? resolvedApkSaveUri = await settingsProvider.getApkSaveDir();
+      final Uri? resolvedApkSaveUri = await settingsProvider.getApkSaveDir(
+        warnIfInaccessible: saveApkCopies,
+      );
       var bundleCopiedOk = false;
       if (Platform.isAndroid &&
           saveApkCopies &&
@@ -1809,7 +1811,7 @@ class AppsProvider with ChangeNotifier {
         settingsProvider.saveDownloadedApkCopies &&
         !skipApkSaveFolderPersistForPrimaryApk;
     final Uri? apkSaveTreeUri = saveApkCopiesRequested
-        ? await settingsProvider.getApkSaveDir()
+        ? await settingsProvider.getApkSaveDir(warnIfInaccessible: true)
         : null;
     var installReportedOk = false;
     try {
@@ -3777,7 +3779,9 @@ class AppsProvider with ChangeNotifier {
     SettingsProvider? sp,
   }) async {
     SettingsProvider settingsProvider = sp ?? this.settingsProvider;
-    var exportDir = await settingsProvider.getExportDir();
+    var exportDir = await settingsProvider.getExportDir(
+      warnIfInaccessible: true,
+    );
     if (isAuto) {
       if (settingsProvider.autoExportOnChanges != true) {
         return null;
@@ -3797,7 +3801,9 @@ class AppsProvider with ChangeNotifier {
     }
     if (exportDir == null || pickOnly) {
       await settingsProvider.pickExportDir();
-      exportDir = await settingsProvider.getExportDir();
+      exportDir = await settingsProvider.getExportDir(
+        warnIfInaccessible: true,
+      );
     }
     if (exportDir == null) {
       return null;

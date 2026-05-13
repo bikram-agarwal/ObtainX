@@ -67,4 +67,18 @@ class NativeFeatures {
       return null;
     }
   }
+
+  static Future<bool> hasPersistedDocumentTreePermission(Uri uri) async {
+    try {
+      return await _storageChannel.invokeMethod<bool>(
+            'hasPersistedDocumentTreePermission',
+            <String, String>{'uri': uri.toString()},
+          ) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }
