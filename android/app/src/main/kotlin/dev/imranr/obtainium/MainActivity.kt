@@ -1,5 +1,6 @@
 package dev.imranr.obtainium
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ComponentName
@@ -18,6 +19,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.system.Os
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -29,11 +31,13 @@ import java.util.UUID
 private const val CHANNEL = "dev.imranr.obtainium/installer"
 private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
 private const val POWER_CHANNEL = "dev.imranr.obtainium/power"
+private const val STORAGE_CHANNEL = "dev.imranr.obtainium/storage"
 private const val DOWNLOAD_WAKE_LOCK_TAG = "ObtainX:DownloadWakeLock"
 private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
+private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
 /// Ignore focus regain cancel if we lost focus more recently than this (transition bounce).
 private const val FOCUS_REGAIN_CANCEL_MIN_MS = 200L
 
@@ -64,6 +68,7 @@ class MainActivity : FlutterActivity() {
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
     private var downloadWifiLock: WifiManager.WifiLock? = null
+    private var openPersistedDocumentTreeResult: MethodChannel.Result? = null
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
         if (watcher.responded) return
@@ -167,6 +172,83 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            STORAGE_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "openPersistedDocumentTree" -> {
+                    openPersistedDocumentTree(call.argument<String>("initialUri"), result)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun openPersistedDocumentTree(initialUri: String?, result: MethodChannel.Result) {
+        if (openPersistedDocumentTreeResult != null) {
+            result.error("PICKER_ACTIVE", "A document tree picker is already active.", null)
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+            if (!initialUri.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(initialUri))
+            }
+        }
+
+        openPersistedDocumentTreeResult = result
+        try {
+            startActivityForResult(intent, OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE)
+        } catch (ex: Exception) {
+            openPersistedDocumentTreeResult = null
+            result.error("OPEN_TREE_FAILED", ex.message, null)
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE) {
+            super.onActivityResult(requestCode, resultCode, data)
+            return
+        }
+
+        val pendingResult = openPersistedDocumentTreeResult ?: return
+        openPersistedDocumentTreeResult = null
+
+        if (resultCode != Activity.RESULT_OK) {
+            pendingResult.success(null)
+            return
+        }
+
+        val uri = data?.data
+        if (uri == null) {
+            pendingResult.success(null)
+            return
+        }
+
+        val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val grantedPermissionFlags = data.flags and permissionFlags
+        if (grantedPermissionFlags != permissionFlags) {
+            pendingResult.error(
+                "PERSIST_TREE_PERMISSION_FAILED",
+                "The selected folder did not grant read and write permissions.",
+                null,
+            )
+            return
+        }
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                grantedPermissionFlags,
+            )
+            pendingResult.success(uri.toString())
+        } catch (ex: Exception) {
+            pendingResult.error("PERSIST_TREE_PERMISSION_FAILED", ex.message, null)
         }
     }
 

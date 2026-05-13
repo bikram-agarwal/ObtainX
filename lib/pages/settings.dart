@@ -465,42 +465,128 @@ class _SettingsPageState extends State<SettingsPage> {
     Widget sectionHeader(String title, IconData icon, String key) {
       final bool expanded =
           settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
-      return InkWell(
-        onTap: () =>
-            settingsProvider.setSettingBool('settingsSection_$key', !expanded),
-        borderRadius: BorderRadius.circular(8),
-        splashFactory: NoSplash.splashFactory,
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-        hoverColor: Colors.transparent,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
-          child: Row(
-            children: [
-              Icon(icon, color: cs.primary, size: 16),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: cs.primary,
-                    fontSize: 13,
-                    decoration: TextDecoration.none,
+      const Duration headerTransitionDuration = Duration(milliseconds: 300);
+      final Color collapsedHeaderColor = Color.lerp(
+        cs.secondaryContainer,
+        cs.primaryContainer,
+        0.30,
+      )!;
+      final Color collapsedHeaderContentColor = cs.onSecondaryContainer;
+
+      return Padding(
+        padding: EdgeInsets.fromLTRB(0, expanded ? 20 : 16, 0, 8),
+        child: AnimatedSwitcher(
+          duration: headerTransitionDuration,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (Widget child, Animation<double> animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: SizeTransition(
+                sizeFactor: animation,
+                axisAlignment: -1,
+                child: child,
+              ),
+            );
+          },
+          child: expanded
+              ? InkWell(
+                  key: ValueKey<String>('settingsHeaderText_$key'),
+                  onTap: () => settingsProvider.setSettingBool(
+                    'settingsSection_$key',
+                    false,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  splashFactory: NoSplash.splashFactory,
+                  splashColor: Colors.transparent,
+                  highlightColor: Colors.transparent,
+                  hoverColor: Colors.transparent,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+                    child: Row(
+                      children: [
+                        Icon(icon, color: cs.primary, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: cs.primary,
+                              fontSize: 13,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          color: cs.primary,
+                          size: 18,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : DecoratedBox(
+                  key: ValueKey<String>('settingsHeaderPill_$key'),
+                  decoration: ShapeDecoration(
+                    color: collapsedHeaderColor,
+                    shape: StadiumBorder(
+                      side: m3ePureBlackOutlineSide(cs, alpha: 0.16),
+                    ),
+                  ),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: InkWell(
+                      onTap: () => settingsProvider.setSettingBool(
+                        'settingsSection_$key',
+                        true,
+                      ),
+                      customBorder: const StadiumBorder(),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: cs.primary.withValues(alpha: 0.16),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                icon,
+                                color: collapsedHeaderContentColor,
+                                size: 17,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: collapsedHeaderContentColor,
+                                  fontSize: 13,
+                                  letterSpacing: 0.1,
+                                  decoration: TextDecoration.none,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              Icons.keyboard_arrow_right_rounded,
+                              color: collapsedHeaderContentColor,
+                              size: 22,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              AnimatedRotation(
-                turns: expanded ? 0 : -0.25,
-                duration: const Duration(milliseconds: 200),
-                child: Icon(
-                  Icons.keyboard_arrow_down_rounded,
-                  color: cs.primary,
-                  size: 18,
-                ),
-              ),
-            ],
-          ),
         ),
       );
     }
@@ -519,11 +605,16 @@ class _SettingsPageState extends State<SettingsPage> {
       return ClipRect(
         clipper: _SettingsSectionShadowClipper(expanded: expanded),
         child: AnimatedAlign(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeInOut,
+          duration: const Duration(milliseconds: 360),
+          curve: Curves.easeInOutCubicEmphasized,
           alignment: Alignment.topCenter,
           heightFactor: expanded ? 1.0 : 0.0,
-          child: settingsCard(children),
+          child: AnimatedOpacity(
+            duration: Duration(milliseconds: expanded ? 260 : 140),
+            curve: expanded ? Curves.easeOutCubic : Curves.easeInCubic,
+            opacity: expanded ? 1.0 : 0.0,
+            child: settingsCard(children),
+          ),
         ),
       );
     }

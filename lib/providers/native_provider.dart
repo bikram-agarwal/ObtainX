@@ -7,6 +7,9 @@ class NativeFeatures {
   static const MethodChannel _powerChannel = MethodChannel(
     'dev.imranr.obtainium/power',
   );
+  static const MethodChannel _storageChannel = MethodChannel(
+    'dev.imranr.obtainium/storage',
+  );
   static bool _systemFontLoaded = false;
 
   static Future<ByteData> _readFileBytes(String path) async {
@@ -45,6 +48,23 @@ class NativeFeatures {
       // Best-effort cleanup; Android also releases locks if the process dies.
     } on MissingPluginException {
       // Non-Android builds do not provide this channel.
+    }
+  }
+
+  static Future<Uri?> openPersistedDocumentTree({Uri? initialUri}) async {
+    try {
+      final uriString = await _storageChannel.invokeMethod<String>(
+        'openPersistedDocumentTree',
+        <String, String?>{'initialUri': initialUri?.toString()},
+      );
+      if (uriString == null || uriString.isEmpty) {
+        return null;
+      }
+      return Uri.parse(uriString);
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
     }
   }
 }

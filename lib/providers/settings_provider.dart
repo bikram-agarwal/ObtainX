@@ -9,6 +9,7 @@ import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/folders/app_folder.dart';
+import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -1024,16 +1025,14 @@ class SettingsProvider with ChangeNotifier {
       return null;
     }
     final Uri uri = Uri.parse(uriString);
-    Future<bool> canAccessExportTree(Uri treeUri) async {
-      final bool readable = await saf.canRead(treeUri) ?? false;
-      final bool writable = await saf.canWrite(treeUri) ?? false;
-      return readable && writable;
+    Future<bool> canWriteExportTree(Uri treeUri) async {
+      return await saf.canWrite(treeUri) ?? false;
     }
 
-    if (!await canAccessExportTree(uri)) {
+    if (!await canWriteExportTree(uri)) {
       // Transient SAF failures should not wipe a still-valid grant.
       await Future<void>.delayed(const Duration(milliseconds: 200));
-      if (!await canAccessExportTree(uri)) {
+      if (!await canWriteExportTree(uri)) {
         prefs?.remove('exportDir');
         notifyListeners();
         return null;
@@ -1059,7 +1058,11 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousExportDirString = prefs?.getString('exportDir');
-    final Uri? newUri = await saf.openDocumentTree();
+    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
+      initialUri: previousExportDirString == null
+          ? null
+          : Uri.parse(previousExportDirString),
+    );
 
     if (newUri == null) {
       return;
@@ -1088,15 +1091,13 @@ class SettingsProvider with ChangeNotifier {
       return null;
     }
     final Uri uri = Uri.parse(uriString);
-    Future<bool> canAccessApkSaveTree(Uri treeUri) async {
-      final bool readable = await saf.canRead(treeUri) ?? false;
-      final bool writable = await saf.canWrite(treeUri) ?? false;
-      return readable && writable;
+    Future<bool> canWriteApkSaveTree(Uri treeUri) async {
+      return await saf.canWrite(treeUri) ?? false;
     }
 
-    if (!await canAccessApkSaveTree(uri)) {
+    if (!await canWriteApkSaveTree(uri)) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
-      if (!await canAccessApkSaveTree(uri)) {
+      if (!await canWriteApkSaveTree(uri)) {
         prefs?.remove('apkSaveDir');
         notifyListeners();
         return null;
@@ -1121,7 +1122,11 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousApkSaveDirString = prefs?.getString('apkSaveDir');
-    final Uri? newUri = await saf.openDocumentTree();
+    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
+      initialUri: previousApkSaveDirString == null
+          ? null
+          : Uri.parse(previousApkSaveDirString),
+    );
 
     if (newUri == null) {
       return;
