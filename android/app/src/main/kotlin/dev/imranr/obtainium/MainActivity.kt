@@ -60,6 +60,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var installWatcher: InstallWatcher? = null
+    private val downloadKeepAwakeLock = Any()
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
     private var downloadWifiLock: WifiManager.WifiLock? = null
@@ -170,10 +171,10 @@ class MainActivity : FlutterActivity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun acquireDownloadKeepAwake(): Boolean {
+    private fun acquireDownloadKeepAwake(): Boolean = synchronized(downloadKeepAwakeLock) {
         var acquiredWakeLock: PowerManager.WakeLock? = null
         var acquiredWifiLock: WifiManager.WifiLock? = null
-        return try {
+        try {
             if (downloadWakeLock?.isHeld != true) {
                 val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                 acquiredWakeLock = powerManager.newWakeLock(
@@ -221,24 +222,26 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun releaseDownloadKeepAwake() {
-        if (downloadKeepAwakeCount > 0) {
-            downloadKeepAwakeCount -= 1
+        synchronized(downloadKeepAwakeLock) {
+            if (downloadKeepAwakeCount > 0) {
+                downloadKeepAwakeCount -= 1
+            }
+            if (downloadKeepAwakeCount > 0) return@synchronized
+
+            try {
+                if (downloadWifiLock?.isHeld == true) {
+                    downloadWifiLock?.release()
+                }
+            } catch (_: Exception) { }
+            downloadWifiLock = null
+
+            try {
+                if (downloadWakeLock?.isHeld == true) {
+                    downloadWakeLock?.release()
+                }
+            } catch (_: Exception) { }
+            downloadWakeLock = null
         }
-        if (downloadKeepAwakeCount > 0) return
-
-        try {
-            if (downloadWifiLock?.isHeld == true) {
-                downloadWifiLock?.release()
-            }
-        } catch (_: Exception) { }
-        downloadWifiLock = null
-
-        try {
-            if (downloadWakeLock?.isHeld == true) {
-                downloadWakeLock?.release()
-            }
-        } catch (_: Exception) { }
-        downloadWakeLock = null
     }
 
     @Suppress("DEPRECATION")

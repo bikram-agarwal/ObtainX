@@ -1095,13 +1095,15 @@ class RemoveAppsWithModalResult {
 }
 
 class AppsProvider with ChangeNotifier {
-  // Lowered from 4 to 2 alongside moving HTML parsing off the UI isolate.
-  // Even with parses now running on background isolates via
-  // [parseHtmlOffIsolate], two concurrent network+parse pipelines is enough
-  // to saturate phones' typical wifi+cpu envelope; cranking it higher
-  // mostly added isolate-spawn churn and rate-limiting pressure on
-  // upstream sources without speeding up the wall-clock refresh.
-  static const int _maxParallelUpdateChecks = 2;
+  // Start fast on capable devices, but keep a bounded worker pool so a large
+  // app list does not fan out unbounded HTTP + parse work like upstream
+  // Obtainium. [_maxParallelUpdateChecksForDevice] lowers this on low-end
+  // devices using Android's low-RAM flag and total physical RAM.
+  static const int _defaultParallelUpdateChecks = 8;
+  static const int _modestDeviceParallelUpdateChecks = 4;
+  static const int _lowEndDeviceParallelUpdateChecks = 2;
+  static const int _lowEndRamThresholdMb = 3072;
+  static const int _modestRamThresholdMb = 6144;
 
   // In memory App state (should always be kept in sync with local storage versions)
   Map<String, AppInMemory> apps = {};
@@ -1180,6 +1182,25 @@ class AppsProvider with ChangeNotifier {
 
   void finishDetailPageAutoCheck(String appId) {
     _detailPageAutoChecksInFlight.remove(appId);
+  }
+
+  Future<int> _maxParallelUpdateChecksForDevice() async {
+    try {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      if (androidInfo.isLowRamDevice ||
+          (androidInfo.physicalRamSize > 0 &&
+              androidInfo.physicalRamSize <= _lowEndRamThresholdMb)) {
+        return _lowEndDeviceParallelUpdateChecks;
+      }
+      if (androidInfo.physicalRamSize > 0 &&
+          androidInfo.physicalRamSize <= _modestRamThresholdMb) {
+        return _modestDeviceParallelUpdateChecks;
+      }
+    } catch (_) {
+      // If device info is unavailable, prefer speed and keep the bounded
+      // default rather than silently falling back to the slowest path.
+    }
+    return _defaultParallelUpdateChecks;
   }
 
   void cancelDownload(String appId) {
@@ -3579,9 +3600,11 @@ class AppsProvider with ChangeNotifier {
         var appSaveCompleted = false;
         var lastProgressNotificationAt = DateTime.fromMicrosecondsSinceEpoch(0);
         const progressNotificationInterval = Duration(milliseconds: 250);
-        final workerCount = appIds.length < _maxParallelUpdateChecks
+        final maxParallelUpdateChecks =
+            await _maxParallelUpdateChecksForDevice();
+        final workerCount = appIds.length < maxParallelUpdateChecks
             ? appIds.length
-            : _maxParallelUpdateChecks;
+            : maxParallelUpdateChecks;
 
         Future<void> runUpdateCheckWorker() async {
           while (true) {
