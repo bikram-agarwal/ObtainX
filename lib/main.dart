@@ -153,6 +153,9 @@ void main() async {
   }
   final SettingsProvider settingsProvider = SettingsProvider();
   await settingsProvider.initializeSettings();
+  if (settingsProvider.useSystemFont) {
+    await NativeFeatures.loadSystemFont();
+  }
   final np = NotificationsProvider();
   await np.initialize();
   FlutterForegroundTask.initCommunicationPort();
@@ -420,8 +423,6 @@ class _ObtainiumState extends State<Obtainium> {
           if (settingsProvider.useBlackTheme) {
             darkColorScheme = darkColorScheme.withPureBlackBackgrounds();
           }
-
-          if (settingsProvider.useSystemFont) NativeFeatures.loadSystemFont();
 
           final ColorScheme themeColorScheme =
               settingsProvider.theme == ThemeSettings.dark
