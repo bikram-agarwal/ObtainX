@@ -30,6 +30,7 @@ import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
+import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -770,6 +771,42 @@ String storeFacingDownloadDisplayNameForApp(App app) {
 }
 
 Future<File> downloadFile(
+  String url,
+  String fileName,
+  bool fileNameHasExt,
+  Function? onProgress,
+  String destDir, {
+  void Function(int?)? onContentLength,
+  bool useExisting = true,
+  Map<String, String>? headers,
+  bool allowInsecure = false,
+  LogsProvider? logs,
+  DownloadCancelToken? cancelToken,
+}) async {
+  final bool releaseDownloadKeepAwake =
+      await NativeFeatures.acquireDownloadKeepAwake();
+  try {
+    return await _downloadFile(
+      url,
+      fileName,
+      fileNameHasExt,
+      onProgress,
+      destDir,
+      onContentLength: onContentLength,
+      useExisting: useExisting,
+      headers: headers,
+      allowInsecure: allowInsecure,
+      logs: logs,
+      cancelToken: cancelToken,
+    );
+  } finally {
+    if (releaseDownloadKeepAwake) {
+      await NativeFeatures.releaseDownloadKeepAwake();
+    }
+  }
+}
+
+Future<File> _downloadFile(
   String url,
   String fileName,
   bool fileNameHasExt,

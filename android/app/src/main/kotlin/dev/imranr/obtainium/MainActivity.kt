@@ -12,9 +12,11 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.system.Os
 import io.flutter.embedding.android.FlutterActivity
@@ -26,6 +28,9 @@ import java.util.UUID
 
 private const val CHANNEL = "dev.imranr.obtainium/installer"
 private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
+private const val POWER_CHANNEL = "dev.imranr.obtainium/power"
+private const val DOWNLOAD_WAKE_LOCK_TAG = "ObtainX:DownloadWakeLock"
+private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
@@ -55,6 +60,9 @@ class MainActivity : FlutterActivity() {
     }
 
     private var installWatcher: InstallWatcher? = null
+    private var downloadKeepAwakeCount = 0
+    private var downloadWakeLock: PowerManager.WakeLock? = null
+    private var downloadWifiLock: WifiManager.WifiLock? = null
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
         if (watcher.responded) return
@@ -144,6 +152,93 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            POWER_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "acquireDownloadKeepAwake" -> {
+                    result.success(acquireDownloadKeepAwake())
+                }
+                "releaseDownloadKeepAwake" -> {
+                    releaseDownloadKeepAwake()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun acquireDownloadKeepAwake(): Boolean {
+        var acquiredWakeLock: PowerManager.WakeLock? = null
+        var acquiredWifiLock: WifiManager.WifiLock? = null
+        return try {
+            if (downloadWakeLock?.isHeld != true) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                acquiredWakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    DOWNLOAD_WAKE_LOCK_TAG,
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+
+            if (downloadWifiLock?.isHeld != true) {
+                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                    ?: throw IllegalStateException("Wifi service unavailable")
+                acquiredWifiLock = wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    DOWNLOAD_WIFI_LOCK_TAG,
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+
+            if (acquiredWakeLock != null) {
+                downloadWakeLock = acquiredWakeLock
+            }
+            if (acquiredWifiLock != null) {
+                downloadWifiLock = acquiredWifiLock
+            }
+            downloadKeepAwakeCount += 1
+            true
+        } catch (_: Exception) {
+            try {
+                if (acquiredWifiLock?.isHeld == true) {
+                    acquiredWifiLock.release()
+                }
+            } catch (_: Exception) { }
+            try {
+                if (acquiredWakeLock?.isHeld == true) {
+                    acquiredWakeLock.release()
+                }
+            } catch (_: Exception) { }
+            false
+        }
+    }
+
+    private fun releaseDownloadKeepAwake() {
+        if (downloadKeepAwakeCount > 0) {
+            downloadKeepAwakeCount -= 1
+        }
+        if (downloadKeepAwakeCount > 0) return
+
+        try {
+            if (downloadWifiLock?.isHeld == true) {
+                downloadWifiLock?.release()
+            }
+        } catch (_: Exception) { }
+        downloadWifiLock = null
+
+        try {
+            if (downloadWakeLock?.isHeld == true) {
+                downloadWakeLock?.release()
+            }
+        } catch (_: Exception) { }
+        downloadWakeLock = null
     }
 
     @Suppress("DEPRECATION")
