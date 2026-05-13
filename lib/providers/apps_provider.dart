@@ -3545,6 +3545,13 @@ class AppsProvider with ChangeNotifier {
         late List<String> appIds;
         if (specificIds != null) {
           appIds = specificIds.where((id) => apps.containsKey(id)).toList();
+          if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps) {
+            appIds = appIds.where((id) {
+              final AppInMemory appInMemory = apps[id]!;
+              return appInMemory.app.installedVersion != null ||
+                  appInMemory.app.additionalSettings['trackOnly'] == true;
+            }).toList();
+          }
           if (ignoreAppsCheckedAfter != null) {
             final DateTime cutoff = ignoreAppsCheckedAfter;
             appIds = appIds.where((id) {
