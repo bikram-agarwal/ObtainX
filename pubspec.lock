@@ -320,10 +320,10 @@ packages:
     dependency: "direct main"
     description:
       name: file_picker
-      sha256: "5813e430c9444b32c437628056297698e94bb7f804cf69fdf1a8912ff05dd918"
+      sha256: "51093fc49e4d58935998fb112593c23eda571d14b488388bd41d5d2ba332b26a"
       url: "https://pub.dev"
     source: hosted
-    version: "12.0.0-beta.2"
+    version: "12.0.0-beta.3"
   fixnum:
     dependency: transitive
     description:

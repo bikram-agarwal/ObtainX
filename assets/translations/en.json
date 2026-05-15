@@ -478,6 +478,7 @@
     "settingsThemeColorsHint": "Accent and dynamic color source",
     "settingsPaletteStyle": "Palette style",
     "settingsCustomSeedDialogTitle": "Add custom seed color",
+    "settingsCustomSeedSliderTitle": "Select a color",
     "settingsCustomSeedHint": "Hex color",
     "settingsCustomSeedRemoveTitle": "Remove saved color?",
     "settingsCustomSeedRemoveMessage": "This removes the color from your saved list. You can add it again later.",

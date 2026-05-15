@@ -44,6 +44,45 @@ String _formatBytes(int bytes) {
   }
 }
 
+bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
+  final App appModel = appInMemory.app;
+  final String? displayedInstalledVersion = appModel.installedVersion;
+  if (displayedInstalledVersion == null || displayedInstalledVersion.isEmpty) {
+    return false;
+  }
+
+  if (appModel.additionalSettings['trackOnly'] == true) {
+    return appInMemory.installedInfo == null &&
+        versionsEffectivelyEqual(
+          displayedInstalledVersion,
+          appModel.latestVersion,
+        );
+  }
+
+  if (!versionsEffectivelyEqual(
+    displayedInstalledVersion,
+    appModel.latestVersion,
+  )) {
+    return false;
+  }
+
+  final installedInfo = appInMemory.installedInfo;
+  if (installedInfo == null) {
+    return false;
+  }
+  final String? realInstalledVersion =
+      appModel.additionalSettings['useVersionCodeAsOSVersion'] == true
+      ? installedInfo.versionCode.toString()
+      : installedInfo.versionName;
+  if (realInstalledVersion == null || realInstalledVersion.isEmpty) {
+    return false;
+  }
+  return !versionsEffectivelyEqual(
+    realInstalledVersion,
+    displayedInstalledVersion,
+  );
+}
+
 /// Optional debug logger — guarded by the consolidated [apkMirrorSizeDebug]
 /// flag so it short-circuits in release builds.
 void _logApkMirrorSizeDebugFromAppPage(String message) {
@@ -1813,7 +1852,12 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    Widget versionRow(BuildContext ctx, String label, String value) {
+    Widget versionRow(
+      BuildContext ctx,
+      String label,
+      String value, {
+      bool pseudoVersion = false,
+    }) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
@@ -1834,13 +1878,41 @@ class _AppPageState extends State<AppPage> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: SelectableText(
-                value,
-                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w500,
-                  fontSize: 14,
-                ),
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  SelectableText(
+                    value,
+                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
+                      fontStyle: pseudoVersion ? FontStyle.italic : null,
+                    ),
+                  ),
+                  if (pseudoVersion)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          ctx,
+                        ).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        tr('pseudoVersion'),
+                        style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
@@ -2323,6 +2395,7 @@ class _AppPageState extends State<AppPage> {
               pageThemeContext,
               tr('installed'),
               app?.app.installedVersion ?? '',
+              pseudoVersion: app != null && _isInstalledVersionPseudo(app),
             ),
           );
         } else {

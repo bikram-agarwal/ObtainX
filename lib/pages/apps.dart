@@ -358,6 +358,7 @@ class _AppListItem extends StatelessWidget {
     final colorScheme = theme.colorScheme;
     final showChangesFn = getChangeLogFn(context, app.app);
     final installed = app.app.installedVersion;
+    final skipActive = isSkipActiveForCurrentLatest(app.app);
     final hasUpdate = installed != null && appHasActionableUpdate(app.app);
     final hasUncertainUpdate =
         installed != null && versionOrderUncertainUpdate(app.app);
@@ -404,6 +405,19 @@ class _AppListItem extends StatelessWidget {
       );
     }
 
+    Widget buildSkippedVersionIcon() {
+      return Tooltip(
+        message: tr('latestVersionSkipped'),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(
+            Icons.skip_next_rounded,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+
     final String versionText = app.app.installedVersion ?? tr('notInstalled');
     final String changesButtonString = app.app.releaseDate == null
         ? (showChangesFn != null ? tr('changes') : '')
@@ -411,10 +425,17 @@ class _AppListItem extends StatelessWidget {
 
     final Widget trailingRow = Row(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        if (hasUpdate) ...[buildUpdateButton(), const SizedBox(width: 5)],
-        if (!hasUpdate && hasUncertainUpdate) ...[
+        if (skipActive) ...[
+          buildSkippedVersionIcon(),
+          const SizedBox(width: 5),
+        ],
+        if (!skipActive && hasUpdate) ...[
+          buildUpdateButton(),
+          const SizedBox(width: 5),
+        ],
+        if (!skipActive && !hasUpdate && hasUncertainUpdate) ...[
           buildUncertainUpdateButton(),
           const SizedBox(width: 5),
         ],

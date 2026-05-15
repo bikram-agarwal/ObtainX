@@ -2585,26 +2585,17 @@ class AppsProvider with ChangeNotifier {
     }
     // SECOND, RECONCILE DIFFERENCES BETWEEN THE APP'S REPORTED AND REAL INSTALLED VERSIONS, WHERE NEITHER IS NULL
     if (realInstalledVersion != null &&
-        realInstalledVersion != app.installedVersion) {
-      var syncedFromDevice = false;
-      if (versionDetectionIsStandard) {
-        // App's reported version and real version don't match (and it uses standard version detection)
-        var correctedInstalledVersion = reconcileVersionDifferences(
-          realInstalledVersion,
-          app.installedVersion!,
-        );
-        if (correctedInstalledVersion?.key == false) {
-          app.installedVersion = correctedInstalledVersion!.value;
-          modded = true;
-          syncedFromDevice = true;
-        } else if (naiveStandardVersionDetection) {
-          app.installedVersion = realInstalledVersion;
-          modded = true;
-          syncedFromDevice = true;
-        }
-      }
-      if (!syncedFromDevice) {
-        // Device is source of truth; sync when reconciliation did not apply or failed (e.g. user updated via Play Store)
+        realInstalledVersion != app.installedVersion &&
+        versionDetectionIsStandard) {
+      // App's reported version and real version don't match (and it uses standard version detection)
+      var correctedInstalledVersion = reconcileVersionDifferences(
+        realInstalledVersion,
+        app.installedVersion!,
+      );
+      if (correctedInstalledVersion?.key == false) {
+        app.installedVersion = correctedInstalledVersion!.value;
+        modded = true;
+      } else if (naiveStandardVersionDetection) {
         app.installedVersion = realInstalledVersion;
         modded = true;
       }
@@ -2626,11 +2617,14 @@ class AppsProvider with ChangeNotifier {
     }
     // FOURTH, DISABLE VERSION DETECTION IF ENABLED AND THE REPORTED/REAL INSTALLED VERSIONS ARE NOT STANDARDIZED
     // Skip for track-only: do not set installedVersion = latestVersion, so "update available" can still show
-    // Do not disable when installed and latest are effectively equal (e.g. same commit hash); user may have enabled "reconcile" for that case
+    // Do not disable when the real device version and latest are effectively equal (e.g. same commit hash).
+    final bool realInstalledVersionMatchesLatest =
+        realInstalledVersion != null &&
+        versionsEffectivelyEqual(realInstalledVersion, app.latestVersion);
     if (!trackOnly &&
         installedInfo != null &&
         versionDetectionIsStandard &&
-        !versionsEffectivelyEqual(app.installedVersion!, app.latestVersion) &&
+        !realInstalledVersionMatchesLatest &&
         !isVersionDetectionPossible(
           AppInMemory(app, null, installedInfo, null),
         )) {
@@ -3801,9 +3795,7 @@ class AppsProvider with ChangeNotifier {
     }
     if (exportDir == null || pickOnly) {
       await settingsProvider.pickExportDir();
-      exportDir = await settingsProvider.getExportDir(
-        warnIfInaccessible: true,
-      );
+      exportDir = await settingsProvider.getExportDir(warnIfInaccessible: true);
     }
     if (exportDir == null) {
       return null;

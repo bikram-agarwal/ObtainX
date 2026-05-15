@@ -17,6 +17,7 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:url_launcher/url_launcher_string.dart';
 
 /// Human-readable label for a SAF tree [Uri] (Android document tree).
@@ -183,54 +184,85 @@ class _ImportExportPageState extends State<ImportExportPage> {
           });
     }
 
-    runObtainiumImport() {
+    Future<void> importObtainiumBackupData(String backupData) async {
+      try {
+        jsonDecode(backupData);
+      } catch (err) {
+        throw ObtainiumError(tr('invalidInput'));
+      }
+      final value = await appsProvider.import(backupData);
+      if (!context.mounted) return;
+      var cats = settingsProvider.categories;
+      appsProvider.apps.forEach((key, value) {
+        for (var category in value.app.categories) {
+          if (!cats.containsKey(category)) {
+            cats[category] = generateRandomLightColor().toARGB32();
+          }
+        }
+      });
+      appsProvider.addMissingCategories(settingsProvider);
+      showMessage(
+        '${tr('importedX', args: [plural('apps', value.key.length).toLowerCase()])}${value.value ? ' + ${tr('settings').toLowerCase()}' : ''}',
+        context,
+      );
+    }
+
+    Future<String?> pickBackupDataFromSystemPicker() async {
+      final Uri? exportDir = Platform.isAndroid
+          ? await settingsProvider.getExportDir(requireAccess: false)
+          : null;
+      if (Platform.isAndroid) {
+        final List<Uri>? selectedUris = await saf.openDocument(
+          initialUri: exportDir,
+          grantWritePermission: false,
+          persistablePermission: false,
+          mimeType: '*/*',
+        );
+        if (selectedUris == null || selectedUris.isEmpty) {
+          return null;
+        }
+        final String? selectedBackupData = await saf.getDocumentContentAsString(
+          selectedUris.single,
+        );
+        if (selectedBackupData == null) {
+          throw ObtainiumError(tr('unexpectedError'));
+        }
+        return selectedBackupData;
+      }
+
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+      if (result == null) {
+        return null;
+      }
+      return File(result.files.single.path!).readAsString();
+    }
+
+    runObtainiumImport() async {
       HapticFeedback.selectionClick();
-      FilePicker.pickFiles()
-          .then((result) async {
-            setState(() {
-              importInProgress = true;
-            });
-            if (result != null) {
-              // [readAsString] (async) instead of [readAsStringSync] so a
-              // multi-megabyte backup file doesn't freeze the UI thread
-              // while it's being slurped in.
-              String data = await File(
-                result.files.single.path!,
-              ).readAsString();
-              try {
-                jsonDecode(data);
-              } catch (e) {
-                throw ObtainiumError(tr('invalidInput'));
-              }
-              appsProvider.import(data).then((value) {
-                if (!context.mounted) return;
-                var cats = settingsProvider.categories;
-                appsProvider.apps.forEach((key, value) {
-                  for (var c in value.app.categories) {
-                    if (!cats.containsKey(c)) {
-                      cats[c] = generateRandomLightColor().toARGB32();
-                    }
-                  }
-                });
-                appsProvider.addMissingCategories(settingsProvider);
-                showMessage(
-                  '${tr('importedX', args: [plural('apps', value.key.length).toLowerCase()])}${value.value ? ' + ${tr('settings').toLowerCase()}' : ''}',
-                  context,
-                );
-              });
-            } else {
-              // User canceled the picker
-            }
-          })
-          .catchError((e) {
-            if (!context.mounted) return;
-            showError(e, context);
-          })
-          .whenComplete(() {
-            setState(() {
-              importInProgress = false;
-            });
+      var importStarted = false;
+      try {
+        final String? backupData = await pickBackupDataFromSystemPicker();
+        if (backupData != null) {
+          if (!context.mounted) return;
+          setState(() {
+            importInProgress = true;
           });
+          importStarted = true;
+          await importObtainiumBackupData(backupData);
+        }
+      } catch (err) {
+        if (!context.mounted) return;
+        showError(err, context);
+      } finally {
+        if (context.mounted && importStarted) {
+          setState(() {
+            importInProgress = false;
+          });
+        }
+      }
     }
 
     runUrlImport() {

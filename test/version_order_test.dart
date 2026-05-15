@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:device_info_plus_platform_interface/device_info_plus_platform_interface.dart';
+import 'package:android_package_manager/android_package_manager.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
@@ -158,6 +159,19 @@ class FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
   }
 }
 
+class FakePackageInfo extends PackageInfo {
+  const FakePackageInfo({
+    required String packageName,
+    required String versionName,
+    required int versionCode,
+  }) : super(
+         installLocation: AndroidInstallLocation.unspecified,
+         packageName: packageName,
+         versionName: versionName,
+         versionCode: versionCode,
+       );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -202,6 +216,74 @@ void main() {
       1,
     );
   });
+
+  test(
+    'unreconciled source tag version is preserved as installed pseudo version',
+    () {
+      final appsProvider = AppsProvider();
+      final app = App(
+        'app.revanced.android.youtube',
+        'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+        'LovecraftianGodsKiller',
+        'YouTube-Morphe',
+        '106',
+        '106',
+        const <MapEntry<String, String>>[],
+        0,
+        {'versionDetection': true},
+        DateTime.now(),
+        false,
+      );
+
+      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+        app,
+        const FakePackageInfo(
+          packageName: 'app.revanced.android.youtube',
+          versionName: '9.18.50',
+          versionCode: 106,
+        ),
+      );
+
+      expect(correctedApp, isNotNull);
+      expect(correctedApp!.installedVersion, '106');
+      expect(correctedApp.latestVersion, '106');
+      expect(correctedApp.additionalSettings['versionDetection'], false);
+    },
+  );
+
+  test(
+    'disabled version detection does not overwrite source tag with manifest version',
+    () {
+      final appsProvider = AppsProvider();
+      final app = App(
+        'app.revanced.android.youtube',
+        'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+        'LovecraftianGodsKiller',
+        'YouTube-Morphe',
+        '106',
+        '107',
+        const <MapEntry<String, String>>[],
+        0,
+        {'versionDetection': false},
+        DateTime.now(),
+        false,
+      );
+
+      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+        app,
+        const FakePackageInfo(
+          packageName: 'app.revanced.android.youtube',
+          versionName: '9.18.50',
+          versionCode: 106,
+        ),
+      );
+
+      expect(correctedApp, isNull);
+      expect(app.installedVersion, '106');
+      expect(app.latestVersion, '107');
+      expect(app.additionalSettings['versionDetection'], false);
+    },
+  );
 
   test('f-droid regex version filter keeps newest matching release', () async {
     final details = await FDroid().getAPKUrlsFromFDroidPackagesAPIResponse(
