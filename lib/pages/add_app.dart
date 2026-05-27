@@ -104,6 +104,12 @@ class AddAppPageState extends State<AddAppPage> {
         throw UnsupportedURLError();
       }
       sourceProvider.getSource(input);
+      if (_mode != _AddMode.byUrl || _byUrlOpenedFromSearchPick) {
+        setState(() {
+          _mode = _AddMode.byUrl;
+          _byUrlOpenedFromSearchPick = false;
+        });
+      }
       changeUserInput(input, true, false, updateUrlInput: true);
     } catch (e) {
       showError(e, context);

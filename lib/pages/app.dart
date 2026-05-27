@@ -750,16 +750,17 @@ class _AppPageState extends State<AppPage> {
     final FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['png'],
-      withData: true,
     );
     if (!mounted) return;
     if (result == null || result.files.isEmpty) return;
     final PlatformFile picked = result.files.single;
-    Uint8List? bytes = picked.bytes;
-    if (bytes == null && picked.path != null) {
+    Uint8List? bytes;
+    try {
+      bytes = await picked.readAsBytes();
+    } catch (_) {
+      if (picked.path == null) return;
       bytes = await File(picked.path!).readAsBytes();
     }
-    if (bytes == null) return;
     if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
       if (mounted) {
         _showPageError(ObtainiumError(tr('changeAppIconInvalidPng')), context);

@@ -32,6 +32,7 @@ private const val CHANNEL = "dev.imranr.obtainium/installer"
 private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
 private const val POWER_CHANNEL = "dev.imranr.obtainium/power"
 private const val STORAGE_CHANNEL = "dev.imranr.obtainium/storage"
+private const val SHARE_CHANNEL = "dev.imranr.obtainium/share"
 private const val DOWNLOAD_WAKE_LOCK_TAG = "ObtainX:DownloadWakeLock"
 private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
 private const val APK_MIME = "application/vnd.android.package-archive"
@@ -69,6 +70,9 @@ class MainActivity : FlutterActivity() {
     private var downloadWakeLock: PowerManager.WakeLock? = null
     private var downloadWifiLock: WifiManager.WifiLock? = null
     private var openPersistedDocumentTreeResult: MethodChannel.Result? = null
+    private var shareChannel: MethodChannel? = null
+    private var initialSharedTextConsumed = false
+    private var pendingSharedText: String? = null
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
         if (watcher.responded) return
@@ -112,6 +116,14 @@ class MainActivity : FlutterActivity() {
             watcher,
             InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
         )
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val sharedText = getSharedTextFromIntent(intent) ?: return
+        pendingSharedText = sharedText
+        shareChannel?.invokeMethod("onSharedText", sharedText)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -189,6 +201,36 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        shareChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SHARE_CHANNEL,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialSharedText" -> {
+                        if (initialSharedTextConsumed) {
+                            result.success(null)
+                            return@setMethodCallHandler
+                        }
+                        initialSharedTextConsumed = true
+                        val sharedText = pendingSharedText ?: getSharedTextFromIntent(intent)
+                        pendingSharedText = null
+                        result.success(sharedText)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+    }
+
+    private fun getSharedTextFromIntent(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") {
+            return null
+        }
+        return intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
+            ?.toString()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     }
 
     private fun hasPersistedDocumentTreePermission(uriString: String?): Boolean {

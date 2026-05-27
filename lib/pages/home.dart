@@ -14,6 +14,7 @@ import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/shared_url_receiver.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/widgets/progressive_top_edge_overlay.dart';
 import 'package:provider/provider.dart';
@@ -42,6 +43,7 @@ class _HomePageState extends State<HomePage> {
   bool prevIsLoading = true;
   late AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
+  final SharedUrlReceiver _sharedUrlReceiver = SharedUrlReceiver();
   bool isLinkActivity = false;
 
   List<NavigationPageItem> pages = [
@@ -199,32 +201,53 @@ class _HomePageState extends State<HomePage> {
       state.openAppById(appId);
     }
 
+    handleAddUrl(String data) async {
+      // Ensure apps are loaded
+      AppsProvider appsProvider = context.read<AppsProvider>();
+      while (appsProvider.loadingApps) {
+        await Future.delayed(const Duration(milliseconds: 10));
+      }
+
+      // See if we already have this app
+      String standardizedUrl = SourceProvider()
+          .getSource(data)
+          .standardizeUrl(data);
+
+      AppInMemory? existingApp = appsProvider.apps.values
+          .where((AppInMemory a) => a.app.url == standardizedUrl)
+          .firstOrNull;
+
+      if (existingApp != null) {
+        await goToExistingApp(existingApp.app.id);
+      } else {
+        await goToAddApp(data);
+      }
+    }
+
+    handleSharedText(String sharedText) async {
+      isLinkActivity = true;
+      final String? sharedUrl = SharedUrlReceiver.extractFirstUrl(sharedText);
+      if (sharedUrl == null) {
+        if (!context.mounted) return;
+        showError(UnsupportedURLError(), context);
+        return;
+      }
+      try {
+        await handleAddUrl(sharedUrl);
+      } catch (e) {
+        if (!context.mounted) return;
+        // ignore: use_build_context_synchronously
+        showError(e, context);
+      }
+    }
+
     interpretLink(Uri uri) async {
       isLinkActivity = true;
       var action = uri.host;
       var data = uri.path.length > 1 ? uri.path.substring(1) : "";
       try {
         if (action == 'add') {
-          // Ensure apps are loaded
-          AppsProvider appsProvider = context.read<AppsProvider>();
-          while (appsProvider.loadingApps) {
-            await Future.delayed(const Duration(milliseconds: 10));
-          }
-
-          // See if we already have this app
-          String standardizedUrl = SourceProvider()
-              .getSource(data)
-              .standardizeUrl(data);
-
-          AppInMemory? existingApp = appsProvider.apps.values
-              .where((AppInMemory a) => a.app.url == standardizedUrl)
-              .firstOrNull;
-
-          if (existingApp != null) {
-            await goToExistingApp(existingApp.app.id);
-          } else {
-            await goToAddApp(data);
-          }
+          await handleAddUrl(data);
         } else if (action == 'app' || action == 'apps') {
           var dataStr = Uri.decodeComponent(data);
           if (!context.mounted) return;
@@ -287,6 +310,12 @@ class _HomePageState extends State<HomePage> {
     if (appLink != null) {
       await interpretLink(appLink);
       initLinked = true;
+    }
+    _sharedUrlReceiver.listen(handleSharedText);
+    final String? initialSharedText = await _sharedUrlReceiver
+        .getInitialSharedText();
+    if (initialSharedText != null) {
+      await handleSharedText(initialSharedText);
     }
     // Handle link when app is in warm state (front or background)
     _linkSubscription = _appLinks.uriLinkStream.listen((uri) async {
@@ -570,7 +599,8 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    super.dispose();
     _linkSubscription?.cancel();
+    _sharedUrlReceiver.dispose();
+    super.dispose();
   }
 }
