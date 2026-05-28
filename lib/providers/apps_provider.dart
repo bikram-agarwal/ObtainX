@@ -97,6 +97,42 @@ bool versionsEffectivelyEqual(String installed, String latest) {
   return false;
 }
 
+String? reconciledInstalledVersionFromLatest(
+  String installedVersion,
+  String latestVersion,
+) {
+  if (installedVersion == latestVersion ||
+      versionsEffectivelyEqual(installedVersion, latestVersion)) {
+    return latestVersion;
+  }
+  final reconciled = reconcileVersionDifferences(
+    installedVersion,
+    latestVersion,
+  );
+  if (reconciled == null) {
+    return null;
+  }
+  return reconciled.key ? reconciled.value : installedVersion;
+}
+
+String? reconciledInstalledVersionForDisabledVersionDetection(
+  String realInstalledVersion,
+  String reportedInstalledVersion,
+  String latestVersion,
+) {
+  return reconciledInstalledVersionFromLatest(
+        realInstalledVersion,
+        latestVersion,
+      ) ??
+      (reconcileVersionDifferences(
+                realInstalledVersion,
+                reportedInstalledVersion,
+              )?.key ==
+              false
+          ? realInstalledVersion
+          : null);
+}
+
 bool _isDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39; // '0'..'9'
 
 DateTime? _dateFromReleaseDateVersionString(String version) {
@@ -521,6 +557,87 @@ Set<String> findStandardFormatsForVersion(String version, bool strict) {
     }
   }
   return results;
+}
+
+MapEntry<bool, String>? reconcileVersionDifferences(
+  String templateVersion,
+  String comparisonVersion,
+) {
+  // Returns null if the versions don't share a common standard format
+  // Returns <true, comparisonVersion> if they share a common format and are equal
+  // Returns <false, templateVersion> if they share a common format but are not equal
+  // templateVersion must fully match a standard format, while comparisonVersion can have a substring match
+  var templateVersionFormats = findStandardFormatsForVersion(
+    templateVersion,
+    true,
+  );
+  var comparisonVersionFormats = findStandardFormatsForVersion(
+    comparisonVersion,
+    true,
+  );
+  if (comparisonVersionFormats.isEmpty) {
+    comparisonVersionFormats = findStandardFormatsForVersion(
+      comparisonVersion,
+      false,
+    );
+  }
+  var commonStandardFormats = templateVersionFormats.intersection(
+    comparisonVersionFormats,
+  );
+  if (commonStandardFormats.isEmpty) {
+    return reconcileVersionDifferencesByShape(
+      templateVersion,
+      comparisonVersion,
+    );
+  }
+  for (String pattern in commonStandardFormats) {
+    if (doStringsMatchUnderRegEx(pattern, comparisonVersion, templateVersion)) {
+      return MapEntry(true, comparisonVersion);
+    }
+  }
+  return MapEntry(false, templateVersion);
+}
+
+MapEntry<bool, String>? reconcileVersionDifferencesByShape(
+  String templateVersion,
+  String comparisonVersion,
+) {
+  final String templateShape = versionShapeForReconciliation(templateVersion);
+  final String comparisonShape = versionShapeForReconciliation(
+    comparisonVersion,
+  );
+  if (templateShape.isEmpty || templateShape != comparisonShape) {
+    return null;
+  }
+  final templateTokens = numericVersionTokens(templateVersion);
+  final comparisonTokens = numericVersionTokens(comparisonVersion);
+  if (templateTokens.isEmpty ||
+      templateTokens.length != comparisonTokens.length) {
+    return null;
+  }
+  if (listEquals(templateTokens, comparisonTokens)) {
+    return MapEntry(true, comparisonVersion);
+  }
+  return MapEntry(false, templateVersion);
+}
+
+String versionShapeForReconciliation(String version) {
+  return version.trim().toLowerCase().replaceAll(RegExp(r'\d+'), '#');
+}
+
+List<int> numericVersionTokens(String version) {
+  return RegExp(
+    r'\d+',
+  ).allMatches(version).map((m) => int.tryParse(m.group(0)!) ?? 0).toList();
+}
+
+bool doStringsMatchUnderRegEx(String pattern, String value1, String value2) {
+  var r = RegExp(pattern);
+  var m1 = r.firstMatch(value1);
+  var m2 = r.firstMatch(value2);
+  return m1 != null && m2 != null
+      ? value1.substring(m1.start, m1.end) == value2.substring(m2.start, m2.end)
+      : false;
 }
 
 List<String> moveStrToEnd(List<String> arr, String str, {String? strB}) {
@@ -2583,6 +2700,26 @@ class AppsProvider with ChangeNotifier {
       }
       modded = true;
     }
+    if (realInstalledVersion != null &&
+        app.installedVersion != null &&
+        realInstalledVersion != app.installedVersion &&
+        !versionDetectionIsStandard) {
+      // Version detection can be disabled because the APK manifest version is
+      // not the source/release version. Still, an external install should be
+      // reflected when the manifest version can be reconciled with the source
+      // latest or the previous stored installed version; only unreconcilable
+      // pairs keep the source pseudo-version.
+      final correctedInstalledVersion =
+          reconciledInstalledVersionForDisabledVersionDetection(
+            realInstalledVersion,
+            app.installedVersion!,
+            app.latestVersion,
+          );
+      if (correctedInstalledVersion != null) {
+        app.installedVersion = correctedInstalledVersion;
+        modded = true;
+      }
+    }
     // SECOND, RECONCILE DIFFERENCES BETWEEN THE APP'S REPORTED AND REAL INSTALLED VERSIONS, WHERE NEITHER IS NULL
     if (realInstalledVersion != null &&
         realInstalledVersion != app.installedVersion &&
@@ -2639,56 +2776,6 @@ class AppsProvider with ChangeNotifier {
     }
 
     return modded ? app : null;
-  }
-
-  MapEntry<bool, String>? reconcileVersionDifferences(
-    String templateVersion,
-    String comparisonVersion,
-  ) {
-    // Returns null if the versions don't share a common standard format
-    // Returns <true, comparisonVersion> if they share a common format and are equal
-    // Returns <false, templateVersion> if they share a common format but are not equal
-    // templateVersion must fully match a standard format, while comparisonVersion can have a substring match
-    var templateVersionFormats = findStandardFormatsForVersion(
-      templateVersion,
-      true,
-    );
-    var comparisonVersionFormats = findStandardFormatsForVersion(
-      comparisonVersion,
-      true,
-    );
-    if (comparisonVersionFormats.isEmpty) {
-      comparisonVersionFormats = findStandardFormatsForVersion(
-        comparisonVersion,
-        false,
-      );
-    }
-    var commonStandardFormats = templateVersionFormats.intersection(
-      comparisonVersionFormats,
-    );
-    if (commonStandardFormats.isEmpty) {
-      return null;
-    }
-    for (String pattern in commonStandardFormats) {
-      if (doStringsMatchUnderRegEx(
-        pattern,
-        comparisonVersion,
-        templateVersion,
-      )) {
-        return MapEntry(true, comparisonVersion);
-      }
-    }
-    return MapEntry(false, templateVersion);
-  }
-
-  bool doStringsMatchUnderRegEx(String pattern, String value1, String value2) {
-    var r = RegExp(pattern);
-    var m1 = r.firstMatch(value1);
-    var m2 = r.firstMatch(value2);
-    return m1 != null && m2 != null
-        ? value1.substring(m1.start, m1.end) ==
-              value2.substring(m2.start, m2.end)
-        : false;
   }
 
   Future<void> loadApps({String? singleId}) async {

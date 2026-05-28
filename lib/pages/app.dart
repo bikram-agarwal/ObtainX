@@ -754,13 +754,8 @@ class _AppPageState extends State<AppPage> {
     if (!mounted) return;
     if (result == null || result.files.isEmpty) return;
     final PlatformFile picked = result.files.single;
-    Uint8List? bytes;
-    try {
-      bytes = await picked.readAsBytes();
-    } catch (_) {
-      if (picked.path == null) return;
-      bytes = await File(picked.path!).readAsBytes();
-    }
+    final Uint8List? bytes = await _readPickedFileBytes(picked);
+    if (bytes == null) return;
     if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
       if (mounted) {
         _showPageError(ObtainiumError(tr('changeAppIconInvalidPng')), context);
@@ -772,6 +767,20 @@ class _AppPageState extends State<AppPage> {
       _editStagedClearOverride = false;
       _editNonUserIconPreview = null;
     });
+  }
+
+  Future<Uint8List?> _readPickedFileBytes(PlatformFile picked) async {
+    try {
+      return await picked.readAsBytes();
+    } catch (_) {
+      final String? path = picked.path;
+      if (path == null) return null;
+      try {
+        return await File(path).readAsBytes();
+      } catch (_) {
+        return null;
+      }
+    }
   }
 
   Future<void> _onResetEditIconPressed(AppsProvider appsProvider) async {

@@ -190,11 +190,11 @@ class _ImportExportPageState extends State<ImportExportPage> {
       } catch (err) {
         throw ObtainiumError(tr('invalidInput'));
       }
-      final value = await appsProvider.import(backupData);
+      final importResult = await appsProvider.import(backupData);
       if (!context.mounted) return;
       var cats = settingsProvider.categories;
-      appsProvider.apps.forEach((key, value) {
-        for (var category in value.app.categories) {
+      appsProvider.apps.forEach((key, appInMemory) {
+        for (var category in appInMemory.app.categories) {
           if (!cats.containsKey(category)) {
             cats[category] = generateRandomLightColor().toARGB32();
           }
@@ -202,7 +202,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
       });
       appsProvider.addMissingCategories(settingsProvider);
       showMessage(
-        '${tr('importedX', args: [plural('apps', value.key.length).toLowerCase()])}${value.value ? ' + ${tr('settings').toLowerCase()}' : ''}',
+        '${tr('importedX', args: [plural('apps', importResult.key.length).toLowerCase()])}${importResult.value ? ' + ${tr('settings').toLowerCase()}' : ''}',
         context,
       );
     }
