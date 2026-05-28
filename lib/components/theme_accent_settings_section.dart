@@ -129,7 +129,7 @@ class _ThemeAccentSwatchesItemState extends State<_ThemeAccentSwatchesItem> {
             child: _customColorPickerExpanded
                 ? Padding(
                     padding: const EdgeInsets.only(top: 14),
-                    child: _CustomColorSliderPanel(
+                    child: CustomColorSliderPanel(
                       seedHex: _sliderSeedHexForSettings(settings, scheme),
                       onPreviewColor: settings.previewCustomSeedHex,
                       onSaveColor: settings.addCustomSeedHex,
@@ -174,23 +174,27 @@ String _sliderSeedHexForSettings(
 const double _kCustomHexChipWidth = 84;
 const Duration _kCustomHexDebounce = Duration(milliseconds: 450);
 
-class _CustomColorSliderPanel extends StatefulWidget {
-  const _CustomColorSliderPanel({
+class CustomColorSliderPanel extends StatefulWidget {
+  const CustomColorSliderPanel({
+    super.key,
     required this.seedHex,
     required this.onPreviewColor,
     required this.onSaveColor,
+    this.title,
+    this.showSaveButton = true,
   });
 
   final String seedHex;
   final ValueChanged<String> onPreviewColor;
   final ValueChanged<String> onSaveColor;
+  final String? title;
+  final bool showSaveButton;
 
   @override
-  State<_CustomColorSliderPanel> createState() =>
-      _CustomColorSliderPanelState();
+  State<CustomColorSliderPanel> createState() => _CustomColorSliderPanelState();
 }
 
-class _CustomColorSliderPanelState extends State<_CustomColorSliderPanel> {
+class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
   late String _selectedHex;
   late final TextEditingController _hexController;
   final FocusNode _hexFocusNode = FocusNode();
@@ -207,7 +211,7 @@ class _CustomColorSliderPanelState extends State<_CustomColorSliderPanel> {
   }
 
   @override
-  void didUpdateWidget(covariant _CustomColorSliderPanel oldWidget) {
+  void didUpdateWidget(covariant CustomColorSliderPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     final String nextHex = _normalizedOrDefault(widget.seedHex);
     if (nextHex == _selectedHex) return;
@@ -232,7 +236,7 @@ class _CustomColorSliderPanelState extends State<_CustomColorSliderPanel> {
   }
 
   void _syncHexController() {
-    final String text = _selectedHex.substring(1);
+    final String text = _selectedHex;
     _hexController.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
@@ -271,7 +275,8 @@ class _CustomColorSliderPanelState extends State<_CustomColorSliderPanel> {
   void _scheduleHexPreview() {
     _hexDebounce?.cancel();
     final String raw = _hexController.text;
-    if (raw.length != 6) return;
+    final String clean = raw.startsWith('#') ? raw.substring(1) : raw;
+    if (clean.length != 6) return;
     _hexDebounce = Timer(_kCustomHexDebounce, () {
       if (!mounted) return;
       final String? normalized = normalizeCustomSeedHexOrNull(raw);
@@ -317,26 +322,35 @@ class _CustomColorSliderPanelState extends State<_CustomColorSliderPanel> {
             children: [
               Expanded(
                 child: Text(
-                  tr('settingsCustomSeedSliderTitle'),
+                  widget.title ?? tr('settingsCustomSeedSliderTitle'),
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
               _buildHexChip(context),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 42,
-                height: 42,
-                child: IconButton.filledTonal(
-                  tooltip: tr('ok'),
-                  onPressed: () {
-                    final String hex = _finishHexEditing();
-                    widget.onSaveColor(hex);
-                  },
-                  icon: const Icon(Icons.check_rounded),
+              if (widget.showSaveButton) ...[
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: IconButton.filledTonal(
+                    tooltip: tr('ok'),
+                    visualDensity: VisualDensity.compact,
+                    style: IconButton.styleFrom(
+                      fixedSize: const Size.square(36),
+                      minimumSize: const Size.square(36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      padding: EdgeInsets.zero,
+                    ),
+                    onPressed: () {
+                      final String hex = _finishHexEditing();
+                      widget.onSaveColor(hex);
+                    },
+                    icon: const Icon(Icons.check_rounded),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
           const SizedBox(height: 18),
@@ -401,34 +415,30 @@ class _CustomColorSliderPanelState extends State<_CustomColorSliderPanel> {
           decoration: decoration,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                Text('#', style: textStyle),
-                Expanded(
-                  child: TextField(
-                    controller: _hexController,
-                    focusNode: _hexFocusNode,
-                    inputFormatters: [
-                      _HexInputFormatter(onReject: _rejectHexInput),
-                    ],
-                    maxLines: 1,
-                    autofocus: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    textCapitalization: TextCapitalization.characters,
-                    keyboardType: TextInputType.text,
-                    textInputAction: TextInputAction.done,
-                    style: textStyle,
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      counterText: '',
-                      isCollapsed: true,
-                    ),
-                    onChanged: (_) => _scheduleHexPreview(),
-                    onEditingComplete: _finishHexEditing,
-                  ),
+            child: Center(
+              child: TextField(
+                controller: _hexController,
+                focusNode: _hexFocusNode,
+                inputFormatters: [
+                  _HexInputFormatter(onReject: _rejectHexInput),
+                ],
+                maxLines: 1,
+                autofocus: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                textCapitalization: TextCapitalization.characters,
+                keyboardType: TextInputType.text,
+                textInputAction: TextInputAction.done,
+                textAlign: TextAlign.center,
+                style: textStyle,
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  counterText: '',
+                  isCollapsed: true,
                 ),
-              ],
+                onChanged: (_) => _scheduleHexPreview(),
+                onEditingComplete: _finishHexEditing,
+              ),
             ),
           ),
         ),
@@ -449,15 +459,26 @@ class _HexInputFormatter extends TextInputFormatter {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    if (newValue.text.length > 6 || !_validHex.hasMatch(newValue.text)) {
+    String nextText = newValue.text.toUpperCase();
+    if (nextText.isNotEmpty && !nextText.startsWith('#')) {
+      nextText = '#$nextText';
+    }
+    final String cleanText = nextText.startsWith('#')
+        ? nextText.substring(1)
+        : nextText;
+    if (cleanText.length > 6 || !_validHex.hasMatch(cleanText)) {
       onReject();
       return oldValue;
     }
 
-    final String upperText = newValue.text.toUpperCase();
-    int clampOffset(int offset) => offset.clamp(0, upperText.length).toInt();
+    int clampOffset(int offset) {
+      final int prefixOffset =
+          newValue.text.isNotEmpty && !newValue.text.startsWith('#') ? 1 : 0;
+      return (offset + prefixOffset).clamp(0, nextText.length).toInt();
+    }
+
     return TextEditingValue(
-      text: upperText,
+      text: nextText,
       selection: TextSelection(
         baseOffset: clampOffset(newValue.selection.baseOffset),
         extentOffset: clampOffset(newValue.selection.extentOffset),
@@ -483,13 +504,23 @@ class _HueColorSlider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final Color selectedColor =
-        colorFromNormalizedHex(normalizeCustomSeedHexOrNull(hex)) ??
-        scheme.primary;
     final double hue = _hueFromHexColor(hex);
+    final Color thumbColor = _colorFromHue(
+      hue,
+      saturation: _kHueSliderThumbSaturation,
+      value: _kHueSliderThumbValue,
+    );
+    final bool lightPanel =
+        scheme.surfaceContainerHighest.computeLuminance() > 0.5;
+    final double gapWidth = lightPanel
+        ? _HueSliderTrackBackground.lightGapWidth
+        : _HueSliderTrackBackground.defaultGapWidth;
+    final double handleWidth = lightPanel
+        ? _HueSliderThumbShape.lightWidth
+        : _HueSliderThumbShape.width;
 
     return SizedBox(
-      height: 52,
+      height: _HueSliderThumbShape.height,
       width: double.infinity,
       child: Stack(
         alignment: Alignment.center,
@@ -499,20 +530,22 @@ class _HueColorSlider extends StatelessWidget {
               child: _HueSliderTrackBackground(
                 value: (hue / 360).clamp(0, 1).toDouble(),
                 gapColor: scheme.surfaceContainerHighest,
+                gapWidth: gapWidth,
+                handleWidth: handleWidth,
               ),
             ),
           ),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              trackHeight: 28,
+              trackHeight: _HueSliderTrackBackground.trackHeight,
               activeTrackColor: Colors.transparent,
               inactiveTrackColor: Colors.transparent,
               secondaryActiveTrackColor: Colors.transparent,
               disabledActiveTrackColor: Colors.transparent,
               disabledInactiveTrackColor: Colors.transparent,
-              thumbColor: selectedColor,
+              thumbColor: thumbColor,
               overlayShape: SliderComponentShape.noOverlay,
-              thumbShape: const _HueSliderThumbShape(),
+              thumbShape: _HueSliderThumbShape(handleWidth: handleWidth),
               tickMarkShape: SliderTickMarkShape.noTickMark,
             ),
             child: Slider(
@@ -534,31 +567,37 @@ class _HueSliderTrackBackground extends StatelessWidget {
   const _HueSliderTrackBackground({
     required this.value,
     required this.gapColor,
+    required this.gapWidth,
+    required this.handleWidth,
   });
 
   final double value;
   final Color gapColor;
-  static const double _trackHeight = 28;
-  static const double _gapWidth = 16;
+  final double gapWidth;
+  final double handleWidth;
+  static const double trackHeight = 28;
+  static const double trackCorner = 10;
+  static const double defaultGapWidth = 14;
+  static const double lightGapWidth = 13;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double width = constraints.maxWidth;
-        final double thumbRadius = _HueSliderThumbShape.width / 2;
-        final double usableWidth = (width - _HueSliderThumbShape.width).clamp(
+        final double handleRadius = handleWidth / 2;
+        final double usableWidth = (width - handleWidth).clamp(
           0.0,
           double.infinity,
         );
-        final double gapCenter = thumbRadius + usableWidth * value;
+        final double gapCenter = handleRadius + usableWidth * value;
 
         return Center(
           child: SizedBox(
-            height: _trackHeight,
+            height: trackHeight,
             width: double.infinity,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(_trackHeight / 2),
+              borderRadius: BorderRadius.circular(trackCorner),
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -568,8 +607,8 @@ class _HueSliderTrackBackground extends StatelessWidget {
                     ),
                   ),
                   Positioned(
-                    left: gapCenter - _gapWidth / 2,
-                    width: _gapWidth,
+                    left: gapCenter - gapWidth / 2,
+                    width: gapWidth,
                     top: 0,
                     bottom: 0,
                     child: ColoredBox(color: gapColor),
@@ -585,20 +624,40 @@ class _HueSliderTrackBackground extends StatelessWidget {
 }
 
 const List<Color> _kHueSliderColors = [
-  Color(0xFFF54545),
-  Color(0xFFF5F545),
-  Color(0xFF45F545),
-  Color(0xFF45F5F5),
-  Color(0xFF4545F5),
-  Color(0xFFF545F5),
-  Color(0xFFF54545),
+  Color(0xFFE95A50),
+  Color(0xFFE8B84E),
+  Color(0xFFD5DB4C),
+  Color(0xFF58D95C),
+  Color(0xFF43CDD0),
+  Color(0xFF5569E8),
+  Color(0xFFD64BDD),
+  Color(0xFFE95A50),
 ];
+
+const double _kHueSliderGeneratedSaturation = 0.66;
+const double _kHueSliderGeneratedValue = 0.90;
+const double _kHueSliderThumbSaturation = 0.58;
+const double _kHueSliderThumbValue = 0.86;
 
 String _colorHexFromHue(double hue) {
   final double normalizedHue = hue >= 360 ? 0 : hue.clamp(0, 360).toDouble();
   return colorToCanonicalHex(
-    HSVColor.fromAHSV(1, normalizedHue, 0.72, 0.96).toColor(),
+    HSVColor.fromAHSV(
+      1,
+      normalizedHue,
+      _kHueSliderGeneratedSaturation,
+      _kHueSliderGeneratedValue,
+    ).toColor(),
   );
+}
+
+Color _colorFromHue(
+  double hue, {
+  required double saturation,
+  required double value,
+}) {
+  final double normalizedHue = hue >= 360 ? 0 : hue.clamp(0, 360).toDouble();
+  return HSVColor.fromAHSV(1, normalizedHue, saturation, value).toColor();
 }
 
 double _hueFromHexColor(String hex) {
@@ -610,14 +669,16 @@ double _hueFromHexColor(String hex) {
 }
 
 class _HueSliderThumbShape extends SliderComponentShape {
-  const _HueSliderThumbShape();
+  const _HueSliderThumbShape({required this.handleWidth});
 
-  static const double width = 4;
-  static const double _height = 48;
+  final double handleWidth;
+  static const double width = 5;
+  static const double lightWidth = 6;
+  static const double height = 42;
 
   @override
   Size getPreferredSize(bool isEnabled, bool isDiscrete) {
-    return const Size(width, _height);
+    return Size(handleWidth, height);
   }
 
   @override
@@ -638,8 +699,8 @@ class _HueSliderThumbShape extends SliderComponentShape {
     final Color color = sliderTheme.thumbColor ?? Colors.white;
     final Rect rect = Rect.fromCenter(
       center: center,
-      width: width,
-      height: _height,
+      width: handleWidth,
+      height: height,
     );
     context.canvas.drawRRect(
       RRect.fromRectAndRadius(rect, const Radius.circular(2)),

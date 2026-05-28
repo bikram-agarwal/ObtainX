@@ -368,8 +368,7 @@ class SettingsProvider with ChangeNotifier {
           .map((dynamic e) => normalizeCustomSeedHexOrNull(e.toString()))
           .whereType<String>()
           .toList();
-      if (out.isEmpty) return [activeCustomSeedHex];
-      return out;
+      return out.isNotEmpty ? out : [activeCustomSeedHex];
     } catch (_) {
       return [activeCustomSeedHex];
     }
@@ -402,13 +401,13 @@ class SettingsProvider with ChangeNotifier {
     final List<String> list = savedCustomSeedHexes
         .where((String h) => h != normalized)
         .toList();
-    if (list.isEmpty) {
-      list.add(colorToCanonicalHex(obtainiumThemeColor));
-    }
     _persistSavedCustomSeedHexes(list);
     if (activeCustomSeedHex == normalized) {
-      prefs?.setString('activeCustomSeedHex', list.first);
-      final Color? c = colorFromNormalizedHex(list.first);
+      final String nextHex = list.isNotEmpty
+          ? list.first
+          : colorToCanonicalHex(obtainiumThemeColor);
+      prefs?.setString('activeCustomSeedHex', nextHex);
+      final Color? c = colorFromNormalizedHex(nextHex);
       if (c != null) prefs?.setInt('themeColor', c.toARGB32());
     }
     notifyListeners();

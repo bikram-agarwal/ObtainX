@@ -224,7 +224,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun getSharedTextFromIntent(intent: Intent?): String? {
-        if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") {
+        if (intent?.action != Intent.ACTION_SEND || intent?.type != "text/plain") {
             return null
         }
         return intent.getCharSequenceExtra(Intent.EXTRA_TEXT)

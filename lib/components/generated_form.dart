@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/components/theme_accent_settings_section.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
@@ -419,44 +420,9 @@ Color generateRandomLightColor() {
   return Color.fromARGB(255, rgbValues[0], rgbValues[1], rgbValues[2]);
 }
 
-/// Builds a 5×12 palette using standard HSL for a smooth vivid→pastel gradient.
-/// Each row decreases saturation and increases lightness uniformly across all hues,
-/// so brightness fades gradually rather than in a perceptual-cliff jump.
-List<Color> _buildCategoryColorPalette() {
-  const hues = [
-    0.0,
-    30.0,
-    60.0,
-    90.0,
-    120.0,
-    150.0,
-    180.0,
-    210.0,
-    240.0,
-    270.0,
-    300.0,
-    330.0,
-  ];
-  // (saturation, lightness) pairs — vivid at top, pastel at bottom
-  const rows = [
-    (1.00, 0.50), // vivid/pure
-    (0.75, 0.64), // medium-vivid
-    (0.58, 0.72), // medium
-    (0.50, 0.76), // medium-soft (intermediate)
-    (0.42, 0.80), // pastel
-  ];
-  final palette = <Color>[];
-  for (final (sat, lig) in rows) {
-    for (final h in hues) {
-      palette.add(HSLColor.fromAHSL(1.0, h, sat, lig).toColor());
-    }
-  }
-  return palette;
-}
-
 /// Unified bottom-sheet for creating or editing a category.
-/// Label field with live chip preview at top, 5×12 color swatch grid below,
-/// hex input that auto-stages on valid input. Single "Save" button.
+/// Label field with live chip preview at top, shared color slider below,
+/// and a single sheet-level "Save" button.
 /// Returns ({Color color, String name}) or null if dismissed.
 class _CategoryColorPickerSheet extends StatefulWidget {
   const _CategoryColorPickerSheet({
@@ -473,11 +439,7 @@ class _CategoryColorPickerSheet extends StatefulWidget {
 
 class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
   late Color _staged;
-  Color? _paletteColor;
-  bool _hexError = false;
-  late final List<Color> _palette;
   late final TextEditingController _nameCtrl;
-  late final TextEditingController _hexCtrl;
 
   static String _colorToHex(Color c) {
     final v = c.toARGB32() & 0xFFFFFF;
@@ -487,51 +449,27 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
   @override
   void initState() {
     super.initState();
-    _palette = _buildCategoryColorPalette();
     _staged = widget.initialColor;
     _nameCtrl = TextEditingController(text: widget.initialName);
-    _hexCtrl = TextEditingController(text: _colorToHex(_staged));
-    final match = _palette.where((c) => c.toARGB32() == _staged.toARGB32());
-    _paletteColor = match.isNotEmpty ? _staged : null;
   }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _hexCtrl.dispose();
     super.dispose();
   }
 
-  void _onHexChanged(String text) {
-    final clean = text.replaceFirst('#', '');
-    if (clean.length == 6) {
-      final value = int.tryParse(clean, radix: 16);
-      if (value != null) {
-        setState(() {
-          _staged = Color(0xFF000000 | value);
-          _paletteColor = null;
-          _hexError = false;
-        });
-        return;
-      }
-      setState(() => _hexError = true);
-    } else if (_hexError) {
-      setState(() => _hexError = false);
-    }
-  }
-
-  void _selectSwatch(Color color) {
+  void _stageHex(String hex) {
+    final String clean = hex.replaceFirst('#', '');
+    final int? value = int.tryParse(clean, radix: 16);
+    if (value == null) return;
     setState(() {
-      _staged = color;
-      _paletteColor = color;
-      _hexCtrl.text = _colorToHex(color);
-      _hexError = false;
+      _staged = Color(0xFF000000 | value);
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final name = _nameCtrl.text.trim();
     return SafeArea(
       child: Padding(
@@ -581,90 +519,16 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
               ],
             ),
             const SizedBox(height: 16),
-            // 5×12 swatch grid
-            GridView.count(
-              crossAxisCount: 12,
-              shrinkWrap: true,
-              mainAxisSpacing: 4,
-              crossAxisSpacing: 4,
-              physics: const NeverScrollableScrollPhysics(),
-              children: _palette.map((color) {
-                final bool selected =
-                    _paletteColor?.toARGB32() == color.toARGB32();
-                return GestureDetector(
-                  onTap: () => _selectSwatch(color),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: color,
-                      borderRadius: BorderRadius.circular(6),
-                      border: selected
-                          ? Border.all(
-                              color: theme.colorScheme.onSurface,
-                              width: 2.5,
-                            )
-                          : null,
-                    ),
-                    child: selected
-                        ? Icon(
-                            Icons.check_rounded,
-                            size: 14,
-                            color: color.computeLuminance() > 0.35
-                                ? Colors.black87
-                                : Colors.white,
-                          )
-                        : null,
-                  ),
-                );
-              }).toList(),
+            CustomColorSliderPanel(
+              seedHex: _colorToHex(_staged),
+              onPreviewColor: _stageHex,
+              onSaveColor: _stageHex,
+              showSaveButton: false,
             ),
-            const SizedBox(height: 12),
-            // Hex input + Cancel + Save all in one row
+            const SizedBox(height: 16),
             Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                SizedBox(
-                  width: 148,
-                  child: TextField(
-                    controller: _hexCtrl,
-                    decoration: InputDecoration(
-                      labelText: 'HEX',
-                      hintText: '#FF5733',
-                      errorText: _hexError ? tr('invalidInput') : null,
-                      isDense: true,
-                      border: const OutlineInputBorder(),
-                      prefixIcon: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: Container(
-                          width: 22,
-                          height: 22,
-                          decoration: BoxDecoration(
-                            color: _staged,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: theme.colorScheme.outline,
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    inputFormatters: [
-                      TextInputFormatter.withFunction((old, updated) {
-                        var text = updated.text.toUpperCase();
-                        if (!text.startsWith('#')) text = '#$text';
-                        if (text.length > 7) return old;
-                        return updated.copyWith(
-                          text: text,
-                          selection: TextSelection.collapsed(
-                            offset: text.length,
-                          ),
-                        );
-                      }),
-                    ],
-                    onChanged: _onHexChanged,
-                  ),
-                ),
-                const Spacer(),
                 TextButton(
                   onPressed: () => Navigator.pop(context),
                   child: Text(tr('cancel')),
