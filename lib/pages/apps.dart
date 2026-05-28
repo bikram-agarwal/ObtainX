@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
+import 'package:obtainium/components/bulk_category_editor.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
@@ -16,7 +17,6 @@ import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
-import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -3425,63 +3425,43 @@ class AppsPageState extends State<AppsPage> {
     launchCategorizeDialog() {
       return () async {
         try {
-          Set<String>? preselected;
-          var showPrompt = false;
-          for (var element in selectedApps) {
-            var currentCats = element.categories.toSet();
-            if (preselected == null) {
-              preselected = currentCats;
-            } else {
-              if (!settingsProvider.setEqual(currentCats, preselected)) {
-                showPrompt = true;
-                break;
-              }
-            }
-          }
-          var cont = true;
-          if (showPrompt) {
-            cont =
-                await showDialog<Map<String, dynamic>?>(
-                  context: context,
-                  builder: (BuildContext ctx) {
-                    return GeneratedFormModal(
-                      title: tr('categorize'),
-                      items: const [],
-                      initValid: true,
-                      message: tr('selectedCategorizeWarning'),
-                    );
-                  },
-                ) !=
-                null;
-          }
-          if (cont) {
-            if (!context.mounted) return;
-            await showDialog<Map<String, dynamic>?>(
-              context: context,
-              builder: (BuildContext ctx) {
-                return GeneratedFormModal(
-                  title: tr('categorize'),
-                  items: const [],
-                  initValid: true,
-                  singleNullReturnButton: tr('continue'),
-                  additionalWidgets: [
-                    CategoryEditorSelector(
-                      preselected: !showPrompt ? preselected ?? {} : {},
-                      showLabelWhenNotEmpty: false,
-                      onSelected: (categories) {
-                        appsProvider.saveApps(
-                          selectedApps.map((e) {
-                            e.categories = categories;
-                            return e;
-                          }).toList(),
-                        );
-                      },
-                    ),
-                  ],
-                );
-              },
-            );
-          }
+          final appsToCategorize = selectedApps.toList();
+          await showModalBottomSheet<void>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            builder: (BuildContext sheetContext) {
+              return BulkCategoryEditorSheet(
+                availableCategoryColors: settingsProvider.categories,
+                selectedAppCategories: appsToCategorize
+                    .map((app) => app.categories.toList())
+                    .toList(),
+                onApply: (actions) {
+                  final nextCategoryColors = Map<String, int>.from(
+                    settingsProvider.categories,
+                  )..addAll(actions.newCategoryColors);
+                  if (actions.newCategoryColors.isNotEmpty) {
+                    settingsProvider.setCategories(nextCategoryColors);
+                  }
+                  final updatedCategoryLists =
+                      applyBulkCategoryActionsToCategoryLists(
+                        appsToCategorize.map((app) => app.categories),
+                        actions,
+                      );
+                  var index = 0;
+                  appsProvider.saveApps(
+                    appsToCategorize.map((app) {
+                      app.categories = updatedCategoryLists[index++];
+                      return app;
+                    }).toList(),
+                  );
+                },
+              );
+            },
+          );
         } catch (err) {
           if (!context.mounted) return;
           showError(err, context);

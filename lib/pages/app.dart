@@ -2739,6 +2739,7 @@ class _AppPageState extends State<AppPage> {
                                   ),
                                 ),
                                 backgroundColor: fill,
+                                shape: const StadiumBorder(),
                                 side: BorderSide.none,
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,
@@ -2754,6 +2755,7 @@ class _AppPageState extends State<AppPage> {
                                 categoryName,
                                 style: detailsValueStyle,
                               ),
+                              shape: const StadiumBorder(),
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
                                 vertical: 4,

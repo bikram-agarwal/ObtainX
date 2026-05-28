@@ -441,11 +441,6 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
   late Color _staged;
   late final TextEditingController _nameCtrl;
 
-  static String _colorToHex(Color c) {
-    final v = c.toARGB32() & 0xFFFFFF;
-    return '#${v.toRadixString(16).padLeft(6, '0').toUpperCase()}';
-  }
-
   @override
   void initState() {
     super.initState();
@@ -482,48 +477,12 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Label field + live chip preview
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _nameCtrl,
-                    autofocus: widget.initialName.isEmpty,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: InputDecoration(
-                      labelText: tr('label'),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 14,
-                      ),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                ChoiceChip(
-                  label: Text(name.isEmpty ? ' ' : name),
-                  selected: true,
-                  selectedColor: _staged,
-                  showCheckmark: false,
-                  labelStyle: TextStyle(
-                    color: _staged.computeLuminance() > 0.35
-                        ? Colors.black87
-                        : Colors.white,
-                  ),
-                  onSelected: (_) {},
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            CustomColorSliderPanel(
-              seedHex: _colorToHex(_staged),
-              onPreviewColor: _stageHex,
-              onSaveColor: _stageHex,
-              showSaveButton: false,
+            CategoryEditorFields(
+              nameController: _nameCtrl,
+              color: _staged,
+              autofocusName: widget.initialName.isEmpty,
+              onNameChanged: (_) => setState(() {}),
+              onColorHexChanged: _stageHex,
             ),
             const SizedBox(height: 16),
             Row(
@@ -554,7 +513,7 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
 
 /// Opens [_CategoryColorPickerSheet] for creating or editing a category.
 /// Returns ({Color color, String name}) or null if dismissed.
-Future<({Color color, String name})?> _showCategorySheet(
+Future<({Color color, String name})?> showCategorySheet(
   BuildContext context, {
   required Color initialColor,
   required String initialName,
@@ -571,6 +530,295 @@ Future<({Color color, String name})?> _showCategorySheet(
       initialName: initialName,
     ),
   );
+}
+
+String categoryColorToHex(Color color) {
+  final value = color.toARGB32() & 0xFFFFFF;
+  return '#${value.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+}
+
+class CategoryEditorFields extends StatelessWidget {
+  const CategoryEditorFields({
+    super.key,
+    required this.nameController,
+    required this.color,
+    required this.onNameChanged,
+    required this.onColorHexChanged,
+    this.autofocusName = false,
+  });
+
+  final TextEditingController nameController;
+  final Color color;
+  final ValueChanged<String> onNameChanged;
+  final ValueChanged<String> onColorHexChanged;
+  final bool autofocusName;
+  static const int nameMaxLength = 20;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final String hex = categoryColorToHex(color);
+    final BorderRadius fieldRadius = BorderRadius.circular(12);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: nameController,
+                autofocus: autofocusName,
+                textCapitalization: TextCapitalization.sentences,
+                inputFormatters: [
+                  LengthLimitingTextInputFormatter(nameMaxLength),
+                ],
+                decoration:
+                    appPageOutlinedInputDecoration(
+                      context,
+                      labelText: null,
+                      hintText: tr('label'),
+                      isDense: true,
+                    ).copyWith(
+                      suffixText:
+                          '${nameController.text.length}/$nameMaxLength',
+                      border: OutlineInputBorder(borderRadius: fieldRadius),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: fieldRadius,
+                        borderSide: BorderSide(
+                          color: scheme.outline.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: fieldRadius,
+                        borderSide: BorderSide(color: scheme.primary),
+                      ),
+                    ),
+                onChanged: onNameChanged,
+              ),
+            ),
+            const SizedBox(width: 12),
+            _CategoryHexChip(
+              hex: hex,
+              color: color,
+              onHexChanged: onColorHexChanged,
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        CustomHueColorSlider(
+          seedHex: hex,
+          onPreviewColor: onColorHexChanged,
+          onSaveColor: onColorHexChanged,
+          gapColor: scheme.surfaceContainerLow,
+        ),
+      ],
+    );
+  }
+}
+
+class _CategoryHexChip extends StatelessWidget {
+  const _CategoryHexChip({
+    required this.hex,
+    required this.color,
+    required this.onHexChanged,
+  });
+
+  final String hex;
+  final Color color;
+  final ValueChanged<String> onHexChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _EditableCategoryHexChip(
+      hex: hex,
+      color: color,
+      onHexChanged: onHexChanged,
+    );
+  }
+}
+
+class _EditableCategoryHexChip extends StatefulWidget {
+  const _EditableCategoryHexChip({
+    required this.hex,
+    required this.color,
+    required this.onHexChanged,
+  });
+
+  final String hex;
+  final Color color;
+  final ValueChanged<String> onHexChanged;
+
+  @override
+  State<_EditableCategoryHexChip> createState() =>
+      _EditableCategoryHexChipState();
+}
+
+class _EditableCategoryHexChipState extends State<_EditableCategoryHexChip> {
+  late final TextEditingController _controller;
+  final FocusNode _focusNode = FocusNode();
+  final Object _tapRegionGroup = Object();
+  bool _editing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.hex);
+  }
+
+  @override
+  void didUpdateWidget(covariant _EditableCategoryHexChip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_editing && oldWidget.hex != widget.hex) {
+      _controller.text = widget.hex;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _startEditing() {
+    setState(() {
+      _editing = true;
+      _controller.text = widget.hex;
+      _controller.selection = TextSelection(
+        baseOffset: 1,
+        extentOffset: _controller.text.length,
+      );
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  void _commitEditing() {
+    final normalized = _normalizeCategoryHexInput(_controller.text);
+    if (normalized != null) {
+      widget.onHexChanged(normalized);
+      _controller.text = normalized;
+    } else {
+      _controller.text = widget.hex;
+    }
+    setState(() {
+      _editing = false;
+    });
+  }
+
+  void _handleHexChanged(String value) {
+    final normalized = _normalizeCategoryHexInput(value);
+    if (normalized != null) {
+      widget.onHexChanged(normalized);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool colorIsLight = widget.color.computeLuminance() > 0.35;
+    final Color foreground = colorIsLight ? Colors.black87 : Colors.white;
+    final textStyle = Theme.of(context).textTheme.labelLarge?.copyWith(
+      color: foreground,
+      fontFamily: 'monospace',
+      fontWeight: FontWeight.w800,
+    );
+    return TapRegion(
+      groupId: _tapRegionGroup,
+      onTapOutside: (_) {
+        if (_editing) _commitEditing();
+      },
+      child: SizedBox(
+        width: 104,
+        height: 48,
+        child: Material(
+          color: widget.color,
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: _editing ? null : _startEditing,
+            customBorder: const StadiumBorder(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Center(
+                child: _editing
+                    ? TextField(
+                        controller: _controller,
+                        focusNode: _focusNode,
+                        inputFormatters: [_CategoryHexInputFormatter()],
+                        maxLines: 1,
+                        autofocus: true,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        textCapitalization: TextCapitalization.characters,
+                        keyboardType: TextInputType.text,
+                        textInputAction: TextInputAction.done,
+                        textAlign: TextAlign.center,
+                        cursorColor: foreground,
+                        style: textStyle,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          counterText: '',
+                          isCollapsed: true,
+                        ),
+                        onChanged: _handleHexChanged,
+                        onEditingComplete: _commitEditing,
+                      )
+                    : Text(widget.hex, maxLines: 1, style: textStyle),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String? _normalizeCategoryHexInput(String raw) {
+  final clean = raw.startsWith('#') ? raw.substring(1) : raw;
+  if (!RegExp(r'^[0-9a-fA-F]{6}$').hasMatch(clean)) return null;
+  return '#${clean.toUpperCase()}';
+}
+
+class _CategoryHexInputFormatter extends TextInputFormatter {
+  static final RegExp _validHex = RegExp(r'^[0-9a-fA-F]*$');
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    String nextText = newValue.text.toUpperCase();
+    if (nextText.isNotEmpty && !nextText.startsWith('#')) {
+      nextText = '#$nextText';
+    }
+    final cleanText = nextText.startsWith('#')
+        ? nextText.substring(1)
+        : nextText;
+    if (cleanText.length > 6 || !_validHex.hasMatch(cleanText)) {
+      HapticFeedback.vibrate();
+      SystemSound.play(SystemSoundType.alert);
+      return oldValue;
+    }
+
+    int clampOffset(int offset) {
+      final prefixOffset =
+          newValue.text.isNotEmpty && !newValue.text.startsWith('#') ? 1 : 0;
+      return (offset + prefixOffset).clamp(0, nextText.length).toInt();
+    }
+
+    return TextEditingValue(
+      text: nextText,
+      selection: TextSelection(
+        baseOffset: clampOffset(newValue.selection.baseOffset),
+        extentOffset: clampOffset(newValue.selection.extentOffset),
+        affinity: newValue.selection.affinity,
+        isDirectional: newValue.selection.isDirectional,
+      ),
+      composing: TextRange.empty,
+    );
+  }
 }
 
 int generateRandomNumber(
@@ -1078,7 +1326,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
           final tagInput = widget.items[r][e] as GeneratedFormTagInput;
           onAddPressed() async {
             // ignore: use_build_context_synchronously
-            final result = await _showCategorySheet(
+            final result = await showCategorySheet(
               context,
               initialColor: generateRandomLightColor(),
               initialName: '',
@@ -1165,9 +1413,14 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                 backgroundColor: chipColor,
                                 selectedColor: chipColor,
                                 labelStyle: chipLabelStyle,
+                                shape: const StadiumBorder(),
+                                side: BorderSide.none,
+                                clipBehavior: Clip.antiAlias,
                                 showCheckmark: true,
                                 checkmarkColor: checkColor,
                                 visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
                                 selected: e2.value.value,
                                 onSelected: onCategoryChipSelected,
                               ),
@@ -1191,7 +1444,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                   (e) => e.value.value,
                                 );
                                 // ignore: use_build_context_synchronously
-                                final result = await _showCategorySheet(
+                                final result = await showCategorySheet(
                                   context,
                                   initialColor: Color(oldEntry.value.key),
                                   initialName: oldEntry.key,

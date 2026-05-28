@@ -490,16 +490,51 @@ class _HexInputFormatter extends TextInputFormatter {
   }
 }
 
+class CustomHueColorSlider extends StatelessWidget {
+  const CustomHueColorSlider({
+    super.key,
+    required this.seedHex,
+    required this.onPreviewColor,
+    required this.onSaveColor,
+    this.gapColor,
+    this.showHandleGap = true,
+  });
+
+  final String seedHex;
+  final ValueChanged<String> onPreviewColor;
+  final ValueChanged<String> onSaveColor;
+  final Color? gapColor;
+  final bool showHandleGap;
+
+  @override
+  Widget build(BuildContext context) {
+    final String hex =
+        normalizeCustomSeedHexOrNull(seedHex) ??
+        colorToCanonicalHex(obtainiumThemeColor);
+    return _HueColorSlider(
+      hex: hex,
+      gapColor: gapColor,
+      showHandleGap: showHandleGap,
+      onChanged: onPreviewColor,
+      onChangeEnd: onSaveColor,
+    );
+  }
+}
+
 class _HueColorSlider extends StatelessWidget {
   const _HueColorSlider({
     required this.hex,
     required this.onChanged,
     required this.onChangeEnd,
+    this.gapColor,
+    this.showHandleGap = true,
   });
 
   final String hex;
   final ValueChanged<String> onChanged;
   final ValueChanged<String> onChangeEnd;
+  final Color? gapColor;
+  final bool showHandleGap;
 
   @override
   Widget build(BuildContext context) {
@@ -512,9 +547,11 @@ class _HueColorSlider extends StatelessWidget {
     );
     final bool lightPanel =
         scheme.surfaceContainerHighest.computeLuminance() > 0.5;
-    final double gapWidth = lightPanel
-        ? _HueSliderTrackBackground.lightGapWidth
-        : _HueSliderTrackBackground.defaultGapWidth;
+    final double gapWidth = showHandleGap
+        ? lightPanel
+              ? _HueSliderTrackBackground.lightGapWidth
+              : _HueSliderTrackBackground.defaultGapWidth
+        : 0;
     final double handleWidth = lightPanel
         ? _HueSliderThumbShape.lightWidth
         : _HueSliderThumbShape.width;
@@ -529,7 +566,7 @@ class _HueColorSlider extends StatelessWidget {
             child: IgnorePointer(
               child: _HueSliderTrackBackground(
                 value: (hue / 360).clamp(0, 1).toDouble(),
-                gapColor: scheme.surfaceContainerHighest,
+                gapColor: gapColor ?? scheme.surfaceContainerHighest,
                 gapWidth: gapWidth,
                 handleWidth: handleWidth,
               ),
@@ -606,13 +643,14 @@ class _HueSliderTrackBackground extends StatelessWidget {
                       gradient: LinearGradient(colors: _kHueSliderColors),
                     ),
                   ),
-                  Positioned(
-                    left: gapCenter - gapWidth / 2,
-                    width: gapWidth,
-                    top: 0,
-                    bottom: 0,
-                    child: ColoredBox(color: gapColor),
-                  ),
+                  if (gapWidth > 0)
+                    Positioned(
+                      left: gapCenter - gapWidth / 2,
+                      width: gapWidth,
+                      top: 0,
+                      bottom: 0,
+                      child: ColoredBox(color: gapColor),
+                    ),
                 ],
               ),
             ),
