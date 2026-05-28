@@ -15,6 +15,9 @@ assignees: ''
 **Describe the bug**
 <!-- A clear and concise description of what the bug is. -->
 
+**Exact app name and source**
+<!-- If your issue is related to any particular app, provide the source you are using -->
+
 **To Reproduce**
 <!-- Steps to reproduce the behavior:
 1. Go to '...'

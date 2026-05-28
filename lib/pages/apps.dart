@@ -34,6 +34,31 @@ import 'package:markdown/markdown.dart' as md;
 
 const double _appsListGroupCardRadius = kM3eGroupCardRadius;
 
+enum CategoryFilterIntent { neutral, include, exclude }
+
+CategoryFilterIntent nextCategoryFilterIntent(CategoryFilterIntent intent) =>
+    switch (intent) {
+      CategoryFilterIntent.neutral => CategoryFilterIntent.include,
+      CategoryFilterIntent.include => CategoryFilterIntent.exclude,
+      CategoryFilterIntent.exclude => CategoryFilterIntent.neutral,
+    };
+
+bool appCategoriesMatchFilter(
+  Iterable<String> appCategories, {
+  Set<String> includedCategories = const {},
+  Set<String> excludedCategories = const {},
+}) {
+  final categorySet = appCategories.toSet();
+  if (excludedCategories.intersection(categorySet).isNotEmpty) {
+    return false;
+  }
+  if (includedCategories.isNotEmpty &&
+      includedCategories.intersection(categorySet).isEmpty) {
+    return false;
+  }
+  return true;
+}
+
 /// Group header strip: stronger primary tint than rows; when luminance matches
 /// row fill (common with Material You), nudge toward [surfaceBright] so the
 /// header still reads as its own band.
@@ -1980,14 +2005,27 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    for (final cat in filter.categoryFilter) {
+    for (final cat in filter.includedCategoryFilter) {
       chips.add(
         _filterChip(
           cat,
           () => setState(
-            () =>
-                filter.categoryFilter = Set.from(filter.categoryFilter)
-                  ..remove(cat),
+            () => filter.includedCategoryFilter = Set.from(
+              filter.includedCategoryFilter,
+            )..remove(cat),
+          ),
+        ),
+      );
+    }
+
+    for (final cat in filter.excludedCategoryFilter) {
+      chips.add(
+        _filterChip(
+          '-$cat',
+          () => setState(
+            () => filter.excludedCategoryFilter = Set.from(
+              filter.excludedCategoryFilter,
+            )..remove(cat),
           ),
         ),
       );
@@ -2234,7 +2272,8 @@ class AppsPageState extends State<AppsPage> {
       filter.idFilter,
       filter.includeUptodate,
       filter.includeNonInstalled,
-      Object.hashAll(filter.categoryFilter.toList()..sort()),
+      Object.hashAll(filter.includedCategoryFilter.toList()..sort()),
+      Object.hashAll(filter.excludedCategoryFilter.toList()..sort()),
       filter.sourceFilter,
       _effectiveSortColumn(settingsProvider).index,
       _effectiveSortOrder(settingsProvider).index,
@@ -2322,10 +2361,11 @@ class AppsPageState extends State<AppsPage> {
             return false;
           }
         }
-        if (filter.categoryFilter.isNotEmpty &&
-            filter.categoryFilter
-                .intersection(app.app.categories.toSet())
-                .isEmpty) {
+        if (!appCategoriesMatchFilter(
+          app.app.categories,
+          includedCategories: filter.includedCategoryFilter,
+          excludedCategories: filter.excludedCategoryFilter,
+        )) {
           return false;
         }
         if (filter.sourceFilter.isNotEmpty &&
@@ -3827,12 +3867,14 @@ class AppsPageState extends State<AppsPage> {
                       // ── Category selector ─────────────────────────────────
                       Padding(
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                        child: CategoryEditorSelector(
-                          allowCategoryManagement: false,
-                          preselected: filter.categoryFilter,
-                          onSelected: (categories) {
+                        child: _TriStateCategoryFilterSelector(
+                          categoryColors: settingsProvider.categories,
+                          includedCategories: filter.includedCategoryFilter,
+                          excludedCategories: filter.excludedCategoryFilter,
+                          onChanged: (included, excluded) {
                             update(() {
-                              filter.categoryFilter = categories.toSet();
+                              filter.includedCategoryFilter = included;
+                              filter.excludedCategoryFilter = excluded;
                             });
                           },
                         ),
@@ -4783,9 +4825,10 @@ class AppsPageState extends State<AppsPage> {
     if (currentFilter.idFilter.isNotEmpty) {
       activeFields[FolderRuleField.id] = currentFilter.idFilter;
     }
-    if (currentFilter.categoryFilter.length == 1) {
+    if (currentFilter.includedCategoryFilter.length == 1 &&
+        currentFilter.excludedCategoryFilter.isEmpty) {
       activeFields[FolderRuleField.category] =
-          currentFilter.categoryFilter.first;
+          currentFilter.includedCategoryFilter.first;
     }
     if (currentFilter.sourceFilter.isNotEmpty) {
       activeFields[FolderRuleField.source] = currentFilter.sourceFilter;
@@ -5100,14 +5143,242 @@ class AppsPageState extends State<AppsPage> {
   }
 }
 
+class _TriStateCategoryFilterSelector extends StatelessWidget {
+  const _TriStateCategoryFilterSelector({
+    required this.categoryColors,
+    required this.includedCategories,
+    required this.excludedCategories,
+    required this.onChanged,
+  });
+
+  final Map<String, int> categoryColors;
+  final Set<String> includedCategories;
+  final Set<String> excludedCategories;
+  final void Function(Set<String> included, Set<String> excluded) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final categories = <String>{
+      ...categoryColors.keys,
+      ...includedCategories,
+      ...excludedCategories,
+    }.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    if (categories.isEmpty) {
+      return Text(
+        tr('noCategories'),
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      );
+    }
+
+    void cycleCategory(String category) {
+      final included = Set<String>.from(includedCategories);
+      final excluded = Set<String>.from(excludedCategories);
+      final currentIntent = included.contains(category)
+          ? CategoryFilterIntent.include
+          : excluded.contains(category)
+          ? CategoryFilterIntent.exclude
+          : CategoryFilterIntent.neutral;
+      switch (nextCategoryFilterIntent(currentIntent)) {
+        case CategoryFilterIntent.neutral:
+          included.remove(category);
+          excluded.remove(category);
+          break;
+        case CategoryFilterIntent.include:
+          included.add(category);
+          excluded.remove(category);
+          break;
+        case CategoryFilterIntent.exclude:
+          included.remove(category);
+          excluded.add(category);
+          break;
+      }
+      onChanged(included, excluded);
+    }
+
+    void clearCategory(String category) {
+      onChanged(
+        Set<String>.from(includedCategories)..remove(category),
+        Set<String>.from(excludedCategories)..remove(category),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(tr('categories')),
+        const SizedBox(height: 2),
+        Text(
+          'Tap to cycle: (+) Include, (x) Exclude, tap again to reset',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: categories.map((category) {
+            final intent = includedCategories.contains(category)
+                ? CategoryFilterIntent.include
+                : excludedCategories.contains(category)
+                ? CategoryFilterIntent.exclude
+                : CategoryFilterIntent.neutral;
+            return _TriStateCategoryFilterChip(
+              category: category,
+              color: Color(
+                categoryColors[category] ?? Colors.grey.shade500.toARGB32(),
+              ),
+              intent: intent,
+              onCycle: () => cycleCategory(category),
+              onClear: intent == CategoryFilterIntent.neutral
+                  ? null
+                  : () => clearCategory(category),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+}
+
+class _TriStateCategoryFilterChip extends StatelessWidget {
+  const _TriStateCategoryFilterChip({
+    required this.category,
+    required this.color,
+    required this.intent,
+    required this.onCycle,
+    this.onClear,
+  });
+
+  final String category;
+  final Color color;
+  final CategoryFilterIntent intent;
+  final VoidCallback onCycle;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final maxChipWidth = MediaQuery.sizeOf(context).width - 40;
+    final Color containerColor;
+    final Color textColor;
+    final Color iconColor;
+    final Color dotColor;
+    final TextDecoration textDecoration;
+    final IconData? leadingIcon;
+    final FontWeight textWeight;
+    final BorderSide borderSide;
+
+    switch (intent) {
+      case CategoryFilterIntent.neutral:
+        containerColor = colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.45,
+        );
+        textColor = colorScheme.onSurfaceVariant.withValues(alpha: 0.70);
+        iconColor = colorScheme.onSurfaceVariant.withValues(alpha: 0.55);
+        dotColor = color.withValues(alpha: 0.45);
+        textDecoration = TextDecoration.none;
+        leadingIcon = null;
+        textWeight = FontWeight.w500;
+        borderSide = BorderSide.none;
+      case CategoryFilterIntent.include:
+        containerColor = colorScheme.surfaceContainerHighest;
+        textColor = colorScheme.onSurface;
+        iconColor = color;
+        dotColor = color;
+        textDecoration = TextDecoration.none;
+        leadingIcon = Icons.add_rounded;
+        textWeight = FontWeight.w600;
+        borderSide = BorderSide.none;
+      case CategoryFilterIntent.exclude:
+        containerColor = colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.32,
+        );
+        textColor = colorScheme.onSurfaceVariant.withValues(alpha: 0.64);
+        iconColor = color.withValues(alpha: 0.64);
+        dotColor = color.withValues(alpha: 0.32);
+        textDecoration = TextDecoration.lineThrough;
+        leadingIcon = Icons.close_rounded;
+        textWeight = FontWeight.w500;
+        borderSide = BorderSide(color: color.withValues(alpha: 0.44));
+    }
+
+    return Tooltip(
+      message: switch (intent) {
+        CategoryFilterIntent.neutral => category,
+        CategoryFilterIntent.include => '+ $category',
+        CategoryFilterIntent.exclude => '- $category',
+      },
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxChipWidth),
+        child: Material(
+          color: Colors.transparent,
+          child: Ink(
+            decoration: ShapeDecoration(
+              color: containerColor,
+              shape: StadiumBorder(side: borderSide),
+            ),
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: onCycle,
+              onLongPress: onClear,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (leadingIcon != null) ...[
+                      Icon(leadingIcon, size: 14, color: iconColor),
+                      const SizedBox(width: 6),
+                    ],
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: dotColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        category,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              color: textColor,
+                              fontWeight: textWeight,
+                              decoration: textDecoration,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AppsFilter {
-  late String nameFilter;
-  late String authorFilter;
-  late String idFilter;
-  late bool includeUptodate;
-  late bool includeNonInstalled;
-  late Set<String> categoryFilter;
-  late String sourceFilter;
+  String nameFilter;
+  String authorFilter;
+  String idFilter;
+  bool includeUptodate;
+  bool includeNonInstalled;
+  Set<String> includedCategoryFilter;
+  Set<String> excludedCategoryFilter;
+  String sourceFilter;
 
   AppsFilter({
     this.nameFilter = '',
@@ -5115,9 +5386,12 @@ class AppsFilter {
     this.idFilter = '',
     this.includeUptodate = true,
     this.includeNonInstalled = true,
-    this.categoryFilter = const {},
+    Set<String> categoryFilter = const {},
+    Set<String>? includedCategoryFilter,
+    Set<String>? excludedCategoryFilter,
     this.sourceFilter = '',
-  });
+  }) : includedCategoryFilter = includedCategoryFilter ?? categoryFilter,
+       excludedCategoryFilter = excludedCategoryFilter ?? const {};
 
   Map<String, dynamic> toFormValuesMap() {
     return {
@@ -5145,6 +5419,13 @@ class AppsFilter {
       idFilter.trim() == other.idFilter.trim() &&
       includeUptodate == other.includeUptodate &&
       includeNonInstalled == other.includeNonInstalled &&
-      settingsProvider.setEqual(categoryFilter, other.categoryFilter) &&
+      settingsProvider.setEqual(
+        includedCategoryFilter,
+        other.includedCategoryFilter,
+      ) &&
+      settingsProvider.setEqual(
+        excludedCategoryFilter,
+        other.excludedCategoryFilter,
+      ) &&
       sourceFilter.trim() == other.sourceFilter.trim();
 }
