@@ -1,8 +1,14 @@
 // @author Bikram Agarwal
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('dev.imranr.obtainium/installer');
+
+typedef ThirdPartyInstallPackageChangedCallback =
+    FutureOr<void> Function(String packageName);
+
+ThirdPartyInstallPackageChangedCallback? _thirdPartyInstallPackageChanged;
 
 class InstallerAppInfo {
   final String packageName;
@@ -20,8 +26,9 @@ class InstallerAppInfo {
 
 Future<List<InstallerAppInfo>> getApkInstallerApps() async {
   if (!Platform.isAndroid) return [];
-  final rawList =
-      await _channel.invokeMethod<List<dynamic>>('queryApkInstallerActivities');
+  final rawList = await _channel.invokeMethod<List<dynamic>>(
+    'queryApkInstallerActivities',
+  );
   if (rawList == null) return [];
   return rawList.map((entry) {
     final map = Map<String, dynamic>.from(entry as Map);
@@ -38,6 +45,23 @@ Future<List<InstallerAppInfo>> getApkInstallerApps() async {
   }).toList();
 }
 
+void registerThirdPartyInstallPackageChangedCallback(
+  ThirdPartyInstallPackageChangedCallback? callback,
+) {
+  _thirdPartyInstallPackageChanged = callback;
+  if (!Platform.isAndroid) return;
+  _channel.setMethodCallHandler((call) async {
+    if (call.method != 'thirdPartyInstallPackageChanged') {
+      throw MissingPluginException();
+    }
+    final arguments = call.arguments;
+    if (arguments is! Map) return;
+    final packageName = arguments['packageName']?.toString();
+    if (packageName == null || packageName.isEmpty) return;
+    await _thirdPartyInstallPackageChanged?.call(packageName);
+  });
+}
+
 /// Sends one or more APK paths to a user-chosen third-party installer (Settings: Third-Party mode).
 /// Multiple paths use the same comma-separated convention as [AndroidPackageInstaller.installApk]
 /// so split / multi-APK installs are handed off whole (not only the base split).
@@ -50,12 +74,12 @@ Future<bool> installApkViaThirdParty(
   required String expectedPackageName,
 }) async {
   if (!Platform.isAndroid) return false;
-  final result =
-      await _channel.invokeMethod<bool>('launchInstallIntent', <String, dynamic>{
-    'path': apkFilePathsCommaSeparated,
-    'package': targetPackage,
-    'activity': targetActivity,
-    'expectedPackageName': expectedPackageName,
-  });
+  final result = await _channel
+      .invokeMethod<bool>('launchInstallIntent', <String, dynamic>{
+        'path': apkFilePathsCommaSeparated,
+        'package': targetPackage,
+        'activity': targetActivity,
+        'expectedPackageName': expectedPackageName,
+      });
   return result ?? false;
 }

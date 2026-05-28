@@ -38,6 +38,7 @@ private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
+private const val INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS = 200L
 private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
 /// Ignore focus regain cancel if we lost focus more recently than this (transition bounce).
 private const val FOCUS_REGAIN_CANCEL_MIN_MS = 200L
@@ -65,6 +66,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var installWatcher: InstallWatcher? = null
+    private var installerChannel: MethodChannel? = null
     private val downloadKeepAwakeLock = Any()
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -128,7 +130,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        installerChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        installerChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "queryApkInstallerActivities" -> {
                     try {
@@ -557,6 +560,25 @@ class MainActivity : FlutterActivity() {
                 if (changedPkg != expectedPkgName || session.responded) return
                 if (session.packageInstallBroadcastReceived) return
                 session.packageInstallBroadcastReceived = true
+                installerChannel?.invokeMethod(
+                    "thirdPartyInstallPackageChanged",
+                    mapOf("packageName" to changedPkg),
+                )
+                if (!session.focusLost) {
+                    session.handler.postDelayed({
+                        if (
+                            installWatcher === session &&
+                            !session.responded &&
+                            session.packageInstallBroadcastReceived &&
+                            !session.focusLost
+                        ) {
+                            completeThirdPartyInstallSession(
+                                session,
+                                InstallSessionOutcome.Success(true),
+                            )
+                        }
+                    }, INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS)
+                }
             }
         }
 

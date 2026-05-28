@@ -1263,6 +1263,7 @@ class AppsProvider with ChangeNotifier {
   /// survive Android "clear cache".
   late Directory userAppIconsDir;
   late SettingsProvider settingsProvider;
+  bool _receivesThirdPartyInstallEvents = false;
 
   Iterable<AppInMemory> getAppValues() => apps.values.map((a) => a.deepCopy());
 
@@ -1326,6 +1327,12 @@ class AppsProvider with ChangeNotifier {
 
   AppsProvider({bool isBg = false, SettingsProvider? sharedSettings}) {
     settingsProvider = sharedSettings ?? SettingsProvider();
+    if (!isBg) {
+      installer.registerThirdPartyInstallPackageChangedCallback(
+        _handleThirdPartyInstallPackageChanged,
+      );
+      _receivesThirdPartyInstallEvents = true;
+    }
     // Subscribe to changes in the app foreground status
     foregroundStream = FGBGEvents.instance.stream.asBroadcastStream();
     foregroundSubscription = foregroundStream?.listen((event) async {
@@ -1376,6 +1383,29 @@ class AppsProvider with ChangeNotifier {
             });
       }
     }();
+  }
+
+  Future<void> _handleThirdPartyInstallPackageChanged(
+    String packageName,
+  ) async {
+    final AppInMemory? appInMemory = apps[packageName];
+    if (appInMemory == null) return;
+    final PackageInfo? installedInfo = await getInstalledInfo(
+      packageName,
+      printErr: false,
+    );
+    if (installedInfo == null) return;
+    final App app = appInMemory.app.deepCopy();
+    app.installedVersion = app.latestVersion;
+    final correctedApp =
+        getCorrectedInstallStatusAppIfPossible(app, installedInfo) ?? app;
+    apps[packageName] = AppInMemory(
+      correctedApp,
+      appInMemory.downloadProgress,
+      installedInfo,
+      appInMemory.icon,
+    );
+    notifyListeners();
   }
 
   Future<File> handleAPKIDChange(
@@ -3974,6 +4004,10 @@ class AppsProvider with ChangeNotifier {
     // Pending JSON under pending_removal/ is left on disk; the next [loadApps]
     // run commits removal via [_purgeStalePendingRemovalFilesWithoutLiveDeferral]
     // when no in-memory deferral tracks that id.
+    if (_receivesThirdPartyInstallEvents) {
+      installer.registerThirdPartyInstallPackageChangedCallback(null);
+      _receivesThirdPartyInstallEvents = false;
+    }
     foregroundSubscription?.cancel();
     super.dispose();
   }
