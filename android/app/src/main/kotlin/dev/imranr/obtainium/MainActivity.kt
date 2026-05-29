@@ -124,8 +124,7 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val sharedText = getSharedTextFromIntent(intent) ?: return
-        pendingSharedText = sharedText
-        shareChannel?.invokeMethod("onSharedText", sharedText)
+        enqueueSharedText(sharedText)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -224,6 +223,34 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        deliverPendingSharedText()
+    }
+
+    private fun enqueueSharedText(sharedText: String) {
+        pendingSharedText = sharedText
+        deliverPendingSharedText()
+    }
+
+    private fun deliverPendingSharedText() {
+        val channel = shareChannel ?: return
+        val sharedText = pendingSharedText ?: return
+        channel.invokeMethod(
+            "onSharedText",
+            sharedText,
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    if (pendingSharedText == sharedText) {
+                        pendingSharedText = null
+                    }
+                }
+
+                override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                }
+
+                override fun notImplemented() {
+                }
+            },
+        )
     }
 
     private fun getSharedTextFromIntent(intent: Intent?): String? {

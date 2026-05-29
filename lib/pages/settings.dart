@@ -1,10 +1,12 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:android_package_manager/android_package_manager.dart'
+    show PackageInfo;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
@@ -35,6 +37,19 @@ IconData _swipeActionIcon(SwipeAction action) => switch (action) {
   SwipeAction.edit => Icons.edit_rounded,
   SwipeAction.none => Icons.block_rounded,
 };
+
+const String _aboutObtainXWebsiteUrl =
+    'https://bikram-agarwal.github.io/obtainx/';
+const String _aboutObtainXPrivacyUrl =
+    'https://bikram-agarwal.github.io/obtainx/privacy/';
+const String _aboutObtainXTermsUrl =
+    'https://bikram-agarwal.github.io/obtainx/terms/';
+const String _aboutRememberUrl =
+    'https://github.com/bikram-agarwal/Remember/releases/latest';
+const String _aboutFilePipeUrl =
+    'https://github.com/bikram-agarwal/FilePipe/releases/latest';
+const String _aboutAuthorUrl = 'https://github.com/bikram-agarwal';
+const String _aboutWikiUrl = 'https://wiki.obtainium.imranr.dev/';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -591,6 +606,46 @@ class _SettingsPageState extends State<SettingsPage> {
       );
     }
 
+    Widget aboutSectionHeader() {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(0, 20, 0, 4),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+          child: Row(
+            children: [
+              Icon(Icons.info_rounded, color: cs.primary, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  tr('about'),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: cs.primary,
+                    fontSize: 13,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: () => _openLogsDialog(context),
+                icon: const Icon(Icons.bug_report_outlined),
+                tooltip: tr('appLogs'),
+                color: cs.primary,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 40,
+                  height: 40,
+                ),
+                style: IconButton.styleFrom(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     Widget settingsCard(List<Widget> children) {
       return m3eExpressiveSettingsCard(
         context: context,
@@ -1072,73 +1127,15 @@ class _SettingsPageState extends State<SettingsPage> {
                                 ),
                               ),
                             ]),
+                            aboutSectionHeader(),
+                            settingsCard([
+                              _AboutSectionContent(
+                                colorScheme: cs,
+                                settingsProvider: settingsProvider,
+                              ),
+                            ]),
                           ],
                         ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    const Divider(height: 32),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        IconButton(
-                          onPressed: () {
-                            launchUrlString(
-                              settingsProvider.sourceUrl,
-                              mode: LaunchMode.externalApplication,
-                            );
-                          },
-                          icon: const Icon(Icons.code),
-                          tooltip: tr('appSource'),
-                        ),
-                        IconButton(
-                          onPressed: () {
-                            launchUrlString(
-                              'https://wiki.obtainium.imranr.dev/',
-                              mode: LaunchMode.externalApplication,
-                            );
-                          },
-                          icon: const Icon(Icons.open_in_new_rounded),
-                          tooltip: tr('wiki'),
-                        ),
-                        IconButton(
-                          onPressed: () {
-                            launchUrlString(
-                              'https://apps.obtainium.imranr.dev/',
-                              mode: LaunchMode.externalApplication,
-                            );
-                          },
-                          icon: const Icon(Icons.apps_rounded),
-                          tooltip: tr('crowdsourcedConfigsLabel'),
-                        ),
-                        IconButton(
-                          onPressed: () {
-                            context.read<LogsProvider>().get().then((logs) {
-                              if (!context.mounted) return;
-                              if (logs.isEmpty) {
-                                showMessage(
-                                  ObtainiumError(tr('noLogs')),
-                                  context,
-                                );
-                              } else {
-                                showDialog(
-                                  context: context,
-                                  builder: (BuildContext ctx) {
-                                    return const LogsDialog();
-                                  },
-                                );
-                              }
-                            });
-                          },
-                          icon: const Icon(Icons.bug_report_outlined),
-                          tooltip: tr('appLogs'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                  ],
                 ),
               ),
               if (settingsProvider.progressiveBlurEnabled)
@@ -1177,6 +1174,474 @@ class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
   bool shouldReclip(_SettingsSectionShadowClipper oldClipper) {
     return oldClipper.expanded != expanded;
   }
+}
+
+class _AboutSectionContent extends StatelessWidget {
+  const _AboutSectionContent({
+    required this.colorScheme,
+    required this.settingsProvider,
+  });
+
+  final ColorScheme colorScheme;
+  final SettingsProvider settingsProvider;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          FutureBuilder<PackageInfo?>(
+            future: getInstalledInfo(obtainiumId, printErr: false),
+            builder: (context, snapshot) {
+              final String versionName =
+                  snapshot.data?.versionName ?? tr('unknown');
+              return Text(
+                tr('aboutAppVersion', args: [versionName]),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.displaySmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: colorScheme.onSurface,
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 6),
+          Text(
+            tr('aboutTagline'),
+            textAlign: TextAlign.center,
+            style: textTheme.bodyMedium?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _AboutImageTile(
+                assetPath: 'assets/graphics/icon_small.png',
+                borderRadius: 24,
+                semanticLabel: tr('about'),
+                fit: BoxFit.contain,
+                backgroundColor: colorScheme.surfaceContainerHighest,
+              ),
+              const SizedBox(width: 14),
+              _AboutImageTile(
+                assetPath: 'assets/graphics/me_600.webp',
+                borderRadius: 18,
+                semanticLabel: tr('aboutAuthorProfile'),
+                onTap: () => _openAboutUrl(_aboutAuthorUrl),
+                onLongPress: () => _copyAboutUrl(context, _aboutAuthorUrl),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            tr('aboutByline'),
+            textAlign: TextAlign.center,
+            style: textTheme.bodyMedium?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 18),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => _openAboutUrl(settingsProvider.sourceUrl),
+                onLongPress: () =>
+                    _copyAboutUrl(context, settingsProvider.sourceUrl),
+                icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
+                label: Text(tr('aboutStarOnGithub')),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    style: _aboutSecondaryButtonStyle(colorScheme),
+                    onPressed: () => _openAboutUrl(_aboutWikiUrl),
+                    onLongPress: () => _copyAboutUrl(context, _aboutWikiUrl),
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    label: Text(tr('aboutOpenWiki')),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    style: _aboutSecondaryButtonStyle(colorScheme),
+                    onPressed: () =>
+                        _shareAboutUrl(settingsProvider.sourceUrl, 'ObtainX'),
+                    onLongPress: () =>
+                        _copyAboutUrl(context, settingsProvider.sourceUrl),
+                    icon: const Icon(Icons.share_rounded),
+                    label: Text(tr('share')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 22),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              tr('aboutOtherApps'),
+              style: textTheme.labelLarge?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _AboutAppPromo(
+            colorScheme: colorScheme,
+            assetPath: 'assets/graphics/remember_logo.png',
+            accentColor: const Color(0xFF74B84A),
+            name: tr('aboutRememberName'),
+            tagline: tr('aboutRememberTagline'),
+            url: _aboutRememberUrl,
+          ),
+          const SizedBox(height: 10),
+          _AboutAppPromo(
+            colorScheme: colorScheme,
+            assetPath: 'assets/graphics/filepipe_logo.png',
+            accentColor: const Color(0xFF5967D8),
+            name: tr('aboutFilePipeName'),
+            tagline: tr('aboutFilePipeTagline'),
+            url: _aboutFilePipeUrl,
+          ),
+          const SizedBox(height: 8),
+          _AboutLegalLinks(colorScheme: colorScheme),
+        ],
+      ),
+    );
+  }
+}
+
+ButtonStyle _aboutSecondaryButtonStyle(ColorScheme colorScheme) {
+  return FilledButton.styleFrom(
+    backgroundColor: Color.alphaBlend(
+      colorScheme.primary.withValues(alpha: 0.16),
+      colorScheme.surfaceContainerHighest,
+    ),
+    foregroundColor: colorScheme.primary,
+    side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.36)),
+  );
+}
+
+class _GitHubMarkIcon extends StatelessWidget {
+  const _GitHubMarkIcon({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size.square(20),
+      painter: _GitHubMarkPainter(color),
+    );
+  }
+}
+
+class _GitHubMarkPainter extends CustomPainter {
+  const _GitHubMarkPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24, size.height / 24);
+    final Path path = Path()
+      ..moveTo(12, 2)
+      ..arcToPoint(
+        const Offset(2, 12),
+        radius: const Radius.circular(10),
+        clockwise: false,
+      )
+      ..relativeCubicTo(0, 4.42, 2.87, 8.17, 6.84, 9.5)
+      ..relativeCubicTo(0.5, 0.08, 0.66, -0.23, 0.66, -0.5)
+      ..relativeLineTo(0, -1.69)
+      ..relativeCubicTo(-2.77, 0.6, -3.36, -1.34, -3.36, -1.34)
+      ..relativeCubicTo(-0.46, -1.16, -1.11, -1.47, -1.11, -1.47)
+      ..relativeCubicTo(-0.91, -0.62, 0.07, -0.6, 0.07, -0.6)
+      ..relativeCubicTo(1, 0.07, 1.53, 1.03, 1.53, 1.03)
+      ..relativeCubicTo(0.89, 1.52, 2.34, 1.08, 2.91, 0.83)
+      ..relativeCubicTo(0.09, -0.65, 0.35, -1.09, 0.63, -1.34)
+      ..relativeCubicTo(-2.22, -0.25, -4.55, -1.11, -4.55, -4.94)
+      ..relativeCubicTo(0, -1.09, 0.39, -1.98, 1.03, -2.68)
+      ..relativeCubicTo(-0.1, -0.25, -0.45, -1.27, 0.1, -2.65)
+      ..relativeCubicTo(0, 0, 0.84, -0.27, 2.75, 1.02)
+      ..relativeCubicTo(0.8, -0.22, 1.65, -0.33, 2.5, -0.33)
+      ..relativeCubicTo(0.85, 0, 1.7, 0.11, 2.5, 0.33)
+      ..relativeCubicTo(1.91, -1.29, 2.75, -1.02, 2.75, -1.02)
+      ..relativeCubicTo(0.55, 1.38, 0.2, 2.4, 0.1, 2.65)
+      ..relativeCubicTo(0.64, 0.7, 1.03, 1.59, 1.03, 2.68)
+      ..relativeCubicTo(0, 3.85, -2.34, 4.68, -4.57, 4.93)
+      ..relativeCubicTo(0.36, 0.31, 0.68, 0.92, 0.68, 1.85)
+      ..relativeLineTo(0, 2.74)
+      ..relativeCubicTo(0, 0.27, 0.16, 0.59, 0.67, 0.5)
+      ..cubicTo(19.14, 20.17, 22, 16.42, 22, 12)
+      ..arcToPoint(
+        const Offset(12, 2),
+        radius: const Radius.circular(10),
+        clockwise: false,
+      )
+      ..close();
+    canvas.drawPath(path, Paint()..color = color);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _GitHubMarkPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
+
+class _AboutImageTile extends StatelessWidget {
+  const _AboutImageTile({
+    required this.assetPath,
+    required this.borderRadius,
+    required this.semanticLabel,
+    this.backgroundColor,
+    this.fit = BoxFit.cover,
+    this.onTap,
+    this.onLongPress,
+  });
+
+  final String assetPath;
+  final double borderRadius;
+  final String semanticLabel;
+  final Color? backgroundColor;
+  final BoxFit fit;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: backgroundColor ?? Colors.transparent,
+      borderRadius: BorderRadius.circular(borderRadius),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Ink.image(
+          image: AssetImage(assetPath),
+          width: 84,
+          height: 84,
+          fit: fit,
+          child: Semantics(
+            label: semanticLabel,
+            image: true,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutAppPromo extends StatelessWidget {
+  const _AboutAppPromo({
+    required this.colorScheme,
+    required this.assetPath,
+    required this.accentColor,
+    required this.name,
+    required this.tagline,
+    required this.url,
+  });
+
+  final ColorScheme colorScheme;
+  final String assetPath;
+  final Color accentColor;
+  final String name;
+  final String tagline;
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    final Color containerColor = Color.alphaBlend(
+      accentColor.withValues(alpha: 0.24),
+      colorScheme.surfaceContainerHighest,
+    );
+    final RoundedRectangleBorder shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: BorderSide(color: accentColor.withValues(alpha: 0.34)),
+    );
+    return Material(
+      color: containerColor,
+      shape: shape,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _openAboutUrl(url),
+        onLongPress: () => _copyAboutUrl(context, url),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset(
+                  assetPath,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      tagline,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: accentColor.withValues(alpha: 0.86),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutLegalLinks extends StatelessWidget {
+  const _AboutLegalLinks({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.center,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _AboutTextLink(
+              label: tr('aboutWebsite'),
+              url: _aboutObtainXWebsiteUrl,
+              colorScheme: colorScheme,
+            ),
+            _AboutLinkSeparator(colorScheme: colorScheme),
+            _AboutTextLink(
+              label: tr('aboutPrivacyPolicy'),
+              url: _aboutObtainXPrivacyUrl,
+              colorScheme: colorScheme,
+            ),
+            _AboutLinkSeparator(colorScheme: colorScheme),
+            _AboutTextLink(
+              label: tr('aboutTerms'),
+              url: _aboutObtainXTermsUrl,
+              colorScheme: colorScheme,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutTextLink extends StatelessWidget {
+  const _AboutTextLink({
+    required this.label,
+    required this.url,
+    required this.colorScheme,
+  });
+
+  final String label;
+  final String url;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: () => _openAboutUrl(url),
+      onLongPress: () => _copyAboutUrl(context, url),
+      style: TextButton.styleFrom(
+        foregroundColor: colorScheme.primary,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(label, maxLines: 1),
+    );
+  }
+}
+
+class _AboutLinkSeparator extends StatelessWidget {
+  const _AboutLinkSeparator({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text('•', style: TextStyle(color: colorScheme.onSurfaceVariant));
+  }
+}
+
+Future<void> _openAboutUrl(String url) async {
+  await launchUrlString(url, mode: LaunchMode.externalApplication);
+}
+
+Future<void> _copyAboutUrl(BuildContext context, String url) async {
+  await Clipboard.setData(ClipboardData(text: url));
+  if (!context.mounted) return;
+  showMessage(tr('aboutLinkCopied'), context);
+}
+
+Future<void> _shareAboutUrl(String url, String subject) async {
+  await SharePlus.instance.share(ShareParams(text: url, subject: subject));
+}
+
+void _openLogsDialog(BuildContext context) {
+  context.read<LogsProvider>().get().then((logs) {
+    if (!context.mounted) return;
+    if (logs.isEmpty) {
+      showMessage(ObtainiumError(tr('noLogs')), context);
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (BuildContext ctx) {
+        return const LogsDialog();
+      },
+    );
+  });
 }
 
 class LogsDialog extends StatefulWidget {

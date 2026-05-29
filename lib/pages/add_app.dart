@@ -235,6 +235,11 @@ class AddAppPageState extends State<AddAppPage> {
         .read<NotificationsProvider>();
 
     bool doingSomething = gettingAppInfo || searching;
+    final double bottomNavigationClearance =
+        settingsProvider.progressiveBlurEnabled ? 88 : 0;
+    final bool showAppVaultFab =
+        (_mode == _AddMode.byUrl && userInput.trim().isEmpty) ||
+        (_mode == _AddMode.search && !_searchHasSearched && !searching);
 
     // ── Track-only / release-date confirmations (URL mode) ─────────────
 
@@ -403,8 +408,54 @@ class AddAppPageState extends State<AddAppPage> {
 
     // ── URL mode widgets ───────────────────────────────────────────────
 
+    void showSupportedSourcesDialog() {
+      showDialog(
+        context: context,
+        builder: (context) {
+          return GeneratedFormModal(
+            singleNullReturnButton: tr('ok'),
+            title: tr('supportedSources'),
+            items: const [],
+            additionalWidgets: [
+              ...sourceProvider.sources.map(
+                (e) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: InkWell(
+                    onTap: e.hosts.isNotEmpty
+                        ? () {
+                            launchUrlString(
+                              'https://${e.hosts[0]}',
+                              mode: LaunchMode.externalApplication,
+                            );
+                          }
+                        : null,
+                    child: Text(
+                      '${e.name}${e.enforceTrackOnly ? ' ${tr('trackOnlyInBrackets')}' : ''}${e.canSearch ? ' ${tr('searchableInBrackets')}' : ''}',
+                      style: TextStyle(
+                        decoration: e.hosts.isNotEmpty
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '${tr('note')}:',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(tr('selfHostedNote', args: [tr('overrideSource')])),
+            ],
+          );
+        },
+      );
+    }
+
     Widget getUrlInputRow() {
       final ColorScheme colorScheme = Theme.of(context).colorScheme;
+      final bool showSupportedSourcesButton = userInput.trim().isEmpty;
       final bool addDisabled =
           doingSomething ||
           pickedSource == null ||
@@ -464,10 +515,41 @@ class AddAppPageState extends State<AddAppPage> {
                   addApp();
                 }
               },
-              decoration: appPageOutlinedInputDecoration(
-                context,
-                labelText: tr('appSourceURL'),
-              ),
+              decoration:
+                  appPageOutlinedInputDecoration(
+                    context,
+                    labelText: tr('appSourceURL'),
+                  ).copyWith(
+                    suffixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
+                    ),
+                    suffixIcon: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(
+                        end: showSupportedSourcesButton ? 1 : 0,
+                      ),
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOutCubicEmphasized,
+                      builder: (context, animationValue, child) {
+                        return SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: Opacity(
+                            opacity: animationValue,
+                            child: IgnorePointer(
+                              ignoring: !showSupportedSourcesButton,
+                              child: child,
+                            ),
+                          ),
+                        );
+                      },
+                      child: IconButton(
+                        tooltip: tr('supportedSources'),
+                        icon: const Icon(Icons.info_outline_rounded),
+                        onPressed: showSupportedSourcesDialog,
+                      ),
+                    ),
+                  ),
             ),
           ),
           const SizedBox(width: 10),
@@ -676,87 +758,6 @@ class AddAppPageState extends State<AddAppPage> {
         ],
       );
     }
-
-    Widget getSourcesListWidget() => Padding(
-      padding: const EdgeInsets.all(16),
-      child: Wrap(
-        direction: Axis.horizontal,
-        alignment: WrapAlignment.spaceBetween,
-        spacing: 12,
-        children: [
-          InkWell(
-            onTap: () {
-              showDialog(
-                context: context,
-                builder: (context) {
-                  return GeneratedFormModal(
-                    singleNullReturnButton: tr('ok'),
-                    title: tr('supportedSources'),
-                    items: const [],
-                    additionalWidgets: [
-                      ...sourceProvider.sources.map(
-                        (e) => Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: InkWell(
-                            onTap: e.hosts.isNotEmpty
-                                ? () {
-                                    launchUrlString(
-                                      'https://${e.hosts[0]}',
-                                      mode: LaunchMode.externalApplication,
-                                    );
-                                  }
-                                : null,
-                            child: Text(
-                              '${e.name}${e.enforceTrackOnly ? ' ${tr('trackOnlyInBrackets')}' : ''}${e.canSearch ? ' ${tr('searchableInBrackets')}' : ''}',
-                              style: TextStyle(
-                                decoration: e.hosts.isNotEmpty
-                                    ? TextDecoration.underline
-                                    : TextDecoration.none,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        '${tr('note')}:',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(tr('selfHostedNote', args: [tr('overrideSource')])),
-                    ],
-                  );
-                },
-              );
-            },
-            child: Text(
-              tr('supportedSources'),
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.underline,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ),
-          InkWell(
-            onTap: () {
-              launchUrlString(
-                'https://apps.obtainium.imranr.dev/',
-                mode: LaunchMode.externalApplication,
-              );
-            },
-            child: Text(
-              tr('crowdsourcedConfigsShort'),
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.underline,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
 
     // ── Search mode widgets ────────────────────────────────────────────
 
@@ -1236,10 +1237,34 @@ class AddAppPageState extends State<AddAppPage> {
     final ColorScheme addScheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: addScheme.surface,
-      // Show supported-sources footer only for URL mode when no source is detected
-      bottomNavigationBar: (_mode == _AddMode.byUrl && pickedSource == null)
-          ? getSourcesListWidget()
-          : null,
+      floatingActionButtonAnimator: FloatingActionButtonAnimator.noAnimation,
+      floatingActionButton: TweenAnimationBuilder<double>(
+        tween: Tween<double>(end: showAppVaultFab ? 1 : 0),
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeInOutCubicEmphasized,
+        builder: (context, animationValue, child) {
+          return IgnorePointer(
+            ignoring: !showAppVaultFab,
+            child: Opacity(opacity: animationValue, child: child),
+          );
+        },
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: _mode == _AddMode.search ? bottomNavigationClearance : 0,
+          ),
+          child: FloatingActionButton.extended(
+            heroTag: 'add-app-app-vault-fab',
+            onPressed: () {
+              launchUrlString(
+                'https://apps.obtainium.imranr.dev/',
+                mode: LaunchMode.externalApplication,
+              );
+            },
+            icon: const Icon(Icons.apps_rounded),
+            label: Text(tr('aboutAppVault')),
+          ),
+        ),
+      ),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -1341,7 +1366,11 @@ class AddAppPageState extends State<AddAppPage> {
               ),
               if (settingsProvider.progressiveBlurEnabled)
                 SliverToBoxAdapter(
-                  child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
+                  child: SizedBox(
+                    height:
+                        MediaQuery.paddingOf(context).bottom +
+                        bottomNavigationClearance,
+                  ),
                 ),
             ],
           ),
