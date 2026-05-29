@@ -24,6 +24,25 @@ void main() {
     );
   });
 
+  test('included categories can use all-match semantics', () {
+    expect(
+      appCategoriesMatchFilter(
+        const ['Google', 'Social', 'Open Source'],
+        includedCategories: const {'Google', 'Social'},
+        matchMode: CategoryFilterMatchMode.all,
+      ),
+      true,
+    );
+    expect(
+      appCategoriesMatchFilter(
+        const ['Social'],
+        includedCategories: const {'Google', 'Social'},
+        matchMode: CategoryFilterMatchMode.all,
+      ),
+      false,
+    );
+  });
+
   test('excluded categories reject any matching app category', () {
     expect(
       appCategoriesMatchFilter(

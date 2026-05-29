@@ -37,6 +37,8 @@ const double _appsListGroupCardRadius = kM3eGroupCardRadius;
 
 enum CategoryFilterIntent { neutral, include, exclude }
 
+enum CategoryFilterMatchMode { any, all }
+
 CategoryFilterIntent nextCategoryFilterIntent(CategoryFilterIntent intent) =>
     switch (intent) {
       CategoryFilterIntent.neutral => CategoryFilterIntent.include,
@@ -48,14 +50,20 @@ bool appCategoriesMatchFilter(
   Iterable<String> appCategories, {
   Set<String> includedCategories = const {},
   Set<String> excludedCategories = const {},
+  CategoryFilterMatchMode matchMode = CategoryFilterMatchMode.any,
 }) {
   final categorySet = appCategories.toSet();
   if (excludedCategories.intersection(categorySet).isNotEmpty) {
     return false;
   }
-  if (includedCategories.isNotEmpty &&
-      includedCategories.intersection(categorySet).isEmpty) {
-    return false;
+  if (includedCategories.isNotEmpty) {
+    return switch (matchMode) {
+      CategoryFilterMatchMode.any =>
+        includedCategories.intersection(categorySet).isNotEmpty,
+      CategoryFilterMatchMode.all => categorySet.containsAll(
+        includedCategories,
+      ),
+    };
   }
   return true;
 }
@@ -2015,6 +2023,18 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
+    if (filter.includedCategoryFilter.length > 1 &&
+        filter.categoryMatchMode == CategoryFilterMatchMode.all) {
+      chips.add(
+        _filterChip(
+          tr('categoryMatchAllActive'),
+          () => setState(
+            () => filter.categoryMatchMode = CategoryFilterMatchMode.any,
+          ),
+        ),
+      );
+    }
+
     for (final cat in filter.excludedCategoryFilter) {
       chips.add(
         _filterChip(
@@ -2271,6 +2291,7 @@ class AppsPageState extends State<AppsPage> {
       filter.includeNonInstalled,
       Object.hashAll(filter.includedCategoryFilter.toList()..sort()),
       Object.hashAll(filter.excludedCategoryFilter.toList()..sort()),
+      filter.categoryMatchMode.index,
       filter.sourceFilter,
       _effectiveSortColumn(settingsProvider).index,
       _effectiveSortOrder(settingsProvider).index,
@@ -2362,6 +2383,7 @@ class AppsPageState extends State<AppsPage> {
           app.app.categories,
           includedCategories: filter.includedCategoryFilter,
           excludedCategories: filter.excludedCategoryFilter,
+          matchMode: filter.categoryMatchMode,
         )) {
           return false;
         }
@@ -3722,162 +3744,166 @@ class AppsPageState extends State<AppsPage> {
                 ),
               ];
 
-              return Padding(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.viewInsetsOf(sheetCtx).bottom,
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Drag handle
-                      Center(
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 12),
-                          width: 40,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: colorScheme.outlineVariant,
-                            borderRadius: BorderRadius.circular(2),
+              return SafeArea(
+                top: false,
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.viewInsetsOf(sheetCtx).bottom,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Drag handle
+                        Center(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 12),
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: colorScheme.outlineVariant,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
-                      ),
-                      // Title row
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 8, 12),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                tr('filterApps'),
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.w600),
+                        // Title row
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 0, 8, 12),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  tr('filterApps'),
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  update(() {
+                                    filter = AppsFilter();
+                                    _searchField = 'appName';
+                                    _searchController.clear();
+                                  });
+                                  Navigator.of(sheetCtx).pop();
+                                },
+                                child: Text(tr('remove')),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // ── Search field selector ─────────────────────────────
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                          child: Text(
+                            tr('search'),
+                            style: Theme.of(context).textTheme.labelMedium,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+                          child: Wrap(
+                            spacing: 8,
+                            children: [
+                              fieldChip('appName', tr('appName')),
+                              fieldChip('author', tr('author')),
+                              fieldChip('appId', tr('appId')),
+                            ],
+                          ),
+                        ),
+
+                        const Divider(height: 1),
+                        const SizedBox(height: 8),
+
+                        // ── Visibility toggles ────────────────────────────────
+                        SwitchListTile(
+                          dense: true,
+                          title: Text(tr('upToDateApps')),
+                          value: filter.includeUptodate,
+                          onChanged: (v) =>
+                              update(() => filter.includeUptodate = v),
+                        ),
+                        SwitchListTile(
+                          dense: true,
+                          title: Text(tr('nonInstalledApps')),
+                          value: filter.includeNonInstalled,
+                          onChanged: (v) =>
+                              update(() => filter.includeNonInstalled = v),
+                        ),
+
+                        const SizedBox(height: 8),
+                        const Divider(height: 1),
+                        const SizedBox(height: 8),
+
+                        // ── Source dropdown ───────────────────────────────────
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                          child: DropdownButtonFormField<String>(
+                            key: ValueKey(filter.sourceFilter),
+                            decoration: InputDecoration(
+                              labelText: tr('appSource'),
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
                               ),
                             ),
-                            TextButton(
-                              onPressed: () {
-                                update(() {
-                                  filter = AppsFilter();
-                                  _searchField = 'appName';
-                                  _searchController.clear();
-                                });
-                                Navigator.of(sheetCtx).pop();
-                              },
-                              child: Text(tr('remove')),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // ── Search field selector ─────────────────────────────
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-                        child: Text(
-                          tr('search'),
-                          style: Theme.of(context).textTheme.labelMedium,
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
-                        child: Wrap(
-                          spacing: 8,
-                          children: [
-                            fieldChip('appName', tr('appName')),
-                            fieldChip('author', tr('author')),
-                            fieldChip('appId', tr('appId')),
-                          ],
-                        ),
-                      ),
-
-                      const Divider(height: 1),
-                      const SizedBox(height: 8),
-
-                      // ── Visibility toggles ────────────────────────────────
-                      SwitchListTile(
-                        dense: true,
-                        title: Text(tr('upToDateApps')),
-                        value: filter.includeUptodate,
-                        onChanged: (v) =>
-                            update(() => filter.includeUptodate = v),
-                      ),
-                      SwitchListTile(
-                        dense: true,
-                        title: Text(tr('nonInstalledApps')),
-                        value: filter.includeNonInstalled,
-                        onChanged: (v) =>
-                            update(() => filter.includeNonInstalled = v),
-                      ),
-
-                      const SizedBox(height: 8),
-                      const Divider(height: 1),
-                      const SizedBox(height: 8),
-
-                      // ── Source dropdown ───────────────────────────────────
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-                        child: DropdownButtonFormField<String>(
-                          key: ValueKey(filter.sourceFilter),
-                          decoration: InputDecoration(
-                            labelText: tr('appSource'),
-                            isDense: true,
-                            border: const OutlineInputBorder(),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
+                            initialValue: filter.sourceFilter,
+                            items: sourceItems
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(e.value),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (v) =>
+                                update(() => filter.sourceFilter = v ?? ''),
                           ),
-                          initialValue: filter.sourceFilter,
-                          items: sourceItems
-                              .map(
-                                (e) => DropdownMenuItem(
-                                  value: e.key,
-                                  child: Text(e.value),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (v) =>
-                              update(() => filter.sourceFilter = v ?? ''),
                         ),
-                      ),
 
-                      // ── Category selector ─────────────────────────────────
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                        child: _TriStateCategoryFilterSelector(
-                          categoryColors: settingsProvider.categories,
-                          includedCategories: filter.includedCategoryFilter,
-                          excludedCategories: filter.excludedCategoryFilter,
-                          onChanged: (included, excluded) {
-                            update(() {
-                              filter.includedCategoryFilter = included;
-                              filter.excludedCategoryFilter = excluded;
-                            });
-                          },
-                        ),
-                      ),
-
-                      // ── Save as Folder ────────────────────────────────────
-                      Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          20,
-                          12,
-                          20,
-                          20 + MediaQuery.of(context).viewPadding.bottom,
-                        ),
-                        child: OutlinedButton.icon(
-                          icon: const Icon(
-                            Icons.create_new_folder_outlined,
-                            size: 18,
+                        // ── Category selector ─────────────────────────────────
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                          child: _TriStateCategoryFilterSelector(
+                            categoryColors: settingsProvider.categories,
+                            includedCategories: filter.includedCategoryFilter,
+                            excludedCategories: filter.excludedCategoryFilter,
+                            matchMode: filter.categoryMatchMode,
+                            onChanged: (included, excluded) {
+                              update(() {
+                                filter.includedCategoryFilter = included;
+                                filter.excludedCategoryFilter = excluded;
+                              });
+                            },
+                            onMatchModeChanged: (matchMode) {
+                              update(() {
+                                filter.categoryMatchMode = matchMode;
+                              });
+                            },
                           ),
-                          label: Text(tr('saveAsFolder')),
-                          onPressed: () {
-                            Navigator.of(sheetCtx).pop();
-                            _saveFilterAsFolder(context, filter);
-                          },
                         ),
-                      ),
-                    ],
+
+                        // ── Save as Folder ────────────────────────────────────
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                          child: OutlinedButton.icon(
+                            icon: const Icon(
+                              Icons.create_new_folder_outlined,
+                              size: 18,
+                            ),
+                            label: Text(tr('saveAsFolder')),
+                            onPressed: () {
+                              Navigator.of(sheetCtx).pop();
+                              _saveFilterAsFolder(context, filter);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -5125,13 +5151,17 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
     required this.categoryColors,
     required this.includedCategories,
     required this.excludedCategories,
+    required this.matchMode,
     required this.onChanged,
+    required this.onMatchModeChanged,
   });
 
   final Map<String, int> categoryColors;
   final Set<String> includedCategories;
   final Set<String> excludedCategories;
+  final CategoryFilterMatchMode matchMode;
   final void Function(Set<String> included, Set<String> excluded) onChanged;
+  final ValueChanged<CategoryFilterMatchMode> onMatchModeChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -5185,10 +5215,41 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(tr('categories')),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                tr('categories'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            SegmentedButton<CategoryFilterMatchMode>(
+              showSelectedIcon: false,
+              style: SegmentedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+              segments: [
+                ButtonSegment(
+                  value: CategoryFilterMatchMode.any,
+                  label: Text(tr('categoryMatchAny')),
+                ),
+                ButtonSegment(
+                  value: CategoryFilterMatchMode.all,
+                  label: Text(tr('categoryMatchAll')),
+                ),
+              ],
+              selected: {matchMode},
+              onSelectionChanged: (selection) {
+                onMatchModeChanged(selection.first);
+              },
+            ),
+          ],
+        ),
         const SizedBox(height: 2),
         Text(
-          'Tap to cycle: (+) Include, (x) Exclude, tap again to reset',
+          tr('categoryFilterCycleHint'),
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
@@ -5273,6 +5334,7 @@ class AppsFilter {
   bool includeNonInstalled;
   Set<String> includedCategoryFilter;
   Set<String> excludedCategoryFilter;
+  CategoryFilterMatchMode categoryMatchMode;
   String sourceFilter;
 
   AppsFilter({
@@ -5284,6 +5346,7 @@ class AppsFilter {
     Set<String> categoryFilter = const {},
     Set<String>? includedCategoryFilter,
     Set<String>? excludedCategoryFilter,
+    this.categoryMatchMode = CategoryFilterMatchMode.any,
     this.sourceFilter = '',
   }) : includedCategoryFilter = includedCategoryFilter ?? categoryFilter,
        excludedCategoryFilter = excludedCategoryFilter ?? const {};
@@ -5322,5 +5385,6 @@ class AppsFilter {
         excludedCategoryFilter,
         other.excludedCategoryFilter,
       ) &&
+      categoryMatchMode == other.categoryMatchMode &&
       sourceFilter.trim() == other.sourceFilter.trim();
 }
