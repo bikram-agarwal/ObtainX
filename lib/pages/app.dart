@@ -11,6 +11,7 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
+import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -128,12 +129,6 @@ class _MeasureSizeState extends State<_MeasureSize> {
     _lastReportedSize = currentSize;
     widget.onChange(currentSize);
   }
-}
-
-Color _labelColorOnCategoryFill(Color categoryFill) {
-  return categoryFill.computeLuminance() > 0.5
-      ? const Color(0xFF1A1A1A)
-      : const Color(0xFFF5F5F5);
 }
 
 /// True when [trackedUrl]'s host contains [hostFragment].
@@ -982,6 +977,7 @@ class _AppPageState extends State<AppPage> {
             preselected: _editCategories.toSet(),
             alignment: WrapAlignment.start,
             showLabelWhenNotEmpty: false,
+            showSelectedCheckmark: true,
             onSelected: (cats) => setState(() => _editCategories = cats),
           ),
         ]),
@@ -2718,51 +2714,19 @@ class _AppPageState extends State<AppPage> {
               Expanded(
                 child: (app?.app.categories ?? []).isEmpty
                     ? Text(tr('none'), style: detailsValueStyle)
-                    : Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
+                    : CategoryActionChipGroup(
                         alignment: WrapAlignment.start,
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           ...(app?.app.categories ?? []).map((categoryName) {
                             final colorArgb =
                                 settingsProvider.categories[categoryName];
-                            if (colorArgb != null) {
-                              final fill = Color(colorArgb);
-                              return Chip(
-                                label: Text(
-                                  categoryName,
-                                  style: TextStyle(
-                                    color: _labelColorOnCategoryFill(fill),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                backgroundColor: fill,
-                                shape: const StadiumBorder(),
-                                side: BorderSide.none,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 2,
-                                ),
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: VisualDensity.compact,
-                              );
-                            }
-                            return Chip(
-                              label: Text(
-                                categoryName,
-                                style: detailsValueStyle,
+                            return CategoryActionChip(
+                              label: categoryName,
+                              color: Color(
+                                colorArgb ?? Colors.grey.shade500.toARGB32(),
                               ),
-                              shape: const StadiumBorder(),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              visualDensity: VisualDensity.compact,
+                              state: CategoryActionChipState.plain,
                             );
                           }),
                         ],

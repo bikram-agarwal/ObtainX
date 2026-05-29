@@ -58,9 +58,8 @@ extension AppAccentColorSourceX on AppAccentColorSource {
   bool get isSeedBased => this != AppAccentColorSource.materialYou;
 
   static const List<AppAccentColorSource> accentPickerOrder = [
-    AppAccentColorSource.appDefault,
     AppAccentColorSource.materialYou,
-    AppAccentColorSource.presetSapphire,
+    AppAccentColorSource.appDefault,
     AppAccentColorSource.presetEmerald,
     AppAccentColorSource.presetAmber,
     AppAccentColorSource.presetViolet,
@@ -149,7 +148,11 @@ extension ColorSchemeBoost on ColorScheme {
   ColorScheme boostSurfaceContainersTowardPrimary({
     required bool darkTheme,
     required bool useGradient,
+    required double shadingIntensity,
   }) {
+    final double intensity = shadingIntensity.clamp(0.0, 2.0);
+    if (intensity <= 0.0) return this;
+
     final Color accent;
     final double containerAmount;
     final double surfaceAmount;
@@ -173,8 +176,13 @@ extension ColorSchemeBoost on ColorScheme {
       surfaceAmount = 0.26;
     }
 
-    Color tintC(Color base) => Color.lerp(base, accent, containerAmount)!;
-    Color tintS(Color base) => Color.lerp(base, accent, surfaceAmount)!;
+    Color tintC(Color base) {
+      return Color.lerp(base, accent, containerAmount * intensity)!;
+    }
+
+    Color tintS(Color base) {
+      return Color.lerp(base, accent, surfaceAmount * intensity)!;
+    }
 
     ColorScheme result = copyWith(
       surface: useGradient ? surface : tintS(surface),

@@ -1,8 +1,7 @@
-import 'dart:math' as math;
-
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/components/generated_form.dart';
 
 enum BulkCategoryCoverageState { all, some, none }
@@ -343,9 +342,7 @@ class _BulkCategoryEditorSheetState extends State<BulkCategoryEditorSheet> {
             else
               Flexible(
                 child: SingleChildScrollView(
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                  child: CategoryActionChipGroup(
                     children: coverage.map((item) {
                       final key = bulkCategoryKey(item.category);
                       final intent =
@@ -522,128 +519,21 @@ class _BulkCategoryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorIsLight = color.computeLuminance() > 0.35;
-    final onColor = colorIsLight ? Colors.black87 : Colors.white;
+    final CategoryActionChipState visualState = switch (intent) {
+      BulkCategoryIntent.add => CategoryActionChipState.add,
+      BulkCategoryIntent.remove => CategoryActionChipState.remove,
+      BulkCategoryIntent.neutral => switch (coverage.state) {
+        BulkCategoryCoverageState.all => CategoryActionChipState.selected,
+        BulkCategoryCoverageState.some => CategoryActionChipState.partial,
+        BulkCategoryCoverageState.none => CategoryActionChipState.unselected,
+      },
+    };
 
-    late final Widget avatar;
-    late final Color containerColor;
-    late final Color foregroundColor;
-    late final TextDecoration decoration;
-    late final FontWeight fontWeight;
-
-    switch (intent) {
-      case BulkCategoryIntent.neutral:
-        decoration = TextDecoration.none;
-        switch (coverage.state) {
-          case BulkCategoryCoverageState.all:
-            containerColor = color;
-            foregroundColor = onColor;
-            fontWeight = FontWeight.w600;
-            avatar = Icon(
-              Icons.radio_button_checked,
-              size: 18,
-              color: foregroundColor,
-            );
-          case BulkCategoryCoverageState.some:
-            containerColor = color;
-            foregroundColor = onColor;
-            fontWeight = FontWeight.w500;
-            avatar = _PartialRadioIcon(color: foregroundColor);
-          case BulkCategoryCoverageState.none:
-            containerColor = color;
-            foregroundColor = onColor.withValues(alpha: 0.78);
-            fontWeight = FontWeight.w500;
-            avatar = Icon(
-              Icons.radio_button_unchecked,
-              size: 18,
-              color: foregroundColor,
-            );
-        }
-      case BulkCategoryIntent.add:
-        containerColor = color;
-        foregroundColor = onColor;
-        decoration = TextDecoration.none;
-        fontWeight = FontWeight.w600;
-        avatar = Icon(Icons.add, size: 18, color: foregroundColor);
-      case BulkCategoryIntent.remove:
-        containerColor = theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.3,
-        );
-        foregroundColor = theme.colorScheme.onSurface.withValues(alpha: 0.55);
-        decoration = TextDecoration.lineThrough;
-        fontWeight = FontWeight.w500;
-        avatar = Icon(Icons.close, size: 18, color: foregroundColor);
-    }
-
-    return RawChip(
+    return CategoryActionChip(
       onPressed: onPressed,
-      avatar: avatar,
-      label: Text(
-        coverage.category,
-        style: theme.textTheme.labelMedium?.copyWith(
-          color: foregroundColor,
-          decoration: decoration,
-          fontWeight: fontWeight,
-        ),
-      ),
-      backgroundColor: containerColor,
-      shape: const StadiumBorder(),
-      side: BorderSide(
-        color: intent == BulkCategoryIntent.remove
-            ? color.withValues(alpha: 0.55)
-            : Colors.transparent,
-      ),
-      visualDensity: VisualDensity.compact,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      label: coverage.category,
+      color: color,
+      state: visualState,
     );
   }
-}
-
-class _PartialRadioIcon extends StatelessWidget {
-  const _PartialRadioIcon({required this.color});
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox.square(
-      dimension: 18,
-      child: CustomPaint(painter: _PartialRadioPainter(color)),
-    );
-  }
-}
-
-class _PartialRadioPainter extends CustomPainter {
-  const _PartialRadioPainter(this.color);
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final outlinePaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    final fillPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(center, 7, outlinePaint);
-
-    final innerRadius = 4.75;
-    final innerBounds = Rect.fromCircle(center: center, radius: innerRadius);
-    final halfDot = Path()
-      ..moveTo(center.dx, center.dy - innerRadius)
-      ..arcTo(innerBounds, -math.pi / 2, -math.pi, false)
-      ..lineTo(center.dx, center.dy - innerRadius)
-      ..close();
-
-    canvas.drawPath(halfDot, fillPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _PartialRadioPainter oldDelegate) =>
-      oldDelegate.color != color;
 }

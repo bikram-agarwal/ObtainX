@@ -2,6 +2,12 @@
 
 ObtainX builds on everything Obtainium does well — same sources, same trust model, same spirit — with a reworked UI and a set of features aimed at making everyday use a little smoother. For a side-by-side comparison with screenshots, see [ObtainX vs Obtainium](./docs/Difference_with_Obtainium.md).
 
+<p align="center">
+<strong>Featured by HowToMen: Best Android Apps - May 2026! 🎊</strong>
+</p>
+<p align="center">
+  <a href="https://youtu.be/B59glf2bweo?si=8rTAqBJiW9uwtpTT&t=468"><img width="50%" alt="ObtainX: Best Android Apps - May 2026!" src="./assets/graphics/feature_htm.webp" /></a>
+</p>
 
 ## ✨ New Features
 
@@ -29,7 +35,6 @@ Features that don't exist in Obtainium at all.
 
 - **💾 Save assets** - Option to save update assets (e.g. APKs) to your chosen folder, during update process itself.
 
-
 ## 🔧 Enhanced Features
 
 Features Obtainium has, extended or improved here.
@@ -47,7 +52,7 @@ Features Obtainium has, extended or improved here.
 
 - **🔖 Active filter chips** — Extends Obtainium's filter with dismissible chips pinned below the toolbar showing every active non-text filter (category, pinned, installed state, etc.). Tap any chip to clear just that filter. The row disappears entirely when nothing is active.
 
-- **🏷️ Category customization** — More control over your categories: instead of cycling between a few random colors, choose from a 5×12 color palette (vivid to pastel), or enter the hex value yourself. A live preview of the category chip as you name and color it. Category colors are WYSIWYG. Category's name switches between black and white text automatically for readability. You can also rename an existing category, and all assigned apps automatically receive it. 
+- **🏷️ Category customization** — More control over your categories: instead of cycling between a few random colors, pick any color of your choice. Category colors are WYSIWYG. Category's name switches between black and white text automatically for readability. You can also rename an existing category, and all assigned apps automatically receive it. Bulk edit lets you assign new categories to your selected apps, without wiping all existing ones. 
 
 ## 🎨 UI & UX
 

@@ -37,4 +37,24 @@ void main() {
 
     expect(settings.savedCustomSeedHexes, <String>['#ABCDEF']);
   });
+
+  test('shading intensity defaults to current theme boost', () async {
+    final SettingsProvider settings = await _settingsWithPrefs(
+      <String, Object>{},
+    );
+
+    expect(settings.shadingIntensity, 1.0);
+  });
+
+  test('shading intensity is stepped and clamped', () async {
+    final SettingsProvider settings = await _settingsWithPrefs(
+      <String, Object>{},
+    );
+
+    settings.shadingIntensity = 2.35;
+    expect(settings.shadingIntensity, 2.0);
+
+    settings.shadingIntensity = 0.46;
+    expect(settings.shadingIntensity, 0.5);
+  });
 }

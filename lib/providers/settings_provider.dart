@@ -468,6 +468,16 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  double get shadingIntensity {
+    return (prefs?.getDouble('shadingIntensity') ?? 1.0).clamp(0.0, 2.0);
+  }
+
+  set shadingIntensity(double value) {
+    final double steppedValue = ((value * 10).round() / 10).clamp(0.0, 2.0);
+    prefs?.setDouble('shadingIntensity', steppedValue);
+    notifyListeners();
+  }
+
   bool get useMaterialYou {
     return appAccentColorSource == AppAccentColorSource.materialYou;
   }

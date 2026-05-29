@@ -481,127 +481,120 @@ class _SettingsPageState extends State<SettingsPage> {
       final bool expanded =
           settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
       const Duration headerTransitionDuration = Duration(milliseconds: 300);
+      const Curve headerTransitionCurve = Curves.easeInOutCubicEmphasized;
       final Color collapsedHeaderColor = Color.lerp(
         cs.secondaryContainer,
         cs.primaryContainer,
         0.30,
       )!;
       final Color collapsedHeaderContentColor = cs.onSecondaryContainer;
+      final Color headerContentColor = expanded
+          ? cs.primary
+          : collapsedHeaderContentColor;
+      final BorderSide outlineSide = expanded
+          ? BorderSide.none
+          : m3ePureBlackOutlineSide(cs, alpha: 0.16);
 
-      return Padding(
+      return AnimatedPadding(
+        duration: headerTransitionDuration,
+        curve: headerTransitionCurve,
         padding: EdgeInsets.fromLTRB(0, expanded ? 20 : 16, 0, 8),
-        child: AnimatedSwitcher(
+        child: AnimatedContainer(
           duration: headerTransitionDuration,
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (Widget child, Animation<double> animation) {
-            return FadeTransition(
-              opacity: animation,
-              child: SizeTransition(
-                sizeFactor: animation,
-                axisAlignment: -1,
-                child: child,
+          curve: headerTransitionCurve,
+          decoration: BoxDecoration(
+            color: expanded ? Colors.transparent : collapsedHeaderColor,
+            borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+            border: outlineSide == BorderSide.none
+                ? null
+                : Border.fromBorderSide(outlineSide),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: () => settingsProvider.setSettingBool(
+                'settingsSection_$key',
+                !expanded,
               ),
-            );
-          },
-          child: expanded
-              ? InkWell(
-                  key: ValueKey<String>('settingsHeaderText_$key'),
-                  onTap: () => settingsProvider.setSettingBool(
-                    'settingsSection_$key',
-                    false,
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                  splashFactory: NoSplash.splashFactory,
-                  splashColor: Colors.transparent,
-                  highlightColor: Colors.transparent,
-                  hoverColor: Colors.transparent,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
-                    child: Row(
-                      children: [
-                        Icon(icon, color: cs.primary, size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: cs.primary,
-                              fontSize: 13,
-                              decoration: TextDecoration.none,
-                            ),
-                          ),
-                        ),
-                        Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          color: cs.primary,
-                          size: 18,
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              : DecoratedBox(
-                  key: ValueKey<String>('settingsHeaderPill_$key'),
-                  decoration: ShapeDecoration(
-                    color: collapsedHeaderColor,
-                    shape: StadiumBorder(
-                      side: m3ePureBlackOutlineSide(cs, alpha: 0.16),
-                    ),
-                  ),
-                  child: Material(
-                    type: MaterialType.transparency,
-                    child: InkWell(
-                      onTap: () => settingsProvider.setSettingBool(
-                        'settingsSection_$key',
-                        true,
-                      ),
-                      customBorder: const StadiumBorder(),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 30,
-                              height: 30,
-                              decoration: BoxDecoration(
-                                color: cs.primary.withValues(alpha: 0.16),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                icon,
-                                color: collapsedHeaderContentColor,
-                                size: 17,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                title,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: collapsedHeaderContentColor,
-                                  fontSize: 13,
-                                  letterSpacing: 0.1,
-                                  decoration: TextDecoration.none,
-                                ),
-                              ),
-                            ),
-                            Icon(
-                              Icons.keyboard_arrow_right_rounded,
-                              color: collapsedHeaderContentColor,
-                              size: 22,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+              borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+              splashFactory: NoSplash.splashFactory,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              hoverColor: Colors.transparent,
+              child: AnimatedPadding(
+                duration: headerTransitionDuration,
+                curve: headerTransitionCurve,
+                padding: EdgeInsets.symmetric(
+                  horizontal: expanded ? 4 : 12,
+                  vertical: expanded ? 4 : 8,
                 ),
+                child: Row(
+                  children: [
+                    AnimatedContainer(
+                      duration: headerTransitionDuration,
+                      curve: headerTransitionCurve,
+                      width: expanded ? 20 : 30,
+                      height: expanded ? 20 : 30,
+                      decoration: BoxDecoration(
+                        color: expanded
+                            ? Colors.transparent
+                            : cs.primary.withValues(alpha: 0.16),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        icon,
+                        color: headerContentColor,
+                        size: expanded ? 16 : 17,
+                      ),
+                    ),
+                    SizedBox(width: expanded ? 8 : 10),
+                    Expanded(
+                      child: AnimatedDefaultTextStyle(
+                        duration: headerTransitionDuration,
+                        curve: headerTransitionCurve,
+                        style: TextStyle(
+                          fontWeight: expanded
+                              ? FontWeight.w600
+                              : FontWeight.w700,
+                          color: headerContentColor,
+                          fontSize: 13,
+                          letterSpacing: expanded ? 0 : 0.1,
+                          decoration: TextDecoration.none,
+                        ),
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    AnimatedContainer(
+                      duration: headerTransitionDuration,
+                      curve: headerTransitionCurve,
+                      width: expanded ? 20 : 32,
+                      height: expanded ? 20 : 32,
+                      decoration: BoxDecoration(
+                        color: expanded
+                            ? Colors.transparent
+                            : cs.surfaceContainerHighest,
+                        shape: BoxShape.circle,
+                      ),
+                      child: AnimatedRotation(
+                        turns: expanded ? 0.25 : 0,
+                        duration: headerTransitionDuration,
+                        curve: headerTransitionCurve,
+                        child: Icon(
+                          Icons.chevron_right_rounded,
+                          color: expanded ? cs.primary : cs.onSurfaceVariant,
+                          size: expanded ? 18 : 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -1124,6 +1117,8 @@ class _SettingsPageState extends State<SettingsPage> {
                                 padding: EdgeInsets.all(16),
                                 child: CategoryEditorSelector(
                                   showLabelWhenNotEmpty: false,
+                                  showSelectedCheckmark: true,
+                                  showChangeIntentIcons: false,
                                 ),
                               ),
                             ]),
@@ -1625,7 +1620,12 @@ Future<void> _copyAboutUrl(BuildContext context, String url) async {
 }
 
 Future<void> _shareAboutUrl(String url, String subject) async {
-  await SharePlus.instance.share(ShareParams(text: url, subject: subject));
+  await SharePlus.instance.share(
+    ShareParams(
+      text: tr('aboutShareText', args: [url]),
+      subject: subject,
+    ),
+  );
 }
 
 void _openLogsDialog(BuildContext context) {
@@ -1817,6 +1817,8 @@ class CategoryEditorSelector extends StatefulWidget {
   final Set<String> preselected;
   final WrapAlignment alignment;
   final bool showLabelWhenNotEmpty;
+  final bool showSelectedCheckmark;
+  final bool showChangeIntentIcons;
 
   /// When false, only chips are shown (toggle selection). Add / edit / remove
   /// controls for the global category list are hidden.
@@ -1828,6 +1830,8 @@ class CategoryEditorSelector extends StatefulWidget {
     this.preselected = const {},
     this.alignment = WrapAlignment.start,
     this.showLabelWhenNotEmpty = true,
+    this.showSelectedCheckmark = false,
+    this.showChangeIntentIcons = true,
     this.allowCategoryManagement = true,
   });
 
@@ -1868,6 +1872,8 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
             singleSelect: widget.singleSelect,
             showLabelWhenNotEmpty: widget.showLabelWhenNotEmpty,
             allowTagManagement: widget.allowCategoryManagement,
+            showSelectedCheckmark: widget.showSelectedCheckmark,
+            showChangeIntentIcons: widget.showChangeIntentIcons,
           ),
         ],
       ],

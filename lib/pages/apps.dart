@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/components/bulk_category_editor.dart';
+import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
@@ -1245,11 +1246,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          tr('showBadges'),
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 8),
+                        sectionLabel(tr('showBadges')),
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
@@ -5197,9 +5194,7 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        CategoryActionChipGroup(
           children: categories.map((category) {
             final intent = includedCategories.contains(category)
                 ? CategoryFilterIntent.include
@@ -5241,50 +5236,12 @@ class _TriStateCategoryFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     final maxChipWidth = MediaQuery.sizeOf(context).width - 40;
-    final Color containerColor;
-    final Color textColor;
-    final Color iconColor;
-    final Color dotColor;
-    final TextDecoration textDecoration;
-    final IconData? leadingIcon;
-    final FontWeight textWeight;
-    final BorderSide borderSide;
-
-    switch (intent) {
-      case CategoryFilterIntent.neutral:
-        containerColor = colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.45,
-        );
-        textColor = colorScheme.onSurfaceVariant.withValues(alpha: 0.70);
-        iconColor = colorScheme.onSurfaceVariant.withValues(alpha: 0.55);
-        dotColor = color.withValues(alpha: 0.45);
-        textDecoration = TextDecoration.none;
-        leadingIcon = null;
-        textWeight = FontWeight.w500;
-        borderSide = BorderSide.none;
-      case CategoryFilterIntent.include:
-        containerColor = colorScheme.surfaceContainerHighest;
-        textColor = colorScheme.onSurface;
-        iconColor = color;
-        dotColor = color;
-        textDecoration = TextDecoration.none;
-        leadingIcon = Icons.add_rounded;
-        textWeight = FontWeight.w600;
-        borderSide = BorderSide.none;
-      case CategoryFilterIntent.exclude:
-        containerColor = colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.32,
-        );
-        textColor = colorScheme.onSurfaceVariant.withValues(alpha: 0.64);
-        iconColor = color.withValues(alpha: 0.64);
-        dotColor = color.withValues(alpha: 0.32);
-        textDecoration = TextDecoration.lineThrough;
-        leadingIcon = Icons.close_rounded;
-        textWeight = FontWeight.w500;
-        borderSide = BorderSide(color: color.withValues(alpha: 0.44));
-    }
+    final CategoryActionChipState chipState = switch (intent) {
+      CategoryFilterIntent.neutral => CategoryActionChipState.muted,
+      CategoryFilterIntent.include => CategoryActionChipState.add,
+      CategoryFilterIntent.exclude => CategoryActionChipState.remove,
+    };
 
     return Tooltip(
       message: switch (intent) {
@@ -5294,55 +5251,13 @@ class _TriStateCategoryFilterChip extends StatelessWidget {
       },
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxChipWidth),
-        child: Material(
-          color: Colors.transparent,
-          child: Ink(
-            decoration: ShapeDecoration(
-              color: containerColor,
-              shape: StadiumBorder(side: borderSide),
-            ),
-            child: InkWell(
-              customBorder: const StadiumBorder(),
-              onTap: onCycle,
-              onLongPress: onClear,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (leadingIcon != null) ...[
-                      Icon(leadingIcon, size: 14, color: iconColor),
-                      const SizedBox(width: 6),
-                    ],
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: dotColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        category,
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: textColor,
-                              fontWeight: textWeight,
-                              decoration: textDecoration,
-                            ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+        child: GestureDetector(
+          onLongPress: onClear,
+          child: CategoryActionChip(
+            label: category,
+            color: color,
+            state: chipState,
+            onPressed: onCycle,
           ),
         ),
       ),

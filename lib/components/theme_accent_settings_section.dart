@@ -896,18 +896,11 @@ class _AccentCircleContent extends StatelessWidget {
     const double inner = _kAccentInnerSize;
     switch (source) {
       case AppAccentColorSource.appDefault:
-        return ClipOval(
-          child: SizedBox(
-            width: inner,
-            height: inner,
-            child: Row(
-              children: [
-                Expanded(child: Container(color: const Color(0xFF1B5EA8))),
-                Expanded(child: Container(color: const Color(0xFF576270))),
-                Expanded(child: Container(color: const Color(0xFF006874))),
-              ],
-            ),
-          ),
+        return const _TripletAccentCircle(
+          primary: Color(0xFF1B5EA8),
+          secondary: Color(0xFF576270),
+          tertiary: Color(0xFF006874),
+          size: inner,
         );
       case AppAccentColorSource.materialYou:
         return SizedBox(
@@ -927,6 +920,43 @@ class _AccentCircleContent extends StatelessWidget {
           child: Container(width: inner, height: inner, color: fill),
         );
     }
+  }
+}
+
+class _TripletAccentCircle extends StatelessWidget {
+  const _TripletAccentCircle({
+    required this.primary,
+    required this.secondary,
+    required this.tertiary,
+    required this.size,
+  });
+
+  final Color primary;
+  final Color secondary;
+  final Color tertiary;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Column(
+          children: [
+            Expanded(child: Container(color: primary)),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: Container(color: secondary)),
+                  Expanded(child: Container(color: tertiary)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

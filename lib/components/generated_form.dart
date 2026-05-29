@@ -5,6 +5,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
+import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -179,6 +180,8 @@ class GeneratedFormTagInput extends GeneratedFormItem {
   /// When false, only category chips are shown (toggle selection). Add / edit /
   /// remove list controls are hidden.
   late bool allowTagManagement;
+  late bool showSelectedCheckmark;
+  late bool showChangeIntentIcons;
   GeneratedFormTagInput(
     super.key, {
     super.label,
@@ -193,6 +196,8 @@ class GeneratedFormTagInput extends GeneratedFormItem {
     this.emptyMessage = 'Input',
     this.showLabelWhenNotEmpty = true,
     this.allowTagManagement = true,
+    this.showSelectedCheckmark = false,
+    this.showChangeIntentIcons = true,
   });
 
   @override
@@ -214,6 +219,8 @@ class GeneratedFormTagInput extends GeneratedFormItem {
       emptyMessage: emptyMessage,
       showLabelWhenNotEmpty: showLabelWhenNotEmpty,
       allowTagManagement: allowTagManagement,
+      showSelectedCheckmark: showSelectedCheckmark,
+      showChangeIntentIcons: showChangeIntentIcons,
     );
   }
 }
@@ -991,6 +998,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
   List<List<Widget>> rows = [];
   int forceUpdateKeyCount = 0;
   final Map<String, TextEditingController> _textFieldControllers = {};
+  final Map<String, Map<String, MapEntry<int, bool>>> _initialTagValues = {};
 
   void _disposeTextFieldControllers() {
     for (final TextEditingController controller
@@ -1032,14 +1040,19 @@ class _GeneratedFormState extends State<GeneratedForm> {
 
   void initForm() {
     _disposeTextFieldControllers();
+    _initialTagValues.clear();
     // Initialize form values as all empty
     values.clear();
     for (var row in widget.items) {
       for (var e in row) {
         if (e is GeneratedFormSectionHeader) continue;
         if (e is GeneratedFormTagInput) {
-          values[e.key] = cloneCategoryTagInputValueMap(
+          final initialValue = cloneCategoryTagInputValueMap(
             e.defaultValue as Map<String, MapEntry<int, bool>>?,
+          );
+          values[e.key] = initialValue;
+          _initialTagValues[e.key] = cloneCategoryTagInputValueMap(
+            initialValue,
           );
         } else {
           values[e.key] = e.defaultValue;
@@ -1366,7 +1379,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                     const SizedBox(height: 8),
                   ],
                 ),
-              Wrap(
+              CategoryActionChipGroup(
                 alignment:
                     (widget.items[r][e] as GeneratedFormTagInput).alignment,
                 crossAxisAlignment: WrapCrossAlignment.center,
@@ -1374,6 +1387,27 @@ class _GeneratedFormState extends State<GeneratedForm> {
                   ...(values[fieldKey] as Map<String, MapEntry<int, bool>>?)
                           ?.entries
                           .map((e2) {
+                            final bool originallySelected =
+                                _initialTagValues[fieldKey]?[e2.key]?.value ??
+                                false;
+                            final bool currentlySelected = e2.value.value;
+                            final CategoryActionChipState selectedState =
+                                tagInput.showSelectedCheckmark
+                                ? CategoryActionChipState.checked
+                                : CategoryActionChipState.plain;
+                            final CategoryActionChipState chipState =
+                                tagInput.showChangeIntentIcons
+                                ? (originallySelected
+                                      ? (currentlySelected
+                                            ? selectedState
+                                            : CategoryActionChipState.remove)
+                                      : (currentlySelected
+                                            ? CategoryActionChipState.add
+                                            : CategoryActionChipState.muted))
+                                : (currentlySelected
+                                      ? selectedState
+                                      : CategoryActionChipState.muted);
+
                             void onCategoryChipSelected(bool newValue) {
                               setState(() {
                                 final Map<String, MapEntry<int, bool>> map =
@@ -1394,35 +1428,15 @@ class _GeneratedFormState extends State<GeneratedForm> {
                               someValueChanged();
                             }
 
-                            final Color chipColor = Color(e2.value.key);
-                            final bool lightChip =
-                                chipColor.computeLuminance() > 0.35;
-                            final TextStyle chipLabelStyle = TextStyle(
-                              color: lightChip ? Colors.black87 : Colors.white,
-                            );
-                            final Color checkColor = lightChip
-                                ? Colors.black87
-                                : Colors.white;
-                            return Padding(
+                            return KeyedSubtree(
                               key: ValueKey<String>('category_chip_${e2.key}'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                              ),
-                              child: FilterChip(
-                                label: Text(e2.key),
-                                backgroundColor: chipColor,
-                                selectedColor: chipColor,
-                                labelStyle: chipLabelStyle,
-                                shape: const StadiumBorder(),
-                                side: BorderSide.none,
-                                clipBehavior: Clip.antiAlias,
-                                showCheckmark: true,
-                                checkmarkColor: checkColor,
-                                visualDensity: VisualDensity.compact,
-                                materialTapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                                selected: e2.value.value,
-                                onSelected: onCategoryChipSelected,
+                              child: CategoryActionChip(
+                                label: e2.key,
+                                color: Color(e2.value.key),
+                                state: chipState,
+                                onPressed: () {
+                                  onCategoryChipSelected(!currentlySelected);
+                                },
                               ),
                             );
                           }) ??

@@ -120,7 +120,7 @@ Everything happens on one page. All stores are visible from the start. Tap Searc
 <img src="https://github.com/user-attachments/assets/cf630d89-e4c9-4bb6-8a7e-bbc96c1c05af" alt="Obtainium add app entry" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/bba7f987-3408-4954-8ec8-eea14cf8edee" alt="ObtainX add app modes and URL" width="300" /><br /><strong>ObtainX</strong>
+<img src="https://github.com/user-attachments/assets/47e8c75a-ed40-4633-a582-448b6943c8d8" alt="ObtainX add app modes and URL" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 <tr>

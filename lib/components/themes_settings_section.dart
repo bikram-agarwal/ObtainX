@@ -1,5 +1,5 @@
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:easy_localization/easy_localization.dart';
+import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart'
     show buildThemeAccentSettingsCardItems;
@@ -57,6 +57,7 @@ List<Widget> buildThemesSettingsCardItems(
       s.useBlackTheme,
       s.theme,
       s.useGradientBackground,
+      s.shadingIntensity,
       s.progressiveBlurEnabled,
       s.matchAppPageToIconColors,
       s.reduceVisualEffects,
@@ -127,6 +128,7 @@ List<Widget> buildThemesSettingsCardItems(
       ),
     ),
     ...buildThemeAccentSettingsCardItems(androidInfoFuture),
+    _ShadingIntensityTile(settings: settings),
     ListTile(
       title: Text(tr('settingsGradientBackground')),
       trailing: IgnorePointer(
@@ -223,4 +225,247 @@ List<Widget> buildThemesSettingsCardItems(
       },
     ),
   ];
+}
+
+class _ShadingIntensityTile extends StatelessWidget {
+  const _ShadingIntensityTile({required this.settings});
+
+  final SettingsProvider settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final bool enabled = !settings.useBlackTheme;
+    final Color titleColor = enabled
+        ? colorScheme.onSurface
+        : colorScheme.onSurface.withValues(alpha: 0.38);
+    final Color subtitleColor = enabled
+        ? colorScheme.onSurfaceVariant
+        : colorScheme.onSurfaceVariant.withValues(alpha: 0.38);
+    final double sliderValue = settings.shadingIntensity;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  tr('settingsShadingIntensity'),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(color: titleColor),
+                ),
+              ),
+              Text(
+                _shadingIntensityLabel(sliderValue),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: titleColor),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            tr('settingsShadingIntensitySubtitle'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: subtitleColor),
+          ),
+          const SizedBox(height: 10),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 16,
+              trackShape: const _ShadingGappedTrackShape(),
+              thumbShape: const _ShadingVerticalBarThumbShape(),
+              tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
+              activeTickMarkColor: colorScheme.onPrimary,
+              inactiveTickMarkColor: colorScheme.primary,
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+            ),
+            child: Slider(
+              value: sliderValue,
+              min: 0,
+              max: 2,
+              divisions: 20,
+              label: _shadingIntensityLabel(sliderValue),
+              onChanged: enabled
+                  ? (double value) {
+                      settings.shadingIntensity = value;
+                    }
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _shadingIntensityLabel(double value) {
+  return '${(value * 100).round()}%';
+}
+
+class _ShadingVerticalBarThumbShape extends SliderComponentShape {
+  const _ShadingVerticalBarThumbShape();
+
+  static const double _width = 4;
+  static const double _height = 28;
+  static const double _radius = 2;
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) {
+    return const Size(_width, _height);
+  }
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset center, {
+    required Animation<double> activationAnimation,
+    required Animation<double> enableAnimation,
+    required bool isDiscrete,
+    required TextPainter labelPainter,
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required TextDirection textDirection,
+    required double value,
+    required double textScaleFactor,
+    required Size sizeWithOverflow,
+  }) {
+    final Rect trackRect = sliderTheme.trackShape!.getPreferredRect(
+      parentBox: parentBox,
+      offset: Offset.zero,
+      sliderTheme: sliderTheme,
+      isEnabled: enableAnimation.value > 0,
+      isDiscrete: isDiscrete,
+    );
+    final double trackHeight = trackRect.height;
+    final double trackWidth = trackRect.width;
+    Offset alignedCenter = center;
+    if (trackWidth > trackHeight) {
+      final double valueRatio = textDirection == TextDirection.rtl
+          ? 1.0 - value
+          : value;
+      final double alignedX =
+          trackRect.left +
+          valueRatio * (trackWidth - trackHeight) +
+          trackHeight / 2;
+      alignedCenter = Offset(alignedX, center.dy);
+    }
+    final Canvas canvas = context.canvas;
+    final Paint paint = Paint()
+      ..color = sliderTheme.thumbColor ?? Colors.white
+      ..style = PaintingStyle.fill;
+    final RRect thumb = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: alignedCenter, width: _width, height: _height),
+      const Radius.circular(_radius),
+    );
+    canvas.drawRRect(thumb, paint);
+  }
+}
+
+class _ShadingGappedTrackShape extends SliderTrackShape
+    with BaseSliderTrackShape {
+  const _ShadingGappedTrackShape();
+
+  static const int _divisions = 20;
+  static const double _gap = 4;
+  static const double _radius = 8;
+  static const double _tickRadius = 2.75;
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 0,
+  }) {
+    final Canvas canvas = context.canvas;
+    final Rect trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+
+    double thumbX = thumbCenter.dx;
+    final double trackHeight = trackRect.height;
+    final double trackWidth = trackRect.width;
+    if (trackWidth > trackHeight) {
+      final double valueRatio = ((thumbCenter.dx - trackRect.left) / trackWidth)
+          .clamp(0.0, 1.0);
+      thumbX =
+          trackRect.left +
+          valueRatio * (trackWidth - trackHeight) +
+          trackHeight / 2;
+    }
+
+    final Paint activePaint = Paint()
+      ..color = sliderTheme.activeTrackColor ?? Colors.blue;
+    final Paint inactivePaint = Paint()
+      ..color = sliderTheme.inactiveTrackColor ?? Colors.grey;
+
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        Rect.fromLTRB(
+          trackRect.left,
+          trackRect.top,
+          thumbX - _gap,
+          trackRect.bottom,
+        ),
+        topLeft: const Radius.circular(_radius),
+        bottomLeft: const Radius.circular(_radius),
+      ),
+      activePaint,
+    );
+
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        Rect.fromLTRB(
+          thumbX + _gap,
+          trackRect.top,
+          trackRect.right,
+          trackRect.bottom,
+        ),
+        topRight: const Radius.circular(_radius),
+        bottomRight: const Radius.circular(_radius),
+      ),
+      inactivePaint,
+    );
+
+    final Paint tickPaint = Paint()..style = PaintingStyle.fill;
+    for (int tickIndex = 1; tickIndex < _divisions; tickIndex++) {
+      final double tickRatio = tickIndex / _divisions;
+      final double tickX =
+          trackRect.left +
+          tickRatio * (trackWidth - trackHeight) +
+          trackHeight / 2;
+      final bool isActive = textDirection == TextDirection.rtl
+          ? tickX > thumbX
+          : tickX < thumbX;
+      tickPaint.color = isActive
+          ? sliderTheme.activeTickMarkColor ??
+                sliderTheme.activeTrackColor ??
+                Colors.white
+          : sliderTheme.inactiveTickMarkColor ??
+                sliderTheme.inactiveTrackColor ??
+                Colors.grey;
+      canvas.drawCircle(
+        Offset(tickX, trackRect.center.dy),
+        _tickRadius,
+        tickPaint,
+      );
+    }
+  }
 }

@@ -318,6 +318,7 @@ class _ObtainiumState extends State<Obtainium> {
         s.activeCustomSeedHex,
         s.useBlackTheme,
         s.useGradientBackground,
+        s.shadingIntensity,
         s.useSystemFont,
         s.theme,
         s.appUiScale,
@@ -415,10 +416,12 @@ class _ObtainiumState extends State<Obtainium> {
               .boostSurfaceContainersTowardPrimary(
                 darkTheme: false,
                 useGradient: useGradient,
+                shadingIntensity: settingsProvider.shadingIntensity,
               );
           darkColorScheme = darkColorScheme.boostSurfaceContainersTowardPrimary(
             darkTheme: true,
             useGradient: useGradient,
+            shadingIntensity: settingsProvider.shadingIntensity,
           );
           if (settingsProvider.useBlackTheme) {
             darkColorScheme = darkColorScheme.withPureBlackBackgrounds();
