@@ -248,9 +248,12 @@ class AddAppPageState extends State<AddAppPage> {
         : 0.0;
     final double appVaultFabBottomPadding =
         bottomChromeClearance + _appVaultFabBottomGap;
+    final bool urlHasInput =
+        _mode == _AddMode.byUrl && userInput.trim().isNotEmpty;
     final bool showAppVaultFab =
         (_mode == _AddMode.byUrl && userInput.trim().isEmpty) ||
         (_mode == _AddMode.search && !_searchHasSearched && !searching);
+    final bool showBottomActionFab = showAppVaultFab || urlHasInput;
 
     // ── Track-only / release-date confirmations (URL mode) ─────────────
 
@@ -417,6 +420,52 @@ class AddAppPageState extends State<AddAppPage> {
       }
     }
 
+    bool urlAddDisabled() =>
+        doingSomething ||
+        pickedSource == null ||
+        (pickedSource!.combinedAppSpecificSettingFormItems.isNotEmpty &&
+            !additionalSettingsValid);
+
+    VoidCallback? urlAddAction() {
+      if (urlAddDisabled()) return null;
+      return () {
+        HapticFeedback.selectionClick();
+        addApp();
+      };
+    }
+
+    Widget buildBottomActionFab() {
+      if (urlHasInput) {
+        return FloatingActionButton.extended(
+          key: const ValueKey<String>('add-app-save-fab'),
+          heroTag: 'add-app-save-fab',
+          onPressed: urlAddAction(),
+          icon: gettingAppInfo
+              ? ExpressiveLoadingIndicator(
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 24,
+                    height: 24,
+                  ),
+                )
+              : const Icon(Icons.save_rounded),
+          label: Text(tr('save')),
+        );
+      }
+      return FloatingActionButton.extended(
+        key: const ValueKey<String>('add-app-app-vault-fab'),
+        heroTag: 'add-app-app-vault-fab',
+        onPressed: () {
+          launchUrlString(
+            'https://apps.obtainium.imranr.dev/',
+            mode: LaunchMode.externalApplication,
+          );
+        },
+        icon: const Icon(Icons.apps_rounded),
+        label: Text(tr('aboutAppVault')),
+      );
+    }
+
     // ── URL mode widgets ───────────────────────────────────────────────
 
     void showSupportedSourcesDialog() {
@@ -465,50 +514,8 @@ class AddAppPageState extends State<AddAppPage> {
     }
 
     Widget getUrlInputRow() {
-      final ColorScheme colorScheme = Theme.of(context).colorScheme;
       final bool showSupportedSourcesButton = userInput.trim().isEmpty;
-      final bool addDisabled =
-          doingSomething ||
-          pickedSource == null ||
-          (pickedSource!.combinedAppSpecificSettingFormItems.isNotEmpty &&
-              !additionalSettingsValid);
-      final Widget trailingControl = gettingAppInfo
-          ? SizedBox(
-              width: 48,
-              height: 48,
-              child: Center(
-                child: ExpressiveLoadingIndicator(
-                  color: colorScheme.primary,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 24,
-                    height: 24,
-                  ),
-                ),
-              ),
-            )
-          : Material(
-              color: addDisabled
-                  ? colorScheme.primary.withValues(alpha: 0.38)
-                  : colorScheme.primary,
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: addDisabled
-                    ? null
-                    : () {
-                        HapticFeedback.selectionClick();
-                        addApp();
-                      },
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Icon(
-                    Icons.add,
-                    color: colorScheme.onPrimary,
-                    size: 22,
-                  ),
-                ),
-              ),
-            );
+      final bool addDisabled = urlAddDisabled();
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -563,8 +570,6 @@ class AddAppPageState extends State<AddAppPage> {
                   ),
             ),
           ),
-          const SizedBox(width: 10),
-          trailingControl,
         ],
       );
     }
@@ -1392,25 +1397,23 @@ class AddAppPageState extends State<AddAppPage> {
                 appVaultFabBottomPadding,
               ),
               child: TweenAnimationBuilder<double>(
-                tween: Tween<double>(end: showAppVaultFab ? 1 : 0),
+                tween: Tween<double>(end: showBottomActionFab ? 1 : 0),
                 duration: const Duration(milliseconds: 320),
                 curve: Curves.easeInOutCubicEmphasized,
                 builder: (context, animationValue, child) {
                   return IgnorePointer(
-                    ignoring: !showAppVaultFab,
+                    ignoring: !showBottomActionFab,
                     child: Opacity(opacity: animationValue, child: child),
                   );
                 },
-                child: FloatingActionButton.extended(
-                  heroTag: 'add-app-app-vault-fab',
-                  onPressed: () {
-                    launchUrlString(
-                      'https://apps.obtainium.imranr.dev/',
-                      mode: LaunchMode.externalApplication,
-                    );
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    return FadeTransition(opacity: animation, child: child);
                   },
-                  icon: const Icon(Icons.apps_rounded),
-                  label: Text(tr('aboutAppVault')),
+                  child: buildBottomActionFab(),
                 ),
               ),
             ),
