@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/foundation.dart';
@@ -90,17 +88,9 @@ Future<bool> persistAdditionalOptionsForm({
 
 /// Full-screen editor for per-app additional options (keyboard-friendly).
 class AdditionalOptionsPage extends StatefulWidget {
-  const AdditionalOptionsPage({
-    super.key,
-    required this.appId,
-    this.onAfterSave,
-  });
+  const AdditionalOptionsPage({super.key, required this.appId});
 
   final String appId;
-
-  /// Optional follow-up after a successful save (e.g. metadata refresh on [AppPage]).
-  final Future<void> Function(String appId, bool versionDetectionJustEnabled)?
-  onAfterSave;
 
   @override
   State<AdditionalOptionsPage> createState() => _AdditionalOptionsPageState();
@@ -232,7 +222,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
   }
 
   Future<void> _onSave() async {
-    if (!_valid || _saving) return;
+    if (!_valid || _saving || !_isDirty()) return;
     setState(() {
       _saving = true;
     });
@@ -245,13 +235,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         formValues: _values,
       );
       if (!mounted) return;
-      if (widget.onAfterSave != null) {
-        final onAfterSave = widget.onAfterSave!;
-        Navigator.of(context).pop();
-        unawaited(onAfterSave(widget.appId, versionDetectionEnabled));
-        return;
-      }
-      if (mounted) Navigator.of(context).pop();
+      Navigator.of(context).pop(versionDetectionEnabled);
     } catch (err) {
       if (mounted) showError(err, context);
     } finally {
@@ -271,11 +255,35 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       return false;
     }
     for (final MapEntry<String, dynamic> entry in current.entries) {
-      if (baseline[entry.key] != entry.value) {
+      if (!_formValueEquals(baseline[entry.key], entry.value)) {
         return false;
       }
     }
     return true;
+  }
+
+  bool _formValueEquals(dynamic left, dynamic right) {
+    if (identical(left, right)) return true;
+    if (left is MapEntry && right is MapEntry) {
+      return _formValueEquals(left.key, right.key) &&
+          _formValueEquals(left.value, right.value);
+    }
+    if (left is Map && right is Map) {
+      if (left.length != right.length) return false;
+      for (final dynamic key in left.keys) {
+        if (!right.containsKey(key)) return false;
+        if (!_formValueEquals(left[key], right[key])) return false;
+      }
+      return true;
+    }
+    if (left is List && right is List) {
+      if (left.length != right.length) return false;
+      for (int index = 0; index < left.length; index++) {
+        if (!_formValueEquals(left[index], right[index])) return false;
+      }
+      return true;
+    }
+    return left == right;
   }
 
   bool _isDirty() {
@@ -456,6 +464,15 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     }
 
     final double fabBottomPadding = MediaQuery.of(context).padding.bottom + 16;
+    final bool canSave = _valid && !_saving && _isDirty();
+    final ColorScheme colorScheme = pageThemeForPage.colorScheme;
+    final Color disabledSaveFabColor =
+        Color.lerp(
+          colorScheme.surfaceContainerHighest,
+          colorScheme.onSurface,
+          Theme.of(context).brightness == Brightness.dark ? 0.18 : 0.08,
+        ) ??
+        colorScheme.surfaceContainerHighest;
 
     return Theme(
       data: pageThemeForPage,
@@ -491,7 +508,12 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
                 FloatingActionButton(
                   heroTag: 'additional_options_save',
                   tooltip: tr('continue'),
-                  onPressed: (!_valid || _saving) ? null : _onSave,
+                  backgroundColor: canSave ? null : disabledSaveFabColor,
+                  foregroundColor: canSave
+                      ? null
+                      : colorScheme.onSurface.withValues(alpha: 0.48),
+                  elevation: canSave ? null : 0,
+                  onPressed: canSave ? _onSave : null,
                   child: _saving
                       ? Builder(
                           builder: (indicatorContext) {

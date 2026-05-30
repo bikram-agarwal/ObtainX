@@ -50,7 +50,13 @@ import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:obtainium/folders/app_folder.dart';
 
 final pm = AndroidPackageManager();
+// Full flags — includes signing certs needed for cert-hash display/verification.
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
+// Light flags — omits signing certs; safe for foreground version-reconciliation
+// because getCorrectedInstallStatusAppIfPossible only reads versionName/versionCode.
+// Skipping getSigningCertificates makes getInstalledPackages ~10× faster and keeps
+// the Android platform thread free to dispatch touch events during the foreground load.
+final packageInfoFlagsLight = PackageInfoFlags({});
 
 final RegExp _androidApplicationIdPattern = RegExp(
   r'^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$',
@@ -1172,8 +1178,11 @@ Future<File> _downloadFile(
   return downloadedFile;
 }
 
-Future<List<PackageInfo>> getAllInstalledInfo() async {
-  return await pm.getInstalledPackages(flags: packageInfoFlags) ?? [];
+Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
+  return await pm.getInstalledPackages(
+        flags: light ? packageInfoFlagsLight : packageInfoFlags,
+      ) ??
+      [];
 }
 
 Future<PackageInfo?> getInstalledInfo(
@@ -1252,6 +1261,7 @@ class AppsProvider with ChangeNotifier {
 
   // In memory App state (should always be kept in sync with local storage versions)
   Map<String, AppInMemory> apps = {};
+  final Map<String, String> appPageErrors = {};
   bool loadingApps = false;
   Completer<void>? _loadingCompleter;
   bool gettingUpdates = false;
@@ -1398,8 +1408,22 @@ class AppsProvider with ChangeNotifier {
         final now = DateTime.now();
         final last = _lastForegroundLoadAt;
         if (last == null || now.difference(last) >= _foregroundLoadCooldown) {
+          // Stamp the cooldown immediately to prevent a second foreground event
+          // from queuing a concurrent load during the delay below.
           _lastForegroundLoadAt = now;
-          await loadApps(silent: true);
+          // Yield for one event-loop turn so Flutter can paint the first
+          // post-resume frame and register the user's first touch gesture before
+          // the getInstalledPackages platform call occupies the Android platform
+          // thread. Without this delay the first swipe after returning to the app
+          // is reliably missed.
+          await Future.delayed(const Duration(milliseconds: 300));
+          if (!isForeground) {
+            // User switched away within the delay window; reset the stamp so
+            // the next real foreground return triggers a load.
+            _lastForegroundLoadAt = last;
+            return;
+          }
+          await loadApps(silent: true, lightInstalledInfoFetch: true);
         }
       }
     });
@@ -1764,6 +1788,17 @@ class AppsProvider with ChangeNotifier {
   bool areDownloadsRunning() => apps.values
       .where((element) => element.downloadProgress != null)
       .isNotEmpty;
+
+  void setAppPageError(String appId, Object error) {
+    appPageErrors[appId] = error.toString();
+    notifyListeners();
+  }
+
+  void clearAppPageError(String appId) {
+    if (appPageErrors.remove(appId) != null) {
+      notifyListeners();
+    }
+  }
 
   Future<bool> canInstallSilently(App app) async {
     if (!settingsProvider.enableBackgroundUpdates) {
@@ -2919,7 +2954,11 @@ class AppsProvider with ChangeNotifier {
   // notify at the start and suppress the end notify when the app list is
   // unchanged — avoids two full rebuilds of every mounted page on every
   // lock/unlock or app-switch when nothing actually changed.
-  Future<void> loadApps({String? singleId, bool silent = false}) async {
+  Future<void> loadApps({
+    String? singleId,
+    bool silent = false,
+    bool lightInstalledInfoFetch = false,
+  }) async {
     await _loadingCompleter?.future;
     _loadingCompleter = Completer<void>();
     if (!silent) {
@@ -2929,12 +2968,13 @@ class AppsProvider with ChangeNotifier {
     await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
     var sp = SourceProvider();
     List<List<String>> errors = [];
-    var installedAppsData = await getAllInstalledInfo();
+    var installedAppsData = await getAllInstalledInfo(
+      light: lightInstalledInfoFetch,
+    );
     List<String> removedAppIds = [];
     bool anyAppModded = false;
     await Future.wait(
-      (await getAppsDir()) // Parse Apps from JSON
-          .listSync()
+      (await (await getAppsDir()).list().toList()) // Parse Apps from JSON
           .map((item) async {
             App? app;
             if (item.path.toLowerCase().endsWith('.json') &&

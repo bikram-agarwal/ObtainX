@@ -34,6 +34,9 @@ class DownloadForegroundService : Service() {
         val channelCode = intent?.getStringExtra(EXTRA_CHANNEL_CODE) ?: DEFAULT_CHANNEL_CODE
         val channelName = intent?.getStringExtra(EXTRA_CHANNEL_NAME) ?: channelCode
         val channelDescription = intent?.getStringExtra(EXTRA_CHANNEL_DESCRIPTION) ?: channelName
+        val notificationId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, DEFAULT_NOTIFICATION_ID)
+            ?: DEFAULT_NOTIFICATION_ID
+        val appId = intent?.getStringExtra(EXTRA_APP_ID)
         ensureChannel(channelCode, channelName, channelDescription)
 
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -41,16 +44,15 @@ class DownloadForegroundService : Service() {
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val contentIntent = PendingIntent.getActivity(
             this,
-            DEFAULT_NOTIFICATION_ID,
+            notificationId,
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             activityLaunchOptions(),
         )
-        val appId = intent?.getStringExtra(EXTRA_APP_ID)
         val cancelIntent = if (!appId.isNullOrBlank()) {
             PendingIntent.getBroadcast(
                 this,
-                DEFAULT_NOTIFICATION_ID,
+                appId.hashCode(),
                 Intent(this, DownloadActionReceiver::class.java).apply {
                     action = DownloadActionReceiver.ACTION_CANCEL_DOWNLOAD
                     putExtra(DownloadActionReceiver.EXTRA_APP_ID, appId)

@@ -802,12 +802,91 @@ class _AppPageState extends State<AppPage> {
 
   void _showPageError(dynamic error, BuildContext hostContext) {
     if (!hostContext.mounted) return;
-    showError(error, hostContext, theme: _cachedPageTheme);
+    Provider.of<LogsProvider>(
+      hostContext,
+      listen: false,
+    ).add(error.toString(), level: LogLevels.error);
+    Provider.of<AppsProvider>(
+      hostContext,
+      listen: false,
+    ).setAppPageError(widget.appId, error);
   }
 
   void _showPageMessage(dynamic message, BuildContext hostContext) {
     if (!hostContext.mounted) return;
     showMessage(message, hostContext, theme: _cachedPageTheme);
+  }
+
+  Widget _buildPersistentPageError(
+    BuildContext ctx,
+    ThemeData pageTheme,
+    String? error,
+  ) {
+    if (error == null || error.isEmpty) return const SizedBox.shrink();
+
+    final BoxDecoration baseDecoration = appPageSectionCardDecoration(ctx);
+    final ColorScheme colorScheme = pageTheme.colorScheme;
+    final TextTheme textTheme = pageTheme.textTheme;
+    final Color errorFill = Color.alphaBlend(
+      colorScheme.error.withValues(alpha: 0.08),
+      baseDecoration.color ?? colorScheme.surfaceContainer,
+    );
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      decoration: baseDecoration.copyWith(
+        color: errorFill,
+        border: Border.all(
+          color: colorScheme.error.withValues(alpha: 0.42),
+          width: 1,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 12,
+          children: [
+            Container(
+              height: 32,
+              width: 32,
+              decoration: BoxDecoration(
+                color: colorScheme.error.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.error_outline_rounded,
+                color: colorScheme.error,
+                size: 20,
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    tr('errorCheckingUpdates'),
+                    style: textTheme.labelLarge?.copyWith(
+                      color: colorScheme.onSurface,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  SelectableText(
+                    error,
+                    style: textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<T?> _showPageDialog<T>({
@@ -1519,6 +1598,7 @@ class _AppPageState extends State<AppPage> {
         updating = true;
       });
       await appsProvider.checkUpdate(id);
+      appsProvider.clearAppPageError(id);
       if (!mounted || widget.appId != id) return;
       // saveApps (called inside checkUpdate) replaces the in-memory icon with
       // null for non-installed apps.  Reset the one-shot flag so the rebuild
@@ -1653,6 +1733,9 @@ class _AppPageState extends State<AppPage> {
     context.select<AppsProvider, int>(
       (AppsProvider provider) =>
           appPageAppsRebuildToken(provider, widget.appId),
+    );
+    final String? persistentPageError = context.select<AppsProvider, String?>(
+      (AppsProvider provider) => provider.appPageErrors[widget.appId],
     );
 
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
@@ -3457,25 +3540,21 @@ class _AppPageState extends State<AppPage> {
                       onPressed: app?.downloadProgress != null || updating
                           ? null
                           : () async {
-                              await Navigator.push<void>(
-                                context,
-                                slideUpPageRoute(
-                                  (_) => AdditionalOptionsPage(
-                                    appId: widget.appId,
-                                    onAfterSave:
-                                        (
-                                          String savedAppId,
-                                          bool versionDetectionJustEnabled,
-                                        ) async {
-                                          await _runCheckUpdate(
-                                            savedAppId,
-                                            resetVersion:
-                                                versionDetectionJustEnabled,
-                                          );
-                                        },
-                                  ),
-                                ),
-                              );
+                              final bool? versionDetectionJustEnabled =
+                                  await Navigator.push<bool>(
+                                    context,
+                                    slideUpPageRoute(
+                                      (_) => AdditionalOptionsPage(
+                                        appId: widget.appId,
+                                      ),
+                                    ),
+                                  );
+                              if (versionDetectionJustEnabled != null) {
+                                await _runCheckUpdate(
+                                  widget.appId,
+                                  resetVersion: versionDetectionJustEnabled,
+                                );
+                              }
                             },
                       tooltip: tr('appOptions'),
                       icon: const Icon(Icons.tune),
@@ -3736,7 +3815,21 @@ class _AppPageState extends State<AppPage> {
               body: RefreshIndicator(
                 displacement: 20,
                 child: showAppWebpageFinal
-                    ? getAppWebView(themedPageContext)
+                    ? Stack(
+                        children: [
+                          Positioned.fill(
+                            child: getAppWebView(themedPageContext),
+                          ),
+                          SafeArea(
+                            bottom: false,
+                            child: _buildPersistentPageError(
+                              themedPageContext,
+                              pageThemeForPage,
+                              persistentPageError,
+                            ),
+                          ),
+                        ],
+                      )
                     : CustomScrollView(
                         controller: _appPageScrollController,
                         cacheExtent: 1600,
@@ -3799,11 +3892,17 @@ class _AppPageState extends State<AppPage> {
                                         appsProvider,
                                         settingsProvider,
                                       )
-                                    else
+                                    else ...[
+                                      _buildPersistentPageError(
+                                        themedPageContext,
+                                        pageThemeForPage,
+                                        persistentPageError,
+                                      ),
                                       getInfoColumn(
                                         themedPageContext,
                                         small: false,
                                       ),
+                                    ],
                                     Padding(
                                       padding: const EdgeInsets.fromLTRB(
                                         16,
