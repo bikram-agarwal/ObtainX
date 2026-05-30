@@ -62,10 +62,7 @@ class ProgressiveTopEdgeOverlay extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [
-                        overlayColor,
-                        overlayColor.withValues(alpha: 0),
-                      ],
+                      colors: [overlayColor, overlayColor.withValues(alpha: 0)],
                     ),
                   ),
                 ),
@@ -121,10 +118,7 @@ class ProgressiveBottomEdgeBlur extends StatelessWidget {
             fit: StackFit.expand,
             children: [
               BackdropFilter(
-                filter: ImageFilter.blur(
-                  sigmaX: blurSigma,
-                  sigmaY: blurSigma,
-                ),
+                filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
                 child: const SizedBox.expand(),
               ),
               DecoratedBox(
@@ -132,10 +126,7 @@ class ProgressiveBottomEdgeBlur extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
-                    colors: [
-                      overlayColor,
-                      overlayColor.withValues(alpha: 0),
-                    ],
+                    colors: [overlayColor, overlayColor.withValues(alpha: 0)],
                   ),
                 ),
               ),

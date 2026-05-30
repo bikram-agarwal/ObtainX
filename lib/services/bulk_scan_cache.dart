@@ -28,6 +28,16 @@ class BulkScanCache {
   static const String _relativeDir = 'bulk_scan_data';
   static const String _fileName = 'store_url_map.json';
 
+  static Map<String, Map<String, String>>? _cache;
+
+  static Map<String, Map<String, String>> _deepCopy(
+    Map<String, Map<String, String>> source,
+  ) {
+    return source.map(
+      (key, val) => MapEntry(key, Map<String, String>.from(val)),
+    );
+  }
+
   // Single-writer queue. Each [_enqueueWrite] call chains its work onto
   // this future; all writes therefore run strictly sequentially in the
   // order they were enqueued. Errors from one write don't break the
@@ -36,7 +46,8 @@ class BulkScanCache {
   static Future<void> _writeChainTail = Future<void>.value();
 
   static Future<Directory> _rootDir() async {
-    final Directory base = await getExternalStorageDirectory() ??
+    final Directory base =
+        await getExternalStorageDirectory() ??
         await getApplicationDocumentsDirectory();
     final Directory dir = Directory('${base.path}/$_relativeDir');
     if (!dir.existsSync()) {
@@ -52,27 +63,39 @@ class BulkScanCache {
   /// Outer key: package name. Inner key: store name (e.g. APKMirror).
   /// Empty string value means "looked up, not found" for that store.
   static Future<Map<String, Map<String, String>>> load() async {
+    if (_cache != null) {
+      return _deepCopy(_cache!);
+    }
     try {
       final File file = await _file();
-      if (!file.existsSync()) return {};
+      if (!file.existsSync()) {
+        _cache = {};
+        return {};
+      }
       final String content = await file.readAsString();
-      if (content.trim().isEmpty) return {};
+      if (content.trim().isEmpty) {
+        _cache = {};
+        return {};
+      }
       final Object? decoded = jsonDecode(content);
-      if (decoded is! Map<String, dynamic>) return {};
+      if (decoded is! Map<String, dynamic>) {
+        _cache = {};
+        return {};
+      }
       final Map<String, Map<String, String>> out = {};
       for (final MapEntry<String, dynamic> entry in decoded.entries) {
         final Object? inner = entry.value;
         if (inner is Map<String, dynamic>) {
           out[entry.key] = inner.map(
-            (String storeKey, dynamic urlValue) => MapEntry(
-              storeKey,
-              urlValue is String ? urlValue : '',
-            ),
+            (String storeKey, dynamic urlValue) =>
+                MapEntry(storeKey, urlValue is String ? urlValue : ''),
           );
         }
       }
+      _cache = _deepCopy(out);
       return out;
     } catch (_) {
+      _cache = {};
       return {};
     }
   }
@@ -94,10 +117,10 @@ class BulkScanCache {
     final Future<void> work = _writeChainTail.then((_) async {
       final Map<String, Map<String, String>> fresh = await load();
       merger(fresh);
+      _cache = _deepCopy(fresh);
       final File file = await _file();
       final File tmp = File('${file.path}.tmp');
-      final String json =
-          const JsonEncoder.withIndent('  ').convert(fresh);
+      final String json = const JsonEncoder.withIndent('  ').convert(fresh);
       await tmp.writeAsString(json);
       await tmp.rename(file.path);
     });

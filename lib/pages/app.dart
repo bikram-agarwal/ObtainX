@@ -1795,7 +1795,14 @@ class _AppPageState extends State<AppPage> {
     if (useIconPageColors && iconBytes != null) {
       final String iconSchemeCacheKey =
           '${identityHashCode(iconBytes)}_${themeBrightness.name}';
-      if (_iconSchemeCacheKey != iconSchemeCacheKey &&
+      final ColorScheme? cachedScheme = getCachedColorScheme(
+        iconBytes,
+        themeBrightness,
+      );
+      if (cachedScheme != null) {
+        _iconDerivedColorScheme = cachedScheme;
+        _iconSchemeCacheKey = iconSchemeCacheKey;
+      } else if (_iconSchemeCacheKey != iconSchemeCacheKey &&
           _iconSchemeLoadingForKey != iconSchemeCacheKey &&
           _iconSchemeFailedCacheKey != iconSchemeCacheKey) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1868,7 +1875,7 @@ class _AppPageState extends State<AppPage> {
         }
         // Let the push transition start before network + notifyListeners churn.
         _detailPageAutoCheckDelayTimer = Timer(
-          const Duration(milliseconds: 320),
+          const Duration(milliseconds: 750),
           () => _startScheduledDetailPageAutoCheck(refreshAppId, appsProvider),
         );
       });

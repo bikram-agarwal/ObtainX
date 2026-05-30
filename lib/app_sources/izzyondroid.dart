@@ -96,9 +96,11 @@ class IzzyOnDroid extends AppSource {
       return fromQuery;
     }
     final List<String> segments = parsed.pathSegments;
-    for (int indexSegmentIndex = 0;
-        indexSegmentIndex < segments.length;
-        indexSegmentIndex++) {
+    for (
+      int indexSegmentIndex = 0;
+      indexSegmentIndex < segments.length;
+      indexSegmentIndex++
+    ) {
       if (segments[indexSegmentIndex].toLowerCase() != 'index') {
         continue;
       }
@@ -111,8 +113,9 @@ class IzzyOnDroid extends AppSource {
       final String apkOrId = segments[indexSegmentIndex + 2];
       if (apkOrId.toLowerCase().endsWith('.apk')) {
         final String baseName = apkOrId.substring(0, apkOrId.length - 4);
-        final RegExpMatch? versionSuffix =
-            RegExp(r'^(.+)_([0-9]+)$').firstMatch(baseName);
+        final RegExpMatch? versionSuffix = RegExp(
+          r'^(.+)_([0-9]+)$',
+        ).firstMatch(baseName);
         if (versionSuffix != null) {
           return versionSuffix.group(1);
         }
@@ -123,8 +126,9 @@ class IzzyOnDroid extends AppSource {
     final String lastSegment = parsed.pathSegments.last;
     if (lastSegment.endsWith('.apk')) {
       final String baseName = lastSegment.substring(0, lastSegment.length - 4);
-      final RegExpMatch? versionSuffix =
-          RegExp(r'^(.+)_([0-9]+)$').firstMatch(baseName);
+      final RegExpMatch? versionSuffix = RegExp(
+        r'^(.+)_([0-9]+)$',
+      ).firstMatch(baseName);
       if (versionSuffix != null) {
         return versionSuffix.group(1);
       }
@@ -142,9 +146,11 @@ class IzzyOnDroid extends AppSource {
     appId ??= uri.queryParameters['appId']?.trim();
     if (appId == null || appId.isEmpty) {
       final List<String> segments = uri.pathSegments;
-      for (int indexSegmentIndex = 0;
-          indexSegmentIndex < segments.length;
-          indexSegmentIndex++) {
+      for (
+        int indexSegmentIndex = 0;
+        indexSegmentIndex < segments.length;
+        indexSegmentIndex++
+      ) {
         if (segments[indexSegmentIndex].toLowerCase() != 'index') {
           continue;
         }
@@ -157,8 +163,9 @@ class IzzyOnDroid extends AppSource {
         String candidate = segments[indexSegmentIndex + 2];
         if (candidate.toLowerCase().endsWith('.apk')) {
           final String baseName = candidate.substring(0, candidate.length - 4);
-          final RegExpMatch? versionSuffix =
-              RegExp(r'^(.+)_([0-9]+)$').firstMatch(baseName);
+          final RegExpMatch? versionSuffix = RegExp(
+            r'^(.+)_([0-9]+)$',
+          ).firstMatch(baseName);
           candidate = versionSuffix?.group(1) ?? baseName;
         }
         appId = candidate;
@@ -183,8 +190,10 @@ class IzzyOnDroid extends AppSource {
     if (standardUri.queryParameters['appId']?.trim().isNotEmpty == true) {
       appIdOrName = standardUri.queryParameters['appId']!.trim();
     }
-    appIdOrName ??=
-        await tryInferringAppId(standardUrl, additionalSettings: additionalSettings);
+    appIdOrName ??= await tryInferringAppId(
+      standardUrl,
+      additionalSettings: additionalSettings,
+    );
     if (appIdOrName == null || appIdOrName.isEmpty) {
       throw NoReleasesError();
     }
@@ -234,8 +243,9 @@ class IzzyOnDroid extends AppSource {
         await FDroidRepo.parseIndexXmlSearchResults(indexResponse, query);
     final Map<String, List<String>> out = <String, List<String>>{};
     for (final MapEntry<String, List<String>> entry in parsed.entries) {
-      final String? packageId =
-          Uri.parse(entry.key).queryParameters['appId']?.trim();
+      final String? packageId = Uri.parse(
+        entry.key,
+      ).queryParameters['appId']?.trim();
       if (packageId != null && packageId.isNotEmpty) {
         out['$_izzyIndexApkBase$packageId'] = entry.value;
       } else {

@@ -19,6 +19,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -30,7 +31,10 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.util.UUID
+import kotlin.system.exitProcess
 
 private const val CHANNEL = "dev.imranr.obtainium/installer"
 private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
@@ -38,8 +42,11 @@ private const val POWER_CHANNEL = "dev.imranr.obtainium/power"
 private const val STORAGE_CHANNEL = "dev.imranr.obtainium/storage"
 private const val SHARE_CHANNEL = "dev.imranr.obtainium/share"
 private const val NOTIFICATIONS_CHANNEL = "dev.imranr.obtainium/notifications"
+private const val DIAGNOSTICS_CHANNEL = "dev.imranr.obtainium/diagnostics"
 private const val DOWNLOAD_WAKE_LOCK_TAG = "ObtainX:DownloadWakeLock"
 private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
+private const val NATIVE_CRASH_LOG_FILE = "obtainx-native-crashes.log"
+private const val MAX_NATIVE_CRASH_LOG_BYTES = 256 * 1024L
 private const val REQUEST_PROMOTED_ONGOING_EXTRA = "android.requestPromotedOngoing"
 private const val SESSION_API_PACKAGE_INSTALLED_ACTION =
     "com.android_package_installer.content.SESSION_API_PACKAGE_INSTALLED"
@@ -74,6 +81,65 @@ class MainActivity : FlutterActivity() {
         private val downloadCancelLock = Any()
         private val pendingDownloadCancelAppIds = linkedSetOf<String>()
         private var downloadCancelHandlerReady = false
+
+        @Volatile
+        private var nativeCrashHandlerInstalled = false
+
+        private fun installNativeCrashHandler(context: Context) {
+            if (nativeCrashHandlerInstalled) return
+            val appContext = context.applicationContext
+            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                writeNativeCrashLog(
+                    appContext,
+                    "Uncaught native exception on ${thread.name}",
+                    throwable,
+                )
+                if (previousHandler != null) {
+                    previousHandler.uncaughtException(thread, throwable)
+                } else {
+                    exitProcess(2)
+                }
+            }
+            nativeCrashHandlerInstalled = true
+        }
+
+        private fun consumeNativeCrashLog(context: Context): String? {
+            val crashLog = File(context.filesDir, NATIVE_CRASH_LOG_FILE)
+            if (!crashLog.exists()) return null
+            val text = runCatching { crashLog.readText() }.getOrNull()
+            runCatching { crashLog.delete() }
+            return text?.ifBlank { null }
+        }
+
+        private fun writeNativeCrashLog(
+            context: Context,
+            message: String,
+            throwable: Throwable,
+        ) {
+            runCatching {
+                val crashLog = File(context.filesDir, NATIVE_CRASH_LOG_FILE)
+                if (crashLog.exists() && crashLog.length() > MAX_NATIVE_CRASH_LOG_BYTES) {
+                    crashLog.delete()
+                }
+                crashLog.appendText(
+                    buildString {
+                        append(System.currentTimeMillis())
+                        append(" | ")
+                        append(message)
+                        append('\n')
+                        append(stackTraceText(throwable))
+                        append('\n')
+                    },
+                )
+            }
+        }
+
+        private fun stackTraceText(throwable: Throwable): String {
+            val stringWriter = StringWriter()
+            throwable.printStackTrace(PrintWriter(stringWriter))
+            return stringWriter.toString()
+        }
 
         fun cancelDownloadFromNotification(appId: String) {
             var channelToNotify: MethodChannel? = null
@@ -140,6 +206,11 @@ class MainActivity : FlutterActivity() {
     private var shareChannel: MethodChannel? = null
     private var initialSharedTextConsumed = false
     private var pendingSharedText: String? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        installNativeCrashHandler(this)
+        super.onCreate(savedInstanceState)
+    }
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
         if (watcher.responded) return
@@ -330,6 +401,17 @@ class MainActivity : FlutterActivity() {
                     }
                     else -> result.notImplemented()
                 }
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            DIAGNOSTICS_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "consumeNativeCrashLog" -> {
+                    result.success(consumeNativeCrashLog(this))
+                }
+                else -> result.notImplemented()
             }
         }
         shareChannel = MethodChannel(

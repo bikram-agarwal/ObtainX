@@ -20,6 +20,7 @@ import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
@@ -911,8 +912,19 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
               .downloadAndInstallLatestApps([
                 widget.appId,
               ], globalNavigatorKey.currentContext)
-              .catchError((e) {
-                showError(e, globalNavigatorKey.currentContext!);
+              .catchError((Object e, StackTrace stackTrace) {
+                unawaited(
+                  provider.logs.add(
+                    'Swipe update failed for ${widget.appId}: $e\n$stackTrace',
+                    level: LogLevels.error,
+                  ),
+                );
+                final errorContext = context.mounted
+                    ? context
+                    : globalNavigatorKey.currentContext;
+                if (errorContext != null && errorContext.mounted) {
+                  showError(e, errorContext);
+                }
                 return <String>[];
               });
         }

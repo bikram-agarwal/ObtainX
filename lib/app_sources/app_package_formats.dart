@@ -10,8 +10,7 @@ const kXapkExt = 'xapk';
 const kObbExt = 'obb';
 const kZipExt = 'zip';
 
-bool _ends(String path, String ext) =>
-    path.toLowerCase().endsWith('.$ext');
+bool _ends(String path, String ext) => path.toLowerCase().endsWith('.$ext');
 
 /// Path ends with `.apk`.
 bool isApk(String path) => _ends(path, kApkExt);

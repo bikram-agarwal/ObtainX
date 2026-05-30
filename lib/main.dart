@@ -1,4 +1,6 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -63,6 +65,72 @@ var fdroid = false;
 
 final globalNavigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
+void installDiagnosticErrorLogging() {
+  final logs = LogsProvider(runDefaultClear: false);
+  final previousFlutterError = FlutterError.onError;
+  final previousPlatformError = PlatformDispatcher.instance.onError;
+  unawaited(_recordNativeCrashLogIfPresent(logs));
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    unawaited(
+      logs.add(
+        _diagnosticErrorMessage(
+          'Flutter framework error',
+          details.exception,
+          details.stack,
+          context: details.context?.toDescription(),
+          library: details.library,
+        ),
+        level: LogLevels.error,
+      ),
+    );
+    if (previousFlutterError != null) {
+      previousFlutterError(details);
+    } else {
+      FlutterError.presentError(details);
+    }
+  };
+
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stackTrace) {
+    unawaited(
+      logs.add(
+        _diagnosticErrorMessage('Uncaught Dart error', error, stackTrace),
+        level: LogLevels.error,
+      ),
+    );
+    return previousPlatformError?.call(error, stackTrace) ?? false;
+  };
+}
+
+Future<void> _recordNativeCrashLogIfPresent(LogsProvider logs) async {
+  final nativeCrashLog = await NativeFeatures.consumeNativeCrashLog();
+  if (nativeCrashLog == null) return;
+  await logs.add(
+    'Native crash from previous run:\n$nativeCrashLog',
+    level: LogLevels.error,
+  );
+}
+
+String _diagnosticErrorMessage(
+  String label,
+  Object error,
+  StackTrace? stackTrace, {
+  String? context,
+  String? library,
+}) {
+  final buffer = StringBuffer(label)..writeln(': $error');
+  if (library != null && library.isNotEmpty) {
+    buffer.writeln('Library: $library');
+  }
+  if (context != null && context.isNotEmpty) {
+    buffer.writeln('Context: $context');
+  }
+  if (stackTrace != null) {
+    buffer.writeln(stackTrace);
+  }
+  return buffer.toString().trimRight();
+}
 
 Future<void> loadTranslations() async {
   // See easy_localization/issues/210
@@ -134,6 +202,7 @@ class MyTaskHandler extends TaskHandler {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installDiagnosticErrorLogging();
   try {
     ByteData data = await PlatformAssetBundle().load(
       'assets/ca/lets-encrypt-r3.pem',

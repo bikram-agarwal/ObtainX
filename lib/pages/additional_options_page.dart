@@ -400,7 +400,14 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     if (useIconPageColors && iconBytes != null) {
       final String iconSchemeCacheKey =
           '${identityHashCode(iconBytes)}_${themeBrightness.name}';
-      if (_iconSchemeCacheKey != iconSchemeCacheKey &&
+      final ColorScheme? cachedScheme = getCachedColorScheme(
+        iconBytes,
+        themeBrightness,
+      );
+      if (cachedScheme != null) {
+        _iconDerivedColorScheme = cachedScheme;
+        _iconSchemeCacheKey = iconSchemeCacheKey;
+      } else if (_iconSchemeCacheKey != iconSchemeCacheKey &&
           _iconSchemeLoadingForKey != iconSchemeCacheKey &&
           _iconSchemeFailedCacheKey != iconSchemeCacheKey) {
         WidgetsBinding.instance.addPostFrameCallback((_) {

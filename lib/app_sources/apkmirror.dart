@@ -553,11 +553,7 @@ class APKMirror extends AppSource {
     DateTime? releaseDate;
 
     if (itemInnerBlocks.isNotEmpty) {
-      for (
-        int scanIndex = 0;
-        scanIndex < itemInnerBlocks.length;
-        scanIndex++
-      ) {
+      for (int scanIndex = 0; scanIndex < itemInnerBlocks.length; scanIndex++) {
         collectReleaseTitleCandidate(
           titleFromApkMirrorRssItemInner(itemInnerBlocks[scanIndex]),
         );
@@ -566,11 +562,7 @@ class APKMirror extends AppSource {
           ? RegExp(regexFilter)
           : null;
       String? chosenBlock;
-      for (
-        int itemIndex = 0;
-        itemIndex < itemInnerBlocks.length;
-        itemIndex++
-      ) {
+      for (int itemIndex = 0; itemIndex < itemInnerBlocks.length; itemIndex++) {
         if (!fallbackToOlderReleases && itemIndex > 0) break;
         final block = itemInnerBlocks[itemIndex];
         final nameToFilter = titleFromApkMirrorRssItemInner(block);

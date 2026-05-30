@@ -112,24 +112,21 @@ void main() {
   // When the version changes, the stale size MUST be cleared so the
   // next AppPage open re-resolves.
 
-  test(
-    'apkSizeBytes is preserved when source version is unchanged',
-    () async {
-      final source = _StubAPKMirror(version: '2.0', apkSizeFromSource: null);
-      final currentApp = _buildCurrentApp(
-        latestVersion: '2.0',
-        apkSizeBytes: 12345678,
-      );
-      final newApp = await SourceProvider().getApp(
-        source,
-        'https://www.apkmirror.com/apk/example/example',
-        {'trackOnly': true, 'appId': 'com.example.app'},
-        currentApp: currentApp,
-      );
-      expect(newApp.apkSizeBytes, 12345678);
-      expect(newApp.latestVersion, '2.0');
-    },
-  );
+  test('apkSizeBytes is preserved when source version is unchanged', () async {
+    final source = _StubAPKMirror(version: '2.0', apkSizeFromSource: null);
+    final currentApp = _buildCurrentApp(
+      latestVersion: '2.0',
+      apkSizeBytes: 12345678,
+    );
+    final newApp = await SourceProvider().getApp(
+      source,
+      'https://www.apkmirror.com/apk/example/example',
+      {'trackOnly': true, 'appId': 'com.example.app'},
+      currentApp: currentApp,
+    );
+    expect(newApp.apkSizeBytes, 12345678);
+    expect(newApp.latestVersion, '2.0');
+  });
 
   test(
     'apkSizeBytes is cleared when source reports a different version',
@@ -151,10 +148,7 @@ void main() {
   );
 
   test('apkSizeBytes from source wins over the cached value', () async {
-    final source = _StubAPKMirror(
-      version: '3.0',
-      apkSizeFromSource: 99999999,
-    );
+    final source = _StubAPKMirror(version: '3.0', apkSizeFromSource: 99999999);
     final currentApp = _buildCurrentApp(
       latestVersion: '2.0',
       apkSizeBytes: 12345678,
@@ -168,15 +162,17 @@ void main() {
     expect(newApp.apkSizeBytes, 99999999);
   });
 
-  test('apkSizeBytes is null on first add when source returns no size', () async {
-    final source = _StubAPKMirror(version: '1.0', apkSizeFromSource: null);
-    final newApp = await SourceProvider().getApp(
-      source,
-      'https://www.apkmirror.com/apk/example/example',
-      {'trackOnly': true, 'appId': 'com.example.app'},
-      // No currentApp — simulating first-time add.
-    );
-    expect(newApp.apkSizeBytes, isNull);
-  });
+  test(
+    'apkSizeBytes is null on first add when source returns no size',
+    () async {
+      final source = _StubAPKMirror(version: '1.0', apkSizeFromSource: null);
+      final newApp = await SourceProvider().getApp(
+        source,
+        'https://www.apkmirror.com/apk/example/example',
+        {'trackOnly': true, 'appId': 'com.example.app'},
+        // No currentApp — simulating first-time add.
+      );
+      expect(newApp.apkSizeBytes, isNull);
+    },
+  );
 }
-

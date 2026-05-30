@@ -74,12 +74,15 @@ class AppFolder {
 
   const AppFolder({required this.id, required this.name, this.rule});
 
-  AppFolder copyWith({String? name, FolderRule? rule, bool clearRule = false}) =>
-      AppFolder(
-        id: id,
-        name: name ?? this.name,
-        rule: clearRule ? null : (rule ?? this.rule),
-      );
+  AppFolder copyWith({
+    String? name,
+    FolderRule? rule,
+    bool clearRule = false,
+  }) => AppFolder(
+    id: id,
+    name: name ?? this.name,
+    rule: clearRule ? null : (rule ?? this.rule),
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -99,8 +102,10 @@ class AppFolder {
   static String generateId() {
     final rand = Random();
     final ts = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
-    final rnd =
-        List.generate(6, (_) => rand.nextInt(36).toRadixString(36)).join();
+    final rnd = List.generate(
+      6,
+      (_) => rand.nextInt(36).toRadixString(36),
+    ).join();
     return '$ts$rnd';
   }
 }

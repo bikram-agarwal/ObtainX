@@ -198,11 +198,7 @@ class GitLab extends AppSource {
           .split('.$kXapkExt)')
           .join('.$kXapkExt\n')
           .split('\n')
-          .where(
-            (s) =>
-                s.startsWith('/uploads/') &&
-                isInstallable(s),
-          )
+          .where((s) => s.startsWith('/uploads/') && isInstallable(s))
           .map((s) => 'https://${hosts[0]}/-/project/$projectId$s')
           .map((l) => MapEntry(Uri.parse(l).pathSegments.last, l))
           .toList();

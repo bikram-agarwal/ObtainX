@@ -13,6 +13,9 @@ class NativeFeatures {
   static const MethodChannel _notificationsChannel = MethodChannel(
     'dev.imranr.obtainium/notifications',
   );
+  static const MethodChannel _diagnosticsChannel = MethodChannel(
+    'dev.imranr.obtainium/diagnostics',
+  );
   static bool _systemFontLoaded = false;
   static bool _downloadCancelHandlerRegistered = false;
 
@@ -65,6 +68,21 @@ class NativeFeatures {
     fontLoader.addFont(_readFileBytes(fontFilePath!));
     await fontLoader.load();
     _systemFontLoaded = true;
+  }
+
+  static Future<String?> consumeNativeCrashLog() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final log = await _diagnosticsChannel.invokeMethod<String>(
+        'consumeNativeCrashLog',
+      );
+      if (log == null || log.trim().isEmpty) return null;
+      return log;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
   }
 
   static Future<bool> acquireDownloadKeepAwake() async {

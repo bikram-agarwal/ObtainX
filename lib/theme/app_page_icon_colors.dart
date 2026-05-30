@@ -117,16 +117,29 @@ ThemeData buildAppPageThemedData(
   );
 }
 
+final Map<String, ColorScheme> _extractedSchemeCache = {};
+
+ColorScheme? getCachedColorScheme(Uint8List iconBytes, Brightness brightness) {
+  final String key = '${identityHashCode(iconBytes)}_${brightness.name}';
+  return _extractedSchemeCache[key];
+}
+
 Future<ColorScheme?> loadColorSchemeFromAppIcon({
   required Uint8List iconBytes,
   required Brightness brightness,
 }) async {
+  final String key = '${identityHashCode(iconBytes)}_${brightness.name}';
+  if (_extractedSchemeCache.containsKey(key)) {
+    return _extractedSchemeCache[key];
+  }
   try {
-    return ColorScheme.fromImageProvider(
+    final ColorScheme scheme = await ColorScheme.fromImageProvider(
       provider: MemoryImage(iconBytes),
       brightness: brightness,
       dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
     );
+    _extractedSchemeCache[key] = scheme;
+    return scheme;
   } catch (_) {
     return null;
   }

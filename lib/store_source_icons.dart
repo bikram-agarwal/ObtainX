@@ -4,10 +4,26 @@ import 'package:obtainium/favicon_cache.dart';
 
 /// Inversion filter: swaps black ↔ white while preserving alpha.
 const ColorFilter invertColorFilter = ColorFilter.matrix([
-  -1, 0, 0, 0, 255,
-   0,-1, 0, 0, 255,
-   0, 0,-1, 0, 255,
-   0, 0, 0, 1,   0,
+  -1,
+  0,
+  0,
+  0,
+  255,
+  0,
+  -1,
+  0,
+  0,
+  255,
+  0,
+  0,
+  -1,
+  0,
+  255,
+  0,
+  0,
+  0,
+  1,
+  0,
 ]);
 
 /// Returns true if [assetPath]'s icon should be colour-inverted for the current
@@ -62,7 +78,10 @@ class _StoreSourceChipAvatarState extends State<StoreSourceChipAvatar> {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final String? localAsset = storeSourceAssetPathForHost(widget.host);
     if (localAsset != null) {
-      Widget img = StoreSourceIconImage(assetPath: localAsset, size: widget.size);
+      Widget img = StoreSourceIconImage(
+        assetPath: localAsset,
+        size: widget.size,
+      );
       if (iconNeedsInversion(localAsset, isDark)) {
         img = ColorFiltered(colorFilter: invertColorFilter, child: img);
       }
@@ -101,6 +120,7 @@ class StoreSourceIconPaths {
   static const String apkmirror = 'assets/graphics/ic_apkmirror.png';
   static const String apkpure = 'assets/graphics/ic_apkpure.png';
   static const String github = 'assets/graphics/ic_github.png';
+
   /// IzzyOnDroid logo from https://codeberg.org/IzzyOnDroid/assets (IzzyOnDroidLogo.png).
   static const String izzydroid = 'assets/graphics/ic_izzydroid.png';
 }
@@ -140,12 +160,18 @@ String? storeSourceAssetPathForUrl(String url) {
 /// Use [storeSourceAssetPathForHost] when a URL or host is available instead.
 String? storeSourceAssetPathForClassName(String className) {
   switch (className) {
-    case 'GitHub':    return StoreSourceIconPaths.github;
-    case 'FDroid':    return StoreSourceIconPaths.fdroid;
-    case 'APKMirror': return StoreSourceIconPaths.apkmirror;
-    case 'APKPure':   return StoreSourceIconPaths.apkpure;
-    case 'IzzyOnDroid': return StoreSourceIconPaths.izzydroid;
-    default:          return null;
+    case 'GitHub':
+      return StoreSourceIconPaths.github;
+    case 'FDroid':
+      return StoreSourceIconPaths.fdroid;
+    case 'APKMirror':
+      return StoreSourceIconPaths.apkmirror;
+    case 'APKPure':
+      return StoreSourceIconPaths.apkpure;
+    case 'IzzyOnDroid':
+      return StoreSourceIconPaths.izzydroid;
+    default:
+      return null;
   }
 }
 
@@ -182,7 +208,8 @@ class StoreSourceIconImage extends StatelessWidget {
           fit: BoxFit.cover,
           alignment: _cropAlignmentFor(assetPath),
           gaplessPlayback: true,
-          errorBuilder: errorBuilder ??
+          errorBuilder:
+              errorBuilder ??
               (BuildContext context, Object error, StackTrace? stackTrace) {
                 if (size <= 20) {
                   return const SizedBox.shrink();
@@ -233,7 +260,10 @@ class _StoreSourceIconForUrlState extends State<StoreSourceIconForUrl> {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final String? localAsset = storeSourceAssetPathForHost(_host);
     if (localAsset != null) {
-      Widget img = StoreSourceIconImage(assetPath: localAsset, size: widget.size);
+      Widget img = StoreSourceIconImage(
+        assetPath: localAsset,
+        size: widget.size,
+      );
       if (iconNeedsInversion(localAsset, isDark)) {
         img = ColorFiltered(colorFilter: invertColorFilter, child: img);
       }
@@ -321,8 +351,8 @@ class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
               snapshot.data == null) {
             return const SizedBox.shrink();
           }
-          final int cachePx =
-              (13 * MediaQuery.devicePixelRatioOf(context)).round();
+          final int cachePx = (13 * MediaQuery.devicePixelRatioOf(context))
+              .round();
           return Image.memory(
             snapshot.data!,
             width: 13,
@@ -339,10 +369,7 @@ class _StoreSourceListBadgeState extends State<StoreSourceListBadge> {
     return SizedBox(
       width: 16,
       height: 16,
-      child: Padding(
-        padding: const EdgeInsets.all(1.5),
-        child: image,
-      ),
+      child: Padding(padding: const EdgeInsets.all(1.5), child: image),
     );
   }
 }
