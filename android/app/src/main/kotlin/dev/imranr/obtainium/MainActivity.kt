@@ -71,9 +71,39 @@ private const val BROADCAST_CONFIRMED_INTERACTIVE_FALLBACK_MS = 5_000L
 class MainActivity : FlutterActivity() {
     companion object {
         private var notificationsMethodChannel: MethodChannel? = null
+        private val downloadCancelLock = Any()
+        private val pendingDownloadCancelAppIds = linkedSetOf<String>()
+        private var downloadCancelHandlerReady = false
 
         fun cancelDownloadFromNotification(appId: String) {
-            notificationsMethodChannel?.invokeMethod("cancelDownload", appId)
+            var channelToNotify: MethodChannel? = null
+            synchronized(downloadCancelLock) {
+                if (downloadCancelHandlerReady) {
+                    channelToNotify = notificationsMethodChannel
+                }
+                if (channelToNotify == null) {
+                    pendingDownloadCancelAppIds.add(appId)
+                }
+            }
+            channelToNotify?.invokeMethod("cancelDownload", appId)
+        }
+
+        private fun consumePendingDownloadCancels(): List<String> {
+            synchronized(downloadCancelLock) {
+                downloadCancelHandlerReady = true
+                val pendingAppIds = pendingDownloadCancelAppIds.toList()
+                pendingDownloadCancelAppIds.clear()
+                return pendingAppIds
+            }
+        }
+
+        private fun resetNotificationChannel(channel: MethodChannel?) {
+            synchronized(downloadCancelLock) {
+                notificationsMethodChannel = channel
+                if (channel == null) {
+                    downloadCancelHandlerReady = false
+                }
+            }
         }
     }
 
@@ -265,12 +295,16 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
-        notificationsMethodChannel = MethodChannel(
+        MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             NOTIFICATIONS_CHANNEL,
         ).also { channel ->
+            resetNotificationChannel(channel)
             channel.setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "consumePendingDownloadCancels" -> {
+                        result.success(consumePendingDownloadCancels())
+                    }
                     "showDownloadProgressNotification" -> {
                         try {
                             result.success(showDownloadProgressNotification(call))
@@ -319,6 +353,11 @@ class MainActivity : FlutterActivity() {
             }
         }
         deliverPendingSharedText()
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        resetNotificationChannel(null)
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun enqueueSharedText(sharedText: String) {

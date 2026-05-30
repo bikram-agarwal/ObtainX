@@ -29,6 +29,8 @@ const double _fabHorizontalMargin = 16.0;
 
 enum _AddMode { byUrl, search, fromDevice }
 
+enum _PackageIdDetectionChoice { download, trackOnly }
+
 class AddAppPage extends StatefulWidget {
   const AddAppPage({super.key});
 
@@ -313,6 +315,38 @@ class AddAppPageState extends State<AddAppPage> {
               null));
     }
 
+    Future<_PackageIdDetectionChoice?>
+    getPackageIdDetectionConfirmation() async {
+      if (!context.mounted) return null;
+      return showDialog<_PackageIdDetectionChoice>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(tr('downloadAPKToIdentifyAppQuestion')),
+            content: Text(tr('downloadAPKToIdentifyAppExplanation')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(_PackageIdDetectionChoice.trackOnly),
+                child: Text(tr('trackOnly')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(
+                  dialogContext,
+                ).pop(_PackageIdDetectionChoice.download),
+                child: Text(tr('downloadX', args: [tr('app')])),
+              ),
+            ],
+          );
+        },
+      );
+    }
+
     // ── Add app (URL mode) ─────────────────────────────────────────────
 
     addApp({bool resetUserInputAfter = false}) async {
@@ -337,33 +371,43 @@ class AddAppPageState extends State<AddAppPage> {
           );
           // Only download the APK here if you need to for the package ID
           if (isTempId(app) && app.additionalSettings['trackOnly'] != true) {
-            if (!context.mounted) return;
-            var apkUrl = await appsProvider.confirmAppFileUrl(
-              app,
-              context,
-              false,
-            );
-            if (apkUrl == null) {
+            var packageIdDetectionChoice =
+                await getPackageIdDetectionConfirmation();
+            if (packageIdDetectionChoice == null) {
               throw ObtainiumError(tr('cancelled'));
             }
-            app.preferredApkIndex = app.apkUrls
-                .map((e) => e.value)
-                .toList()
-                .indexOf(apkUrl.value);
-            // ignore: use_build_context_synchronously
-            var downloadedArtifact = await appsProvider.downloadApp(
-              app,
-              globalNavigatorKey.currentContext,
-              notificationsProvider: notificationsProvider,
-            );
-            DownloadedApk? downloadedFile;
-            DownloadedDir? downloadedDir;
-            if (downloadedArtifact is DownloadedApk) {
-              downloadedFile = downloadedArtifact;
+            if (packageIdDetectionChoice ==
+                _PackageIdDetectionChoice.trackOnly) {
+              app.additionalSettings['trackOnly'] = true;
             } else {
-              downloadedDir = downloadedArtifact as DownloadedDir;
+              if (!context.mounted) return;
+              var apkUrl = await appsProvider.confirmAppFileUrl(
+                app,
+                context,
+                false,
+              );
+              if (apkUrl == null) {
+                throw ObtainiumError(tr('cancelled'));
+              }
+              app.preferredApkIndex = app.apkUrls
+                  .map((e) => e.value)
+                  .toList()
+                  .indexOf(apkUrl.value);
+              // ignore: use_build_context_synchronously
+              var downloadedArtifact = await appsProvider.downloadApp(
+                app,
+                globalNavigatorKey.currentContext,
+                notificationsProvider: notificationsProvider,
+              );
+              DownloadedApk? downloadedFile;
+              DownloadedDir? downloadedDir;
+              if (downloadedArtifact is DownloadedApk) {
+                downloadedFile = downloadedArtifact;
+              } else {
+                downloadedDir = downloadedArtifact as DownloadedDir;
+              }
+              app.id = downloadedFile?.appId ?? downloadedDir!.appId;
             }
-            app.id = downloadedFile?.appId ?? downloadedDir!.appId;
           }
           if (appsProvider.apps.containsKey(app.id)) {
             throw ObtainiumError(tr('appAlreadyAdded'));

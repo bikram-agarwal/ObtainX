@@ -29,6 +29,28 @@ class NativeFeatures {
       if (appId == null || appId.isEmpty) return;
       await handler(appId);
     });
+    unawaited(_consumePendingDownloadCancels(handler));
+  }
+
+  static Future<void> _consumePendingDownloadCancels(
+    FutureOr<void> Function(String appId) handler,
+  ) async {
+    try {
+      final pendingAppIds =
+          await _notificationsChannel.invokeListMethod<String>(
+            'consumePendingDownloadCancels',
+          ) ??
+          const <String>[];
+      for (final String appId in pendingAppIds) {
+        if (appId.isNotEmpty) {
+          await handler(appId);
+        }
+      }
+    } on PlatformException {
+      // Notification actions remain best-effort on older native runners.
+    } on MissingPluginException {
+      // Non-Android builds and older native runners do not expose this method.
+    }
   }
 
   static Future<ByteData> _readFileBytes(String path) async {

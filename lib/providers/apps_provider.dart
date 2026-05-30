@@ -834,12 +834,29 @@ Future<String> checkPartialDownloadHash(
   }
   req.headers[HttpHeaders.rangeHeader] = 'bytes=0-$bytesToGrab';
   var client = IOClient(createHttpClient(allowInsecure));
-  var response = await client.send(req);
-  if (response.statusCode < 200 || response.statusCode > 299) {
-    throw ObtainiumError(response.reasonPhrase ?? tr('unexpectedError'));
+  try {
+    var response = await client.send(req);
+    if (response.statusCode < 200 || response.statusCode > 299) {
+      throw ObtainiumError(response.reasonPhrase ?? tr('unexpectedError'));
+    }
+    final bytesBuilder = BytesBuilder(copy: false);
+    var remainingBytes = bytesToGrab + 1;
+    await for (final chunk in response.stream) {
+      if (remainingBytes <= 0) {
+        break;
+      }
+      if (chunk.length <= remainingBytes) {
+        bytesBuilder.add(chunk);
+        remainingBytes -= chunk.length;
+      } else {
+        bytesBuilder.add(chunk.sublist(0, remainingBytes));
+        remainingBytes = 0;
+      }
+    }
+    return hashListOfLists([bytesBuilder.takeBytes()]);
+  } finally {
+    client.close();
   }
-  List<List<int>> bytes = await response.stream.take(bytesToGrab).toList();
-  return hashListOfLists(bytes);
 }
 
 Future<String?> checkETagHeader(

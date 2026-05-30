@@ -40,6 +40,8 @@
     "appsFromSourceAreTrackOnly": "Apps from this source are 'track-only'.",
     "youPickedTrackOnly": "You have selected the 'track-only' option.",
     "trackOnlyAppDescription": "The app will be tracked for updates, but ObtainX will not be able to download or install it.",
+    "downloadAPKToIdentifyAppQuestion": "Download APK to identify app?",
+    "downloadAPKToIdentifyAppExplanation": "ObtainX could not determine this app's package ID from the source. To add it as an installable app, ObtainX needs to download the selected APK once and read its package ID. Choose track-only to add it without downloading now.",
     "cancelled": "Cancelled",
     "appAlreadyAdded": "App already added",
     "alreadyUpToDateQuestion": "App already up to date?",
