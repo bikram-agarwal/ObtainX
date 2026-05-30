@@ -1,6 +1,8 @@
 // Exposes functions that can be used to send notifications to the user
 // Contains a set of pre-defined ObtainiumNotification objects that should be used throughout the app
 
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -19,6 +21,7 @@ class ObtainiumNotification {
   int? progPercent;
   bool onlyAlertOnce;
   String? payload;
+  String? downloadCancelAppId;
 
   ObtainiumNotification(
     this.id,
@@ -31,7 +34,18 @@ class ObtainiumNotification {
     this.onlyAlertOnce = false,
     this.progPercent,
     this.payload,
+    this.downloadCancelAppId,
   });
+}
+
+const String downloadCancelActionPrefix = 'cancelDownload:';
+
+FutureOr<void> Function(String appId)? _downloadCancelHandler;
+
+void registerDownloadNotificationCancelHandler(
+  FutureOr<void> Function(String appId)? handler,
+) {
+  _downloadCancelHandler = handler;
 }
 
 class UpdateNotification extends ObtainiumNotification {
@@ -139,18 +153,26 @@ class AppsRemovedNotification extends ObtainiumNotification {
 }
 
 class DownloadNotification extends ObtainiumNotification {
-  DownloadNotification(String appName, int progPercent)
-    : super(
-        appName.hashCode,
-        tr('downloadingX', args: [appName]),
-        '',
-        'APP_DOWNLOADING',
-        tr('downloadingXNotifChannel', args: [tr('app')]),
-        tr('downloadNotifDescription'),
-        Importance.low,
-        onlyAlertOnce: true,
-        progPercent: progPercent,
-      );
+  DownloadNotification(
+    String appName,
+    int progPercent, {
+    String? appId,
+    String? message,
+  }) : super(
+         appName.hashCode,
+         tr('downloadingX', args: [appName]),
+         message ??
+             (progPercent < 0
+                 ? tr('installing')
+                 : tr('percentProgress', args: [progPercent.toString()])),
+         'APP_DOWNLOADING',
+         tr('downloadingXNotifChannel', args: [tr('app')]),
+         tr('downloadNotifDescription'),
+         Importance.low,
+         onlyAlertOnce: true,
+         progPercent: progPercent,
+         downloadCancelAppId: progPercent < 0 ? null : appId,
+       );
 }
 
 class DownloadedNotification extends ObtainiumNotification {
@@ -212,10 +234,25 @@ class NotificationsProvider {
             android: AndroidInitializationSettings('ic_notification'),
           ),
           onDidReceiveNotificationResponse: (NotificationResponse response) {
+            if (_handleDownloadCancelAction(response)) {
+              return;
+            }
             _showNotificationPayload(response.payload);
           },
         ) ??
         false;
+  }
+
+  bool _handleDownloadCancelAction(NotificationResponse response) {
+    final actionId = response.actionId;
+    if (actionId == null || !actionId.startsWith(downloadCancelActionPrefix)) {
+      return false;
+    }
+    final appId = actionId.substring(downloadCancelActionPrefix.length);
+    if (appId.isNotEmpty) {
+      _downloadCancelHandler?.call(appId);
+    }
+    return true;
   }
 
   Future<void> checkLaunchByNotif() async {
@@ -274,6 +311,7 @@ class NotificationsProvider {
     int? progPercent,
     bool onlyAlertOnce = false,
     String? payload,
+    String? downloadCancelAppId,
   }) async {
     if (cancelExisting) {
       await cancel(id);
@@ -298,6 +336,16 @@ class NotificationsProvider {
           showProgress: progPercent != null,
           onlyAlertOnce: onlyAlertOnce,
           indeterminate: progPercent != null && progPercent < 0,
+          actions: downloadCancelAppId != null
+              ? [
+                  AndroidNotificationAction(
+                    '$downloadCancelActionPrefix$downloadCancelAppId',
+                    tr('cancel'),
+                    showsUserInterface: false,
+                    cancelNotification: false,
+                  ),
+                ]
+              : null,
         ),
       ),
       payload: payload,
@@ -319,5 +367,6 @@ class NotificationsProvider {
     onlyAlertOnce: notif.onlyAlertOnce,
     progPercent: notif.progPercent,
     payload: notif.payload,
+    downloadCancelAppId: notif.downloadCancelAppId,
   );
 }

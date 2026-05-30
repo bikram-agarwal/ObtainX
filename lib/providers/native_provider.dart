@@ -10,7 +10,26 @@ class NativeFeatures {
   static const MethodChannel _storageChannel = MethodChannel(
     'dev.imranr.obtainium/storage',
   );
+  static const MethodChannel _notificationsChannel = MethodChannel(
+    'dev.imranr.obtainium/notifications',
+  );
   static bool _systemFontLoaded = false;
+  static bool _downloadCancelHandlerRegistered = false;
+
+  static void registerDownloadCancelHandler(
+    FutureOr<void> Function(String appId) handler,
+  ) {
+    if (_downloadCancelHandlerRegistered) return;
+    _downloadCancelHandlerRegistered = true;
+    _notificationsChannel.setMethodCallHandler((call) async {
+      if (call.method != 'cancelDownload') {
+        throw MissingPluginException();
+      }
+      final appId = call.arguments?.toString();
+      if (appId == null || appId.isEmpty) return;
+      await handler(appId);
+    });
+  }
 
   static Future<ByteData> _readFileBytes(String path) async {
     var bytes = await File(path).readAsBytes();
@@ -79,6 +98,79 @@ class NativeFeatures {
       return false;
     } on MissingPluginException {
       return false;
+    }
+  }
+
+  static Future<void> showDownloadProgressNotification({
+    required int id,
+    required String appId,
+    required String title,
+    required String message,
+    required String channelCode,
+    required int progressPercent,
+    required bool indeterminate,
+    required String cancelLabel,
+    String? shortCriticalText,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _notificationsChannel
+          .invokeMethod('showDownloadProgressNotification', <String, Object?>{
+            'id': id,
+            'appId': appId,
+            'title': title,
+            'message': message,
+            'channelCode': channelCode,
+            'progressPercent': progressPercent,
+            'indeterminate': indeterminate,
+            'cancelLabel': cancelLabel,
+            'shortCriticalText': shortCriticalText,
+          });
+    } on PlatformException {
+      // The regular Flutter notification remains the fallback.
+    } on MissingPluginException {
+      // Non-Android builds and older runners do not provide this channel.
+    }
+  }
+
+  static Future<void> startDownloadForegroundService({
+    required int id,
+    required String appId,
+    required String title,
+    required String message,
+    required String channelCode,
+    required String channelName,
+    required String channelDescription,
+    required String cancelLabel,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _notificationsChannel
+          .invokeMethod('startDownloadForegroundService', <String, Object?>{
+            'id': id,
+            'appId': appId,
+            'title': title,
+            'message': message,
+            'channelCode': channelCode,
+            'channelName': channelName,
+            'channelDescription': channelDescription,
+            'cancelLabel': cancelLabel,
+          });
+    } on PlatformException {
+      // The download can still proceed; wake locks and progress notification remain best effort.
+    } on MissingPluginException {
+      // Non-Android builds and older runners do not provide this channel.
+    }
+  }
+
+  static Future<void> stopDownloadForegroundService() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _notificationsChannel.invokeMethod('stopDownloadForegroundService');
+    } on PlatformException {
+      // Android will tear the service down if the process dies.
+    } on MissingPluginException {
+      // Non-Android builds and older runners do not provide this channel.
     }
   }
 }

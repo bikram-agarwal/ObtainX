@@ -1,6 +1,10 @@
 package dev.imranr.obtainium
 
 import android.app.Activity
+import android.app.ActivityOptions
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ComponentName
@@ -33,8 +37,12 @@ private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
 private const val POWER_CHANNEL = "dev.imranr.obtainium/power"
 private const val STORAGE_CHANNEL = "dev.imranr.obtainium/storage"
 private const val SHARE_CHANNEL = "dev.imranr.obtainium/share"
+private const val NOTIFICATIONS_CHANNEL = "dev.imranr.obtainium/notifications"
 private const val DOWNLOAD_WAKE_LOCK_TAG = "ObtainX:DownloadWakeLock"
 private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
+private const val REQUEST_PROMOTED_ONGOING_EXTRA = "android.requestPromotedOngoing"
+private const val SESSION_API_PACKAGE_INSTALLED_ACTION =
+    "com.android_package_installer.content.SESSION_API_PACKAGE_INSTALLED"
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
@@ -61,6 +69,13 @@ private const val FOCUS_REGAIN_SETTLE_MS = 500L
 private const val BROADCAST_CONFIRMED_INTERACTIVE_FALLBACK_MS = 5_000L
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        private var notificationsMethodChannel: MethodChannel? = null
+
+        fun cancelDownloadFromNotification(appId: String) {
+            notificationsMethodChannel?.invokeMethod("cancelDownload", appId)
+        }
+    }
 
     private class InstallWatcher(
         val methodResult: MethodChannel.Result,
@@ -90,6 +105,7 @@ class MainActivity : FlutterActivity() {
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
     private var downloadWifiLock: WifiManager.WifiLock? = null
+    private var downloadForegroundServiceCount = 0
     private var openPersistedDocumentTreeResult: MethodChannel.Result? = null
     private var shareChannel: MethodChannel? = null
     private var initialSharedTextConsumed = false
@@ -158,7 +174,16 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
+        try {
+            super.onNewIntent(intent)
+        } catch (ex: IllegalStateException) {
+            val duplicateInstallerReply =
+                intent.action == SESSION_API_PACKAGE_INSTALLED_ACTION &&
+                    ex.message == "Reply already submitted"
+            if (!duplicateInstallerReply) {
+                throw ex
+            }
+        }
         setIntent(intent)
         val sharedText = getSharedTextFromIntent(intent) ?: return
         enqueueSharedText(sharedText)
@@ -238,6 +263,39 @@ class MainActivity : FlutterActivity() {
                     )
                 }
                 else -> result.notImplemented()
+            }
+        }
+        notificationsMethodChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NOTIFICATIONS_CHANNEL,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "showDownloadProgressNotification" -> {
+                        try {
+                            result.success(showDownloadProgressNotification(call))
+                        } catch (ex: Exception) {
+                            result.error("NOTIFICATION_ERROR", ex.message, null)
+                        }
+                    }
+                    "startDownloadForegroundService" -> {
+                        try {
+                            startDownloadForegroundService(call)
+                            result.success(true)
+                        } catch (ex: Exception) {
+                            result.error("DOWNLOAD_SERVICE_ERROR", ex.message, null)
+                        }
+                    }
+                    "stopDownloadForegroundService" -> {
+                        try {
+                            stopDownloadForegroundService()
+                            result.success(true)
+                        } catch (ex: Exception) {
+                            result.error("DOWNLOAD_SERVICE_ERROR", ex.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
             }
         }
         shareChannel = MethodChannel(
@@ -450,6 +508,133 @@ class MainActivity : FlutterActivity() {
             } catch (_: Exception) { }
             downloadWakeLock = null
         }
+    }
+
+    private fun showDownloadProgressNotification(call: io.flutter.plugin.common.MethodCall): Boolean {
+        val id = call.argument<Int>("id") ?: return false
+        val title = call.argument<String>("title") ?: return false
+        val message = call.argument<String>("message") ?: ""
+        val channelCode = call.argument<String>("channelCode") ?: return false
+        val progressPercent = call.argument<Int>("progressPercent") ?: 0
+        val indeterminate = call.argument<Boolean>("indeterminate") ?: false
+        val shortCriticalText = call.argument<String>("shortCriticalText")
+
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(this, MainActivity::class.java)
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            id,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            activityLaunchOptions(),
+        )
+        val cancelAppId = call.argument<String>("appId")
+        val cancelIntent = if (!indeterminate && !cancelAppId.isNullOrBlank()) {
+            PendingIntent.getBroadcast(
+                this,
+                id,
+                Intent(this, DownloadActionReceiver::class.java).apply {
+                    action = DownloadActionReceiver.ACTION_CANCEL_DOWNLOAD
+                    putExtra(DownloadActionReceiver.EXTRA_APP_ID, cancelAppId)
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        } else {
+            null
+        }
+        val builder = Notification.Builder(this, channelCode)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setContentIntent(contentIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setProgress(100, progressPercent.coerceIn(0, 100), indeterminate)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            val progressStyle = Notification.ProgressStyle()
+                .setProgressIndeterminate(indeterminate)
+            if (!indeterminate) {
+                progressStyle
+                    .setStyledByProgress(true)
+                    .setProgress(progressPercent.coerceIn(0, 100))
+                    .setProgressSegments(listOf(Notification.ProgressStyle.Segment(100)))
+            }
+            builder
+                .setStyle(progressStyle)
+                .addExtras(android.os.Bundle().apply {
+                    putBoolean(REQUEST_PROMOTED_ONGOING_EXTRA, true)
+                })
+        }
+        if (cancelIntent != null) {
+            builder.addAction(
+                R.drawable.ic_notification,
+                call.argument<String>("cancelLabel") ?: "Cancel",
+                cancelIntent,
+            )
+        }
+        if (!shortCriticalText.isNullOrBlank()) {
+            builder.setShortCriticalText(shortCriticalText)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            try {
+                builder.javaClass
+                    .getMethod("setRequestPromotedOngoing", Boolean::class.javaPrimitiveType)
+                    .invoke(builder, true)
+            } catch (_: Exception) {
+                // Present as ProgressStyle even on Android 16 builds that do not expose the promotion setter.
+            }
+        }
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.notify(id, builder.build())
+        return true
+    }
+
+    private fun startDownloadForegroundService(call: io.flutter.plugin.common.MethodCall) {
+        val intent = Intent(this, DownloadForegroundService::class.java).apply {
+            putExtra(
+                DownloadForegroundService.EXTRA_NOTIFICATION_ID,
+                call.argument<Int>("id") ?: 0,
+            )
+            putExtra(DownloadForegroundService.EXTRA_APP_ID, call.argument<String>("appId"))
+            putExtra(DownloadForegroundService.EXTRA_TITLE, call.argument<String>("title"))
+            putExtra(DownloadForegroundService.EXTRA_MESSAGE, call.argument<String>("message"))
+            putExtra(DownloadForegroundService.EXTRA_CHANNEL_CODE, call.argument<String>("channelCode"))
+            putExtra(DownloadForegroundService.EXTRA_CHANNEL_NAME, call.argument<String>("channelName"))
+            putExtra(
+                DownloadForegroundService.EXTRA_CHANNEL_DESCRIPTION,
+                call.argument<String>("channelDescription"),
+            )
+            putExtra(DownloadForegroundService.EXTRA_CANCEL_LABEL, call.argument<String>("cancelLabel"))
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        downloadForegroundServiceCount += 1
+    }
+
+    private fun stopDownloadForegroundService() {
+        if (downloadForegroundServiceCount > 0) {
+            downloadForegroundServiceCount -= 1
+        }
+        if (downloadForegroundServiceCount > 0) {
+            return
+        }
+        stopService(Intent(this, DownloadForegroundService::class.java))
+    }
+
+    private fun activityLaunchOptions(): android.os.Bundle? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
+            return null
+        }
+        return ActivityOptions.makeBasic()
+            .setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE,
+            )
+            .toBundle()
     }
 
     @Suppress("DEPRECATION")

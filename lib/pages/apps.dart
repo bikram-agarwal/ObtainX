@@ -536,6 +536,59 @@ class _AppListItem extends StatelessWidget {
       ],
     );
 
+    Widget buildDownloadProgressControl() {
+      final double activeDownloadProgress = downloadProgress ?? 0;
+      final bool isInstalling =
+          downloadProgress != null && activeDownloadProgress < 0;
+      final double? progressValue = isInstalling
+          ? null
+          : (activeDownloadProgress / 100).clamp(0.0, 1.0);
+      return Semantics(
+        label: isInstalling
+            ? tr('installing')
+            : tr(
+                'percentProgress',
+                args: [activeDownloadProgress.toInt().toString()],
+              ),
+        button: !isInstalling,
+        child: SizedBox.square(
+          dimension: 48,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              SizedBox.square(
+                dimension: 48,
+                child: CircularProgressIndicatorM3E(
+                  value: progressValue,
+                  size: CircularProgressM3ESize.s,
+                  shape: ProgressM3EShape.wavy,
+                  activeColor: isInstalling
+                      ? colorScheme.secondary
+                      : colorScheme.primary,
+                  trackColor: colorScheme.surfaceContainerHighest,
+                ),
+              ),
+              if (!isInstalling)
+                IconButton.filledTonal(
+                  tooltip: tr('cancel'),
+                  style: IconButton.styleFrom(
+                    fixedSize: const Size.square(32),
+                    minimumSize: const Size.square(32),
+                    padding: EdgeInsets.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: colorScheme.errorContainer,
+                    foregroundColor: colorScheme.onErrorContainer,
+                  ),
+                  icon: const Icon(Icons.stop_rounded, size: 19),
+                  onPressed: () =>
+                      context.read<AppsProvider>().cancelDownload(app.app.id),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final int transparent = colorScheme.surface.withValues(alpha: 0).toARGB32();
     List<double> stops = [
       ...app.app.categories.asMap().entries.map(
@@ -724,19 +777,7 @@ class _AppListItem extends StatelessWidget {
           ),
         ),
         trailing: downloadProgress != null
-            ? SizedBox(
-                child: Text(
-                  downloadProgress >= 0
-                      ? tr(
-                          'percentProgress',
-                          args: [downloadProgress.toInt().toString()],
-                        )
-                      : tr('installing'),
-                  textAlign: downloadProgress >= 0
-                      ? TextAlign.start
-                      : TextAlign.end,
-                ),
-              )
+            ? buildDownloadProgressControl()
             : trailingRow,
         onTap: onTap,
       ),

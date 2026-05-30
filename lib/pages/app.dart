@@ -33,18 +33,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:markdown/markdown.dart' as md;
 
-String _formatBytes(int bytes) {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-  } else if (bytes >= 1024 * 1024) {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
-  } else if (bytes >= 1024) {
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
-  } else {
-    return '$bytes B';
-  }
-}
-
 bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
   final App appModel = appInMemory.app;
   final String? displayedInstalledVersion = appModel.installedVersion;
@@ -3080,7 +3068,7 @@ class _AppPageState extends State<AppPage> {
         if (knownApkSizeBytes == null) {
           return base;
         }
-        return '$base · ${_formatBytes(knownApkSizeBytes)}';
+        return '$base · ${formatBytesForDisplay(knownApkSizeBytes)}';
       }
 
       final String updateLabel = sizeAnnotated(tr('update'));
@@ -3094,7 +3082,7 @@ class _AppPageState extends State<AppPage> {
         final bool isInstalling = dp < 0;
         final int? totalBytes = app.downloadTotalBytes;
         final String bytesLabel = !isInstalling && totalBytes != null
-            ? ' · ${_formatBytes((dp / 100 * totalBytes).round())} / ${_formatBytes(totalBytes)}'
+            ? ' · ${formatBytesForDisplay((dp / 100 * totalBytes).round())} / ${formatBytesForDisplay(totalBytes)}'
             : '';
         final String label = isInstalling
             ? '${tr('installing')}…'

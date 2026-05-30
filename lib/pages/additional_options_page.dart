@@ -488,12 +488,16 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
                   tooltip: tr('continue'),
                   onPressed: (!_valid || _saving) ? null : _onSave,
                   child: _saving
-                      ? ExpressiveLoadingIndicator(
-                          color: pageThemeForPage.colorScheme.onPrimary,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 26,
-                            height: 26,
-                          ),
+                      ? Builder(
+                          builder: (indicatorContext) {
+                            return ExpressiveLoadingIndicator(
+                              color: IconTheme.of(indicatorContext).color,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 26,
+                                height: 26,
+                              ),
+                            );
+                          },
                         )
                       : const Icon(Icons.check),
                 ),

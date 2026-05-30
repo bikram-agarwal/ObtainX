@@ -56,6 +56,18 @@ final RegExp _androidApplicationIdPattern = RegExp(
   r'^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$',
 );
 
+String formatBytesForDisplay(int bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  } else if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
+  } else if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  } else {
+    return '$bytes B';
+  }
+}
+
 /// True if both versions are equal or one is a prefix of the other with a
 /// non-digit next (e.g. 50.5.19 and 50.5.19-31 [0] [PR] 879778031), or both
 /// contain the same commit-hash-like token (6+ hex chars), e.g. 1.5.3-DEV (75094D8) vs debug-75094d8.
@@ -887,6 +899,22 @@ String storeFacingDownloadDisplayNameForApp(App app) {
   return sanitizeApkSaveDisplayName(key);
 }
 
+String _downloadProgressNotificationMessage(
+  int progressPercent,
+  int? totalBytes,
+) {
+  final progressMessage = tr(
+    'percentProgress',
+    args: [progressPercent.toString()],
+  );
+  if (totalBytes == null) {
+    return progressMessage;
+  }
+  final downloadedBytes = (progressPercent.clamp(0, 100) / 100 * totalBytes)
+      .round();
+  return '$progressMessage - ${formatBytesForDisplay(downloadedBytes)} / ${formatBytesForDisplay(totalBytes)}';
+}
+
 Future<File> downloadFile(
   String url,
   String fileName,
@@ -1248,6 +1276,7 @@ class AppsProvider with ChangeNotifier {
     }
     return _cachedPendingUpdateCount;
   }
+
   final Set<String> _detailPageAutoChecksInFlight = <String>{};
   final Map<String, DateTime> _lastDetailPageAutoCheckStartedAt =
       <String, DateTime>{};
@@ -1354,6 +1383,8 @@ class AppsProvider with ChangeNotifier {
   AppsProvider({bool isBg = false, SettingsProvider? sharedSettings}) {
     settingsProvider = sharedSettings ?? SettingsProvider();
     if (!isBg) {
+      NativeFeatures.registerDownloadCancelHandler(cancelDownload);
+      registerDownloadNotificationCancelHandler(cancelDownload);
       installer.registerThirdPartyInstallPackageChangedCallback(
         _handleThirdPartyInstallPackageChanged,
       );
@@ -1494,7 +1525,22 @@ class AppsProvider with ChangeNotifier {
     /// it. Avoids a flash of the normal button between download and install.
     bool retainInstallPhaseProgressForHandoff = false,
   }) async {
-    var notifId = DownloadNotification(app.finalName, 0).id;
+    final initialDownloadNotification = DownloadNotification(
+      app.finalName,
+      0,
+      appId: app.id,
+    );
+    var notifId = initialDownloadNotification.id;
+    await NativeFeatures.startDownloadForegroundService(
+      id: initialDownloadNotification.id,
+      appId: app.id,
+      title: initialDownloadNotification.title,
+      message: initialDownloadNotification.message,
+      channelCode: initialDownloadNotification.channelCode,
+      channelName: initialDownloadNotification.channelName,
+      channelDescription: initialDownloadNotification.channelDescription,
+      cancelLabel: tr('cancel'),
+    );
     if (apps[app.id] != null) {
       apps[app.id]!.downloadProgress = 0;
       notifyListeners();
@@ -1548,6 +1594,10 @@ class AppsProvider with ChangeNotifier {
         },
         (double? progress) {
           int? prog = progress?.ceil();
+          final totalBytes = apps[app.id]?.downloadTotalBytes;
+          final notificationMessage = prog != null
+              ? _downloadProgressNotificationMessage(prog, totalBytes)
+              : null;
           if (apps[app.id] != null) {
             apps[app.id]!.downloadProgress = progress;
             // Throttle UI notifications to ~250 ms so AppPage's progress
@@ -1558,9 +1608,26 @@ class AppsProvider with ChangeNotifier {
               notifyListeners,
             );
           }
-          notif = DownloadNotification(app.finalName, prog ?? 100);
+          notif = DownloadNotification(
+            app.finalName,
+            prog ?? 100,
+            appId: app.id,
+            message: notificationMessage,
+          );
           if (prog != null && prevProg != prog) {
-            notificationsProvider?.notify(notif);
+            unawaited(
+              NativeFeatures.showDownloadProgressNotification(
+                id: notif.id,
+                appId: app.id,
+                title: notif.title,
+                message: notif.message,
+                channelCode: notif.channelCode,
+                progressPercent: prog,
+                indeterminate: false,
+                cancelLabel: tr('cancel'),
+                shortCriticalText: '$prog%',
+              ),
+            );
           }
           prevProg = prog;
         },
@@ -1574,8 +1641,19 @@ class AppsProvider with ChangeNotifier {
       if (apps[app.id] != null) {
         apps[app.id]!.downloadProgress = -1;
         notifyListeners();
-        notif = DownloadNotification(app.finalName, -1);
-        notificationsProvider?.notify(notif);
+        notif = DownloadNotification(app.finalName, -1, appId: app.id);
+        unawaited(
+          NativeFeatures.showDownloadProgressNotification(
+            id: notif.id,
+            appId: app.id,
+            title: notif.title,
+            message: notif.message,
+            channelCode: notif.channelCode,
+            progressPercent: -1,
+            indeterminate: true,
+            cancelLabel: tr('cancel'),
+          ),
+        );
       }
       PackageInfo? newInfo;
       var isAPK = isApk(downloadedFile.path);
@@ -1671,6 +1749,7 @@ class AppsProvider with ChangeNotifier {
         _downloadCancelTokens.remove(app.id);
       }
       _progressNotifyTimer?.cancel();
+      unawaited(NativeFeatures.stopDownloadForegroundService());
       notificationsProvider?.cancel(notifId);
       if (apps[app.id] != null) {
         apps[app.id]!.downloadTotalBytes = null;
@@ -2446,10 +2525,7 @@ class AppsProvider with ChangeNotifier {
       }
     }
 
-    Future<Map<Object?, Object?>> downloadFn(
-      String id, {
-      bool skipInstalls = false,
-    }) async {
+    Future<Map<Object?, Object?>> downloadFn(String id) async {
       bool willBeSilent = false;
       DownloadedApk? downloadedFile;
       DownloadedDir? downloadedDir;
@@ -2517,20 +2593,10 @@ class AppsProvider with ChangeNotifier {
       };
     }
 
-    List<Map<Object?, Object?>> downloadResults = [];
-    if (forceParallelDownloads || !settingsProvider.parallelDownloads) {
-      for (var id in appsToInstall) {
-        downloadResults.add(await downloadFn(id));
-      }
-    } else {
-      downloadResults = await Future.wait(
-        appsToInstall.map((id) => downloadFn(id, skipInstalls: true)),
-      );
-    }
     bool needsLegacyInterInstallDelay = false;
-    for (var res in downloadResults) {
+    Future<void> installDownloadResult(Map<Object?, Object?> res) async {
       if (res['cancelled'] == true) {
-        continue;
+        return;
       }
       if (!errors.appIdNames.containsKey(res['id'])) {
         try {
@@ -2551,6 +2617,17 @@ class AppsProvider with ChangeNotifier {
         if (settingsProvider.installerMode == 'legacy') {
           needsLegacyInterInstallDelay = true;
         }
+      }
+    }
+
+    if (forceParallelDownloads || settingsProvider.parallelDownloads) {
+      final downloadResults = await Future.wait(appsToInstall.map(downloadFn));
+      for (var res in downloadResults) {
+        await installDownloadResult(res);
+      }
+    } else {
+      for (var id in appsToInstall) {
+        await installDownloadResult(await downloadFn(id));
       }
     }
 
