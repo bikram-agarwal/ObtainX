@@ -40,8 +40,25 @@ private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
 private const val INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS = 200L
 private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
-/// Ignore focus regain cancel if we lost focus more recently than this (transition bounce).
+/// Ignore focus regain if it arrived within this window of the FIRST focus loss (transition bounce).
+/// Only the first loss is recorded; subsequent oscillations during TPI teardown are ignored.
 private const val FOCUS_REGAIN_CANCEL_MIN_MS = 200L
+/// After ObtainX regains window focus (TPI entered onPause), wait this long before completing
+/// the install session.
+///
+/// Why this is needed: popular TPIs such as InstallerX use android:launchMode="singleInstance"
+/// and guard onNewIntent against re-use while a session is active:
+///   if (session != null && intent.flags.hasFlag(FLAG_ACTIVITY_NEW_TASK)) { return }  // drop
+/// The `session` field is never nulled out — it stays non-null through onPause/onStop/onDestroy.
+/// A new intent is only accepted by a FRESH instance, which Android creates once the current
+/// activity is fully destroyed (onDestroy complete). onWindowFocusChanged(true) fires in ObtainX
+/// roughly when the TPI enters onPause; onStop + onDestroy typically take another 150–400ms.
+/// 500ms gives a comfortable margin before the next install intent is fired.
+private const val FOCUS_REGAIN_SETTLE_MS = 500L
+/// If the ACTION_PACKAGE_REPLACED broadcast confirms install success but focus never returns
+/// (some TPIs / OEM builds do not reliably deliver onWindowFocusChanged back to ObtainX),
+/// complete the session after this fallback rather than waiting the full 120s timeout.
+private const val BROADCAST_CONFIRMED_INTERACTIVE_FALLBACK_MS = 5_000L
 
 class MainActivity : FlutterActivity() {
 
@@ -53,10 +70,12 @@ class MainActivity : FlutterActivity() {
         var responded: Boolean = false,
         var focusLost: Boolean = false,
         var focusLostAtUptimeMs: Long = 0L,
-        /// Set when PACKAGE_ADDED/REPLACED matches expected package. We intentionally do not complete the
-        /// MethodChannel here: completing immediately would let Dart start the next batch install while
-        /// InstallerX (or similar) is still showing the previous app's Done UI, so later intents are dropped.
-        /// Session completes from [onResume], [onWindowFocusChanged], or timeout.
+        /// Set when PACKAGE_ADDED/REPLACED matches expected package. We do not complete the session
+        /// immediately: doing so would let Dart start the next batch install while InstallerX (or
+        /// similar) is still tearing down, causing later intents to be dropped.
+        /// Interactive mode (focusLost=true): completes via [onWindowFocusChanged] + FOCUS_REGAIN_SETTLE_MS
+        ///   delay, or via BROADCAST_CONFIRMED_INTERACTIVE_FALLBACK_MS if focus never returns.
+        /// Background mode (focusLost=false): completes via [onResume] or INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS.
         var packageInstallBroadcastReceived: Boolean = false,
     )
 
@@ -97,7 +116,13 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         val watcher = installWatcher ?: return
         if (watcher.responded || !watcher.packageInstallBroadcastReceived) return
-        // Complete immediately so Flutter can clear installing UI without an extra frame delay.
+        if (watcher.focusLost) {
+            // Interactive mode: onWindowFocusChanged already posted a FOCUS_REGAIN_SETTLE_MS
+            // delayed completion. Completing here would fire before that delay expires,
+            // bypassing the TPI teardown buffer and sending the next batch intent too soon.
+            return
+        }
+        // Background mode (focus never lost): complete immediately.
         completeThirdPartyInstallSession(watcher, InstallSessionOutcome.Success(true))
     }
 
@@ -105,8 +130,14 @@ class MainActivity : FlutterActivity() {
         super.onWindowFocusChanged(hasFocus)
         val watcher = installWatcher ?: return
         if (!hasFocus) {
+            // Only record the initial loss time; don't overwrite on subsequent oscillations
+            // (e.g. during TPI teardown animations). The FOCUS_REGAIN_CANCEL_MIN_MS check
+            // compares against this timestamp, and resetting it on every loss would make
+            // the final focus-regain event fail the check and stall until the timeout.
+            if (!watcher.focusLost) {
+                watcher.focusLostAtUptimeMs = SystemClock.uptimeMillis()
+            }
             watcher.focusLost = true
-            watcher.focusLostAtUptimeMs = SystemClock.uptimeMillis()
             return
         }
         // Regained focus — third-party installer overlay dismissed (or user cancelled without installing).
@@ -114,10 +145,16 @@ class MainActivity : FlutterActivity() {
         if (SystemClock.uptimeMillis() - watcher.focusLostAtUptimeMs < FOCUS_REGAIN_CANCEL_MIN_MS) {
             return
         }
-        completeThirdPartyInstallSession(
-            watcher,
-            InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
-        )
+        // Delay session completion so the TPI activity finishes destroying before Dart
+        // can fire the next install intent in batch mode. The broadcast may also arrive
+        // within this window, converting a Success(false) into Success(true).
+        watcher.handler.postDelayed({
+            if (installWatcher !== watcher || watcher.responded) return@postDelayed
+            completeThirdPartyInstallSession(
+                watcher,
+                InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
+            )
+        }, FOCUS_REGAIN_SETTLE_MS)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -592,6 +629,7 @@ class MainActivity : FlutterActivity() {
                     mapOf("packageName" to changedPkg),
                 )
                 if (!session.focusLost) {
+                    // Background mode: TPI never took focus, complete after short settle.
                     session.handler.postDelayed({
                         if (
                             installWatcher === session &&
@@ -605,6 +643,18 @@ class MainActivity : FlutterActivity() {
                             )
                         }
                     }, INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS)
+                } else {
+                    // Interactive mode: install confirmed, waiting for focus to return.
+                    // Schedule a fallback so we don't wait the full 120s if onWindowFocusChanged
+                    // never fires (some TPIs don't return focus reliably).
+                    session.handler.postDelayed({
+                        if (installWatcher === session && !session.responded) {
+                            completeThirdPartyInstallSession(
+                                session,
+                                InstallSessionOutcome.Success(true),
+                            )
+                        }
+                    }, BROADCAST_CONFIRMED_INTERACTIVE_FALLBACK_MS)
                 }
             }
         }
