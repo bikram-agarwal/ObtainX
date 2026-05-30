@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:animations/animations.dart';
 import 'package:app_links/app_links.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
@@ -37,7 +36,6 @@ class NavigationPageItem {
 
 class _HomePageState extends State<HomePage> {
   List<int> selectedIndexHistory = [];
-  bool isReversing = false;
   int pageSwitchRequestId = 0;
   int prevAppCount = -1;
   bool prevIsLoading = true;
@@ -327,15 +325,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  void setIsReversing(int targetIndex) {
-    bool reversing =
-        selectedIndexHistory.isNotEmpty &&
-        selectedIndexHistory.last > targetIndex;
-    setState(() {
-      isReversing = reversing;
-    });
-  }
-
   NavigationBar _materialHomeNavigationBar({
     required List<NavigationDestination> destinations,
     required int selectedIndex,
@@ -373,13 +362,7 @@ class _HomePageState extends State<HomePage> {
     pageSwitchRequestId += 1;
     final int currentRequestId = pageSwitchRequestId;
 
-    setIsReversing(index);
     if (index == 0) {
-      while ((pages[0].widget.key as GlobalKey<AppsPageState>).currentState !=
-          null) {
-        // Avoid duplicate GlobalKey error
-        await Future.delayed(const Duration(microseconds: 1));
-      }
       if (!mounted || currentRequestId != pageSwitchRequestId) {
         return;
       }
@@ -418,29 +401,11 @@ class _HomePageState extends State<HomePage> {
     // download-progress notification.
     final (int appsCount, bool isLoading, int updateCount) = context
         .select<AppsProvider, (int, bool, int)>(
-          (p) => (
-            p.apps.length,
-            p.loadingApps,
-            p
-                .findExistingUpdates(
-                  installedOnly: true,
-                  excludeOnDemandOnly: true,
-                  includeVersionOrderUncertain: true,
-                )
-                .length,
-          ),
+          (p) => (p.apps.length, p.loadingApps, p.pendingUpdateCount),
         );
-    // Subscribe only to the three settings home.dart actually reads in
-    // build (blur toggle, page-transition disable, reverse direction).
-    // Without this, every notify on SettingsProvider rebuilt the entire
-    // navigation shell — including the apps page IndexedStack child.
-    context.select<SettingsProvider, int>(
-      (s) => Object.hash(
-        s.progressiveBlurEnabled,
-        s.disablePageTransitions,
-        s.reversePageTransitions,
-      ),
-    );
+    // Only the blur toggle is read in build now; page-transition settings
+    // are unused after switching to IndexedStack.
+    context.select<SettingsProvider, bool>((s) => s.progressiveBlurEnabled);
     SettingsProvider settingsProvider = context.read<SettingsProvider>();
 
     final AddAppPageState? addPageState =
@@ -483,11 +448,6 @@ class _HomePageState extends State<HomePage> {
         if (currentKey is GlobalKey<AppsPageState>) {
           if (currentKey.currentState?.handleBack() == true) return;
         }
-        setIsReversing(
-          selectedIndexHistory.length >= 2
-              ? selectedIndexHistory.reversed.toList()[1]
-              : 0,
-        );
         if (selectedIndexHistory.isNotEmpty) {
           setState(() {
             selectedIndexHistory.removeLast();
@@ -532,37 +492,13 @@ class _HomePageState extends State<HomePage> {
             body: Stack(
               fit: StackFit.expand,
               children: [
-                SizedBox.expand(
-                  child: PageTransitionSwitcher(
-                    duration: Duration(
-                      milliseconds: settingsProvider.disablePageTransitions
-                          ? 0
-                          : 300,
-                    ),
-                    reverse: settingsProvider.reversePageTransitions
-                        ? !isReversing
-                        : isReversing,
-                    transitionBuilder:
-                        (
-                          Widget child,
-                          Animation<double> animation,
-                          Animation<double> secondaryAnimation,
-                        ) {
-                          return SharedAxisTransition(
-                            animation: animation,
-                            secondaryAnimation: secondaryAnimation,
-                            transitionType: SharedAxisTransitionType.horizontal,
-                            child: child,
-                          );
-                        },
-                    child: pages
-                        .elementAt(
-                          selectedIndexHistory.isEmpty
-                              ? 0
-                              : selectedIndexHistory.last,
-                        )
-                        .widget,
-                  ),
+                // IndexedStack keeps all four pages mounted so tab switches
+                // are a single paint op — no rebuild, no tear-down.
+                IndexedStack(
+                  index: selectedIndexHistory.isEmpty
+                      ? 0
+                      : selectedIndexHistory.last,
+                  children: pages.map((p) => p.widget).toList(),
                 ),
               ],
             ),

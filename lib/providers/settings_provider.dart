@@ -65,12 +65,21 @@ class SettingsProvider with ChangeNotifier {
   /// Mirrors last [setCategories] write; [getString] can lag [setString] briefly.
   Map<String, int>? _categoriesMemory;
 
+  /// Mirrors last [appFolders] write; avoids re-parsing JSON on every access.
+  List<AppFolder>? _appFoldersMemory;
+
+  /// Per-folder view settings cache; avoids re-decoding 'folderView_<id>' JSON
+  /// on every getter call. Null value means the key exists but has no override.
+  final Map<String, Map<String, dynamic>?> _folderViewCache = {};
+
   String sourceUrl = 'https://github.com/bikram-agarwal/ObtainX';
 
   // Not done in constructor as we want to be able to await it
   Future<void> initializeSettings() async {
     prefs = await SharedPreferences.getInstance();
     _categoriesMemory = null;
+    _appFoldersMemory = null;
+    _folderViewCache.clear();
     _migrateProgressiveBlurDefaultForExistingUsers();
     defaultAppDir = (await getAppStorageDir()).path;
     _migrateShizukuSetting();
@@ -87,18 +96,10 @@ class SettingsProvider with ChangeNotifier {
   void _migrateProgressiveBlurDefaultForExistingUsers() {
     if (prefs == null) return;
     if (prefs!.containsKey('progressiveBlurDefaultMigrated')) return;
-    final Set<String> existingKeys = prefs!.getKeys();
-    final bool existingInstall = existingKeys.isNotEmpty;
-    final bool hasExplicitProgressiveBlur = prefs!.containsKey(
-      'progressiveBlurEnabled',
-    );
-    final bool reduceVisualEffectsEnabled =
-        prefs!.getBool('reduceVisualEffects') ?? false;
-    if (existingInstall &&
-        !hasExplicitProgressiveBlur &&
-        !reduceVisualEffectsEnabled) {
-      prefs!.setBool('progressiveBlurEnabled', true);
-    }
+    // No longer force-enable blur for existing installs. The default is off
+    // (see progressiveBlurEnabled getter). Users who want blur can enable it
+    // explicitly in Settings. The migration guard is still written so this
+    // block never runs twice.
     prefs!.setBool('progressiveBlurDefaultMigrated', true);
   }
 
@@ -460,6 +461,7 @@ class SettingsProvider with ChangeNotifier {
   }
 
   bool get useGradientBackground {
+    if (reduceVisualEffects) return false;
     return prefs?.getBool('useGradientBackground') ?? true;
   }
 
@@ -806,14 +808,19 @@ class SettingsProvider with ChangeNotifier {
   }
 
   List<AppFolder> get appFolders {
+    if (_appFoldersMemory != null) {
+      return List<AppFolder>.from(_appFoldersMemory!);
+    }
     final raw = prefs?.getString('appFolders') ?? '[]';
     final list = jsonDecode(raw) as List<dynamic>;
-    return list
+    _appFoldersMemory = list
         .map((e) => AppFolder.fromJson(e as Map<String, dynamic>))
         .toList();
+    return List<AppFolder>.from(_appFoldersMemory!);
   }
 
   set appFolders(List<AppFolder> folders) {
+    _appFoldersMemory = List<AppFolder>.from(folders);
     prefs?.setString(
       'appFolders',
       jsonEncode(folders.map((f) => f.toJson()).toList()),
@@ -834,19 +841,26 @@ class SettingsProvider with ChangeNotifier {
   // Each getter falls back to the global setting when no override is stored.
 
   Map<String, dynamic>? _getFolderViewRaw(String folderId) {
+    if (_folderViewCache.containsKey(folderId)) {
+      return _folderViewCache[folderId];
+    }
     final raw = prefs?.getString('folderView_$folderId');
-    if (raw == null) return null;
-    return jsonDecode(raw) as Map<String, dynamic>;
+    final result =
+        raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+    _folderViewCache[folderId] = result;
+    return result;
   }
 
   void _setFolderViewField(String folderId, String key, dynamic value) {
-    final data = _getFolderViewRaw(folderId) ?? {};
+    final data = Map<String, dynamic>.from(_getFolderViewRaw(folderId) ?? {});
     data[key] = value;
+    _folderViewCache[folderId] = data;
     prefs?.setString('folderView_$folderId', jsonEncode(data));
     notifyListeners();
   }
 
   void clearFolderViewSettings(String folderId) {
+    _folderViewCache.remove(folderId);
     prefs?.remove('folderView_$folderId');
     notifyListeners();
   }

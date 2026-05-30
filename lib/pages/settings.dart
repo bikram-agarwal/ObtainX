@@ -1844,10 +1844,14 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
 
   @override
   Widget build(BuildContext context) {
-    final settingsProvider = context.watch<SettingsProvider>();
+    // Select only categories so this widget doesn't rebuild on unrelated
+    // settings changes (every SettingsProvider setter calls notifyListeners).
+    final Map<String, int> fromPrefs =
+        context.select<SettingsProvider, Map<String, int>>(
+          (s) => s.categories,
+        );
     final appsProvider = context
         .read<AppsProvider>(); // not watch: saveApps would rebuild form
-    final Map<String, int> fromPrefs = settingsProvider.categories;
     final Map<String, MapEntry<int, bool>> merged = _mergeCategoryEditorMaps(
       fromPrefs,
       storedValues,
@@ -1889,7 +1893,7 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
               .where((k) => catMap[k]!.value)
               .toList();
           widget.onSelected?.call(selected);
-          settingsProvider.setCategories(
+          context.read<SettingsProvider>().setCategories(
             colorsByName,
             appsProvider: appsProvider,
           );

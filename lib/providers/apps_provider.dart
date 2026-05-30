@@ -1228,6 +1228,21 @@ class AppsProvider with ChangeNotifier {
   Completer<void>? _loadingCompleter;
   bool gettingUpdates = false;
   LogsProvider logs = LogsProvider();
+
+  // Cached result of findExistingUpdates() for the home-tab badge. Recomputed
+  // once per notifyListeners() so the home.dart context.select lambda is O(1).
+  int _cachedPendingUpdateCount = 0;
+  int get pendingUpdateCount => _cachedPendingUpdateCount;
+
+  @override
+  void notifyListeners() {
+    _cachedPendingUpdateCount = findExistingUpdates(
+      installedOnly: true,
+      excludeOnDemandOnly: true,
+      includeVersionOrderUncertain: true,
+    ).length;
+    super.notifyListeners();
+  }
   final Set<String> _detailPageAutoChecksInFlight = <String>{};
   final Map<String, DateTime> _lastDetailPageAutoCheckStartedAt =
       <String, DateTime>{};
@@ -1256,6 +1271,12 @@ class AppsProvider with ChangeNotifier {
   bool isForeground = true;
   late Stream<FGBGType>? foregroundStream;
   late StreamSubscription<FGBGType>? foregroundSubscription;
+
+  // Throttle foreground-triggered loadApps: getInstalledPackages enumerates
+  // every package with signing certs, which is the most expensive single call
+  // in the app. Skip a foreground reload if one completed recently.
+  static const Duration _foregroundLoadCooldown = Duration(seconds: 5);
+  DateTime? _lastForegroundLoadAt;
   late Directory apkDir;
   late Directory iconsCacheDir;
 
@@ -1338,7 +1359,12 @@ class AppsProvider with ChangeNotifier {
     foregroundSubscription = foregroundStream?.listen((event) async {
       isForeground = event == FGBGType.foreground;
       if (isForeground) {
-        await loadApps();
+        final now = DateTime.now();
+        final last = _lastForegroundLoadAt;
+        if (last == null || now.difference(last) >= _foregroundLoadCooldown) {
+          _lastForegroundLoadAt = now;
+          await loadApps(silent: true);
+        }
       }
     });
     () async {
@@ -1348,39 +1374,37 @@ class AppsProvider with ChangeNotifier {
       var cacheDirs = await getExternalCacheDirectories();
       final Directory appStorageRoot = await getAppStorageDir();
       userAppIconsDir = Directory('${appStorageRoot.path}/user_icons');
-      if (!userAppIconsDir.existsSync()) {
-        userAppIconsDir.createSync(recursive: true);
+      if (!await userAppIconsDir.exists()) {
+        await userAppIconsDir.create(recursive: true);
       }
       if (cacheDirs?.isNotEmpty ?? false) {
         apkDir = cacheDirs!.first;
         iconsCacheDir = Directory('${cacheDirs.first.path}/icons');
-        if (!iconsCacheDir.existsSync()) {
-          iconsCacheDir.createSync();
+        if (!await iconsCacheDir.exists()) {
+          await iconsCacheDir.create();
         }
       } else {
         apkDir = Directory('${appStorageRoot.path}/apks');
-        if (!apkDir.existsSync()) {
-          apkDir.createSync();
+        if (!await apkDir.exists()) {
+          await apkDir.create();
         }
         iconsCacheDir = Directory('${appStorageRoot.path}/icons');
-        if (!iconsCacheDir.existsSync()) {
-          iconsCacheDir.createSync();
+        if (!await iconsCacheDir.exists()) {
+          await iconsCacheDir.create();
         }
       }
-      _migrateUserIconsFromLegacyCacheDir();
+      await _migrateUserIconsFromLegacyCacheDir();
       if (!isBg) {
         // Load Apps into memory (in background processes, this is done later instead of in the constructor)
         await loadApps();
         // Delete any partial APKs (if safe to do so)
         var cutoff = DateTime.now().subtract(const Duration(days: 7));
-        apkDir
-            .listSync()
-            .where((element) => element.statSync().modified.isBefore(cutoff))
-            .forEach((partialApk) {
-              if (!areDownloadsRunning()) {
-                partialApk.delete(recursive: true);
-              }
-            });
+        for (final element in await apkDir.list().toList()) {
+          final stat = await element.stat();
+          if (stat.modified.isBefore(cutoff) && !areDownloadsRunning()) {
+            await element.delete(recursive: true);
+          }
+        }
       }
     }();
   }
@@ -2808,16 +2832,23 @@ class AppsProvider with ChangeNotifier {
     return modded ? app : null;
   }
 
-  Future<void> loadApps({String? singleId}) async {
+  // When [silent] is true (foreground refreshes) we skip the loading-indicator
+  // notify at the start and suppress the end notify when the app list is
+  // unchanged — avoids two full rebuilds of every mounted page on every
+  // lock/unlock or app-switch when nothing actually changed.
+  Future<void> loadApps({String? singleId, bool silent = false}) async {
     await _loadingCompleter?.future;
-    loadingApps = true;
     _loadingCompleter = Completer<void>();
-    notifyListeners();
+    if (!silent) {
+      loadingApps = true;
+      notifyListeners();
+    }
     await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
     var sp = SourceProvider();
     List<List<String>> errors = [];
     var installedAppsData = await getAllInstalledInfo();
     List<String> removedAppIds = [];
+    bool anyAppModded = false;
     await Future.wait(
       (await getAppsDir()) // Parse Apps from JSON
           .listSync()
@@ -2873,6 +2904,7 @@ class AppsProvider with ChangeNotifier {
                 );
                 if (moddedApp != null) {
                   app = moddedApp;
+                  anyAppModded = true;
                   // Note the app ID if it was uninstalled externally
                   if (moddedApp.installedVersion == null) {
                     removedAppIds.add(moddedApp.id);
@@ -2912,7 +2944,14 @@ class AppsProvider with ChangeNotifier {
     loadingApps = false;
     _loadingCompleter?.complete();
     _loadingCompleter = null;
-    notifyListeners();
+    // In silent mode only notify if something actually changed — prevents
+    // a redundant full rebuild on foreground events when the app list is
+    // identical to what was already displayed.
+    final bool dataChanged =
+        anyAppModded || errors.isNotEmpty || removedAppIds.isNotEmpty;
+    if (!silent || dataChanged) {
+      notifyListeners();
+    }
   }
 
   bool _bytesLookLikeRasterImage(Uint8List bytes) {
@@ -2955,23 +2994,24 @@ class AppsProvider with ChangeNotifier {
         bytes[7] == 0x0A;
   }
 
-  void _migrateUserIconsFromLegacyCacheDir() {
+  Future<void> _migrateUserIconsFromLegacyCacheDir() async {
     try {
-      if (!iconsCacheDir.existsSync()) return;
-      for (final FileSystemEntity entity in iconsCacheDir.listSync()) {
+      if (!await iconsCacheDir.exists()) return;
+      for (final FileSystemEntity entity
+          in await iconsCacheDir.list().toList()) {
         if (entity is! File) continue;
         final String fileName = entity.uri.pathSegments.last;
         if (!fileName.endsWith('.user.png')) continue;
         final File destination = File('${userAppIconsDir.path}/$fileName');
-        if (destination.existsSync()) {
+        if (await destination.exists()) {
           try {
-            entity.deleteSync();
+            await entity.delete();
           } catch (_) {}
           continue;
         }
         try {
-          entity.copySync(destination.path);
-          entity.deleteSync();
+          await entity.copy(destination.path);
+          await entity.delete();
         } catch (e) {
           logs.add('User icon migrate $fileName: $e');
         }
@@ -2983,6 +3023,33 @@ class AppsProvider with ChangeNotifier {
 
   File _userAppIconPngFile(String appId) {
     return File('${userAppIconsDir.path}/$appId.user.png');
+  }
+
+  // Icons from getAppIcon() are often 192–432 px. We only display them at
+  // ~40 dp, so 128 px is more than enough at any device pixel ratio. Resize
+  // before writing to the disk cache so both the on-disk and in-memory
+  // representations stay small. Uses ui.instantiateImageCodec which decodes
+  // on a background thread — no main-isolate blocking.
+  static const int _iconMaxCachePx = 128;
+
+  Future<Uint8List> _resizeIconForCache(Uint8List bytes) async {
+    try {
+      final codec = await instantiateImageCodec(
+        bytes,
+        targetWidth: _iconMaxCachePx,
+        targetHeight: _iconMaxCachePx,
+      );
+      final frame = await codec.getNextFrame();
+      final byteData = await frame.image.toByteData(
+        format: ImageByteFormat.png,
+      );
+      frame.image.dispose();
+      codec.dispose();
+      if (byteData != null) return byteData.buffer.asUint8List();
+    } catch (e) {
+      logs.add('Icon resize failed, keeping original: $e');
+    }
+    return bytes;
   }
 
   Future<Uint8List?> _fetchIconFromUrl(String url) async {
@@ -3048,6 +3115,7 @@ class AppsProvider with ChangeNotifier {
       }
     }
     if (icon != null && !alreadyCached) {
+      icon = await _resizeIconForCache(icon);
       await cachedIcon.writeAsBytes(icon);
     }
     if (ignoreCache) {
