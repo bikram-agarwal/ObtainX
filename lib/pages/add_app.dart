@@ -1212,63 +1212,86 @@ class AddAppPageState extends State<AddAppPage> {
 
     // ── Layout ─────────────────────────────────────────────────────────
 
+    final ColorScheme addScheme = Theme.of(context).colorScheme;
+
+    BoxDecoration buildAddAppGradientDecoration() {
+      return BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          stops: const [0, 0.38, 0.72, 1],
+          colors: [
+            addScheme.schemePageGradientTopColor,
+            addScheme.schemePageGradientMidColor,
+            addScheme.surface,
+            addScheme.surface,
+          ],
+        ),
+      );
+    }
+
+    Widget buildGradientBackground() {
+      return Positioned.fill(
+        child: DecoratedBox(decoration: buildAddAppGradientDecoration()),
+      );
+    }
+
     // Device mode uses a plain Column so the BulkAddWidget always gets a clean
     // bounded height via Expanded, with no outer CustomScrollView that could
     // steal scroll gestures or push content off-screen.
     if (_mode == _AddMode.fromDevice) {
-      final ColorScheme deviceScheme = Theme.of(context).colorScheme;
       return Scaffold(
-        backgroundColor: deviceScheme.surface,
-        appBar: AppBar(
-          title: Text(tr('addApp')),
-          automaticallyImplyLeading: false,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          surfaceTintColor: Colors.transparent,
-          backgroundColor: deviceScheme.surface,
-        ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        backgroundColor: addScheme.surface,
+        body: Stack(
+          fit: StackFit.expand,
           children: [
-            buildModeSelector(),
-            Expanded(
-              child: BulkAddWidget(
-                key: _bulkWidgetKey,
-                onComplete: () => setState(() {
-                  _byUrlOpenedFromSearchPick = false;
-                  _mode = _AddMode.byUrl;
-                }),
-              ),
+            if (settingsProvider.useGradientBackground)
+              buildGradientBackground(),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+                  child: Padding(
+                    padding: EdgeInsetsDirectional.only(
+                      start: 20,
+                      top: MediaQuery.paddingOf(context).top,
+                      end: 20,
+                    ),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(
+                        tr('addApp'),
+                        style: Theme.of(context).textTheme.titleLarge!.copyWith(
+                          color: addScheme.onSurface,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                buildModeSelector(),
+                Expanded(
+                  child: BulkAddWidget(
+                    key: _bulkWidgetKey,
+                    onComplete: () => setState(() {
+                      _byUrlOpenedFromSearchPick = false;
+                      _mode = _AddMode.byUrl;
+                    }),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       );
     }
 
-    final ColorScheme addScheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: addScheme.surface,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (settingsProvider.useGradientBackground)
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0, 0.38, 0.72, 1],
-                    colors: [
-                      addScheme.schemePageGradientTopColor,
-                      addScheme.schemePageGradientMidColor,
-                      addScheme.surface,
-                      addScheme.surface,
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          if (settingsProvider.useGradientBackground) buildGradientBackground(),
           CustomScrollView(
             key: const PageStorageKey<String>('add-app-tab-scroll'),
             cacheExtent: 1600,
@@ -1293,6 +1316,12 @@ class AddAppPageState extends State<AddAppPage> {
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 180),
+                    layoutBuilder: (currentChild, previousChildren) {
+                      return Stack(
+                        alignment: Alignment.topCenter,
+                        children: <Widget>[...previousChildren, ?currentChild],
+                      );
+                    },
                     child: KeyedSubtree(
                       key: ValueKey(_mode),
                       child: Column(
