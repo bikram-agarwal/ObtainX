@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:provider/provider.dart';
 
 /// Material 3 expressive grouped-list radii and gaps (matches apps tab list).
 const double kM3eOuterRadius = 14.0;
@@ -19,44 +21,45 @@ enum M3eListGroupPosition { first, middle, last, only }
 BorderRadius m3eListGroupItemRadius(
   M3eListGroupPosition position, {
   required bool flatListBody,
+  double outerRadius = kM3eOuterRadius,
 }) {
   if (flatListBody) {
     return switch (position) {
-      M3eListGroupPosition.first => const BorderRadius.only(
-        topLeft: Radius.circular(kM3eOuterRadius),
-        topRight: Radius.circular(kM3eOuterRadius),
-        bottomLeft: Radius.circular(kM3eInnerRadius),
-        bottomRight: Radius.circular(kM3eInnerRadius),
+      M3eListGroupPosition.first => BorderRadius.only(
+        topLeft: Radius.circular(outerRadius),
+        topRight: Radius.circular(outerRadius),
+        bottomLeft: const Radius.circular(kM3eInnerRadius),
+        bottomRight: const Radius.circular(kM3eInnerRadius),
       ),
       M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
-      M3eListGroupPosition.last => const BorderRadius.only(
-        topLeft: Radius.circular(kM3eInnerRadius),
-        topRight: Radius.circular(kM3eInnerRadius),
-        bottomLeft: Radius.circular(kM3eOuterRadius),
-        bottomRight: Radius.circular(kM3eOuterRadius),
+      M3eListGroupPosition.last => BorderRadius.only(
+        topLeft: const Radius.circular(kM3eInnerRadius),
+        topRight: const Radius.circular(kM3eInnerRadius),
+        bottomLeft: Radius.circular(outerRadius),
+        bottomRight: Radius.circular(outerRadius),
       ),
-      M3eListGroupPosition.only => const BorderRadius.only(
-        topLeft: Radius.circular(kM3eOuterRadius),
-        topRight: Radius.circular(kM3eOuterRadius),
-        bottomLeft: Radius.circular(kM3eOuterRadius),
-        bottomRight: Radius.circular(kM3eOuterRadius),
+      M3eListGroupPosition.only => BorderRadius.only(
+        topLeft: Radius.circular(outerRadius),
+        topRight: Radius.circular(outerRadius),
+        bottomLeft: Radius.circular(outerRadius),
+        bottomRight: Radius.circular(outerRadius),
       ),
     };
   }
   return switch (position) {
     M3eListGroupPosition.first => BorderRadius.circular(kM3eInnerRadius),
     M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
-    M3eListGroupPosition.last => const BorderRadius.only(
-      topLeft: Radius.circular(kM3eInnerRadius),
-      topRight: Radius.circular(kM3eInnerRadius),
-      bottomLeft: Radius.circular(kM3eOuterRadius),
-      bottomRight: Radius.circular(kM3eOuterRadius),
+    M3eListGroupPosition.last => BorderRadius.only(
+      topLeft: const Radius.circular(kM3eInnerRadius),
+      topRight: const Radius.circular(kM3eInnerRadius),
+      bottomLeft: Radius.circular(outerRadius),
+      bottomRight: Radius.circular(outerRadius),
     ),
-    M3eListGroupPosition.only => const BorderRadius.only(
-      topLeft: Radius.circular(kM3eInnerRadius),
-      topRight: Radius.circular(kM3eInnerRadius),
-      bottomLeft: Radius.circular(kM3eOuterRadius),
-      bottomRight: Radius.circular(kM3eOuterRadius),
+    M3eListGroupPosition.only => BorderRadius.only(
+      topLeft: const Radius.circular(kM3eInnerRadius),
+      topRight: const Radius.circular(kM3eInnerRadius),
+      bottomLeft: Radius.circular(outerRadius),
+      bottomRight: Radius.circular(outerRadius),
     ),
   };
 }
@@ -109,6 +112,17 @@ Widget m3eExpressiveSettingsCard({
   double itemGap = kM3eItemGap,
 }) {
   final ThemeData theme = Theme.of(context);
+  final double cardCornerScale = context
+      .read<SettingsProvider>()
+      .cardCornerScale;
+  final double cardRadius = SettingsProvider.cardCornerRadiusForScale(
+    kM3eGroupCardRadius,
+    cardCornerScale,
+  );
+  final double itemOuterRadius = SettingsProvider.cardCornerRadiusForScale(
+    kM3eOuterRadius,
+    cardCornerScale,
+  );
   final BorderSide blackThemeOutlineSide = m3ePureBlackOutlineSide(
     colorScheme,
     alpha: 0.22,
@@ -118,7 +132,7 @@ Widget m3eExpressiveSettingsCard({
     shadowColor: colorScheme.shadow.withAlpha(100),
     surfaceTintColor: colorScheme.surfaceTint,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(kM3eGroupCardRadius),
+      borderRadius: BorderRadius.circular(cardRadius),
       side: blackThemeOutlineSide,
     ),
     color: m3eGroupedListBackdropFill(colorScheme),
@@ -137,6 +151,7 @@ Widget m3eExpressiveSettingsCard({
                 borderRadius: m3eListGroupItemRadius(
                   m3eFlatStackSlotPosition(itemIndex, items.length),
                   flatListBody: true,
+                  outerRadius: itemOuterRadius,
                 ),
                 side: blackThemeOutlineSide,
               ),

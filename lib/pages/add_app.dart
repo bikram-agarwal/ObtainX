@@ -231,6 +231,7 @@ class AddAppPageState extends State<AddAppPage> {
         s.hideTrackOnlyWarning,
         s.useGradientBackground,
         s.progressiveBlurEnabled,
+        s.cardCornerScale,
       ),
     );
     SettingsProvider settingsProvider = context.read<SettingsProvider>();

@@ -342,6 +342,7 @@
     "shizukuPretendToBeGooglePlay": "Set Google Play as the installation source (if Shizuku is used)",
     "useSystemFont": "Use the system font",
     "uiScale": "UI scale",
+    "cardCorners": "Card corners",
     "useVersionCodeAsOSVersion": "Use app versionCode as OS-detected version",
     "requestHeader": "Request header",
     "useLatestAssetDateAsReleaseDate": "Use latest asset upload as release date",

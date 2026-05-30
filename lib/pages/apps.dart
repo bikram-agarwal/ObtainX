@@ -33,8 +33,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:markdown/markdown.dart' as md;
 
-const double _appsListGroupCardRadius = kM3eGroupCardRadius;
-
 enum CategoryFilterIntent { neutral, include, exclude }
 
 enum CategoryFilterMatchMode { any, all }
@@ -90,24 +88,29 @@ Color _appsListGroupHeaderColor(ColorScheme scheme) {
 }
 
 /// Collapsed group card; expanded header row uses inner radius on bottom edge.
-const RoundedRectangleBorder _appsExpansionTileCollapsedShape =
-    RoundedRectangleBorder(
-      borderRadius: BorderRadius.all(Radius.circular(_appsListGroupCardRadius)),
-    );
-
-const RoundedRectangleBorder _appsExpansionTileExpandedShape =
-    RoundedRectangleBorder(
-      borderRadius: BorderRadius.only(
-        topLeft: Radius.circular(_appsListGroupCardRadius),
-        topRight: Radius.circular(_appsListGroupCardRadius),
-        bottomLeft: Radius.circular(kM3eInnerRadius),
-        bottomRight: Radius.circular(kM3eInnerRadius),
-      ),
-    );
-
-RoundedRectangleBorder _appsExpansionGroupMaterialShape(ColorScheme scheme) {
+RoundedRectangleBorder _appsExpansionTileCollapsedShape(double cardRadius) {
   return RoundedRectangleBorder(
-    borderRadius: BorderRadius.circular(_appsListGroupCardRadius),
+    borderRadius: BorderRadius.all(Radius.circular(cardRadius)),
+  );
+}
+
+RoundedRectangleBorder _appsExpansionTileExpandedShape(double cardRadius) {
+  return RoundedRectangleBorder(
+    borderRadius: BorderRadius.only(
+      topLeft: Radius.circular(cardRadius),
+      topRight: Radius.circular(cardRadius),
+      bottomLeft: const Radius.circular(kM3eInnerRadius),
+      bottomRight: const Radius.circular(kM3eInnerRadius),
+    ),
+  );
+}
+
+RoundedRectangleBorder _appsExpansionGroupMaterialShape(
+  ColorScheme scheme,
+  double cardRadius,
+) {
+  return RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(cardRadius),
     side: m3ePureBlackOutlineSide(scheme, alpha: 0.22),
   );
 }
@@ -2107,6 +2110,7 @@ class AppsPageState extends State<AppsPage> {
         s.progressiveBlurEnabled,
         s.reduceVisualEffects,
         s.useGradientBackground,
+        s.cardCornerScale,
         s.leftSwipeAction,
         s.rightSwipeAction,
         s.appFolders.length,
@@ -2126,6 +2130,12 @@ class AppsPageState extends State<AppsPage> {
       ),
     );
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
+    final double appsListGroupCardRadius = settingsProvider.cardCornerRadiusFor(
+      kM3eGroupCardRadius,
+    );
+    final double appsListItemOuterRadius = settingsProvider.cardCornerRadiusFor(
+      kM3eOuterRadius,
+    );
     if (!initialAppLoadCompleted && !appsProvider.loadingApps) {
       initialAppLoadCompleted = true;
     }
@@ -2903,7 +2913,11 @@ class AppsPageState extends State<AppsPage> {
       // view) still uses the standard Navigator.push - that's a secondary
       // path and doesn't benefit from container transform.
       final BorderRadius? itemRadius = groupPosition != null
-          ? m3eListGroupItemRadius(groupPosition, flatListBody: flatListBody)
+          ? m3eListGroupItemRadius(
+              groupPosition,
+              flatListBody: flatListBody,
+              outerRadius: appsListItemOuterRadius,
+            )
           : null;
 
       // Builds the row visual given the callback that should fire when the
@@ -2996,6 +3010,7 @@ class AppsPageState extends State<AppsPage> {
           borderRadius: m3eListGroupItemRadius(
             groupPosition,
             flatListBody: flatListBody,
+            outerRadius: appsListItemOuterRadius,
           ),
           child: swipeItem,
         );
@@ -3082,15 +3097,20 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
+            shape: _appsExpansionGroupMaterialShape(
+              theme.colorScheme,
+              appsListGroupCardRadius,
+            ),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: PageStorageKey(catKey),
-                shape: _appsExpansionTileExpandedShape,
-                collapsedShape: _appsExpansionTileCollapsedShape,
+                shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
+                collapsedShape: _appsExpansionTileCollapsedShape(
+                  appsListGroupCardRadius,
+                ),
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -3136,15 +3156,20 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
+            shape: _appsExpansionGroupMaterialShape(
+              theme.colorScheme,
+              appsListGroupCardRadius,
+            ),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: const PageStorageKey(nonInstalledKey),
-                shape: _appsExpansionTileExpandedShape,
-                collapsedShape: _appsExpansionTileCollapsedShape,
+                shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
+                collapsedShape: _appsExpansionTileCollapsedShape(
+                  appsListGroupCardRadius,
+                ),
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -3212,15 +3237,20 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
+            shape: _appsExpansionGroupMaterialShape(
+              theme.colorScheme,
+              appsListGroupCardRadius,
+            ),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: PageStorageKey(groupKey),
-                shape: _appsExpansionTileExpandedShape,
-                collapsedShape: _appsExpansionTileCollapsedShape,
+                shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
+                collapsedShape: _appsExpansionTileCollapsedShape(
+                  appsListGroupCardRadius,
+                ),
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {
@@ -3267,15 +3297,20 @@ class AppsPageState extends State<AppsPage> {
             elevation: 3,
             shadowColor: theme.colorScheme.shadow.withAlpha(100),
             surfaceTintColor: theme.colorScheme.surfaceTint,
-            shape: _appsExpansionGroupMaterialShape(theme.colorScheme),
+            shape: _appsExpansionGroupMaterialShape(
+              theme.colorScheme,
+              appsListGroupCardRadius,
+            ),
             color: _appsListGroupHeaderColor(theme.colorScheme),
             clipBehavior: Clip.antiAlias,
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 key: PageStorageKey(groupKey),
-                shape: _appsExpansionTileExpandedShape,
-                collapsedShape: _appsExpansionTileCollapsedShape,
+                shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
+                collapsedShape: _appsExpansionTileCollapsedShape(
+                  appsListGroupCardRadius,
+                ),
                 initiallyExpanded: isExpanded,
                 onExpansionChanged: (expanded) => setState(() {
                   if (expanded) {

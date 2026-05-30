@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_switch_theme.dart';
+import 'package:provider/provider.dart';
 
 /// Surfaces from [ColorScheme.fromImageProvider] are often very dark in dark mode;
 /// blend them toward [ColorScheme.primary] so the hue reads clearly on the app page.
@@ -134,6 +136,10 @@ Future<ColorScheme?> loadColorSchemeFromAppIcon({
 BoxDecoration appPageSectionCardDecoration(BuildContext context) {
   final bool isDark = Theme.of(context).brightness == Brightness.dark;
   final ColorScheme colorScheme = Theme.of(context).colorScheme;
+  final double cardRadius = SettingsProvider.cardCornerRadiusForScale(
+    28,
+    context.read<SettingsProvider>().cardCornerScale,
+  );
   final double sectionDeepen = isDark ? 0.055 : 0.045;
   final Color defaultSectionFill = isDark
       ? colorScheme.surfaceContainerHighest
@@ -143,7 +149,7 @@ BoxDecoration appPageSectionCardDecoration(BuildContext context) {
       defaultSectionFill;
   return BoxDecoration(
     color: fill,
-    borderRadius: BorderRadius.circular(28),
+    borderRadius: BorderRadius.circular(cardRadius),
     border: Border.all(color: colorScheme.outlineVariant, width: 1),
     boxShadow: [
       if (isDark)

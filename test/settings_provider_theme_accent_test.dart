@@ -57,4 +57,21 @@ void main() {
     settings.shadingIntensity = 0.46;
     expect(settings.shadingIntensity, 0.5);
   });
+
+  test('card corner scale defaults, steps, and clamps', () async {
+    final SettingsProvider settings = await _settingsWithPrefs(
+      <String, Object>{},
+    );
+
+    expect(settings.cardCornerScale, 1.0);
+
+    settings.cardCornerScale = 1.23;
+    expect(settings.cardCornerScale, 1.2);
+
+    settings.cardCornerScale = 2.0;
+    expect(settings.cardCornerScale, SettingsProvider.cardCornerScaleMax);
+
+    settings.cardCornerScale = 0.1;
+    expect(settings.cardCornerScale, SettingsProvider.cardCornerScaleMin);
+  });
 }

@@ -306,13 +306,15 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
+    final SettingsProvider settings = context.watch<SettingsProvider>();
+    final double cardRadius = settings.cardCornerRadiusFor(28);
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(22, 18, 18, 22),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(cardRadius),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

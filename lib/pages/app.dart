@@ -274,6 +274,7 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
     settings.showAppWebpage,
     settings.checkUpdateOnDetailPage,
     settings.highlightTouchTargets,
+    settings.cardCornerScale,
     settings.categories.hashCode,
   );
 }
@@ -2235,6 +2236,8 @@ class _AppPageState extends State<AppPage> {
       // #1 — verdict stripe (A: trailing icon, B: card watermark).
       Widget? verdictStripe;
       Widget? verdictWatermark;
+      final double verdictStripeTopRadius = settingsProvider
+          .cardCornerRadiusFor(28);
       if (!undeterminedTrackOnlyInstalled) {
         Color? stripeColor;
         Color? stripeTextColor;
@@ -2278,15 +2281,13 @@ class _AppPageState extends State<AppPage> {
         }
         if (stripeLabel != null && verdictIcon != null) {
           // A — trailing icon in the stripe.
-          // Fix flush: use BoxDecoration with top-only borderRadius matching the
-          // card's 28px corners so the stripe fills the curved corner areas and
-          // no card-fill bleeds through at the top edges.
+          // Match the parent card's top corners so no card fill bleeds through.
           verdictStripe = Container(
             width: double.infinity,
             decoration: BoxDecoration(
               color: stripeColor,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(28),
+              borderRadius: BorderRadius.vertical(
+                top: Radius.circular(verdictStripeTopRadius),
               ),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),

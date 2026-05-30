@@ -951,6 +951,91 @@ class _SettingsPageState extends State<SettingsPage> {
                                   ],
                                 ),
                               ),
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.rounded_corner_rounded,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    tr('cardCorners'),
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${(settingsProvider.cardCornerScale * 100).round()}%',
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          SliderTheme(
+                                            data: SliderTheme.of(context).copyWith(
+                                              trackHeight: 16,
+                                              trackShape:
+                                                  const _GappedTrackShape(),
+                                              thumbShape:
+                                                  const _VerticalBarThumbShape(),
+                                              tickMarkShape:
+                                                  const RoundSliderTickMarkShape(
+                                                    tickMarkRadius: 3,
+                                                  ),
+                                              activeTickMarkColor: Theme.of(
+                                                context,
+                                              ).colorScheme.onPrimary,
+                                              inactiveTickMarkColor: Theme.of(
+                                                context,
+                                              ).colorScheme.primary,
+                                              overlayShape:
+                                                  const RoundSliderOverlayShape(
+                                                    overlayRadius: 20,
+                                                  ),
+                                            ),
+                                            child: Slider(
+                                              min: SettingsProvider
+                                                  .cardCornerScaleMin,
+                                              max: SettingsProvider
+                                                  .cardCornerScaleMax,
+                                              divisions:
+                                                  ((SettingsProvider
+                                                                  .cardCornerScaleMax -
+                                                              SettingsProvider
+                                                                  .cardCornerScaleMin) /
+                                                          0.10)
+                                                      .round(),
+                                              label:
+                                                  '${(settingsProvider.cardCornerScale * 100).round()}%',
+                                              value: settingsProvider
+                                                  .cardCornerScale,
+                                              onChanged: (double value) {
+                                                settingsProvider
+                                                        .cardCornerScale =
+                                                    value;
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                               SwitchListTile(
                                 title: Text(tr('showWebInAppView')),
                                 value: settingsProvider.showAppWebpage,
@@ -1846,10 +1931,8 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
   Widget build(BuildContext context) {
     // Select only categories so this widget doesn't rebuild on unrelated
     // settings changes (every SettingsProvider setter calls notifyListeners).
-    final Map<String, int> fromPrefs =
-        context.select<SettingsProvider, Map<String, int>>(
-          (s) => s.categories,
-        );
+    final Map<String, int> fromPrefs = context
+        .select<SettingsProvider, Map<String, int>>((s) => s.categories);
     final appsProvider = context
         .read<AppsProvider>(); // not watch: saveApps would rebuild form
     final Map<String, MapEntry<int, bool>> merged = _mergeCategoryEditorMaps(

@@ -62,14 +62,14 @@ class SettingsProvider with ChangeNotifier {
   DateTime? _lastExportDirAccessWarningAt;
   DateTime? _lastApkSaveDirAccessWarningAt;
 
-  /// Mirrors last [setCategories] write; [getString] can lag [setString] briefly.
+  // Mirrors last [setCategories] write; [getString] can lag [setString] briefly.
   Map<String, int>? _categoriesMemory;
 
-  /// Mirrors last [appFolders] write; avoids re-parsing JSON on every access.
+  // Mirrors last [appFolders] write; avoids re-parsing JSON on every access.
   List<AppFolder>? _appFoldersMemory;
 
-  /// Per-folder view settings cache; avoids re-decoding 'folderView_<id>' JSON
-  /// on every getter call. Null value means the key exists but has no override.
+  // Per-folder view settings cache; avoids re-decoding 'folderView_<id>' JSON
+  // on every getter call. Null value means the key exists but has no override.
   final Map<String, Map<String, dynamic>?> _folderViewCache = {};
 
   String sourceUrl = 'https://github.com/bikram-agarwal/ObtainX';
@@ -214,6 +214,9 @@ class SettingsProvider with ChangeNotifier {
   static const double appUiScaleMin = 0.75;
   static const double appUiScaleMax = 1.25;
   static const double appUiScaleDefault = 1.0;
+  static const double cardCornerScaleMin = 0.5;
+  static const double cardCornerScaleMax = 1.5;
+  static const double cardCornerScaleDefault = 1.0;
 
   double get appUiScale {
     final double raw = prefs?.getDouble('appUiScale') ?? appUiScaleDefault;
@@ -225,6 +228,31 @@ class SettingsProvider with ChangeNotifier {
     final double clamped = scale.clamp(appUiScaleMin, appUiScaleMax);
     prefs?.setDouble('appUiScale', clamped);
     notifyListeners();
+  }
+
+  double get cardCornerScale {
+    final double raw =
+        prefs?.getDouble('cardCornerScale') ?? cardCornerScaleDefault;
+    if (raw.isNaN || raw <= 0) return cardCornerScaleDefault;
+    return raw.clamp(cardCornerScaleMin, cardCornerScaleMax);
+  }
+
+  set cardCornerScale(double scale) {
+    final double stepped = (scale * 10).round() / 10;
+    final double clamped = stepped.clamp(
+      cardCornerScaleMin,
+      cardCornerScaleMax,
+    );
+    prefs?.setDouble('cardCornerScale', clamped);
+    notifyListeners();
+  }
+
+  static double cardCornerRadiusForScale(double baseRadius, double scale) {
+    return (baseRadius * scale).clamp(4.0, 40.0);
+  }
+
+  double cardCornerRadiusFor(double baseRadius) {
+    return cardCornerRadiusForScale(baseRadius, cardCornerScale);
   }
 
   // 'stock' = default Android installer, 'shizuku' = Shizuku, 'Third-Party' = third-party installer (user-chosen app; stored value unchanged for prefs compatibility)
@@ -845,8 +873,7 @@ class SettingsProvider with ChangeNotifier {
       return _folderViewCache[folderId];
     }
     final raw = prefs?.getString('folderView_$folderId');
-    final result =
-        raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+    final result = raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
     _folderViewCache[folderId] = result;
     return result;
   }
