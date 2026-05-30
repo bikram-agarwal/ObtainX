@@ -1285,7 +1285,11 @@ String? replaceMatchGroupsInString(RegExpMatch match, String matchGroupString) {
   var outputString = matchGroupString;
   for (final numberMatch in numbers) {
     final number = numberMatch.group(0)!;
-    final matchGroup = match.group(int.parse(number.substring(1))) ?? '';
+    final int matchGroupIndex = int.parse(number.substring(1));
+    if (matchGroupIndex > match.groupCount) {
+      return null;
+    }
+    final matchGroup = match.group(matchGroupIndex) ?? '';
     // Check if the number is preceded by a single backslash
     final isEscaped = outputString.contains('\\$number');
     // Replace the number with the corresponding match group

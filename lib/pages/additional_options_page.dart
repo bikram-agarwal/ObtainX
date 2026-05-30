@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/foundation.dart';
@@ -244,7 +246,10 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       );
       if (!mounted) return;
       if (widget.onAfterSave != null) {
-        await widget.onAfterSave!(widget.appId, versionDetectionEnabled);
+        final onAfterSave = widget.onAfterSave!;
+        Navigator.of(context).pop();
+        unawaited(onAfterSave(widget.appId, versionDetectionEnabled));
+        return;
       }
       if (mounted) Navigator.of(context).pop();
     } catch (err) {

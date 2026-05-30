@@ -5,6 +5,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
@@ -451,6 +452,17 @@ void main() {
     expect(
       details.changeLog,
       'https://www.apkmirror.com/apk/google-inc/youtube-music/youtube-music-9-17-51-release/youtube-music-9-17-51-5-android-apk-download/',
+    );
+  });
+
+  test('version extraction rejects match groups that do not exist', () {
+    expect(
+      () => extractVersion(
+        r'(\d+_\d+_\d+)',
+        r'$1.$2.$3',
+        'https://www.zdevs.ru/files/za/ZArchiver_1_0_10_arm64-v8a_release.apk',
+      ),
+      throwsA(isA<NoVersionError>()),
     );
   });
 
