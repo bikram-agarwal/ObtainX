@@ -1229,19 +1229,24 @@ class AppsProvider with ChangeNotifier {
   bool gettingUpdates = false;
   LogsProvider logs = LogsProvider();
 
-  // Cached result of findExistingUpdates() for the home-tab badge. Recomputed
-  // once per notifyListeners() so the home.dart context.select lambda is O(1).
+  // Cached result of findExistingUpdates() for the home-tab badge.
+  // Recomputed lazily: only when _pendingUpdateCountDirty is true, which is
+  // set at the data-change sites (loadApps, saveApps, removeApps, install
+  // events). Download-progress ticks and icon updates leave the flag false so
+  // the O(n) scan does not run 4×/sec during downloads.
   int _cachedPendingUpdateCount = 0;
-  int get pendingUpdateCount => _cachedPendingUpdateCount;
+  bool _pendingUpdateCountDirty = true;
 
-  @override
-  void notifyListeners() {
-    _cachedPendingUpdateCount = findExistingUpdates(
-      installedOnly: true,
-      excludeOnDemandOnly: true,
-      includeVersionOrderUncertain: true,
-    ).length;
-    super.notifyListeners();
+  int get pendingUpdateCount {
+    if (_pendingUpdateCountDirty) {
+      _cachedPendingUpdateCount = findExistingUpdates(
+        installedOnly: true,
+        excludeOnDemandOnly: true,
+        includeVersionOrderUncertain: true,
+      ).length;
+      _pendingUpdateCountDirty = false;
+    }
+    return _cachedPendingUpdateCount;
   }
   final Set<String> _detailPageAutoChecksInFlight = <String>{};
   final Map<String, DateTime> _lastDetailPageAutoCheckStartedAt =
@@ -1429,6 +1434,7 @@ class AppsProvider with ChangeNotifier {
       installedInfo,
       appInMemory.icon,
     );
+    _pendingUpdateCountDirty = true;
     notifyListeners();
   }
 
@@ -2950,6 +2956,7 @@ class AppsProvider with ChangeNotifier {
     final bool dataChanged =
         anyAppModded || errors.isNotEmpty || removedAppIds.isNotEmpty;
     if (!silent || dataChanged) {
+      _pendingUpdateCountDirty = true;
       notifyListeners();
     }
   }
@@ -3317,6 +3324,7 @@ class AppsProvider with ChangeNotifier {
       }),
     );
     if (notifyListenersAfterSave) {
+      _pendingUpdateCountDirty = true;
       notifyListeners();
     }
     if (autoExportAfterSave) {
@@ -3375,6 +3383,7 @@ class AppsProvider with ChangeNotifier {
       apps.remove(appId);
     }
     if (appIds.isNotEmpty) {
+      _pendingUpdateCountDirty = true;
       notifyListeners();
       export(isAuto: true);
     }
@@ -3450,6 +3459,7 @@ class AppsProvider with ChangeNotifier {
         _finalizeDeferredObtainiumRemoval(appId);
       });
     }
+    _pendingUpdateCountDirty = true;
     notifyListeners();
     export(isAuto: true);
   }
@@ -3467,6 +3477,7 @@ class AppsProvider with ChangeNotifier {
       }
       apps[appId] = snapshot.deepCopy();
     }
+    _pendingUpdateCountDirty = true;
     notifyListeners();
     export(isAuto: true);
   }
@@ -3493,6 +3504,7 @@ class AppsProvider with ChangeNotifier {
     }
     await deleteObtainiumAppDiskData([appId], deleteMainJson: false);
     export(isAuto: true);
+    _pendingUpdateCountDirty = true;
     notifyListeners();
   }
 

@@ -20,6 +20,12 @@ import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 
+const double _bulkBottomActionGap = 8.0;
+const double _bulkBottomActionHorizontalPadding = 16.0;
+const double _bulkBottomActionMinimumSafePadding = 16.0;
+const double _bulkBottomActionHeight = 56.0;
+const double _bulkBottomActionTopListGap = 16.0;
+
 /// Which app types to include in the bulk scan list.
 enum BulkAppFilter { userOnly, systemOnly, both }
 
@@ -711,6 +717,18 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     );
   }
 
+  double _bottomActionBottomPadding() =>
+      math.max(
+        MediaQuery.paddingOf(context).bottom,
+        _bulkBottomActionMinimumSafePadding,
+      ) +
+      _bulkBottomActionGap;
+
+  double _bottomActionListPadding() =>
+      _bottomActionBottomPadding() +
+      _bulkBottomActionHeight +
+      _bulkBottomActionTopListGap;
+
   Widget _buildSelectAppsStep() {
     final filtered = _filteredApps;
     final alreadyTracked = _appsProvider.apps.keys.toSet();
@@ -828,7 +846,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                 child: ListView.builder(
                   // Bottom padding reserves space so the last item isn't
                   // hidden behind the FAB.
-                  padding: const EdgeInsets.only(bottom: 88),
+                  padding: EdgeInsets.only(bottom: _bottomActionListPadding()),
                   cacheExtent: 1200,
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
@@ -887,8 +905,13 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         // FAB — replaces the full-width button row.
         Align(
           alignment: Alignment.bottomRight,
-          child: SafeArea(
-            minimum: const EdgeInsets.all(16),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              _bulkBottomActionHorizontalPadding,
+              0,
+              _bulkBottomActionHorizontalPadding,
+              _bottomActionBottomPadding(),
+            ),
             child: Badge(
               isLabelVisible: _selectedPackages.isNotEmpty,
               label: Text('${_selectedPackages.length}'),
@@ -1496,7 +1519,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             ? Center(child: Text(tr('noAppsFound')))
             : ListView(
                 // Reserve space for the bottom FAB row.
-                padding: const EdgeInsets.only(bottom: 88),
+                padding: EdgeInsets.only(bottom: _bottomActionListPadding()),
                 children: listItems,
               ),
 
@@ -1506,8 +1529,13 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           left: 0,
           right: 0,
           bottom: 0,
-          child: SafeArea(
-            minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              _bulkBottomActionHorizontalPadding,
+              0,
+              _bulkBottomActionHorizontalPadding,
+              _bottomActionBottomPadding(),
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [

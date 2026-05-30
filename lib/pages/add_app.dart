@@ -24,6 +24,9 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+const double _appVaultFabBottomGap = 8.0;
+const double _fabHorizontalMargin = 16.0;
+
 enum _AddMode { byUrl, search, fromDevice }
 
 class AddAppPage extends StatefulWidget {
@@ -235,8 +238,16 @@ class AddAppPageState extends State<AddAppPage> {
         .read<NotificationsProvider>();
 
     bool doingSomething = gettingAppInfo || searching;
-    final double bottomNavigationClearance =
-        settingsProvider.progressiveBlurEnabled ? 88 : 0;
+    // The nested Scaffold inherits bottom padding from the home Scaffold when
+    // the blurred bottom nav extends underneath it. Place this FAB from the
+    // actual screen bottom chrome instead of letting the default endFloat
+    // location stack its own 16 dp margin on top of that inherited padding.
+    final double coveredBottomInset = MediaQuery.paddingOf(context).bottom;
+    final double bottomChromeClearance = settingsProvider.progressiveBlurEnabled
+        ? coveredBottomInset
+        : 0.0;
+    final double appVaultFabBottomPadding =
+        bottomChromeClearance + _appVaultFabBottomGap;
     final bool showAppVaultFab =
         (_mode == _AddMode.byUrl && userInput.trim().isEmpty) ||
         (_mode == _AddMode.search && !_searchHasSearched && !searching);
@@ -1237,34 +1248,6 @@ class AddAppPageState extends State<AddAppPage> {
     final ColorScheme addScheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: addScheme.surface,
-      floatingActionButtonAnimator: FloatingActionButtonAnimator.noAnimation,
-      floatingActionButton: TweenAnimationBuilder<double>(
-        tween: Tween<double>(end: showAppVaultFab ? 1 : 0),
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeInOutCubicEmphasized,
-        builder: (context, animationValue, child) {
-          return IgnorePointer(
-            ignoring: !showAppVaultFab,
-            child: Opacity(opacity: animationValue, child: child),
-          );
-        },
-        child: Padding(
-          padding: EdgeInsets.only(
-            bottom: _mode == _AddMode.search ? bottomNavigationClearance : 0,
-          ),
-          child: FloatingActionButton.extended(
-            heroTag: 'add-app-app-vault-fab',
-            onPressed: () {
-              launchUrlString(
-                'https://apps.obtainium.imranr.dev/',
-                mode: LaunchMode.externalApplication,
-              );
-            },
-            icon: const Icon(Icons.apps_rounded),
-            label: Text(tr('aboutAppVault')),
-          ),
-        ),
-      ),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -1366,13 +1349,42 @@ class AddAppPageState extends State<AddAppPage> {
               ),
               if (settingsProvider.progressiveBlurEnabled)
                 SliverToBoxAdapter(
-                  child: SizedBox(
-                    height:
-                        MediaQuery.paddingOf(context).bottom +
-                        bottomNavigationClearance,
-                  ),
+                  child: SizedBox(height: bottomChromeClearance),
                 ),
             ],
+          ),
+          Align(
+            alignment: Alignment.bottomRight,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                _fabHorizontalMargin,
+                0,
+                _fabHorizontalMargin,
+                appVaultFabBottomPadding,
+              ),
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: showAppVaultFab ? 1 : 0),
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.easeInOutCubicEmphasized,
+                builder: (context, animationValue, child) {
+                  return IgnorePointer(
+                    ignoring: !showAppVaultFab,
+                    child: Opacity(opacity: animationValue, child: child),
+                  );
+                },
+                child: FloatingActionButton.extended(
+                  heroTag: 'add-app-app-vault-fab',
+                  onPressed: () {
+                    launchUrlString(
+                      'https://apps.obtainium.imranr.dev/',
+                      mode: LaunchMode.externalApplication,
+                    );
+                  },
+                  icon: const Icon(Icons.apps_rounded),
+                  label: Text(tr('aboutAppVault')),
+                ),
+              ),
+            ),
           ),
         ],
       ),
