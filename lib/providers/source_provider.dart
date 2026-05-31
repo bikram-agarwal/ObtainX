@@ -1175,7 +1175,7 @@ abstract class AppSource {
                     ? settingsProvider.getSettingBool(e.key).toString()
                     : settingsProvider.getSettingString(e.key));
       if (val != null) {
-        results[e.key] = val;
+        results[e.key] = val.toString();
       }
     }
     return results;

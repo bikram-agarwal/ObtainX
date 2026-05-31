@@ -735,52 +735,55 @@ class _AppListItem extends StatelessWidget {
           ],
         ),
       ),
-      child: ListTile(
-        tileColor: Colors.transparent,
-        // Selection no longer uses [selectedTileColor]; the visual
-        // treatment lives in the parent [Container] (outline + 1dp
-        // shadow) and on the leading icon (replaced with a checkmark
-        // when selected). Keeping the ListTile fill transparent on
-        // both states preserves the pinned-fill underneath.
-        selectedTileColor: Colors.transparent,
-        selected: isSelected,
-        onLongPress: onLongPress,
-        leading: leadingWidget,
-        title: Row(
-          children: [
-            if (pinned)
-              Padding(
-                padding: const EdgeInsetsDirectional.only(end: 6),
-                child: Icon(
-                  Icons.push_pin_rounded,
-                  size: 16,
-                  color: colorScheme.primary,
+      child: Material(
+        color: Colors.transparent,
+        child: ListTile(
+          tileColor: Colors.transparent,
+          // Selection no longer uses [selectedTileColor]; the visual
+          // treatment lives in the parent [Container] (outline + 1dp
+          // shadow) and on the leading icon (replaced with a checkmark
+          // when selected). Keeping the ListTile fill transparent on
+          // both states preserves the pinned-fill underneath.
+          selectedTileColor: Colors.transparent,
+          selected: isSelected,
+          onLongPress: onLongPress,
+          leading: leadingWidget,
+          title: Row(
+            children: [
+              if (pinned)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 6),
+                  child: Icon(
+                    Icons.push_pin_rounded,
+                    size: 16,
+                    color: colorScheme.primary,
+                  ),
+                ),
+              Expanded(
+                child: Text(
+                  app.name,
+                  maxLines: 1,
+                  style: TextStyle(
+                    overflow: TextOverflow.ellipsis,
+                    fontWeight: pinned ? FontWeight.w700 : FontWeight.normal,
+                  ),
                 ),
               ),
-            Expanded(
-              child: Text(
-                app.name,
-                maxLines: 1,
-                style: TextStyle(
-                  overflow: TextOverflow.ellipsis,
-                  fontWeight: pinned ? FontWeight.w700 : FontWeight.normal,
-                ),
-              ),
-            ),
-          ],
-        ),
-        subtitle: Text(
-          tr('byX', args: [app.author]),
-          maxLines: 1,
-          style: TextStyle(
-            overflow: TextOverflow.ellipsis,
-            fontWeight: pinned ? FontWeight.w600 : FontWeight.normal,
+            ],
           ),
+          subtitle: Text(
+            tr('byX', args: [app.author]),
+            maxLines: 1,
+            style: TextStyle(
+              overflow: TextOverflow.ellipsis,
+              fontWeight: pinned ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
+          trailing: downloadProgress != null
+              ? buildDownloadProgressControl()
+              : trailingRow,
+          onTap: onTap,
         ),
-        trailing: downloadProgress != null
-            ? buildDownloadProgressControl()
-            : trailingRow,
-        onTap: onTap,
       ),
     );
 
@@ -1081,6 +1084,61 @@ void showChangeLogDialog(
   AppSource appSource,
   String changeLog,
 ) {
+  String processedChangeLog = changeLog;
+  if (appSource.changeLogIfAnyIsMarkDown) {
+    final htmlImgRegex = RegExp(r'<img\s+([^>]+)\/?>', caseSensitive: false);
+    final srcRegex = RegExp("src=[\"']([^\"']+)[\"']", caseSensitive: false);
+    final altRegex = RegExp("alt=[\"']([^\"']+)[\"']", caseSensitive: false);
+
+    String resolveUrl(String src) {
+      if (src.startsWith('http://') || src.startsWith('https://')) {
+        return src;
+      }
+      try {
+        final uri = Uri.parse(app.url);
+        final segments = uri.pathSegments;
+        var cleanPath = src;
+        if (cleanPath.startsWith('./')) {
+          cleanPath = cleanPath.substring(2);
+        } else if (cleanPath.startsWith('/')) {
+          cleanPath = cleanPath.substring(1);
+        }
+
+        if (uri.host.contains('github.com') && segments.length >= 2) {
+          return 'https://raw.githubusercontent.com/${segments[0]}/${segments[1]}/HEAD/$cleanPath';
+        } else if (uri.host.contains('gitlab.com') && segments.length >= 2) {
+          return 'https://gitlab.com/${segments[0]}/${segments[1]}/-/raw/HEAD/$cleanPath';
+        } else if (uri.host.contains('codeberg.org') && segments.length >= 2) {
+          return 'https://codeberg.org/${segments[0]}/${segments[1]}/raw/branch/HEAD/$cleanPath';
+        } else {
+          return '${uri.origin}/$cleanPath';
+        }
+      } catch (_) {
+        return src;
+      }
+    }
+
+    processedChangeLog = processedChangeLog.replaceAllMapped(htmlImgRegex, (match) {
+      final attrs = match.group(1) ?? '';
+      final srcMatch = srcRegex.firstMatch(attrs);
+      final altMatch = altRegex.firstMatch(attrs);
+      if (srcMatch != null) {
+        final src = resolveUrl(srcMatch.group(1)!);
+        final alt = altMatch?.group(1) ?? '';
+        return '![$alt]($src)';
+      }
+      return match.group(0)!;
+    });
+
+    final mdImgRegex = RegExp(r'!\[([^\]]*)\]\(([^)]+)\)');
+    processedChangeLog = processedChangeLog.replaceAllMapped(mdImgRegex, (match) {
+      final alt = match.group(1) ?? '';
+      final src = match.group(2)!;
+      final absoluteSrc = resolveUrl(src);
+      return '![$alt]($absoluteSrc)';
+    });
+  }
+
   showDialog(
     context: context,
     builder: (BuildContext context) {
@@ -1114,12 +1172,18 @@ void showChangeLogDialog(
                   width: MediaQuery.of(context).size.width,
                   height: MediaQuery.of(context).size.height - 350,
                   child: Markdown(
+                    padding: const EdgeInsets.only(
+                      left: 16,
+                      right: 16,
+                      top: 16,
+                      bottom: 48,
+                    ),
                     styleSheet: MarkdownStyleSheet(
                       blockquoteDecoration: BoxDecoration(
                         color: Theme.of(context).cardColor,
                       ),
                     ),
-                    data: changeLog,
+                    data: processedChangeLog,
                     onTapLink: (text, href, title) {
                       if (href != null) {
                         launchUrlString(

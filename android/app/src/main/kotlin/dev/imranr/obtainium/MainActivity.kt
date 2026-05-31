@@ -695,7 +695,7 @@ class MainActivity : FlutterActivity() {
                 cancelIntent,
             )
         }
-        if (!shortCriticalText.isNullOrBlank()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA && !shortCriticalText.isNullOrBlank()) {
             builder.setShortCriticalText(shortCriticalText)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {

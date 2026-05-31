@@ -1205,6 +1205,7 @@ Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
 Future<PackageInfo?> getInstalledInfo(
   String? packageName, {
   bool printErr = true,
+  bool light = true,
 }) async {
   if (packageName != null) {
     final List<String> packageNamesToTry = <String>[packageName];
@@ -1220,7 +1221,7 @@ Future<PackageInfo?> getInstalledInfo(
       try {
         return await pm.getPackageInfo(
           packageName: packageNameToTry,
-          flags: packageInfoFlags,
+          flags: light ? packageInfoFlagsLight : packageInfoFlags,
         );
       } catch (e) {
         if (printErr && packageNameToTry == packageNamesToTry.last) {
@@ -2331,7 +2332,6 @@ class AppsProvider with ChangeNotifier {
       action: 'android.intent.action.DELETE',
       data: 'package:$appId',
       flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
-      package: 'vnd.android.package-archive',
     );
     await intent.launch();
   }

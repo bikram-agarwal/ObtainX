@@ -26,7 +26,8 @@ assignees: ''
 4. See error -->
 
 **Screenshots and Logs**
-<!-- If applicable, add screenshots, and logs. Go to ObtainX settings, scroll to the bottom, tap the 🐞 bug icon, "share as file". Attach that log file here. -->
+<!-- If applicable, add screenshots, and logs. Go to ObtainX settings, scroll to the bottom, tap the 🐞 bug icon at the top-right of About section, "share as file". Attach that log file here. -->
+<!-- Bug reports without that log will be closed without further notice. -->
 
 **Please complete the following information:**
  - Device: <!-- [e.g. Pixel 7] -->
