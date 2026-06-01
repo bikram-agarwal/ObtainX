@@ -138,17 +138,15 @@ String? reconciledInstalledVersionForDisabledVersionDetection(
   String reportedInstalledVersion,
   String latestVersion,
 ) {
-  return reconciledInstalledVersionFromLatest(
-        realInstalledVersion,
-        latestVersion,
-      ) ??
-      (reconcileVersionDifferences(
-                realInstalledVersion,
-                reportedInstalledVersion,
-              )?.key ==
-              false
-          ? realInstalledVersion
-          : null);
+  final reconciledLatest = reconcileVersionDifferences(realInstalledVersion, latestVersion);
+  if (reconciledLatest?.key == true) {
+    return reconciledLatest!.value;
+  }
+  final reconciledInstalled = reconcileVersionDifferences(realInstalledVersion, reportedInstalledVersion);
+  if (reconciledInstalled?.key == true) {
+    return reconciledInstalled!.value;
+  }
+  return null;
 }
 
 bool _isDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39; // '0'..'9'
@@ -1544,7 +1542,7 @@ class AppsProvider with ChangeNotifier {
   Future<void> updatePendingRepoRename(String appId, String? newUrl) async {
     if (apps.containsKey(appId)) {
       apps[appId]!.app.pendingRepoRenameUrl = newUrl;
-      await saveApps([apps[appId]!.app]);
+      await saveApps([apps[appId]!.app], updateInstalledInfo: false);
     }
   }
 
@@ -1552,7 +1550,7 @@ class AppsProvider with ChangeNotifier {
     if (apps.containsKey(appId)) {
       apps[appId]!.app.url = newUrl;
       apps[appId]!.app.pendingRepoRenameUrl = null;
-      await saveApps([apps[appId]!.app]);
+      await saveApps([apps[appId]!.app], updateInstalledInfo: false);
     }
   }
 
@@ -2465,7 +2463,7 @@ class AppsProvider with ChangeNotifier {
             .indexOf(apkUrl.value);
         if (urlInd >= 0 && urlInd != apps[id]!.app.preferredApkIndex) {
           apps[id]!.app.preferredApkIndex = urlInd;
-          await saveApps([apps[id]!.app]);
+          await saveApps([apps[id]!.app], updateInstalledInfo: false);
         }
         if (context != null || await canInstallSilently(apps[id]!.app)) {
           appsToInstall.add(id);
@@ -2484,6 +2482,7 @@ class AppsProvider with ChangeNotifier {
         a.additionalSettings['trackOnlyTemporaryPackageId'] = false;
         return a;
       }).toList(),
+      updateInstalledInfo: false,
     );
 
     // Prepare to download+install Apps
@@ -2842,10 +2841,9 @@ class AppsProvider with ChangeNotifier {
         !isHTMLWithNoVersionDetection &&
         !isDirectAPKLink &&
         realInstalledVersion != null &&
-        app.app.installedVersion != null &&
         (reconcileVersionDifferences(
                   realInstalledVersion,
-                  app.app.installedVersion!,
+                  app.app.latestVersion,
                 ) !=
                 null ||
             naiveStandardVersionDetection);
@@ -2883,11 +2881,24 @@ class AppsProvider with ChangeNotifier {
       modded = true;
     } else if (realInstalledVersion != null && app.installedVersion == null) {
       // App says it's not installed but really is - set to installed and use real package versionName (or versionCode if chosen)
-      app.installedVersion = realInstalledVersion;
+      app.installedVersion = versionDetectionIsStandard
+          ? realInstalledVersion
+          : app.latestVersion;
       if (trackOnly) {
         app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = false;
       }
       modded = true;
+    }
+    if (realInstalledVersion != null &&
+        app.installedVersion != null &&
+        !versionDetectionIsStandard) {
+      final reconciled = reconcileVersionDifferences(realInstalledVersion, app.latestVersion);
+      if (reconciled?.key != true) {
+        if (app.installedVersion == realInstalledVersion) {
+          app.installedVersion = app.latestVersion;
+          modded = true;
+        }
+      }
     }
     if (realInstalledVersion != null &&
         app.installedVersion != null &&
@@ -3392,44 +3403,52 @@ class AppsProvider with ChangeNotifier {
     bool onlyIfExists = true,
     bool notifyListenersAfterSave = true,
     bool autoExportAfterSave = true,
+    bool updateInstalledInfo = true,
   }) async {
     attemptToCorrectInstallStatus = attemptToCorrectInstallStatus;
     await Future.wait(
       apps.map((appToSave) async {
         var app = appToSave.deepCopy();
         clearStaleSkippedLatestVersionInPlace(app);
-        PackageInfo? info = await getInstalledInfo(app.id);
-        // Reuse the cached icon whenever the installed package
-        // hasn't changed since the last save. [getAppIcon] returns large PNG
-        // bytes via a JNI hop. We still call [getInstalledInfo]
-        // unconditionally because it is cheap and we need the current
-        // versionName to detect external uninstalls / updates.
-        final AppInMemory? cachedInMemory = this.apps[app.id];
-        final bool installedUnchanged =
-            cachedInMemory != null &&
-            cachedInMemory.installedInfo?.packageName == info?.packageName &&
-            cachedInMemory.installedInfo?.versionName == info?.versionName &&
-            cachedInMemory.installedInfo?.versionCode == info?.versionCode;
+        PackageInfo? info;
         Uint8List? icon;
-        if (installedUnchanged) {
+        final AppInMemory? cachedInMemory = this.apps[app.id];
+        if (!updateInstalledInfo && cachedInMemory != null) {
+          info = cachedInMemory.installedInfo;
           icon = cachedInMemory.icon;
           app.name = cachedInMemory.app.name;
         } else {
-          icon = await info?.applicationInfo?.getAppIcon();
-          String? localizedLabel;
-          if (Platform.isAndroid && info != null) {
-            final labelsByPackageName =
-                await BulkImportService.getApplicationLabels([app.id]);
-            localizedLabel = labelsByPackageName[app.id]?.trim();
-            if (localizedLabel?.isNotEmpty != true) {
-              info = await getInstalledInfo(app.id);
+          info = await getInstalledInfo(app.id);
+          // Reuse the cached icon whenever the installed package
+          // hasn't changed since the last save. [getAppIcon] returns large PNG
+          // bytes via a JNI hop. We still call [getInstalledInfo]
+          // unconditionally because it is cheap and we need the current
+          // versionName to detect external uninstalls / updates.
+          final bool installedUnchanged =
+              cachedInMemory != null &&
+              cachedInMemory.installedInfo?.packageName == info?.packageName &&
+              cachedInMemory.installedInfo?.versionName == info?.versionName &&
+              cachedInMemory.installedInfo?.versionCode == info?.versionCode;
+          if (installedUnchanged) {
+            icon = cachedInMemory.icon;
+            app.name = cachedInMemory.app.name;
+          } else {
+            icon = await info?.applicationInfo?.getAppIcon();
+            String? localizedLabel;
+            if (Platform.isAndroid && info != null) {
+              final labelsByPackageName =
+                  await BulkImportService.getApplicationLabels([app.id]);
+              localizedLabel = labelsByPackageName[app.id]?.trim();
+              if (localizedLabel?.isNotEmpty != true) {
+                info = await getInstalledInfo(app.id);
+              }
             }
-          }
-          final String? appLabel = localizedLabel?.isNotEmpty == true
-              ? localizedLabel
-              : info?.applicationInfo?.nonLocalizedLabel?.toString().trim();
-          if (appLabel?.isNotEmpty == true) {
-            app.name = appLabel!;
+            final String? appLabel = localizedLabel?.isNotEmpty == true
+                ? localizedLabel
+                : info?.applicationInfo?.nonLocalizedLabel?.toString().trim();
+            if (appLabel?.isNotEmpty == true) {
+              app.name = appLabel!;
+            }
           }
         }
         if (attemptToCorrectInstallStatus) {
@@ -3607,7 +3626,7 @@ class AppsProvider with ChangeNotifier {
       await _restoreAppJsonFromPendingRemoval(appId);
       final File mainJson = File('${(await getAppsDir()).path}/$appId.json');
       if (!mainJson.existsSync()) {
-        await saveApps([snapshot.app], onlyIfExists: false);
+        await saveApps([snapshot.app], onlyIfExists: false, updateInstalledInfo: false);
       }
       apps[appId] = snapshot.deepCopy();
     }
@@ -4245,7 +4264,7 @@ class AppsProvider with ChangeNotifier {
       }
     }
     if (changed) {
-      await saveApps([app]);
+      await saveApps([app], updateInstalledInfo: false);
     }
   }
 

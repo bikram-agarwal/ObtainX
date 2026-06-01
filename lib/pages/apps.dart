@@ -933,7 +933,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         }
       case SwipeAction.pin:
         if (app != null) {
-          provider.saveApps([app..pinned = !widget.isPinned]);
+          provider.saveApps([app..pinned = !widget.isPinned], updateInstalledInfo: false);
         }
       case SwipeAction.appOptions:
         await _openAdditionalOptionsModal(widget.appId, context);
@@ -3628,6 +3628,7 @@ class AppsPageState extends State<AppsPage> {
                       app.categories = updatedCategoryLists[index++];
                       return app;
                     }).toList(),
+                    updateInstalledInfo: false,
                   );
                 },
               );
@@ -3678,6 +3679,7 @@ class AppsPageState extends State<AppsPage> {
                       }
                       return a;
                     }).toList(),
+                    updateInstalledInfo: false,
                   );
 
                   Navigator.of(context).pop();
@@ -3700,6 +3702,7 @@ class AppsPageState extends State<AppsPage> {
           e.pinned = pinStatus;
           return e;
         }).toList(),
+        updateInstalledInfo: false,
       );
       Navigator.of(context).pop();
     }
@@ -4708,7 +4711,7 @@ class AppsPageState extends State<AppsPage> {
       }
     }
     if (changed.isNotEmpty) {
-      await appsProvider.saveApps(changed);
+      await appsProvider.saveApps(changed, updateInstalledInfo: false);
     }
   }
 
@@ -4727,7 +4730,7 @@ class AppsPageState extends State<AppsPage> {
       }
     }
     if (changed.isNotEmpty) {
-      await appsProvider.saveApps(changed);
+      await appsProvider.saveApps(changed, updateInstalledInfo: false);
     }
   }
 
@@ -5151,7 +5154,7 @@ class AppsPageState extends State<AppsPage> {
                       app.additionalSettings['onDemandOnly'] = false;
                     }
                   }
-                  await appsProvider.saveApps(apps.toList());
+                  await appsProvider.saveApps(apps.toList(), updateInstalledInfo: false);
                   if (!dCtx.mounted) return;
                   Navigator.of(dCtx).pop();
                 },

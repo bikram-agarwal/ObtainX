@@ -827,7 +827,7 @@ class SettingsProvider with ChangeNotifier {
           .map((e) => e as App)
           .toList();
       if (changedApps.isNotEmpty) {
-        appsProvider.saveApps(changedApps);
+        appsProvider.saveApps(changedApps, updateInstalledInfo: false);
       }
     }
     _categoriesMemory = Map<String, int>.from(cats);

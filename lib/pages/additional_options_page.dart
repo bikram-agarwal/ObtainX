@@ -51,9 +51,17 @@ Future<bool> persistAdditionalOptionsForm({
     }
   }
 
+  final bool versionDetectionPreviouslyActive =
+      originalSettings['versionDetection'] == true ||
+      !originalSettings.containsKey('versionDetection');
+  final bool versionDetectionCurrentlyActive =
+      app.additionalSettings['versionDetection'] == true;
+
   final bool versionDetectionEnabled =
-      app.additionalSettings['versionDetection'] == true &&
-      originalSettings['versionDetection'] != true;
+      versionDetectionCurrentlyActive && !versionDetectionPreviouslyActive;
+  final bool versionDetectionDisabled =
+      !versionDetectionCurrentlyActive && versionDetectionPreviouslyActive;
+
   final bool releaseDateVersionEnabled =
       app.additionalSettings['releaseDateAsVersion'] == true &&
       originalSettings['releaseDateAsVersion'] != true;
@@ -80,9 +88,19 @@ Future<bool> persistAdditionalOptionsForm({
           versionStringSourceDefault;
       syncVersionStringSourceSettings(app.additionalSettings);
     }
+  } else if (versionDetectionDisabled && app.installedVersion != null) {
+    final String? realInstalledVersion =
+        app.additionalSettings['useVersionCodeAsOSVersion'] == true
+            ? appInMem.installedInfo?.versionCode.toString()
+            : appInMem.installedInfo?.versionName;
+    if (realInstalledVersion != null) {
+      if (reconcileVersionDifferences(realInstalledVersion, app.latestVersion)?.key != true) {
+        app.installedVersion = app.latestVersion;
+      }
+    }
   }
 
-  await appsProvider.saveApps([app]);
+  await appsProvider.saveApps([app], updateInstalledInfo: false);
   return versionDetectionEnabled;
 }
 

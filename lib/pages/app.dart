@@ -722,7 +722,7 @@ class _AppPageState extends State<AppPage> {
       }
     }
 
-    await appsProvider.saveApps([updatedApp], onlyIfExists: true);
+    await appsProvider.saveApps([updatedApp], onlyIfExists: true, updateInstalledInfo: false);
     await appsProvider.updateAppIcon(updatedApp.id);
     if (mounted) {
       _clearEditIconStaging();
@@ -1576,6 +1576,7 @@ class _AppPageState extends State<AppPage> {
         [updated],
         // No need to re-export to disk just because we filled in a size.
         autoExportAfterSave: false,
+        updateInstalledInfo: false,
       );
       _logApkMirrorSizeDebugFromAppPage(
         'lazy resolve persisted id=${widget.appId} size=$resolvedSize',
@@ -2217,7 +2218,7 @@ class _AppPageState extends State<AppPage> {
           appToSave
                   .additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
               false;
-          await appsProvider.saveApps([appToSave]);
+          await appsProvider.saveApps([appToSave], updateInstalledInfo: false);
         } catch (err) {
           if (context.mounted) {
             _showPageError(err, context);
@@ -3105,7 +3106,7 @@ class _AppPageState extends State<AppPage> {
                     updatedApp.additionalSettings.remove(
                       'skippedLatestVersion',
                     );
-                    appsProvider.saveApps([updatedApp]);
+                    appsProvider.saveApps([updatedApp], updateInstalledInfo: false);
                   }
                   Navigator.of(context).pop();
                 },
@@ -3284,7 +3285,7 @@ class _AppPageState extends State<AppPage> {
             copy.additionalSettings['skippedLatestVersion'] =
                 copy.latestVersion;
           }
-          await appsProvider.saveApps([copy]);
+          await appsProvider.saveApps([copy], updateInstalledInfo: false);
           if (mounted) {
             setState(() {});
           }
@@ -3628,7 +3629,7 @@ class _AppPageState extends State<AppPage> {
                             ? null
                             : () {
                                 app.app.installedVersion = null;
-                                appsProvider.saveApps([app.app]);
+                                appsProvider.saveApps([app.app], updateInstalledInfo: false);
                               },
                         icon: const Icon(Icons.restore_rounded),
                         tooltip: tr('resetInstallStatus'),

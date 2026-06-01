@@ -286,6 +286,142 @@ void main() {
     },
   );
 
+  test(
+    'disabled version detection sets installedVersion to latestVersion when installed version is null',
+    () {
+      final appsProvider = AppsProvider();
+      final app = App(
+        'app.revanced.android.youtube',
+        'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+        'LovecraftianGodsKiller',
+        'YouTube-Morphe',
+        null,
+        '107',
+        const <MapEntry<String, String>>[],
+        0,
+        {'versionDetection': false},
+        DateTime.now(),
+        false,
+      );
+
+      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+        app,
+        const FakePackageInfo(
+          packageName: 'app.revanced.android.youtube',
+          versionName: '9.18.50',
+          versionCode: 106,
+        ),
+      );
+
+      expect(correctedApp, isNotNull);
+      expect(app.installedVersion, '107');
+      expect(app.latestVersion, '107');
+      expect(app.additionalSettings['versionDetection'], false);
+    },
+  );
+
+  test(
+    'disabled version detection coerces unreconciled system installed version to latestVersion (pseudo version)',
+    () {
+      final appsProvider = AppsProvider();
+      final app = App(
+        'app.revanced.android.youtube',
+        'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+        'LovecraftianGodsKiller',
+        'YouTube-Morphe',
+        '9.18.50',
+        '107',
+        const <MapEntry<String, String>>[],
+        0,
+        {'versionDetection': false},
+        DateTime.now(),
+        false,
+      );
+
+      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+        app,
+        const FakePackageInfo(
+          packageName: 'app.revanced.android.youtube',
+          versionName: '9.18.50',
+          versionCode: 106,
+        ),
+      );
+
+      expect(correctedApp, isNotNull);
+      expect(app.installedVersion, '107');
+      expect(app.latestVersion, '107');
+      expect(app.additionalSettings['versionDetection'], false);
+    },
+  );
+
+  test(
+    'disabled version detection keeps pseudo version when system installed version does not reconcile',
+    () {
+      final appsProvider = AppsProvider();
+      final app = App(
+        'app.revanced.android.youtube',
+        'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+        'LovecraftianGodsKiller',
+        'YouTube-Morphe',
+        '26.06.01-de-vanced',
+        '26.06.01-de-vanced',
+        const <MapEntry<String, String>>[],
+        0,
+        {'versionDetection': false},
+        DateTime.now(),
+        false,
+      );
+
+      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+        app,
+        const FakePackageInfo(
+          packageName: 'app.revanced.android.youtube',
+          versionName: '4.15.0',
+          versionCode: 106,
+        ),
+      );
+
+      expect(correctedApp, isNull);
+      expect(app.installedVersion, '26.06.01-de-vanced');
+      expect(app.latestVersion, '26.06.01-de-vanced');
+      expect(app.additionalSettings['versionDetection'], false);
+    },
+  );
+
+  test(
+    'unreconciled system installed version automatically disables version detection when installedVersion is null',
+    () {
+      final appsProvider = AppsProvider();
+      final app = App(
+        'app.revanced.android.youtube',
+        'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+        'LovecraftianGodsKiller',
+        'YouTube-Morphe',
+        null,
+        '26.06.01-de-vanced',
+        const <MapEntry<String, String>>[],
+        0,
+        {'versionDetection': true},
+        DateTime.now(),
+        false,
+      );
+
+      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+        app,
+        const FakePackageInfo(
+          packageName: 'app.revanced.android.youtube',
+          versionName: '4.15.0',
+          versionCode: 106,
+        ),
+      );
+
+      expect(correctedApp, isNotNull);
+      expect(app.installedVersion, '26.06.01-de-vanced');
+      expect(app.latestVersion, '26.06.01-de-vanced');
+      expect(app.additionalSettings['versionDetection'], false);
+    },
+  );
+
   test('f-droid regex version filter keeps newest matching release', () async {
     final details = await FDroid().getAPKUrlsFromFDroidPackagesAPIResponse(
       Response('''
