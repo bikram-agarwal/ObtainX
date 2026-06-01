@@ -3629,7 +3629,7 @@ class _AppPageState extends State<AppPage> {
                             ? null
                             : () {
                                 app.app.installedVersion = null;
-                                appsProvider.saveApps([app.app], updateInstalledInfo: false);
+                                appsProvider.saveApps([app.app]);
                               },
                         icon: const Icon(Icons.restore_rounded),
                         tooltip: tr('resetInstallStatus'),
