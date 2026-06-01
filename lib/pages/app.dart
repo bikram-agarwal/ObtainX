@@ -3106,7 +3106,11 @@ class _AppPageState extends State<AppPage> {
                     updatedApp.additionalSettings.remove(
                       'skippedLatestVersion',
                     );
-                    appsProvider.saveApps([updatedApp], updateInstalledInfo: false);
+                    appsProvider.saveApps(
+                      [updatedApp],
+                      attemptToCorrectInstallStatus: false,
+                      updateInstalledInfo: false,
+                    );
                   }
                   Navigator.of(context).pop();
                 },

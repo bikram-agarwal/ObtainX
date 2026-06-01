@@ -3679,6 +3679,7 @@ class AppsPageState extends State<AppsPage> {
                       }
                       return a;
                     }).toList(),
+                    attemptToCorrectInstallStatus: false,
                     updateInstalledInfo: false,
                   );
 

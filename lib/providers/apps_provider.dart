@@ -2482,6 +2482,7 @@ class AppsProvider with ChangeNotifier {
         a.additionalSettings['trackOnlyTemporaryPackageId'] = false;
         return a;
       }).toList(),
+      attemptToCorrectInstallStatus: false,
       updateInstalledInfo: false,
     );
 
