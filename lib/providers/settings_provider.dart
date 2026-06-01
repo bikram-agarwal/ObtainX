@@ -244,6 +244,10 @@ class SettingsProvider with ChangeNotifier {
     installerMode = useShizuku ? 'shizuku' : 'stock';
   }
 
+  bool get useRoot {
+    return installerMode == 'root';
+  }
+
   String? get legacyInstallerPackage {
     final value = prefs?.getString('legacyInstallerPackage');
     return (value != null && value.isNotEmpty) ? value : null;
@@ -1293,6 +1297,15 @@ class SettingsProvider with ChangeNotifier {
 
   set shizukuPretendToBeGooglePlay(bool val) {
     prefs?.setBool('shizukuPretendToBeGooglePlay', val);
+    notifyListeners();
+  }
+
+  bool get rootPretendToBeGooglePlay {
+    return prefs?.getBool('rootPretendToBeGooglePlay') ?? false;
+  }
+
+  set rootPretendToBeGooglePlay(bool val) {
+    prefs?.setBool('rootPretendToBeGooglePlay', val);
     notifyListeners();
   }
 

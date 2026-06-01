@@ -130,6 +130,7 @@ android.applicationVariants.configureEach {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    implementation("com.github.topjohnwu.libsu:core:6.0.0")
 }
 
 flutter {

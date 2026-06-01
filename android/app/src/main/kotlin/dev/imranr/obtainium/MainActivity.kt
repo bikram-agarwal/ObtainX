@@ -21,12 +21,15 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.system.Os
+import com.topjohnwu.superuser.Shell
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
 private const val CHANNEL = "dev.imranr.obtainium/installer"
 private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
@@ -152,6 +155,21 @@ class MainActivity : FlutterActivity() {
                     } catch (ex: Exception) {
                         result.error("INSTALL_ERROR", ex.message, null)
                     }
+                }
+                "isRootAvailable" -> {
+                    Thread {
+                        try {
+                            val granted = Shell.getShell().isRoot
+                            runOnUiThread { result.success(granted) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.success(false) }
+                        }
+                    }.start()
+                }
+                "performRootInstall" -> {
+                    val apkSourcePaths = call.argument<List<String>>("paths")!!
+                    val pretendToBeGooglePlay = call.argument<Boolean>("pretendToBeGooglePlay") ?: false
+                    performRootInstall(apkSourcePaths, pretendToBeGooglePlay, result)
                 }
                 else -> result.notImplemented()
             }
@@ -687,5 +705,111 @@ class MainActivity : FlutterActivity() {
             } catch (_: Exception) { }
         }
         return releaseFile
+    }
+
+    private fun performRootInstall(
+        apkSourcePaths: List<String>,
+        pretendToBeGooglePlay: Boolean,
+        methodResult: MethodChannel.Result
+    ) {
+        val apkFiles = apkSourcePaths.map { File(it) }
+        val totalSize = apkFiles.sumOf { it.length() }
+
+        Thread {
+            // Root check
+            try {
+                Shell.getShell()
+            } catch (e: Exception) {
+                runOnUiThread {
+                    methodResult.error("INSTALL_ERROR", "Failed to get root shell: ${e.message}", null)
+                }
+                return@Thread
+            }
+
+            // Session creation
+            val createCmd = StringBuilder("pm install-create -r -S $totalSize")
+            if (pretendToBeGooglePlay) {
+                createCmd.append(" -i com.android.vending")
+            }
+
+            val createResult = Shell.cmd(createCmd.toString()).exec()
+            if (!createResult.isSuccess) {
+                runOnUiThread {
+                    methodResult.error("INSTALL_ERROR", createResult.out.joinToString("\n"), null)
+                }
+                return@Thread
+            }
+
+            val sessionId = createResult.out.firstOrNull()?.let { line: String ->
+                Regex("\\[(\\d+)]").find(line)?.groupValues?.get(1)
+            }
+            if (sessionId == null) {
+                runOnUiThread {
+                    methodResult.error("INSTALL_ERROR", "Failed to get session ID", null)
+                }
+                return@Thread
+            }
+
+            // Install logic
+            try {
+                for ((index, file) in apkFiles.withIndex()) {
+                    val size = file.length()
+                    val apkName = "base_$index"
+                    val stdoutOutput = StringBuilder()
+                    val stderrOutput = StringBuilder()
+
+                    val process = Runtime.getRuntime().exec(
+                        arrayOf("su", "-c", "pm install-write -S $size $sessionId $apkName -")
+                    )
+
+                    val stdoutDrain = Thread {
+                        process.inputStream.bufferedReader().use {
+                            stdoutOutput.append(it.readText())
+                        }
+                    }
+                    val stderrDrain = Thread {
+                        process.errorStream.bufferedReader().use {
+                            stderrOutput.append(it.readText())
+                        }
+                    }
+                    stdoutDrain.start()
+                    stderrDrain.start()
+
+                    val timeoutSeconds = 30L + (size / (1024 * 1024 * 10))
+                    val writeToProcess = CompletableFuture.runAsync {
+                        try {
+                            file.inputStream().use { it.copyTo(process.outputStream) }
+                        } finally {
+                            runCatching { process.outputStream.close() }
+                        }
+                        process.waitFor()
+                    }
+
+                    try {
+                        writeToProcess.get(timeoutSeconds, TimeUnit.SECONDS)
+                    } catch (e: Exception) {
+                        process.destroyForcibly()
+                        throw Exception("install-write failed for $apkName")
+                    } finally {
+                        stdoutDrain.join(500)
+                        stderrDrain.join(500)
+                    }
+                }
+
+                val commitResult = Shell.cmd("pm install-commit $sessionId").exec()
+                if (commitResult.isSuccess) {
+                    runOnUiThread {
+                        methodResult.success(true)
+                    }
+                } else {
+                    throw Exception("pm install-commit failed: ${commitResult.out.joinToString("\n")}")
+                }
+            } catch (e: Exception) {
+                Shell.cmd("pm install-abandon $sessionId").exec()
+                runOnUiThread {
+                    methodResult.error("INSTALL_ERROR", e.message, null)
+                }
+            }
+        }.start()
     }
 }

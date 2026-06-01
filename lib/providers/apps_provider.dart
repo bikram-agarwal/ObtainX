@@ -1697,7 +1697,7 @@ class AppsProvider with ChangeNotifier {
       return false;
     }
 
-    if (settingsProvider.useShizuku) {
+    if (settingsProvider.useShizuku || settingsProvider.useRoot) {
       return true;
     }
 
@@ -2043,6 +2043,23 @@ class AppsProvider with ChangeNotifier {
         await saveApps([apps[file.appId]!.app]);
         return thirdPartyInstallSucceeded;
       }
+      if (settingsProvider.useRoot) {
+        final List<String> rootPaths = [
+          file.file.path,
+          ...additionalAPKs.map((a) => a.file.path),
+        ];
+        bool rootInstallSucceeded = await installer.installApkRoot(
+          rootPaths,
+          pretendToBeGooglePlay: settingsProvider.rootPretendToBeGooglePlay,
+        );
+        if (rootInstallSucceeded) {
+          installReportedOk = true;
+          apps[file.appId]!.app.installedVersion =
+              apps[file.appId]!.app.latestVersion;
+        }
+        await saveApps([apps[file.appId]!.app]);
+        return rootInstallSucceeded;
+      }
       int? code;
       if (!settingsProvider.useShizuku) {
         var allAPKs = [file.file.path];
@@ -2351,7 +2368,10 @@ class AppsProvider with ChangeNotifier {
             ? context
             : null;
         bool needBGWorkaround =
-            willBeSilent && context == null && !settingsProvider.useShizuku;
+            willBeSilent &&
+            context == null &&
+            !settingsProvider.useShizuku &&
+            !settingsProvider.useRoot;
         bool shizukuPretendToBeGooglePlay =
             settingsProvider.shizukuPretendToBeGooglePlay ||
             apps[id]!.app.additionalSettings['shizukuPretendToBeGooglePlay'] ==
@@ -2391,7 +2411,7 @@ class AppsProvider with ChangeNotifier {
           }
         }
         if (willBeSilent && context == null) {
-          if (!settingsProvider.useShizuku) {
+          if (!settingsProvider.useShizuku && !settingsProvider.useRoot) {
             notificationsProvider?.notify(
               SilentUpdateAttemptNotification([apps[id]!.app], id: id.hashCode),
             );
@@ -2442,11 +2462,11 @@ class AppsProvider with ChangeNotifier {
         willBeSilent = await canInstallSilently(apps[id]!.app);
         if (settingsProvider.installerMode == 'legacy') {
           // Third-party installer path bypasses the standard permission check.
-        } else if (!settingsProvider.useShizuku) {
+        } else if (!settingsProvider.useShizuku && !settingsProvider.useRoot) {
           if (!(await settingsProvider.getInstallPermission(enforce: false))) {
             throw ObtainiumError(tr('cancelled'));
           }
-        } else {
+        } else if (settingsProvider.useShizuku) {
           switch ((await ShizukuApkInstaller().checkPermission())!) {
             case 'services_not_found':
               throw ObtainiumError(tr('shizukuBinderNotFound'));
@@ -2458,7 +2478,10 @@ class AppsProvider with ChangeNotifier {
               throw ObtainiumError(tr('cancelled'));
           }
         }
-        if (!willBeSilent && context != null && !settingsProvider.useShizuku) {
+        if (!willBeSilent &&
+            context != null &&
+            !settingsProvider.useShizuku &&
+            !settingsProvider.useRoot) {
           // ignore: use_build_context_synchronously
           await waitForUserToReturnToForeground(context);
         }

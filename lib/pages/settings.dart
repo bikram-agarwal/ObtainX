@@ -276,6 +276,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     label: Text(tr('installerModeShizuku')),
                   ),
                   ButtonSegment<String>(
+                    value: 'root',
+                    label: Text(tr('installerModeRoot')),
+                  ),
+                  ButtonSegment<String>(
                     value: 'legacy',
                     label: Text(tr('installerModeThirdParty')),
                   ),
@@ -312,6 +316,18 @@ class _SettingsPageState extends State<SettingsPage> {
                         }
                       }
                     });
+                  } else if (mode == 'root') {
+                    installer.isRootAvailable().then((isRoot) {
+                      if (!context.mounted) return;
+                      if (isRoot) {
+                        settingsProvider.installerMode = 'root';
+                      } else {
+                        showError(
+                          ObtainiumError(tr('rootNotAvailable')),
+                          context,
+                        );
+                      }
+                    });
                   } else {
                     settingsProvider.installerMode = mode;
                   }
@@ -325,6 +341,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 value: settingsProvider.shizukuPretendToBeGooglePlay,
                 onChanged: (bool value) {
                   settingsProvider.shizukuPretendToBeGooglePlay = value;
+                },
+              ),
+            if (settingsProvider.installerMode == 'root')
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(tr('rootPretendToBeGooglePlay')),
+                value: settingsProvider.rootPretendToBeGooglePlay,
+                onChanged: (bool value) {
+                  settingsProvider.rootPretendToBeGooglePlay = value;
                 },
               ),
             if (settingsProvider.installerMode == 'legacy')

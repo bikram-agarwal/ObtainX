@@ -83,3 +83,24 @@ Future<bool> installApkViaThirdParty(
       });
   return result ?? false;
 }
+
+Future<bool> isRootAvailable() async {
+  if (!Platform.isAndroid) return false;
+  final result = await _channel.invokeMethod<bool>('isRootAvailable');
+  return result ?? false;
+}
+
+Future<bool> installApkRoot(
+  List<String> apkFilePaths, {
+  bool pretendToBeGooglePlay = false,
+}) async {
+  if (!Platform.isAndroid) return false;
+  final result = await _channel.invokeMethod<bool>(
+    'performRootInstall',
+    <String, dynamic>{
+      'paths': apkFilePaths,
+      'pretendToBeGooglePlay': pretendToBeGooglePlay,
+    },
+  );
+  return result ?? false;
+}
