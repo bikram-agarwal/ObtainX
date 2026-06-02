@@ -1221,17 +1221,27 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<bool> _canReadAndWriteSafTree(Uri treeUri) async {
-    if (await NativeFeatures.hasPersistedDocumentTreePermission(treeUri)) {
-      return true;
-    }
+    try {
+      if (await NativeFeatures.hasPersistedDocumentTreePermission(treeUri)) {
+        final bool canReadTree = await saf.canRead(treeUri) ?? false;
+        if (!canReadTree) {
+          return false;
+        }
+        final bool canWriteTree = await saf.canWrite(treeUri) ?? false;
+        return canWriteTree;
+      }
 
-    final bool canReadTree = await saf.canRead(treeUri) ?? false;
-    if (!canReadTree) {
+      final bool canReadTree = await saf.canRead(treeUri) ?? false;
+      if (!canReadTree) {
+        return false;
+      }
+
+      final bool canWriteTree = await saf.canWrite(treeUri) ?? false;
+      return canWriteTree;
+    } catch (e) {
+      debugPrint('Error checking SAF tree permissions: $e');
       return false;
     }
-
-    final bool canWriteTree = await saf.canWrite(treeUri) ?? false;
-    return canWriteTree;
   }
 
   void _showStorageAccessWarning({required bool isExportDir}) {

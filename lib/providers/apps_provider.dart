@@ -4123,61 +4123,87 @@ class AppsProvider with ChangeNotifier {
     required bool isAuto,
     SettingsProvider? sp,
   }) async {
-    SettingsProvider settingsProvider = sp ?? this.settingsProvider;
-    var exportDir = await settingsProvider.getExportDir(
-      warnIfInaccessible: true,
-    );
-    if (isAuto) {
-      if (settingsProvider.autoExportOnChanges != true) {
-        return null;
+    try {
+      SettingsProvider settingsProvider = sp ?? this.settingsProvider;
+      var exportDir = await settingsProvider.getExportDir(
+        warnIfInaccessible: true,
+      );
+      if (isAuto) {
+        if (settingsProvider.autoExportOnChanges != true) {
+          return null;
+        }
+        if (exportDir == null) {
+          return null;
+        }
+        List<dynamic> files = [];
+        try {
+          files = await saf
+              .listFiles(exportDir, columns: [saf.DocumentFileColumn.id])
+              .where((f) => f.uri.pathSegments.last.endsWith('-auto.json'))
+              .toList();
+        } catch (e) {
+          await LogsProvider(runDefaultClear: false).add(
+            'Failed to list files in auto-export directory: $e',
+            level: LogLevels.error,
+          );
+        }
+        if (files.isNotEmpty) {
+          for (var f in files) {
+            try {
+              await saf.delete(f.uri);
+            } catch (e) {
+              await LogsProvider(runDefaultClear: false).add(
+                'Failed to delete old auto-export file: $e',
+                level: LogLevels.error,
+              );
+            }
+          }
+        }
+      }
+      if (exportDir == null || pickOnly) {
+        await settingsProvider.pickExportDir();
+        exportDir = await settingsProvider.getExportDir(warnIfInaccessible: true);
       }
       if (exportDir == null) {
         return null;
       }
-      var files = await saf
-          .listFiles(exportDir, columns: [saf.DocumentFileColumn.id])
-          .where((f) => f.uri.pathSegments.last.endsWith('-auto.json'))
-          .toList();
-      if (files.isNotEmpty) {
-        for (var f in files) {
-          saf.delete(f.uri);
+      String? returnPath;
+      if (!pickOnly) {
+        Map<String, dynamic> finalExport = generateExportJSON(
+          sp: settingsProvider,
+        );
+        // Heavy work - JsonEncoder.withIndent over the whole apps+settings
+        // payload plus utf8 encoding - is run on a background isolate so the
+        // UI thread stays responsive even when the export is large.
+        final Uint8List bytes = await Isolate.run<Uint8List>(() {
+          const JsonEncoder encoder = JsonEncoder.withIndent('    ');
+          return Uint8List.fromList(utf8.encode(encoder.convert(finalExport)));
+        }, debugName: 'export-json-encode');
+        var result = await saf.createFile(
+          exportDir,
+          displayName:
+              '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
+          mimeType: 'application/json',
+          bytes: bytes,
+        );
+        if (result == null) {
+          throw ObtainiumError(tr('unexpectedError'));
         }
+        returnPath = exportDir.pathSegments
+            .join('/')
+            .replaceFirst('tree/primary:', '/');
       }
-    }
-    if (exportDir == null || pickOnly) {
-      await settingsProvider.pickExportDir();
-      exportDir = await settingsProvider.getExportDir(warnIfInaccessible: true);
-    }
-    if (exportDir == null) {
+      return returnPath;
+    } catch (e, stack) {
+      debugPrint('Export failed: $e\n$stack');
+      try {
+        await LogsProvider(runDefaultClear: false).add(
+          'Export failed: $e',
+          level: LogLevels.error,
+        );
+      } catch (_) {}
       return null;
     }
-    String? returnPath;
-    if (!pickOnly) {
-      Map<String, dynamic> finalExport = generateExportJSON(
-        sp: settingsProvider,
-      );
-      // Heavy work - JsonEncoder.withIndent over the whole apps+settings
-      // payload plus utf8 encoding - is run on a background isolate so the
-      // UI thread stays responsive even when the export is large.
-      final Uint8List bytes = await Isolate.run<Uint8List>(() {
-        const JsonEncoder encoder = JsonEncoder.withIndent('    ');
-        return Uint8List.fromList(utf8.encode(encoder.convert(finalExport)));
-      }, debugName: 'export-json-encode');
-      var result = await saf.createFile(
-        exportDir,
-        displayName:
-            '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
-        mimeType: 'application/json',
-        bytes: bytes,
-      );
-      if (result == null) {
-        throw ObtainiumError(tr('unexpectedError'));
-      }
-      returnPath = exportDir.pathSegments
-          .join('/')
-          .replaceFirst('tree/primary:', '/');
-    }
-    return returnPath;
   }
 
   Future<MapEntry<List<App>, bool>> import(String appsJSON) async {
