@@ -1850,6 +1850,9 @@ class AppsPageState extends State<AppsPage> {
   List<AppInMemory> _listedAppsCache = const [];
   List<String> _existingUpdatesCache = const [];
   List<String> _newInstallsCache = const [];
+  List<String> _listedSourcesCache = const [];
+  List<String?> _listedCategoriesCache = const [];
+  List<AppTypeGroup> _listedAppTypesCache = const [];
 
   /// Maps category key (`__null__` for uncategorized) → indices into [_listedAppsCache].
   Map<String, List<int>> _categoryGroupListedIndices = const {};
@@ -2746,133 +2749,152 @@ class AppsPageState extends State<AppsPage> {
     final showUpdatesGroupSection =
         separateUpdates && listedApps.any(isInUpdatesGroup);
 
-    List<String?> getListedCategories(List<AppInMemory> appsSource) {
-      var temp = appsSource.map(
-        (e) => e.app.categories.isNotEmpty ? e.app.categories : [null],
-      );
-      return temp.isNotEmpty
-          ? {
-              ...temp.reduce((v, e) => [...v, ...e]),
-            }.toList()
-          : [];
-    }
-
-    var listedCategories = getListedCategories(appsListedForCategoryKeys);
-    listedCategories.sort((a, b) {
-      return a != null && b != null
-          ? a.toLowerCase().compareTo(b.toLowerCase())
-          : a == null
-          ? 1
-          : -1;
-    });
-
-    List<String> getListedSourceKeys(List<AppInMemory> appsSource) {
-      if (appsSource.isEmpty) return [];
-      final keys = appsSource
-          .map(
-            (e) => sourceProvider
-                .getSource(e.app.url, overrideSource: e.app.overrideSource)
-                .runtimeType
-                .toString(),
-          )
-          .toSet()
-          .toList();
-      keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-      return keys;
-    }
-
-    var listedSources = getListedSourceKeys(appsListedForSourceKeys);
-
-    // App types that are present in the non-updates, non-uninstalled subset.
-    final listedAppTypes = AppTypeGroup.values
-        .where(
-          (t) => appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t),
-        )
-        .toList();
-
     if (listBuildToken != _lastGroupIndexCacheToken) {
       _lastGroupIndexCacheToken = listBuildToken;
-      final nextCategoryMap = <String, List<int>>{};
-      for (
-        int categoryIndex = 0;
-        categoryIndex < listedCategories.length;
-        categoryIndex++
-      ) {
-        final String? categoryNullable = listedCategories[categoryIndex];
-        final String mapKey = categoryNullable ?? '__null__';
-        final indices = <int>[];
-        for (
-          int listingIndex = 0;
-          listingIndex < listedApps.length;
-          listingIndex++
-        ) {
-          final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) {
-            continue;
-          }
-          if (isInUpdatesGroup(row)) continue;
-          if (row.app.categories.contains(categoryNullable) ||
-              (row.app.categories.isEmpty && categoryNullable == null)) {
-            indices.add(listingIndex);
-          }
+      
+      // 1. Categories
+      if (effectiveGroupBy == AppsListGroupBy.category) {
+        List<String?> getListedCategories(List<AppInMemory> appsSource) {
+          var temp = appsSource.map(
+            (e) => e.app.categories.isNotEmpty ? e.app.categories : [null],
+          );
+          return temp.isNotEmpty
+              ? {
+                  ...temp.reduce((v, e) => [...v, ...e]),
+                }.toList()
+              : [];
         }
-        nextCategoryMap[mapKey] = indices;
-      }
-      _categoryGroupListedIndices = nextCategoryMap;
 
-      final nextSourceMap = <String, List<int>>{};
-      for (
-        int sourceIndex = 0;
-        sourceIndex < listedSources.length;
-        sourceIndex++
-      ) {
-        final String sourceKey = listedSources[sourceIndex];
-        final indices = <int>[];
-        for (
-          int listingIndex = 0;
-          listingIndex < listedApps.length;
-          listingIndex++
-        ) {
-          final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) {
-            continue;
-          }
-          if (isInUpdatesGroup(row)) continue;
-          if (sourceProvider
-                  .getSource(
-                    row.app.url,
-                    overrideSource: row.app.overrideSource,
-                  )
-                  .runtimeType
-                  .toString() ==
-              sourceKey) {
-            indices.add(listingIndex);
-          }
-        }
-        nextSourceMap[sourceKey] = indices;
-      }
-      _sourceGroupListedIndices = nextSourceMap;
+        final cats = getListedCategories(appsListedForCategoryKeys);
+        cats.sort((a, b) {
+          return a != null && b != null
+              ? a.toLowerCase().compareTo(b.toLowerCase())
+              : a == null
+              ? 1
+              : -1;
+        });
+        _listedCategoriesCache = cats;
 
-      final nextAppTypeMap = <AppTypeGroup, List<int>>{};
-      for (final type in AppTypeGroup.values) {
-        final indices = <int>[];
+        final nextCategoryMap = <String, List<int>>{};
         for (
-          int listingIndex = 0;
-          listingIndex < listedApps.length;
-          listingIndex++
+          int categoryIndex = 0;
+          categoryIndex < _listedCategoriesCache.length;
+          categoryIndex++
         ) {
-          final AppInMemory row = listedApps[listingIndex];
-          if (segregateNonInstalled && row.app.installedVersion == null) {
-            continue;
+          final String? categoryNullable = _listedCategoriesCache[categoryIndex];
+          final String mapKey = categoryNullable ?? '__null__';
+          final indices = <int>[];
+          for (
+            int listingIndex = 0;
+            listingIndex < listedApps.length;
+            listingIndex++
+          ) {
+            final AppInMemory row = listedApps[listingIndex];
+            if (segregateNonInstalled && row.app.installedVersion == null) {
+              continue;
+            }
+            if (isInUpdatesGroup(row)) continue;
+            if (row.app.categories.contains(categoryNullable) ||
+                (row.app.categories.isEmpty && categoryNullable == null)) {
+              indices.add(listingIndex);
+            }
           }
-          if (isInUpdatesGroup(row)) continue;
-          if (classifyAppType(row) == type) {
-            indices.add(listingIndex);
-          }
+          nextCategoryMap[mapKey] = indices;
         }
-        if (indices.isNotEmpty) nextAppTypeMap[type] = indices;
+        _categoryGroupListedIndices = nextCategoryMap;
+      } else {
+        _listedCategoriesCache = const [];
+        _categoryGroupListedIndices = const {};
       }
-      _appTypeGroupListedIndices = nextAppTypeMap;
+
+      // 2. Sources
+      if (effectiveGroupBy == AppsListGroupBy.source) {
+        List<String> getListedSourceKeys(List<AppInMemory> appsSource) {
+          if (appsSource.isEmpty) return [];
+          final keys = appsSource
+              .map(
+                (e) => sourceProvider
+                    .getSource(e.app.url, overrideSource: e.app.overrideSource)
+                    .runtimeType
+                    .toString(),
+              )
+              .toSet()
+              .toList();
+          keys.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+          return keys;
+        }
+
+        _listedSourcesCache = getListedSourceKeys(appsListedForSourceKeys);
+
+        final nextSourceMap = <String, List<int>>{};
+        for (
+          int sourceIndex = 0;
+          sourceIndex < _listedSourcesCache.length;
+          sourceIndex++
+        ) {
+          final String sourceKey = _listedSourcesCache[sourceIndex];
+          final indices = <int>[];
+          for (
+            int listingIndex = 0;
+            listingIndex < listedApps.length;
+            listingIndex++
+          ) {
+            final AppInMemory row = listedApps[listingIndex];
+            if (segregateNonInstalled && row.app.installedVersion == null) {
+              continue;
+            }
+            if (isInUpdatesGroup(row)) continue;
+            if (sourceProvider
+                    .getSource(
+                      row.app.url,
+                      overrideSource: row.app.overrideSource,
+                    )
+                    .runtimeType
+                    .toString() ==
+                sourceKey) {
+              indices.add(listingIndex);
+            }
+          }
+          nextSourceMap[sourceKey] = indices;
+        }
+        _sourceGroupListedIndices = nextSourceMap;
+      } else {
+        _listedSourcesCache = const [];
+        _sourceGroupListedIndices = const {};
+      }
+
+      // 3. App Types
+      if (effectiveGroupBy == AppsListGroupBy.appType) {
+        _listedAppTypesCache = AppTypeGroup.values
+            .where(
+              (t) => appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t),
+            )
+            .toList();
+
+        final nextAppTypeMap = <AppTypeGroup, List<int>>{};
+        for (final type in _listedAppTypesCache) {
+          final indices = <int>[];
+          for (
+            int listingIndex = 0;
+            listingIndex < listedApps.length;
+            listingIndex++
+          ) {
+            final AppInMemory row = listedApps[listingIndex];
+            if (segregateNonInstalled && row.app.installedVersion == null) {
+              continue;
+            }
+            if (isInUpdatesGroup(row)) continue;
+            if (classifyAppType(row) == type) {
+              indices.add(listingIndex);
+            }
+          }
+          if (indices.isNotEmpty) nextAppTypeMap[type] = indices;
+        }
+        _appTypeGroupListedIndices = nextAppTypeMap;
+      } else {
+        _listedAppTypesCache = const [];
+        _appTypeGroupListedIndices = const {};
+      }
 
       final nonInstalled = <int>[];
       for (
@@ -2898,6 +2920,10 @@ class AppsPageState extends State<AppsPage> {
       }
       _updatesGroupListedIndices = updatesIndices;
     }
+
+    final listedCategories = _listedCategoriesCache;
+    final listedSources = _listedSourcesCache;
+    final listedAppTypes = _listedAppTypesCache;
 
     Set<App> selectedApps = listedApps
         .map((e) => e.app)

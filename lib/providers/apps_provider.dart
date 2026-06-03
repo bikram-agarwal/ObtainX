@@ -3407,6 +3407,30 @@ class AppsProvider with ChangeNotifier {
     bool updateInstalledInfo = true,
   }) async {
     attemptToCorrectInstallStatus = attemptToCorrectInstallStatus;
+    if (!updateInstalledInfo) {
+      bool didAnyInMemoryUpdate = false;
+      for (final appToSave in apps) {
+        final AppInMemory? cachedInMemory = this.apps[appToSave.id];
+        if (cachedInMemory != null || !onlyIfExists) {
+          var appCopy = appToSave.deepCopy();
+          clearStaleSkippedLatestVersionInPlace(appCopy);
+          final installedInfo = cachedInMemory?.installedInfo;
+          final iconBytes = cachedInMemory?.icon;
+          appCopy.name = cachedInMemory?.app.name ?? appCopy.name;
+          this.apps[appCopy.id] = AppInMemory(
+            appCopy,
+            cachedInMemory?.downloadProgress,
+            installedInfo,
+            iconBytes,
+          );
+          didAnyInMemoryUpdate = true;
+        }
+      }
+      if (didAnyInMemoryUpdate && notifyListenersAfterSave) {
+        _pendingUpdateCountDirty = true;
+        notifyListeners();
+      }
+    }
     await Future.wait(
       apps.map((appToSave) async {
         var app = appToSave.deepCopy();
