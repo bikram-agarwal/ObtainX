@@ -522,7 +522,9 @@ class AddAppPageState extends State<AddAppPage> {
             title: tr('supportedSources'),
             items: const [],
             additionalWidgets: [
-              ...sourceProvider.sources.map(
+              ...sourceProvider.sources
+                  .where((e) => e.name != 'RockMods')
+                  .map(
                 (e) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: InkWell(

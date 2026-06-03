@@ -51,14 +51,14 @@ class LogsProvider {
     }
   }
 
-  Database? db;
+  static Future<Database>? _dbFuture;
 
-  Future<Database> getDB() async {
-    db ??= await openDatabase(
+  Future<Database> getDB() {
+    _dbFuture ??= openDatabase(
       dbPath,
       version: 1,
-      onCreate: (Database db, int version) async {
-        await db.execute('''
+      onCreate: (Database databaseInstance, int version) async {
+        await databaseInstance.execute('''
 create table if not exists $logTable ( 
   $idColumn integer primary key autoincrement, 
   $levelColumn integer not null,
@@ -66,8 +66,13 @@ create table if not exists $logTable (
   $timestampColumn integer not null)
 ''');
       },
+      onOpen: (Database database) async {
+        await database.execute(
+          'create index if not exists idx_logs_timestamp on $logTable ($timestampColumn)',
+        );
+      },
     );
-    return db!;
+    return _dbFuture!;
   }
 
   Future<Log> add(String message, {LogLevels level = LogLevels.info}) async {
@@ -79,13 +84,20 @@ create table if not exists $logTable (
     return l;
   }
 
-  Future<List<Log>> get({DateTime? before, DateTime? after}) async {
+  Future<List<Log>> get({
+    DateTime? before,
+    DateTime? after,
+    int? limit,
+    String? orderBy,
+  }) async {
     var where = getWhereDates(before: before, after: after);
     return (await (await getDB()).query(
       logTable,
       where: where.key,
       whereArgs: where.value,
-    )).map((e) => Log.fromMap(e)).toList();
+      limit: limit,
+      orderBy: orderBy,
+    )).map((logMap) => Log.fromMap(logMap)).toList();
   }
 
   Future<int> clear({DateTime? before, DateTime? after}) async {

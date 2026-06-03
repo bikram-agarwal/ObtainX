@@ -1789,7 +1789,6 @@ class AppsProvider with ChangeNotifier {
         _downloadCancelTokens.remove(app.id);
       }
       _progressNotifyTimer?.cancel();
-      unawaited(NativeFeatures.stopDownloadForegroundService());
       notificationsProvider?.cancel(notifId);
       if (apps[app.id] != null) {
         apps[app.id]!.downloadTotalBytes = null;
@@ -1797,6 +1796,9 @@ class AppsProvider with ChangeNotifier {
           apps[app.id]!.downloadProgress = null;
         }
         notifyListeners();
+      }
+      if (!areDownloadsRunning()) {
+        unawaited(NativeFeatures.stopDownloadForegroundService());
       }
     }
   }
@@ -1877,8 +1879,13 @@ class AppsProvider with ChangeNotifier {
   }
 
   Future<void> waitForUserToReturnToForeground(BuildContext context) async {
+    if (isForeground) {
+      return;
+    }
     NotificationsProvider notificationsProvider = context
         .read<NotificationsProvider>();
+    // Give the app a moment to return to foreground in case of fast transitions
+    await Future.delayed(const Duration(milliseconds: 1000));
     if (!isForeground) {
       await notificationsProvider.notify(
         completeInstallationNotification,
@@ -2517,6 +2524,12 @@ class AppsProvider with ChangeNotifier {
             settingsProvider.shizukuPretendToBeGooglePlay ||
             apps[id]!.app.additionalSettings['shizukuPretendToBeGooglePlay'] ==
                 true;
+
+        if (!willBeSilent && context != null && !settingsProvider.useShizuku) {
+          // ignore: use_build_context_synchronously
+          await waitForUserToReturnToForeground(context);
+        }
+
         if (downloadedFile != null) {
           if (needBGWorkaround) {
             // ignore: use_build_context_synchronously
@@ -2574,6 +2587,9 @@ class AppsProvider with ChangeNotifier {
       } finally {
         apps[id]?.downloadProgress = null;
         notifyListeners();
+        if (!areDownloadsRunning()) {
+          unawaited(NativeFeatures.stopDownloadForegroundService());
+        }
       }
     }
 
@@ -2616,14 +2632,10 @@ class AppsProvider with ChangeNotifier {
               throw ObtainiumError(tr('cancelled'));
           }
         }
-        if (!willBeSilent && context != null && !settingsProvider.useShizuku) {
-          // ignore: use_build_context_synchronously
-          await waitForUserToReturnToForeground(context);
-        }
-      } catch (e) {
+      } catch (exception) {
         apps[id]?.downloadProgress = null;
         apps[id]?.downloadTotalBytes = null;
-        if (e is DownloadCancelledError) {
+        if (exception is DownloadCancelledError) {
           notifyListeners();
           return {
             'id': id,
@@ -2633,7 +2645,7 @@ class AppsProvider with ChangeNotifier {
             'downloadedDir': downloadedDir,
           };
         }
-        errors.add(id, e, appName: apps[id]?.name);
+        errors.add(id, exception, appName: apps[id]?.name);
         notifyListeners();
       }
       return {
@@ -2646,25 +2658,28 @@ class AppsProvider with ChangeNotifier {
     }
 
     bool needsLegacyInterInstallDelay = false;
-    Future<void> installDownloadResult(Map<Object?, Object?> res) async {
-      if (res['cancelled'] == true) {
+    Future<void> installDownloadResult(Map<Object?, Object?> result) async {
+      if (result['cancelled'] == true) {
         return;
       }
-      if (!errors.appIdNames.containsKey(res['id'])) {
+      if (result['downloadedFile'] == null && result['downloadedDir'] == null) {
+        return;
+      }
+      if (!errors.appIdNames.containsKey(result['id'])) {
         try {
           if (settingsProvider.installerMode == 'legacy' &&
               needsLegacyInterInstallDelay) {
             await Future.delayed(const Duration(milliseconds: 200));
           }
           await installFn(
-            res['id'] as String,
-            res['willBeSilent'] as bool,
-            res['downloadedFile'] as DownloadedApk?,
-            res['downloadedDir'] as DownloadedDir?,
+            result['id'] as String,
+            result['willBeSilent'] as bool,
+            result['downloadedFile'] as DownloadedApk?,
+            result['downloadedDir'] as DownloadedDir?,
           );
-        } catch (e) {
-          var id = res['id'] as String;
-          errors.add(id, e, appName: apps[id]?.name);
+        } catch (exception) {
+          var id = result['id'] as String;
+          errors.add(id, exception, appName: apps[id]?.name);
         }
         if (settingsProvider.installerMode == 'legacy') {
           needsLegacyInterInstallDelay = true;
@@ -2673,13 +2688,30 @@ class AppsProvider with ChangeNotifier {
     }
 
     if (forceParallelDownloads || settingsProvider.parallelDownloads) {
-      final downloadResults = await Future.wait(appsToInstall.map(downloadFn));
-      for (var res in downloadResults) {
-        await installDownloadResult(res);
-      }
+      Future<void> installChain = Future.value();
+      await Future.wait(
+        appsToInstall.map((appIdToProcess) async {
+          final downloadResult = await downloadFn(appIdToProcess);
+          final completer = Completer<void>();
+          installChain = installChain.then((_) async {
+            try {
+              await installDownloadResult(downloadResult);
+            } finally {
+              if (!completer.isCompleted) {
+                completer.complete();
+              }
+            }
+          }).catchError((exception) {
+            if (!completer.isCompleted) {
+              completer.complete();
+            }
+          });
+          await completer.future;
+        }),
+      );
     } else {
-      for (var id in appsToInstall) {
-        await installDownloadResult(await downloadFn(id));
+      for (final appIdToProcess in appsToInstall) {
+        await installDownloadResult(await downloadFn(appIdToProcess));
       }
     }
 

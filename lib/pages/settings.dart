@@ -7,6 +7,7 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
@@ -1117,7 +1118,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                     children: [
                                       DropdownMenu<SwipeAction>(
                                         key: ValueKey(
-                                          settingsProvider.rightSwipeAction,
+                                          'rightSwipeAction_${settingsProvider.rightSwipeAction}',
                                         ),
                                         initialSelection:
                                             settingsProvider.rightSwipeAction,
@@ -1153,7 +1154,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                       const SizedBox(height: 16),
                                       DropdownMenu<SwipeAction>(
                                         key: ValueKey(
-                                          settingsProvider.leftSwipeAction,
+                                          'leftSwipeAction_${settingsProvider.leftSwipeAction}',
                                         ),
                                         initialSelection:
                                             settingsProvider.leftSwipeAction,
@@ -1714,23 +1715,20 @@ Future<void> _shareAboutUrl(String url, String subject) async {
 }
 
 void _openLogsDialog(BuildContext context) {
-  context.read<LogsProvider>().get().then((logs) {
-    if (!context.mounted) return;
-    if (logs.isEmpty) {
-      showMessage(ObtainiumError(tr('noLogs')), context);
-      return;
-    }
-    showDialog(
-      context: context,
-      builder: (BuildContext ctx) {
-        return const LogsDialog();
-      },
-    );
-  });
+  showDialog(
+    context: context,
+    builder: (BuildContext dialogContext) {
+      return const LogsDialog(initialDays: 7);
+    },
+  );
 }
 
 class LogsDialog extends StatefulWidget {
-  const LogsDialog({super.key});
+  final int initialDays;
+  const LogsDialog({
+    super.key,
+    required this.initialDays,
+  });
 
   @override
   State<LogsDialog> createState() => _LogsDialogState();
@@ -1738,46 +1736,161 @@ class LogsDialog extends StatefulWidget {
 
 class _LogsDialogState extends State<LogsDialog> {
   String? logString;
+  bool isLoading = true;
+  late int selectedDays;
   List<int> days = [7, 5, 4, 3, 2, 1];
+
+  @override
+  void initState() {
+    super.initState();
+    selectedDays = widget.initialDays;
+    fetchLogs(selectedDays);
+  }
+
+  void fetchLogs(int daysLimit) {
+    setState(() {
+      isLoading = true;
+    });
+    context
+        .read<LogsProvider>()
+        .get(
+          after: DateTime.now().subtract(Duration(days: daysLimit)),
+          limit: 500,
+          orderBy: 'timestamp DESC',
+        )
+        .then((logsList) {
+      if (!mounted) return;
+      setState(() {
+        final chronologicalLogs = logsList.reversed.toList();
+        String joinedLogs = chronologicalLogs.map((logEntry) => logEntry.toString()).join('\n\n');
+        logString = joinedLogs.isNotEmpty ? joinedLogs : tr('noLogs');
+        isLoading = false;
+      });
+    }).catchError((error) {
+      if (!mounted) return;
+      setState(() {
+        logString = tr('noLogs');
+        isLoading = false;
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     var logsProvider = context.read<LogsProvider>();
-    void filterLogs(int days) {
-      logsProvider
-          .get(after: DateTime.now().subtract(Duration(days: days)))
-          .then((value) {
-            setState(() {
-              String l = value.map((e) => e.toString()).join('\n\n');
-              logString = l.isNotEmpty ? l : tr('noLogs');
-            });
-          });
-    }
 
-    if (logString == null) {
-      filterLogs(days.first);
+    Future<String> getDiagnosticsText() async {
+      final buffer = StringBuffer();
+      buffer.writeln('=== ObtainX Diagnostic Log ===');
+      
+      try {
+        final packageInfo = await getInstalledInfo(obtainiumId, printErr: false);
+        buffer.writeln('App Version: ${packageInfo?.versionName ?? 'Unknown'} (code ${packageInfo?.versionCode ?? 'unknown'})');
+        buffer.writeln('Package ID: ${packageInfo?.packageName ?? obtainiumId}');
+      } catch (exception) {
+        buffer.writeln('App Version: Unknown (Error fetching package info)');
+      }
+
+      try {
+        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        buffer.writeln('Device: ${androidInfo.manufacturer} ${androidInfo.model} (${androidInfo.device})');
+        buffer.writeln('Android Version: ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt})');
+        buffer.writeln('Supported ABIs: ${androidInfo.supportedAbis.join(', ')}');
+      } catch (exception) {
+        buffer.writeln('Device Info: Unknown (Error fetching device info)');
+      }
+
+      final settingsProvider = context.read<SettingsProvider>();
+      final appsProvider = context.read<AppsProvider>();
+      buffer.writeln('Installer Mode: ${settingsProvider.installerMode}');
+      buffer.writeln('Use Shizuku: ${settingsProvider.useShizuku}');
+      buffer.writeln('Background Updates: ${settingsProvider.enableBackgroundUpdates}');
+      buffer.writeln('Parallel Downloads: ${settingsProvider.parallelDownloads}');
+      buffer.writeln('Tracked Apps: ${appsProvider.apps.length}');
+
+      try {
+        final notificationGranted = await Permission.notification.isGranted;
+        buffer.writeln('Notifications Enabled: $notificationGranted');
+      } catch (exception) {
+        buffer.writeln('Notifications Enabled: Unknown (Error checking permission)');
+      }
+
+      final autoExportEnabled = settingsProvider.autoExportOnChanges;
+      buffer.writeln('Auto-Export on Changes: $autoExportEnabled');
+      if (autoExportEnabled) {
+        try {
+          final exportDir = await settingsProvider.getExportDir(requireAccess: false);
+          if (exportDir == null) {
+            buffer.writeln('Export Directory: Not configured');
+          } else {
+            final accessGranted = await settingsProvider.getExportDir(warnIfInaccessible: false) != null;
+            buffer.writeln('Export Directory Configured: true (Access Present: $accessGranted)');
+          }
+        } catch (exception) {
+          buffer.writeln('Export Directory: Unknown (Error checking path)');
+        }
+      }
+
+      final saveApkCopies = settingsProvider.saveDownloadedApkCopies;
+      buffer.writeln('Save APK Copies: $saveApkCopies');
+      if (saveApkCopies) {
+        try {
+          final apkSaveDir = await settingsProvider.getApkSaveDir(requireAccess: false);
+          if (apkSaveDir == null) {
+            buffer.writeln('APK Save Directory: Not configured');
+          } else {
+            final accessGranted = await settingsProvider.getApkSaveDir(warnIfInaccessible: false) != null;
+            buffer.writeln('APK Save Directory Configured: true (Access Present: $accessGranted)');
+          }
+        } catch (exception) {
+          buffer.writeln('APK Save Directory: Unknown (Error checking path)');
+        }
+      }
+
+      buffer.writeln('===============================\n');
+
+      return buffer.toString();
     }
 
     return AlertDialog(
-      scrollable: true,
       title: Text(tr('appLogs')),
-      content: Column(
-        children: [
-          DropdownButtonFormField(
-            initialValue: days.first,
-            items: days
-                .map(
-                  (e) =>
-                      DropdownMenuItem(value: e, child: Text(plural('day', e))),
-                )
-                .toList(),
-            onChanged: (d) {
-              filterLogs(d ?? 7);
-            },
-          ),
-          const SizedBox(height: 32),
-          Text(logString ?? ''),
-        ],
+      content: SizedBox(
+        width: double.maxFinite,
+        height: MediaQuery.of(context).size.height * 0.6,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DropdownButtonFormField<int>(
+              initialValue: selectedDays,
+              items: days
+                  .map(
+                    (dayValue) => DropdownMenuItem<int>(
+                      value: dayValue,
+                      child: Text(plural('day', dayValue)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: isLoading
+                  ? null
+                  : (selectedVal) {
+                      if (selectedVal != null) {
+                        selectedDays = selectedVal;
+                        fetchLogs(selectedVal);
+                      }
+                    },
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: isLoading
+                  ? const Center(child: ExpressiveLoadingIndicator())
+                  : Scrollbar(
+                      child: SingleChildScrollView(
+                        child: SelectableText(logString ?? ''),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
       actions: [
         SizedBox(
@@ -1794,7 +1907,7 @@ class _LogsDialogState extends State<LogsDialog> {
                       var cont =
                           (await showDialog<Map<String, dynamic>?>(
                             context: context,
-                            builder: (BuildContext ctx) {
+                            builder: (BuildContext modalContext) {
                               return GeneratedFormModal(
                                 title: tr('appLogs'),
                                 items: const [],
@@ -1819,26 +1932,29 @@ class _LogsDialogState extends State<LogsDialog> {
                     child: Text(tr('close')),
                   ),
                   TextButton(
-                    onPressed: () {
+                    onPressed: () async {
+                      final diagnostics = await getDiagnosticsText();
                       SharePlus.instance.share(
                         ShareParams(
-                          text: logString ?? '',
+                          text: '$diagnostics${logString ?? ''}',
                           subject: tr('appLogs'),
                         ),
                       );
+                      if (!context.mounted) return;
                       Navigator.of(context).pop();
                     },
                     child: Text(tr('share')),
                   ),
                   TextButton(
                     onPressed: () async {
+                      final diagnostics = await getDiagnosticsText();
                       final timestampForFilename = DateTime.now()
                           .toIso8601String()
                           .replaceAll(':', '-');
                       final logFileName =
                           'obtainx-logs-$timestampForFilename.txt';
                       final logFile = XFile.fromData(
-                        Uint8List.fromList(utf8.encode(logString ?? '')),
+                        Uint8List.fromList(utf8.encode('$diagnostics${logString ?? ''}')),
                         mimeType: 'text/plain',
                         name: logFileName,
                       );
