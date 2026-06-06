@@ -2163,6 +2163,7 @@ class AppsProvider with ChangeNotifier {
       );
       if (appInfo != null &&
           newInfo.versionCode! < appInfo.versionCode! &&
+          settingsProvider.installerMode == 'stock' &&
           !(await canDowngradeApps())) {
         throw DowngradeError(appInfo.versionCode!, newInfo.versionCode!);
       }
