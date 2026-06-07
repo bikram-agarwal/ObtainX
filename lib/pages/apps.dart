@@ -1872,6 +1872,7 @@ class AppsPageState extends State<AppsPage> {
   // Groups start expanded. When the user collapses one its key goes here and
   // its child tiles are no longer built, saving widget-tree work on rebuilds.
   final Set<String> _collapsedGroups = {};
+  final Map<String, ExpansionTileController> _groupControllers = {};
 
   // ── Hero keep-alive ───────────────────────────────────────────────────────
   // Removed: previously held the appId of the row whose AppPage was open so
@@ -2000,6 +2001,7 @@ class AppsPageState extends State<AppsPage> {
     scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _groupControllers.clear();
     super.dispose();
   }
 
@@ -2925,6 +2927,34 @@ class AppsPageState extends State<AppsPage> {
     final listedSources = _listedSourcesCache;
     final listedAppTypes = _listedAppTypesCache;
 
+    List<String> getActiveGroupKeys() {
+      final List<String> keys = [];
+      if (effectiveGroupBy == AppsListGroupBy.category) {
+        for (final category in listedCategories) {
+          keys.add('cat:${category ?? '__null__'}');
+        }
+      } else if (effectiveGroupBy == AppsListGroupBy.source) {
+        for (final source in listedSources) {
+          keys.add('src:$source');
+        }
+      } else if (effectiveGroupBy == AppsListGroupBy.appType) {
+        for (final type in listedAppTypes) {
+          keys.add('appType:${type.name}');
+        }
+      }
+      if (showNonInstalledGroupSection) {
+        keys.add('__nonInstalled__');
+      }
+      if (showUpdatesGroupSection) {
+        keys.add('__updates__');
+      }
+      return keys;
+    }
+
+    final activeGroupKeys = getActiveGroupKeys();
+    final bool allGroupsExpanded = activeGroupKeys.isNotEmpty &&
+        activeGroupKeys.every((key) => !_collapsedGroups.contains(key));
+
     Set<App> selectedApps = listedApps
         .map((e) => e.app)
         .where((a) => selectedAppIds.contains(a.id))
@@ -3223,6 +3253,7 @@ class AppsPageState extends State<AppsPage> {
     getCategoryCollapsibleTile(int index) {
       final catKey = 'cat:${listedCategories[index] ?? '__null__'}';
       final isExpanded = !_collapsedGroups.contains(catKey);
+      final controller = _groupControllers.putIfAbsent(catKey, () => ExpansionTileController());
 
       final String categoryMapKey = listedCategories[index] ?? '__null__';
       final matchingIndices =
@@ -3249,6 +3280,7 @@ class AppsPageState extends State<AppsPage> {
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
+                controller: controller,
                 key: PageStorageKey(catKey),
                 shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
                 collapsedShape: _appsExpansionTileCollapsedShape(
@@ -3285,6 +3317,7 @@ class AppsPageState extends State<AppsPage> {
     getNonInstalledCollapsibleTile() {
       const nonInstalledKey = '__nonInstalled__';
       final isExpanded = !_collapsedGroups.contains(nonInstalledKey);
+      final controller = _groupControllers.putIfAbsent(nonInstalledKey, () => ExpansionTileController());
 
       final matchingIndices = _nonInstalledListedIndices;
       final tiles = isExpanded
@@ -3308,6 +3341,7 @@ class AppsPageState extends State<AppsPage> {
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
+                controller: controller,
                 key: const PageStorageKey(nonInstalledKey),
                 shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
                 collapsedShape: _appsExpansionTileCollapsedShape(
@@ -3345,6 +3379,7 @@ class AppsPageState extends State<AppsPage> {
       final sourceKey = listedSources[index];
       final groupKey = 'src:$sourceKey';
       final isExpanded = !_collapsedGroups.contains(groupKey);
+      final controller = _groupControllers.putIfAbsent(groupKey, () => ExpansionTileController());
 
       final matchingIndices =
           _sourceGroupListedIndices[sourceKey] ?? const <int>[];
@@ -3389,6 +3424,7 @@ class AppsPageState extends State<AppsPage> {
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
+                controller: controller,
                 key: PageStorageKey(groupKey),
                 shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
                 collapsedShape: _appsExpansionTileCollapsedShape(
@@ -3429,6 +3465,7 @@ class AppsPageState extends State<AppsPage> {
       required List<int> matchingIndices,
     }) {
       final isExpanded = !_collapsedGroups.contains(groupKey);
+      final controller = _groupControllers.putIfAbsent(groupKey, () => ExpansionTileController());
       final tiles = isExpanded
           ? buildGroupedChildren(matchingIndices)
           : const <Widget>[];
@@ -3449,6 +3486,7 @@ class AppsPageState extends State<AppsPage> {
             child: Theme(
               data: theme.copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
+                controller: controller,
                 key: PageStorageKey(groupKey),
                 shape: _appsExpansionTileExpandedShape(appsListGroupCardRadius),
                 collapsedShape: _appsExpansionTileCollapsedShape(
@@ -4528,6 +4566,34 @@ class AppsPageState extends State<AppsPage> {
                                     _searchFocusNode.unfocus();
                                   }),
                                 ),
+                              if (effectiveGroupBy != AppsListGroupBy.none ||
+                                  showUpdatesGroupSection) ...[
+                                IconButton(
+                                  icon: Icon(
+                                    allGroupsExpanded
+                                        ? Icons.unfold_less_rounded
+                                        : Icons.unfold_more_rounded,
+                                  ),
+                                  tooltip: allGroupsExpanded
+                                      ? tr('collapseAll')
+                                      : tr('expandAll'),
+                                  onPressed: () {
+                                    setState(() {
+                                      if (allGroupsExpanded) {
+                                        _collapsedGroups.addAll(activeGroupKeys);
+                                        for (final key in activeGroupKeys) {
+                                          _groupControllers[key]?.collapse();
+                                        }
+                                      } else {
+                                        _collapsedGroups.clear();
+                                        for (final key in activeGroupKeys) {
+                                          _groupControllers[key]?.expand();
+                                        }
+                                      }
+                                    });
+                                  },
+                                ),
+                              ],
                             ],
                             // Always use the compact layout so the action icon
                             // and "Apps" title are always on the same toolbar row.
