@@ -1,6 +1,5 @@
 import java.io.FileInputStream
 import java.util.Properties
-import com.android.build.api.variant.FilterConfiguration.FilterType.*
 import com.android.build.gradle.internal.api.ApkVariantOutputImpl
 
 plugins {
@@ -62,7 +61,14 @@ android {
         }
         create("fdroid") {
             dimension = "default"
-            applicationIdSuffix = ".fdroid"
+            // Intentionally NO applicationIdSuffix: the F-Droid build shares the
+            // GitHub build's applicationId (dev.bikram.obtainx) and signing key so
+            // updates cross between channels seamlessly. This relies on F-Droid
+            // publishing OUR signed APK via the reproducible-build path (Builds.binary
+            // in the fdroiddata recipe) — do NOT re-add a suffix. The flavor still
+            // exists only to run lib/main_fdroid.dart, which disables self-updating
+            // (F-Droid policy: the store updates the app, it must not update itself).
+            applicationIdSuffix = ""
         }
     }
 
@@ -115,15 +121,22 @@ android {
     }
 }
 
-val abiCodes = mapOf("x86_64" to 1, "armeabi-v7a" to 2, "arm64-v8a" to 3)
-
+// Every APK — both the split-per-abi GitHub builds and the universal F-Droid
+// build — gets versionCode = base * 10. This keeps all codes uniform and in the established 5-digit
+// range (e.g. base 3800 -> 38000), which matters for two reasons:
+//   * Existing GitHub users are NEVER downgraded — codes only ever go up
+//     (37903 -> 38000). Dropping to the 4-digit base (3800) would brick their
+//     updates, so we must keep the *10 multiplier.
+//   * The universal F-Droid APK shares ONE versionCode with the GitHub builds,
+//     so installs are interchangeable across channels in either direction.
+// We deliberately do NOT use distinct per-abi codes (38001/2/3): unique codes
+// per APK are only required by Google Play, and ObtainX is not on Play (it's a
+// sideloading manager Play would reject). The fdroiddata recipe reproduces this
+// versionCode for auto-update via `VercodeOperation: %c * 10 `.
 android.applicationVariants.configureEach {
     val variant = this
     variant.outputs.forEach { output ->
-        val abiVersionCode = abiCodes[output.filters.find { it.filterType == "ABI" }?.identifier]
-        if (abiVersionCode != null) {
-            (output as ApkVariantOutputImpl).versionCodeOverride = variant.versionCode * 10 + abiVersionCode
-        }
+        (output as ApkVariantOutputImpl).versionCodeOverride = variant.versionCode * 10
     }
 }
 

@@ -1,0 +1,38 @@
+ObtainX builds on everything Obtainium does well — same sources, same trust model, same spirit — with a reworked Material 3 Expressive UI and a set of features aimed at making everyday use smoother. Get Android app updates straight from the source: GitHub, GitLab, F-Droid, IzzyOnDroid, APKMirror, APKPure, the Play Store and more. No central repository, no account, no tracking. 🚀
+
+<b>━━ 📥 NEW FEATURES ━━</b>
+Features that don't exist in Obtainium at all.
+• <b>Bulk Import from Device</b> — select apps already on your phone and ObtainX finds their sources automatically. No URL hunting, one by one.
+• <b>Installer choice</b> — a Third-Party install path lets you send APKs to any installer you trust (InstallerX, App Manager, Shizuku). Useful when you can't grant "install unknown apps" to normal apps.
+• <b>On-Demand Only mode</b> — hide rarely-updated apps from the main list and check them only when you open them.
+• <b>Folders</b> — organise your list into named folders, with optional auto-assign rules (by name, author, package ID, category, or source).
+• <b>Configurable swipe gestures</b> — independent left/right actions per row: Update, Install, Pin, Edit, Delete, Open, App Info.
+• <b>Custom app icons</b> — set your own icon for any app, from your gallery or the web.
+• <b>Know the update size beforehand</b> — see the exact download size before you hit update.
+• <b>Skip Version</b> — pass on a release without marking the app "updated."
+• <b>RegEx Assist</b> — a built-in helper walks you through building version filters. No regex knowledge required.
+• <b>Undo after delete</b> — swipe- and bulk-delete show a 5-second Undo snackbar.
+• <b>Save assets</b> — save update assets (e.g. APKs) to a folder of your choice during the update.
+
+<b>━━ 🔧 ENHANCED FEATURES ━━</b>
+Features Obtainium has, extended or improved here.
+• <b>APKMirror updates</b> — enabled (disabled upstream) and taking you straight to the specific release page.
+• <b>Verified "also available on" links</b> — each app shows other stores where it's confirmed present.
+• <b>Smarter version status</b> — six distinct states instead of a binary update / up-to-date.
+• <b>Add App — three paths, one screen</b> — URL, Search, and From Device under one segmented control.
+• <b>Editable package ID</b> for track-only sources, instantly restoring correct install detection and update tracking.
+• <b>APK size on the button</b> (e.g. "Update · 43 MB") plus live download progress.
+• <b>Active filter chips</b> and richer list grouping by source, app type, or update state.
+• <b>Category customization</b> — any color, rename, and bulk assign.
+
+<b>━━ 🎨 UI & UX ━━</b>
+• Material 3 Expressive across every screen — cards, fluid animations, expressive controls.
+• Beyond Material You: 9 preset colors, 9 palette algorithms, custom hex accents, gradient background and progressive blurs.
+• Per-app color theming derived from each app's own icon.
+• Hero icon transitions, inline collapsible search, inline edit on the detail page, and auto-hiding action bars.
+
+<b>━━ 🔄 BRING YOUR DATA FROM OBTAINIUM ━━</b>
+In Obtainium, export your app list (Import/Export → Export) to a .json file. In ObtainX, open Import/Export and Import that file. All your tracked apps populate instantly.
+
+<b>━━ 🛡️ FREE &amp; OPEN SOURCE ━━</b>
+ObtainX is free and open-source software (GPLv3). Works on-device with no accounts, no telemetry, and no proprietary services.

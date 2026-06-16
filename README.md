@@ -1,4 +1,6 @@
-# ![ObtainX icon](./assets/graphics/icon_small.png) ObtainX
+# ObtainX
+
+<img alt="FilePipe Banner" src="./fastlane/metadata/android/en-US/images/featureGraphic.png" />
 
 ObtainX builds on everything Obtainium does well — same sources, same trust model, same spirit — with a reworked UI and a set of features aimed at making everyday use a little smoother. For a side-by-side comparison with screenshots, see [ObtainX vs Obtainium](./docs/Difference_with_Obtainium.md).
 
@@ -83,10 +85,10 @@ Features Obtainium has, extended or improved here.
 ---
 
 ## Screenshots
-| <img src="./assets/screenshots/1.apps.webp" alt="All Apps Page" /> | <img src="./assets/screenshots/2.view_opts.webp" alt="Themes and View Options" /> | <img src="./assets/screenshots/3.filters.webp" alt="Live Filters" /> |
+| <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/01_apps.jpg" alt="All Apps Page" /> | <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/02_view_opts.jpg" alt="Themes and View Options" /> | <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/03_filters.jpg" alt="Live Filters" /> |
 | ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| <img src="./assets/screenshots/4.app.webp" alt="Individual App Page" /> | <img src="./assets/screenshots/5.edit.webp" alt="Editing App Details" /> | <img src="./assets/screenshots/6.options.webp" alt="Additional Options with RegEx Helper" /> |
-| <img src="./assets/screenshots/7.settings.webp" alt="Modern Settings Page, custom category colors" /> | <img src="./assets/screenshots/8.installer_choice.webp" alt="Choose your own installer" /> | <img src="./assets/screenshots/9.bulk_add.webp" alt="Bulk Import from Device" /> |
+| <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/04_app.jpg" alt="Individual App Page" /> | <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/05_edit.jpg" alt="Editing App Details" /> | <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/06_options.jpg" alt="Additional Options with RegEx Helper" /> |
+| <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/07_settings.jpg" alt="Modern Settings Page, custom category colors" /> | <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/08_installer_choice.jpg" alt="Choose your own installer" /> | <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/09_bulk_add.jpg" alt="Bulk Import from Device" /> |
 
 ## Screenrecords
 
