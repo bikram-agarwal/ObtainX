@@ -19,6 +19,8 @@ Features that don't exist in Obtainium at all.
 
 - **📦 Installer choice** — A **Third-Party** install path lets you send APKs to any installer you trust (InstallerX, App Manager, etc.). Particularly useful when you can't grant "install unknown apps" to normal apps — for example, under _Advanced Protection_ — but a privileged installer can still do the job.
 
+- **🛡️ Build verification** - F-Droid / Izzy reproducible build checks, GitHub attestation checks for GitHub apps, and attestations for ObtainX's own releases help flag swapped or unverifiable APKs before install. See the [Build Verification Guide](./docs/build-verification-guide.md).
+
 - **🕐 On-Demand Only mode** — Mark an app so it's hidden from the main list and only checked when you explicitly open it. Keeps your main list clean if you have apps you rarely update.
 
 - **📁 Folders** — Create named folders to organise your app list. Apps in a folder are hidden from the main list to keep it decluttered. Folders can auto-assign apps via a rule (match by name, author, package ID, category, or source) or accept manual assignment via long-press. Each folder remembers its own view settings independently.

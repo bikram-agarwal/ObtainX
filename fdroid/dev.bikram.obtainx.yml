@@ -16,7 +16,7 @@ Repo: https://github.com/bikram-agarwal/ObtainX.git
 Builds:
   - versionName: 2.8.1
     versionCode: 38101
-    commit: v2.8.1
+    commit: b643c1d4334721be00320129ab0194f524a21e38
     sudo:
       - mkdir -p /home/runner
       - chown vagrant /home/runner
@@ -27,7 +27,9 @@ Builds:
       - reproducible-apk-tools@719c3471fd1bcb807510dc8e035a69e395ca37f4
       - flutter@stable
     prebuild:
-      - git -C $$flutter$$ checkout -f 3.44.2
+      - flutterVersion=$(sed -n -E "s/^\ *flutter-version:\ (.*)/\1/p" .github/workflows/build.yml)
+      - '[[ $flutterVersion ]]'
+      - git -C $$flutter$$ checkout -f $flutterVersion
       - export repo=/home/runner/work/ObtainX
       - mkdir -p $repo
       - cd ..
@@ -61,7 +63,7 @@ Builds:
 
   - versionName: 2.8.1
     versionCode: 38102
-    commit: v2.8.1
+    commit: b643c1d4334721be00320129ab0194f524a21e38
     sudo:
       - mkdir -p /home/runner
       - chown vagrant /home/runner
@@ -72,7 +74,9 @@ Builds:
       - reproducible-apk-tools@719c3471fd1bcb807510dc8e035a69e395ca37f4
       - flutter@stable
     prebuild:
-      - git -C $$flutter$$ checkout -f 3.44.2
+      - flutterVersion=$(sed -n -E "s/^\ *flutter-version:\ (.*)/\1/p" .github/workflows/build.yml)
+      - '[[ $flutterVersion ]]'
+      - git -C $$flutter$$ checkout -f $flutterVersion
       - export repo=/home/runner/work/ObtainX
       - mkdir -p $repo
       - cd ..
@@ -106,7 +110,7 @@ Builds:
 
   - versionName: 2.8.1
     versionCode: 38103
-    commit: v2.8.1
+    commit: b643c1d4334721be00320129ab0194f524a21e38
     sudo:
       - mkdir -p /home/runner
       - chown vagrant /home/runner
@@ -117,7 +121,9 @@ Builds:
       - reproducible-apk-tools@719c3471fd1bcb807510dc8e035a69e395ca37f4
       - flutter@stable
     prebuild:
-      - git -C $$flutter$$ checkout -f 3.44.2
+      - flutterVersion=$(sed -n -E "s/^\ *flutter-version:\ (.*)/\1/p" .github/workflows/build.yml)
+      - '[[ $flutterVersion ]]'
+      - git -C $$flutter$$ checkout -f $flutterVersion
       - export repo=/home/runner/work/ObtainX
       - mkdir -p $repo
       - cd ..

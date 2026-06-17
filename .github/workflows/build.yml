@@ -119,11 +119,26 @@ jobs:
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           K_ALIAS: ${{ secrets.KEY_ALIAS }}
 
+      - name: Generate Generic Attestations
+        id: generate_attestations
+        uses: actions/attest@v4.1.0
+        with:
+          subject-path: 'build/app/outputs/flutter-apk/ObtainX-*.apk'
+
+      - name: Copy attestation bundle
+        run: |
+          APK_DIR=build/app/outputs/flutter-apk
+          VERSION=${{ steps.extract_version.outputs.version }}
+          cp "${{ steps.generate_attestations.outputs.bundle-path }}" "$APK_DIR/ObtainX-v${VERSION}-attestation.json"
+          ls -l "$APK_DIR/ObtainX-v${VERSION}-attestation.json"
+
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: obtainx-apks-v${{ steps.extract_version.outputs.version }}
-          path: build/app/outputs/flutter-apk/ObtainX-*.apk
+          path: |
+            build/app/outputs/flutter-apk/ObtainX-*.apk
+            build/app/outputs/flutter-apk/ObtainX-*-attestation.json
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
@@ -133,10 +148,7 @@ jobs:
         with:
           draft: true
           tag_name: ${{ github.ref == 'refs/heads/main' && format('v{0}', steps.extract_version.outputs.version) || github.ref_name }}
-          files: build/app/outputs/flutter-apk/ObtainX-*.apk
+          files: |
+            build/app/outputs/flutter-apk/ObtainX-*.apk
+            build/app/outputs/flutter-apk/ObtainX-*-attestation.json
           generate_release_notes: true
-
-      - name: Generate Generic Attestations
-        uses: actions/attest@v4.1.0
-        with:
-          subject-path: 'build/app/outputs/flutter-apk/ObtainX-*.apk'
