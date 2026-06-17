@@ -18,44 +18,43 @@ Builds:
     versionCode: 38101
     commit: b643c1d4334721be00320129ab0194f524a21e38
     sudo:
-      - mkdir -p /home/runner
-      - chown vagrant /home/runner
+      - mkdir -p /home/runner/work/ObtainX
+      - chown -R vagrant /home/runner
     output: build/app/outputs/flutter-apk/app-x86_64-fdroid-release.apk
     binary: 
       https://github.com/bikram-agarwal/ObtainX/releases/download/v%v/ObtainX-v%v-fdroid-x86_64.apk
     srclibs:
-      - reproducible-apk-tools@719c3471fd1bcb807510dc8e035a69e395ca37f4
+      - reproducible-apk-tools@v0.3.0
       - flutter@stable
     prebuild:
       - flutterVersion=$(sed -n -E "s/^\ *flutter-version:\ (.*)/\1/p" .github/workflows/build.yml)
       - '[[ $flutterVersion ]]'
       - git -C $$flutter$$ checkout -f $flutterVersion
-      - export repo=/home/runner/work/ObtainX
-      - mkdir -p $repo
+      - export repo=/home/runner/work/ObtainX/ObtainX
       - cd ..
-      - mv dev.bikram.obtainx $repo/ObtainX
-      - pushd $repo/ObtainX
+      - mv dev.bikram.obtainx $repo
+      - pushd $repo
       - export PUB_CACHE=$(pwd)/.pub-cache
       - sed -i 's/signingConfigs\.getByName("release")/signingConfigs.maybeCreate("release")/g'
         android/app/build.gradle.kts
       - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get
+      - $$flutter$$/bin/flutter pub get --enforce-lockfile
       - popd
-      - mv $repo/ObtainX dev.bikram.obtainx
+      - mv $repo dev.bikram.obtainx
     scanignore:
       - assets/translations/package.json
     scandelete:
       - .pub-cache
     build:
-      - export repo=/home/runner/work/ObtainX
+      - export repo=/home/runner/work/ObtainX/ObtainX
       - cd ..
-      - mv dev.bikram.obtainx $repo/ObtainX
-      - pushd $repo/ObtainX
+      - mv dev.bikram.obtainx $repo
+      - pushd $repo
       - export PUB_CACHE=$(pwd)/.pub-cache
       - $$flutter$$/bin/flutter build apk --release --split-per-abi --target-platform="android-x64"
         --flavor fdroid -t lib/main_fdroid.dart
       - popd
-      - mv $repo/ObtainX dev.bikram.obtainx
+      - mv $repo dev.bikram.obtainx
     postbuild:
       - mv $$OUT$$ unaligned.apk
       - $$reproducible-apk-tools$$/zipalign.py --page-size 16 --pad-like-apksigner
@@ -65,44 +64,43 @@ Builds:
     versionCode: 38102
     commit: b643c1d4334721be00320129ab0194f524a21e38
     sudo:
-      - mkdir -p /home/runner
-      - chown vagrant /home/runner
+      - mkdir -p /home/runner/work/ObtainX
+      - chown -R vagrant /home/runner
     output: build/app/outputs/flutter-apk/app-armeabi-v7a-fdroid-release.apk
     binary: 
       https://github.com/bikram-agarwal/ObtainX/releases/download/v%v/ObtainX-v%v-fdroid-armeabi-v7a.apk
     srclibs:
-      - reproducible-apk-tools@719c3471fd1bcb807510dc8e035a69e395ca37f4
+      - reproducible-apk-tools@v0.3.0
       - flutter@stable
     prebuild:
       - flutterVersion=$(sed -n -E "s/^\ *flutter-version:\ (.*)/\1/p" .github/workflows/build.yml)
       - '[[ $flutterVersion ]]'
       - git -C $$flutter$$ checkout -f $flutterVersion
-      - export repo=/home/runner/work/ObtainX
-      - mkdir -p $repo
+      - export repo=/home/runner/work/ObtainX/ObtainX
       - cd ..
-      - mv dev.bikram.obtainx $repo/ObtainX
-      - pushd $repo/ObtainX
+      - mv dev.bikram.obtainx $repo
+      - pushd $repo
       - export PUB_CACHE=$(pwd)/.pub-cache
       - sed -i 's/signingConfigs\.getByName("release")/signingConfigs.maybeCreate("release")/g'
         android/app/build.gradle.kts
       - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get
+      - $$flutter$$/bin/flutter pub get --enforce-lockfile
       - popd
-      - mv $repo/ObtainX dev.bikram.obtainx
+      - mv $repo dev.bikram.obtainx
     scanignore:
       - assets/translations/package.json
     scandelete:
       - .pub-cache
     build:
-      - export repo=/home/runner/work/ObtainX
+      - export repo=/home/runner/work/ObtainX/ObtainX
       - cd ..
-      - mv dev.bikram.obtainx $repo/ObtainX
-      - pushd $repo/ObtainX
+      - mv dev.bikram.obtainx $repo
+      - pushd $repo
       - export PUB_CACHE=$(pwd)/.pub-cache
       - $$flutter$$/bin/flutter build apk --release --split-per-abi --target-platform="android-arm"
         --flavor fdroid -t lib/main_fdroid.dart
       - popd
-      - mv $repo/ObtainX dev.bikram.obtainx
+      - mv $repo dev.bikram.obtainx
     postbuild:
       - mv $$OUT$$ unaligned.apk
       - $$reproducible-apk-tools$$/zipalign.py --page-size 16 --pad-like-apksigner
@@ -112,44 +110,43 @@ Builds:
     versionCode: 38103
     commit: b643c1d4334721be00320129ab0194f524a21e38
     sudo:
-      - mkdir -p /home/runner
-      - chown vagrant /home/runner
+      - mkdir -p /home/runner/work/ObtainX
+      - chown -R vagrant /home/runner
     output: build/app/outputs/flutter-apk/app-arm64-v8a-fdroid-release.apk
     binary: 
       https://github.com/bikram-agarwal/ObtainX/releases/download/v%v/ObtainX-v%v-fdroid-arm64-v8a.apk
     srclibs:
-      - reproducible-apk-tools@719c3471fd1bcb807510dc8e035a69e395ca37f4
+      - reproducible-apk-tools@v0.3.0
       - flutter@stable
     prebuild:
       - flutterVersion=$(sed -n -E "s/^\ *flutter-version:\ (.*)/\1/p" .github/workflows/build.yml)
       - '[[ $flutterVersion ]]'
       - git -C $$flutter$$ checkout -f $flutterVersion
-      - export repo=/home/runner/work/ObtainX
-      - mkdir -p $repo
+      - export repo=/home/runner/work/ObtainX/ObtainX
       - cd ..
-      - mv dev.bikram.obtainx $repo/ObtainX
-      - pushd $repo/ObtainX
+      - mv dev.bikram.obtainx $repo
+      - pushd $repo
       - export PUB_CACHE=$(pwd)/.pub-cache
       - sed -i 's/signingConfigs\.getByName("release")/signingConfigs.maybeCreate("release")/g'
         android/app/build.gradle.kts
       - $$flutter$$/bin/flutter config --no-analytics
-      - $$flutter$$/bin/flutter pub get
+      - $$flutter$$/bin/flutter pub get --enforce-lockfile
       - popd
-      - mv $repo/ObtainX dev.bikram.obtainx
+      - mv $repo dev.bikram.obtainx
     scanignore:
       - assets/translations/package.json
     scandelete:
       - .pub-cache
     build:
-      - export repo=/home/runner/work/ObtainX
+      - export repo=/home/runner/work/ObtainX/ObtainX
       - cd ..
-      - mv dev.bikram.obtainx $repo/ObtainX
-      - pushd $repo/ObtainX
+      - mv dev.bikram.obtainx $repo
+      - pushd $repo
       - export PUB_CACHE=$(pwd)/.pub-cache
       - $$flutter$$/bin/flutter build apk --release --split-per-abi --target-platform="android-arm64"
         --flavor fdroid -t lib/main_fdroid.dart
       - popd
-      - mv $repo/ObtainX dev.bikram.obtainx
+      - mv $repo dev.bikram.obtainx
     postbuild:
       - mv $$OUT$$ unaligned.apk
       - $$reproducible-apk-tools$$/zipalign.py --page-size 16 --pad-like-apksigner
