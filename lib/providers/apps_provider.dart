@@ -68,14 +68,7 @@ List<String> packageNamesToTryForInstalledInfo(
 }) {
   final List<String> packageNamesToTry = <String>[packageName];
   if (kDebugMode && includeOwnDebugBuild && packageName == obtainiumId) {
-    packageNamesToTry.insert(
-      0,
-      fdroid ? '$obtainiumId.fdroid.debug' : '$obtainiumId.debug',
-    );
-  } else if (kDebugMode &&
-      includeOwnDebugBuild &&
-      packageName == '$obtainiumId.fdroid') {
-    packageNamesToTry.insert(0, '$obtainiumId.fdroid.debug');
+    packageNamesToTry.insert(0, '$obtainiumId.debug');
   }
   return packageNamesToTry;
 }
@@ -813,6 +806,10 @@ List<String> moveStrToEnd(List<String> arr, String str, {String? strB}) {
     arr = [...arr, temp!];
   }
   return arr;
+}
+
+bool isObtainiumAppId(String appId) {
+  return appId == obtainiumId || appId == obtainiumTempId;
 }
 
 List<MapEntry<String, int>> moveStrToEndMapEntryWithCount(
@@ -2835,7 +2832,6 @@ class AppsProvider with ChangeNotifier {
       obtainiumId,
       strB: obtainiumTempId,
     );
-    appsToInstall = moveStrToEnd(appsToInstall, '$obtainiumId.fdroid');
 
     Future<void> installFn(
       String id,
@@ -3024,28 +3020,47 @@ class AppsProvider with ChangeNotifier {
 
     if (forceParallelDownloads || settingsProvider.parallelDownloads) {
       Future<void> installChain = Future.value();
-      await Future.wait(
-        appsToInstall.map((appIdToProcess) async {
-          final downloadResult = await downloadFn(appIdToProcess);
-          final completer = Completer<void>();
-          installChain = installChain
-              .then((_) async {
-                try {
-                  await installDownloadResult(downloadResult);
-                } finally {
-                  if (!completer.isCompleted) {
-                    completer.complete();
-                  }
-                }
-              })
-              .catchError((exception) {
+      final downloadResultsByAppId = <String, Future<Map<Object?, Object?>>>{
+        for (final appIdToProcess in appsToInstall)
+          appIdToProcess: downloadFn(appIdToProcess),
+      };
+      final selfUpdateAppIds = appsToInstall
+          .where((appIdToProcess) => isObtainiumAppId(appIdToProcess))
+          .toList();
+
+      // Downloads stay parallel, but installing this app before the rest can
+      // stop the process and leave the remaining queue unfinished.
+      Future<void> installWhenDownloaded(String appIdToProcess) async {
+        final downloadResult = await downloadResultsByAppId[appIdToProcess]!;
+        final completer = Completer<void>();
+        installChain = installChain
+            .then((_) async {
+              try {
+                await installDownloadResult(downloadResult);
+              } finally {
                 if (!completer.isCompleted) {
                   completer.complete();
                 }
-              });
-          await completer.future;
-        }),
+              }
+            })
+            .catchError((exception) {
+              if (!completer.isCompleted) {
+                completer.complete();
+              }
+            });
+        await completer.future;
+      }
+
+      await Future.wait(
+        appsToInstall
+            .where((appIdToProcess) => !isObtainiumAppId(appIdToProcess))
+            .map(installWhenDownloaded),
       );
+      for (final appIdToProcess in selfUpdateAppIds) {
+        await installDownloadResult(
+          await downloadResultsByAppId[appIdToProcess]!,
+        );
+      }
     } else {
       for (final appIdToProcess in appsToInstall) {
         await installDownloadResult(await downloadFn(appIdToProcess));
@@ -5189,8 +5204,7 @@ Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
     }
     if (toInstall.isNotEmpty) {
       var tempObtArr = toInstall.where(
-        (element) =>
-            element.key == obtainiumId || element.key == '$obtainiumId.fdroid',
+        (element) => isObtainiumAppId(element.key),
       );
       if (tempObtArr.isNotEmpty) {
         // Move obtainium to the end of the list as it must always install last

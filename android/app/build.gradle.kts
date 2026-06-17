@@ -34,6 +34,15 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "28.2.13676358"
 
+    dependenciesInfo {
+        // Strip the Google-only encrypted "Dependency Info" blob from the APK
+        // signing block. Only Google can decrypt it, so nobody else can verify
+        // its contents — IzzyOnDroid and F-Droid flag it. Disable for both the
+        // APK (IzzyOnDroid/F-Droid).
+        includeInApk = false
+        includeInBundle = false
+    }
+
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_21
