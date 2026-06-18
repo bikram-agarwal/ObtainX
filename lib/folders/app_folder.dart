@@ -127,11 +127,16 @@ List<String> excludedFolderIdsForApp(App app) {
 }
 
 /// Adds [folderId] to the app's folder membership and removes it from exclusions.
-void addAppToFolder(App app, String folderId) {
+void addAppToFolder(App app, String folderId, String folderName) {
   final ids = folderIdsForApp(app).toSet()..add(folderId);
   final excluded = excludedFolderIdsForApp(app).toSet()..remove(folderId);
   app.additionalSettings['folderIds'] = ids.toList();
   app.additionalSettings['excludedFolderIds'] = excluded.toList();
+  final Map<String, dynamic> folderNames = Map<String, dynamic>.from(
+    app.additionalSettings['folderNames'] as Map? ?? {},
+  );
+  folderNames[folderId] = folderName;
+  app.additionalSettings['folderNames'] = folderNames;
 }
 
 /// Removes [folderId] from the app's folder membership and adds it to exclusions.
@@ -140,6 +145,11 @@ void removeAppFromFolder(App app, String folderId) {
   final excluded = excludedFolderIdsForApp(app).toSet()..add(folderId);
   app.additionalSettings['folderIds'] = ids.toList();
   app.additionalSettings['excludedFolderIds'] = excluded.toList();
+  final Map<String, dynamic> folderNames = Map<String, dynamic>.from(
+    app.additionalSettings['folderNames'] as Map? ?? {},
+  );
+  folderNames.remove(folderId);
+  app.additionalSettings['folderNames'] = folderNames;
 }
 
 /// Removes all references to [folderId] from the app (membership + exclusions).
@@ -148,4 +158,9 @@ void clearFolderFromApp(App app, String folderId) {
   final excluded = excludedFolderIdsForApp(app).toSet()..remove(folderId);
   app.additionalSettings['folderIds'] = ids.toList();
   app.additionalSettings['excludedFolderIds'] = excluded.toList();
+  final Map<String, dynamic> folderNames = Map<String, dynamic>.from(
+    app.additionalSettings['folderNames'] as Map? ?? {},
+  );
+  folderNames.remove(folderId);
+  app.additionalSettings['folderNames'] = folderNames;
 }

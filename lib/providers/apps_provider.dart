@@ -4542,7 +4542,28 @@ class AppsProvider with ChangeNotifier {
             return appIds.contains(e.app.id);
           }
         })
-        .map((e) => e.app.toJson())
+        .map((e) {
+          final appJson = e.app.toJson();
+          final Map<String, dynamic> additionalSettings = Map<String, dynamic>.from(
+            jsonDecode(appJson['additionalSettings'] as String),
+          );
+          final List<dynamic>? folderIds = additionalSettings['folderIds'] as List?;
+          if (folderIds != null && folderIds.isNotEmpty) {
+            final Map<String, String> folderNames = {};
+            final existingFolders = exportSettingsProvider.appFolders;
+            for (final folderId in folderIds) {
+              for (final f in existingFolders) {
+                if (f.id == folderId) {
+                  folderNames[folderId] = f.name;
+                  break;
+                }
+              }
+            }
+            additionalSettings['folderNames'] = folderNames;
+            appJson['additionalSettings'] = jsonEncode(additionalSettings);
+          }
+          return appJson;
+        })
         .toList();
     int shouldExportSettings = exportSettingsProvider.exportSettings;
     if (overrideExportSettings != null) {
@@ -4687,6 +4708,110 @@ class AppsProvider with ChangeNotifier {
         ((newFormat ? decodedJSON['apps'] : decodedJSON) as List<dynamic>)
             .map((e) => App.fromJson(e))
             .toList();
+
+    final List<AppFolder> existingFolders = List<AppFolder>.from(settingsProvider.appFolders);
+    final Map<String, String> backupIdToTargetId = {};
+    final List<AppFolder> foldersToCreate = [];
+
+    // Parse backup folders from settings if they exist
+    final Map<String, String> backupFolderIdToName = {};
+    if (newFormat && decodedJSON['settings'] != null && decodedJSON['settings']['appFolders'] != null) {
+      try {
+        final list = jsonDecode(decodedJSON['settings']['appFolders'] as String) as List<dynamic>;
+        for (var e in list) {
+          final folder = AppFolder.fromJson(e as Map<String, dynamic>);
+          backupFolderIdToName[folder.id] = folder.name;
+        }
+      } catch (_) {}
+    }
+
+    // Gather folder names from imported apps' folderNames map
+    for (final app in importedApps) {
+      final Map<dynamic, dynamic>? appFolderNames = app.additionalSettings['folderNames'] as Map?;
+      if (appFolderNames != null) {
+        appFolderNames.forEach((key, val) {
+          if (key is String && val is String) {
+            backupFolderIdToName.putIfAbsent(key, () => val);
+          }
+        });
+      }
+    }
+
+    // Match or create folders
+    backupFolderIdToName.forEach((backupId, name) {
+      AppFolder? match;
+      for (final f in existingFolders) {
+        if (f.name.trim().toLowerCase() == name.trim().toLowerCase()) {
+          match = f;
+          break;
+        }
+      }
+
+      if (match != null) {
+        backupIdToTargetId[backupId] = match.id;
+      } else {
+        final newFolder = AppFolder(id: backupId, name: name);
+        foldersToCreate.add(newFolder);
+        backupIdToTargetId[backupId] = backupId;
+      }
+    });
+
+    if (foldersToCreate.isNotEmpty) {
+      existingFolders.addAll(foldersToCreate);
+      settingsProvider.appFolders = existingFolders;
+    }
+
+    // Rewrite app folderIds and folderNames maps
+    for (final app in importedApps) {
+      final folderIds = folderIdsForApp(app);
+      final Map<String, dynamic> updatedFolderNames = {};
+      
+      if (folderIds.isNotEmpty) {
+        final List<String> updatedFolderIds = [];
+        for (final id in folderIds) {
+          final String? targetId = backupIdToTargetId[id];
+          if (targetId != null) {
+            updatedFolderIds.add(targetId);
+            final String? folderName = backupFolderIdToName[id];
+            if (folderName != null) {
+              updatedFolderNames[targetId] = folderName;
+            }
+          } else {
+            AppFolder? match;
+            for (final f in existingFolders) {
+              if (f.id == id) {
+                match = f;
+                break;
+              }
+            }
+            if (match != null) {
+              updatedFolderIds.add(id);
+              updatedFolderNames[id] = match.name;
+            }
+          }
+        }
+        app.additionalSettings['folderIds'] = updatedFolderIds;
+      }
+      
+      final excludedFolderIds = excludedFolderIdsForApp(app);
+      if (excludedFolderIds.isNotEmpty) {
+        final List<String> updatedExcludedIds = [];
+        for (final id in excludedFolderIds) {
+          final String? targetId = backupIdToTargetId[id];
+          if (targetId != null) {
+            updatedExcludedIds.add(targetId);
+          } else {
+            if (existingFolders.any((f) => f.id == id)) {
+              updatedExcludedIds.add(id);
+            }
+          }
+        }
+        app.additionalSettings['excludedFolderIds'] = updatedExcludedIds;
+      }
+
+      app.additionalSettings['folderNames'] = updatedFolderNames;
+    }
+
     await _loadingCompleter?.future;
     await Future.wait(
       importedApps.map((a) async {
@@ -4699,9 +4824,11 @@ class AppsProvider with ChangeNotifier {
     );
     await saveApps(importedApps, onlyIfExists: false);
     notifyListeners();
+
     if (newFormat && decodedJSON['settings'] != null) {
       var settingsMap = decodedJSON['settings'] as Map<String, Object?>;
       settingsMap.forEach((key, value) {
+        if (key == 'appFolders') return; // Skip folder settings as we already merged/saved them
         if (value is int) {
           settingsProvider.prefs?.setInt(key, value);
         } else if (value is double) {
@@ -4717,6 +4844,7 @@ class AppsProvider with ChangeNotifier {
           settingsProvider.prefs?.setString(key, value as String);
         }
       });
+      await settingsProvider.initializeSettings();
     }
     return MapEntry<List<App>, bool>(
       importedApps,
@@ -4760,7 +4888,7 @@ class AppsProvider with ChangeNotifier {
       if (folder.rule == null) continue;
       if (excludedFolderIdsForApp(app).contains(folder.id)) continue;
       if (folder.rule!.matches(app, resolvedSource: resolvedSource)) {
-        addAppToFolder(app, folder.id);
+        addAppToFolder(app, folder.id, folder.name);
         changed = true;
       }
     }

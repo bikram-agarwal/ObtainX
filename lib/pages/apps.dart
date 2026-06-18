@@ -2468,6 +2468,7 @@ class AppsPageState extends State<AppsPage> {
       ),
     );
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
+    final existingFolderIds = settingsProvider.appFolders.map((f) => f.id).toSet();
     final double appsListGroupCardRadius = settingsProvider.cardCornerRadiusFor(
       kM3eGroupCardRadius,
     );
@@ -2570,7 +2571,7 @@ class AppsPageState extends State<AppsPage> {
         } else {
           refreshFuture = appsProvider.checkUpdates(
             specificIds: appsProvider.apps.values
-                .where((a) => folderIdsForApp(a.app).isEmpty)
+                .where((a) => folderIdsForApp(a.app).where((id) => existingFolderIds.contains(id)).isEmpty)
                 .map((a) => a.app.id)
                 .toList(),
           );
@@ -2682,7 +2683,7 @@ class AppsPageState extends State<AppsPage> {
         // On the main page only: hide apps that belong to any folder.
         // The on-demand page shows all on-demand apps regardless of folder membership.
         workingList = workingList
-            .where((appInMem) => folderIdsForApp(appInMem.app).isEmpty)
+            .where((appInMem) => folderIdsForApp(appInMem.app).where((id) => existingFolderIds.contains(id)).isEmpty)
             .toList();
       }
 
@@ -5069,7 +5070,7 @@ class AppsPageState extends State<AppsPage> {
         final before = List<String>.from(
           app.additionalSettings['folderIds'] as List? ?? [],
         );
-        addAppToFolder(app, folder.id);
+        addAppToFolder(app, folder.id, folder.name);
         final after = List<String>.from(
           app.additionalSettings['folderIds'] as List? ?? [],
         );
@@ -5507,7 +5508,7 @@ class AppsPageState extends State<AppsPage> {
                     // Add to newly-checked folders, remove from unchecked ones.
                     for (final f in folders) {
                       if (selected.contains(f.id)) {
-                        addAppToFolder(app, f.id);
+                        addAppToFolder(app, f.id, f.name);
                       } else if (commonFolderIds.contains(f.id)) {
                         removeAppFromFolder(app, f.id);
                       }
