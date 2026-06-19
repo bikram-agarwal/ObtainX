@@ -102,7 +102,7 @@ Instead of one long wall of options, settings are grouped into **separate boxes*
 <img src="https://github.com/user-attachments/assets/6fff2569-44f5-4bdb-902f-ce5e1121d21b" alt="Obtainium add app options" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/add_app_url.jpg" alt="ObtainX add app URL and options" width="300" /><br /><strong>ObtainX</strong>
+<img src="../assets/screenshots/add_app_url.jpg" alt="ObtainX add app URL and options" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>
@@ -147,7 +147,7 @@ Settings gets the **same card-based layout** as the rest of the app: related opt
 <img src="https://github.com/user-attachments/assets/4ba8a63b-8aaf-4fc2-a447-14e119199148" alt="Obtainium settings" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/Compare_Settings.jpg" alt="ObtainX settings" width="300" /><br /><strong>ObtainX</strong>
+<img src="../assets/screenshots/Compare_Settings.jpg" alt="ObtainX settings" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>
@@ -164,36 +164,36 @@ ObtainX surfaces **finer-grained states** rather than forcing every situation in
 <table>
 <tr>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/App_Up_to_Date.jpg" alt="ObtainX status: up to date" width="300" /><br />
+<img src="../assets/screenshots/App_Up_to_Date.jpg" alt="ObtainX status: up to date" width="300" /><br />
 <strong>Up to date</strong><br />
 What's on your device matches what the source is offering — you're current.
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/App_Update.jpg" alt="ObtainX status: update available" width="300" /><br />
+<img src="../assets/screenshots/App_Update.jpg" alt="ObtainX status: update available" width="300" /><br />
 <strong>Update available</strong><br />
 The source has a newer version than what's installed — time to update.
 </td>
 </tr>
 <tr>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/App_Newer.jpg" alt="ObtainX status: newer on device" width="300" /><br />
+<img src="../assets/screenshots/App_Newer.jpg" alt="ObtainX status: newer on device" width="300" /><br />
 <strong>Device has a higher version</strong><br />
 Your installed version is ahead of what the source advertises. Common with betas, sideloads, or sources that lag behind the actual release — shown correctly rather than flagged as a false update.
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/App_Same_Build.jpg" alt="ObtainX status: same version different label" width="300" /><br />
+<img src="../assets/screenshots/App_Same_Build.jpg" alt="ObtainX status: same version different label" width="300" /><br />
 <strong>Same version, shown differently</strong><br />
 The version is the same, but the text from the source and from Android don't match exactly. ObtainX recognizes this and doesn't send you chasing an "update" that isn't really one.
 </td>
 </tr>
 <tr>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/App_Uncertain.jpg" alt="ObtainX status: unclear comparison" width="300" /><br />
+<img src="../assets/screenshots/App_Uncertain.jpg" alt="ObtainX status: unclear comparison" width="300" /><br />
 <strong>Genuinely unclear</strong><br />
 Sometimes two versions can't be fairly compared — for example when a developer labels releases with commit hashes instead of version numbers. Rather than guessing, ObtainX says so and lets you check for yourself or skip it.
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/App_Not_Installed.jpg" alt="ObtainX status: unclear comparison" width="300" /><br />
+<img src="../assets/screenshots/App_Not_Installed.jpg" alt="ObtainX status: unclear comparison" width="300" /><br />
 <strong>App not installed</strong><br />
 This app is currently not installed on you device. Tip: if ObtainX somehow fetched a wrong package id when you added the app, that will cause it say "App not installed". In that case, you can click edit and fix the package id. 
 </td>
@@ -245,21 +245,21 @@ ObtainX reads every app installed on your device, searches each of your chosen s
 <table>
 <tr>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/Bulk_Add_1.jpg" alt="Select apps from device" width="300" /><br />
+<img src="../assets/screenshots/Bulk_Add_1.jpg" alt="Select apps from device" width="300" /><br />
 <strong>Select</strong><br />Filter by app type, pick your stores, toggle Skip tracked / Skip privileged, search, select all or hand-pick.
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/Bulk_Add_2.jpg" alt="Scanning stores in parallel" width="300" /><br />
+<img src="../assets/screenshots/Bulk_Add_2.jpg" alt="Scanning stores in parallel" width="300" /><br />
 <strong>Scan</strong><br />Stores are searched, with live per-store progress. Results are cached — repeat scans skip what's already known.
 </td>
 </tr>
 <tr>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/Bulk_Add_3.jpg" alt="Results with store badges" width="300" /><br />
+<img src="../assets/screenshots/Bulk_Add_3.jpg" alt="Results with store badges" width="300" /><br />
 <strong>Review</strong><br />Found / Not found summary at a glance. Each result shows which store(s) it was found on. Uncheck anything you don't want.
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/Bulk_Add_4.jpg" alt="Adding apps in progress" width="300" /><br />
+<img src="../assets/screenshots/Bulk_Add_4.jpg" alt="Adding apps in progress" width="300" /><br />
 <strong>Add</strong><br />Tap "Add N found apps." Live progress as they're added. Cancel any time.
 </td>
 </tr>
