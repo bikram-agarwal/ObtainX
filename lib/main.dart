@@ -1,5 +1,4 @@
 import 'dart:async' show unawaited;
-import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
@@ -203,16 +202,6 @@ class MyTaskHandler extends TaskHandler {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   installDiagnosticErrorLogging();
-  try {
-    ByteData data = await PlatformAssetBundle().load(
-      'assets/ca/lets-encrypt-r3.pem',
-    );
-    SecurityContext.defaultContext.setTrustedCertificatesBytes(
-      data.buffer.asUint8List(),
-    );
-  } catch (e) {
-    // Already added, do nothing (see #375)
-  }
   await EasyLocalization.ensureInitialized();
   if ((await DeviceInfoPlugin().androidInfo).version.sdkInt >= 29) {
     SystemChrome.setSystemUIOverlayStyle(

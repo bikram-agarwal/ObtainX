@@ -143,6 +143,28 @@ Because of that, GitHub only shows:
 
 ---
 
+## When ObtainX re-checks a build
+
+These verification lookups talk to the internet (and, for GitHub, count against your API limits), so ObtainX avoids repeating them on every single update check when the answer can't have changed. The rule of thumb:
+
+> ObtainX always re-checks when a **new version** appears. Between versions, it reuses the last result — *unless* that result is one that could still improve on its own, in which case it keeps checking.
+
+The two checks behave differently here, because the two systems publish their proof at different times:
+
+| Source | Once the result is **Verified Build** | Other "no proof" results | If the result is **Can't Check** |
+|---|---|---|---|
+| **F-Droid / Izzy** | Kept for the current version — not re-checked until a new version arrives. | **No Verification Data** / **Mismatched Build**: **keeps re-checking on every update check.** | Keeps re-checking. |
+| **GitHub** | Kept for the current version. | **Unverified Build**: kept for the current version — not re-checked until a new version arrives. | Keeps re-checking until it gets a real answer. |
+
+Why the difference for an unverified result:
+
+- **F-Droid / Izzy:** a freshly released build can start out as **No Verification Data** and then turn into **Verified Build** a few hours later. This is normal: the reproducible-build check is finished *after* the app is published, so the proof shows up later for the same version. ObtainX keeps re-checking these until they become verified, so you don't get stuck looking at an outdated "no data" result.
+- **GitHub:** the proof is published *together with* the release and is tied to that exact file — it is not added afterward. So an **Unverified Build** result won't change for the same version, and re-asking would only waste API calls. ObtainX keeps that answer until a new version appears.
+
+In both cases, a **Can't Check** result is always retried later, because that just means the check itself couldn't run that time (network, rate limit, etc.) — not that there's a real answer to keep.
+
+---
+
 ## What these checks do not prove
 
 Build verification is not the same as app safety.

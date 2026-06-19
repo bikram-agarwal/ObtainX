@@ -933,6 +933,15 @@ abstract class AppSource {
   bool urlsAlwaysHaveExtension = false;
   bool allowIncludeZips = false;
 
+  /// Transient per-check context: the app as it was known before this update
+  /// check, set by [SourceProvider.getApp] right before [getLatestAPKDetails].
+  /// Lets a source skip an expensive *secondary* verification network round-trip
+  /// (GitHub attestation API, F-Droid fdroiddata metadata YAML) when the raw
+  /// upstream version is unchanged since the last check, reusing the cached
+  /// result instead. Not persisted; safe to read because [SourceProvider.getSource]
+  /// hands each check its own source instance.
+  App? previouslyCheckedApp;
+
   AppSource() {
     name = runtimeType.toString();
   }
@@ -1590,6 +1599,9 @@ class SourceProvider {
     }
     syncVersionStringSourceSettings(additionalSettings);
     String standardUrl = source.standardizeUrl(url);
+    // Hand the source the previously-known app so it can skip redundant
+    // verification round-trips when the upstream release hasn't changed.
+    source.previouslyCheckedApp = currentApp;
     APKDetails apk = await source.getLatestAPKDetails(
       standardUrl,
       additionalSettings,

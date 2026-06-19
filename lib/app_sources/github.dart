@@ -1027,15 +1027,32 @@ class GitHub extends AppSource {
         }
       }
       final String? preferredAssetDigest = preferredAsset?['digest'] as String?;
-      final String? attestationStatus = shouldCheckAttestation
-          ? preferredAssetDigest != null
-                ? await getAttestationStatusForSha256Digest(
-                    standardUrl,
-                    preferredAssetDigest,
-                    additionalSettings,
-                  )
-                : githubAttestationStatusError
-          : null;
+      // Skip the attestation API round-trip when the upstream release is
+      // unchanged and we hold a CONCLUSIVE cached verdict. Unlike F-Droid's
+      // reproducible status (which flips no_data -> verified asynchronously
+      // after publish), a GitHub attestation is produced inside the release
+      // workflow run that builds the asset and bound to its digest, so for an
+      // unchanged release both 'verified' and 'unsupported' (no attestation for
+      // this digest) are stable. Only a cached 'error' is re-checked, since
+      // that is a transient lookup failure, not a real verdict.
+      final App? prevApp = previouslyCheckedApp;
+      final bool canReuseCachedAttestation =
+          prevApp != null &&
+          prevApp.rawLatestVersionFromSource != null &&
+          prevApp.rawLatestVersionFromSource == version &&
+          prevApp.latestAttestationStatus != null &&
+          prevApp.latestAttestationStatus != githubAttestationStatusError;
+      final String? attestationStatus = !shouldCheckAttestation
+          ? null
+          : canReuseCachedAttestation
+          ? prevApp.latestAttestationStatus
+          : preferredAssetDigest != null
+          ? await getAttestationStatusForSha256Digest(
+              standardUrl,
+              preferredAssetDigest,
+              additionalSettings,
+            )
+          : githubAttestationStatusError;
       return APKDetails(
         version,
         apkUrls,

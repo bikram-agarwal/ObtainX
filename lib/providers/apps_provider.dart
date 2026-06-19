@@ -1493,6 +1493,15 @@ class AppsProvider with ChangeNotifier {
   // in the app. Skip a foreground reload if one completed recently.
   static const Duration _foregroundLoadCooldown = Duration(seconds: 5);
   DateTime? _lastForegroundLoadAt;
+
+  // Watermark for [loadApps]' incremental JSON parse. A full load (singleId ==
+  // null) stamps this with the time the load started. On a subsequent full
+  // load, any app JSON whose file mtime predates the watermark is reused from
+  // memory instead of being re-read + re-decoded — so a foreground resume with
+  // a large library doesn't re-run hundreds of synchronous jsonDecode /
+  // App.fromJson calls on the UI isolate. Files written since the watermark
+  // (e.g. by the background update task) advance their mtime and are re-parsed.
+  DateTime? _lastFullDiskLoadAt;
   late Directory apkDir;
   late Directory iconsCacheDir;
 
@@ -3459,19 +3468,62 @@ class AppsProvider with ChangeNotifier {
     await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
     var sp = SourceProvider();
     List<List<String>> errors = [];
-    var installedAppsData = await getAllInstalledInfo(
-      light: lightInstalledInfoFetch,
-    );
+    // Always use the light (no signing-cert) flags. The load/reconcile path
+    // only needs versionName / versionCode / lastUpdateTime via
+    // getCorrectedInstallStatusAppIfPossible; enumerating signing certificates
+    // for every device package is ~10× more expensive and nothing in this path
+    // consumes them (cert hashes, if ever needed, are fetched on demand). The
+    // [lightInstalledInfoFetch] param is retained for call-site compatibility
+    // but no longer changes the flags. This keeps the cold start from stalling
+    // on the single most expensive PackageManager call.
+    var installedAppsData = await getAllInstalledInfo(light: true);
+    // Index the device's installed packages once. The previous per-app
+    // `firstWhere` was an O(tracked × installed) scan on the UI isolate.
+    final Map<String, PackageInfo> installedInfoByPackage = {
+      for (final info in installedAppsData)
+        if (info.packageName != null) info.packageName!: info,
+    };
     List<String> removedAppIds = [];
     bool anyAppModded = false;
+    final DateTime? reuseWatermark = singleId == null
+        ? _lastFullDiskLoadAt
+        : null;
+    final DateTime diskLoadStartedAt = DateTime.now();
     await Future.wait(
       (await (await getAppsDir()).list().toList()) // Parse Apps from JSON
           .map((item) async {
+            if (!item.path.toLowerCase().endsWith('.json')) return;
+            final String fileName = item.path.split('/').last;
+            if (singleId != null &&
+                fileName.toLowerCase() != '${singleId.toLowerCase()}.json') {
+              return;
+            }
+            // App JSON files are named `${app.id}.json`, so the id can be
+            // recovered from the filename without reading the file.
+            final String idFromFile = fileName.substring(
+              0,
+              fileName.length - '.json'.length,
+            );
             App? app;
-            if (item.path.toLowerCase().endsWith('.json') &&
-                (singleId == null ||
-                    item.path.split('/').last.toLowerCase() ==
-                        '${singleId.toLowerCase()}.json')) {
+            bool reused = false;
+            // Incremental parse: reuse the in-memory app when its JSON file
+            // has not changed since the last full load. Skips both the file
+            // read and the synchronous decode. stat() runs on the dart:io
+            // thread pool, off the UI isolate; the cold start (no watermark)
+            // skips stat entirely and parses everything.
+            final AppInMemory? existing = apps[idFromFile];
+            if (existing != null && reuseWatermark != null) {
+              try {
+                final FileStat stat = await item.stat();
+                if (stat.modified.isBefore(reuseWatermark)) {
+                  app = existing.app;
+                  reused = true;
+                }
+              } catch (_) {
+                // stat failed — fall through to a normal parse.
+              }
+            }
+            if (!reused) {
               try {
                 app = App.fromJson(
                   jsonDecode(await File(item.path).readAsString()),
@@ -3488,30 +3540,28 @@ class AppsProvider with ChangeNotifier {
               }
             }
             if (app != null) {
-              // Save the app to the in-memory list without grabbing any OS info first
-              apps.update(
-                app.id,
-                (value) => AppInMemory(
-                  app!,
-                  value.downloadProgress,
-                  value.installedInfo,
-                  value.icon,
-                ),
-                ifAbsent: () => AppInMemory(app!, null, null, null),
-              );
+              if (!reused) {
+                // Save the app to the in-memory list without grabbing any OS info first
+                apps.update(
+                  app.id,
+                  (value) => AppInMemory(
+                    app!,
+                    value.downloadProgress,
+                    value.installedInfo,
+                    value.icon,
+                  ),
+                  ifAbsent: () => AppInMemory(app!, null, null, null),
+                );
+              }
               try {
                 // Try getting the app's source to ensure no invalid apps get loaded
                 sp.getSource(app.url, overrideSource: app.overrideSource);
-                // If the app is installed, grab its OS data and reconcile install statuses
-                PackageInfo? installedInfo;
-                try {
-                  installedInfo = installedAppsData.firstWhere(
-                    (i) => i.packageName == app!.id,
-                  );
-                } catch (e) {
-                  // If the app isn't installed the above throws an error
-                }
-                // Reconcile differences between the installed and recorded install info
+                // Reconcile install status against the device package list.
+                // This runs even for reused apps: the JSON may be unchanged
+                // while the package was installed/uninstalled/updated
+                // externally since the last load.
+                final PackageInfo? installedInfo =
+                    installedInfoByPackage[app.id];
                 var moddedApp = getCorrectedInstallStatusAppIfPossible(
                   app,
                   installedInfo,
@@ -3541,6 +3591,11 @@ class AppsProvider with ChangeNotifier {
             }
           }),
     );
+    // Stamp the watermark only after a full load completed its parse pass, so
+    // the next full load can reuse everything that hasn't changed since.
+    if (singleId == null) {
+      _lastFullDiskLoadAt = diskLoadStartedAt;
+    }
     if (errors.isNotEmpty) {
       removeApps(errors.map((e) => e[0]).toList());
       NotificationsProvider().notify(
@@ -3682,6 +3737,37 @@ class AppsProvider with ChangeNotifier {
     }
   }
 
+  /// Fetches the installed app's launcher icon via the platform channel,
+  /// tolerating a missing package. When [PackageManager.getAppIcon] is called
+  /// for an app whose package is no longer resolvable (e.g. uninstalled for the
+  /// current user, or a track-only app that was never installed), the JNI hop
+  /// throws `NameNotFoundException`. Previously this surfaced as an uncaught
+  /// Dart error on every row warm. Here we swallow it, drop the stale
+  /// [AppInMemory.installedInfo] so the dead lookup isn't retried, and let the
+  /// caller fall back to the app's [App.iconUrl].
+  Future<Uint8List?> _getInstalledAppIconSafely(String appId) async {
+    final applicationInfo = apps[appId]?.installedInfo?.applicationInfo;
+    if (applicationInfo == null) return null;
+    try {
+      return await applicationInfo.getAppIcon();
+    } catch (e) {
+      logs.add('App icon unavailable for $appId (clearing stale info): $e');
+      final AppInMemory? existing = apps[appId];
+      if (existing != null && existing.installedInfo != null) {
+        apps.update(
+          appId,
+          (value) => AppInMemory(
+            value.app,
+            value.downloadProgress,
+            null,
+            value.icon,
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
   Future<void> updateAppIcon(String? appId, {bool ignoreCache = false}) async {
     if (appId == null || apps[appId] == null) return;
 
@@ -3720,9 +3806,12 @@ class AppsProvider with ChangeNotifier {
       await cachedIcon.delete();
     }
     var alreadyCached = cachedIcon.existsSync() && !ignoreCache;
-    Uint8List? icon = alreadyCached
-        ? await cachedIcon.readAsBytes()
-        : await apps[appId]!.installedInfo?.applicationInfo?.getAppIcon();
+    Uint8List? icon;
+    if (alreadyCached) {
+      icon = await cachedIcon.readAsBytes();
+    } else {
+      icon = await _getInstalledAppIconSafely(appId);
+    }
     if (icon == null && !alreadyCached) {
       final url = apps[appId]!.app.iconUrl;
       if (url != null && url.isNotEmpty) {
@@ -3789,8 +3878,7 @@ class AppsProvider with ChangeNotifier {
         logs.add('loadIconPreviewExcludingUserOverride cache: $e');
       }
     }
-    Uint8List? icon = await apps[appId]!.installedInfo?.applicationInfo
-        ?.getAppIcon();
+    Uint8List? icon = await _getInstalledAppIconSafely(appId);
     if (icon == null) {
       final String? url = apps[appId]!.app.iconUrl;
       if (url != null && url.isNotEmpty) {
@@ -3933,7 +4021,14 @@ class AppsProvider with ChangeNotifier {
           if (installedUnchanged) {
             icon = cachedInMemory.icon;
           } else {
-            icon = await info?.applicationInfo?.getAppIcon();
+            try {
+              // getAppIcon() is a JNI hop that throws NameNotFoundException if
+              // the package vanished between getInstalledInfo() and here.
+              icon = await info?.applicationInfo?.getAppIcon();
+            } catch (e) {
+              logs.add('App icon unavailable while saving ${app.id}: $e');
+              icon = null;
+            }
             String? localizedLabel;
             if (Platform.isAndroid && info != null) {
               final labelsByPackageName =
