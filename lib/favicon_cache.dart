@@ -18,7 +18,7 @@ class FaviconCache {
   static Future<File> _fileFor(String host) async {
     final base = await getApplicationCacheDirectory();
     final dir = Directory('${base.path}/favicons');
-    if (!dir.existsSync()) dir.createSync(recursive: true);
+    if (!await dir.exists()) await dir.create(recursive: true);
     return File('${dir.path}/${_fileName(host)}');
   }
 
@@ -28,8 +28,8 @@ class FaviconCache {
     if (_mem.containsKey(host)) return _mem[host];
 
     final file = await _fileFor(host);
-    if (file.existsSync()) {
-      final bytes = file.readAsBytesSync();
+    if (await file.exists()) {
+      final bytes = await file.readAsBytes();
       _mem[host] = bytes;
       return bytes;
     }

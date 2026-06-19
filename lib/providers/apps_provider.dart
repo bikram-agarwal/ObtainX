@@ -1017,9 +1017,9 @@ Future<String?> checkETagHeader(
       .toString();
 }
 
-void deleteFile(File file) {
+Future<void> deleteFile(File file) async {
   try {
-    file.deleteSync(recursive: true);
+    await file.delete(recursive: true);
   } on PathAccessException catch (e) {
     throw ObtainiumError(
       tr('fileDeletionError', args: [e.path ?? tr('unknown')]),
@@ -1170,8 +1170,8 @@ Future<File> _downloadFile(
   // decide whether you can use it (either return full or resume partial)
   var fullContentLength = headersResponse.contentLength;
   onContentLength?.call(fullContentLength);
-  if (useExisting && downloadedFile.existsSync()) {
-    var length = downloadedFile.lengthSync();
+  if (useExisting && await downloadedFile.exists()) {
+    var length = await downloadedFile.length();
     if (fullContentLength == null || !rangeFeatureEnabled) {
       // If there is no content length reported, assume it the existing file is fully downloaded
       // Also if the range feature is not supported, don't trust the content length if any (#1542)
@@ -1191,7 +1191,7 @@ Future<File> _downloadFile(
   File tempDownloadedFile = File('${downloadedFile.path}.part');
 
   // If there is already a temp file, a download may already be in progress - account for this (see #2073)
-  bool tempFileExists = tempDownloadedFile.existsSync();
+  bool tempFileExists = await tempDownloadedFile.exists();
   if (tempFileExists && useExisting) {
     logs?.add(
       'Partial download exists - will wait: ${tempDownloadedFile.uri.pathSegments.last}',
@@ -1203,7 +1203,7 @@ Future<File> _downloadFile(
       cancelToken?.throwIfCancelled();
       await Future.delayed(const Duration(seconds: 7));
       cancelToken?.throwIfCancelled();
-      if (tempDownloadedFile.existsSync()) {
+      if (await tempDownloadedFile.exists()) {
         int newTempFileSize = await tempDownloadedFile.length();
         if (newTempFileSize > currentTempFileSize) {
           currentTempFileSize = newTempFileSize;
@@ -1217,7 +1217,7 @@ Future<File> _downloadFile(
           break;
         }
       } else {
-        shouldReturn = downloadedFile.existsSync();
+        shouldReturn = await downloadedFile.exists();
       }
     }
     if (shouldReturn) {
@@ -1235,8 +1235,8 @@ Future<File> _downloadFile(
   // If the range feature is not available (or you need to start a ranged req from 0),
   // complete the already-started request, else cancel it and start a ranged request,
   // and open the file for writing in the appropriate mode
-  var targetFileLength = useExisting && tempDownloadedFile.existsSync()
-      ? tempDownloadedFile.lengthSync()
+  var targetFileLength = useExisting && await tempDownloadedFile.exists()
+      ? await tempDownloadedFile.length()
       : null;
   int rangeStart = targetFileLength ?? 0;
   IOSink? sink;
@@ -1245,8 +1245,8 @@ Future<File> _downloadFile(
   if (rangeFeatureEnabled && fullContentLength != null && rangeStart > 0) {
     reqHeaders.addAll({'range': 'bytes=$rangeStart-${fullContentLength - 1}'});
     sink = tempDownloadedFile.openWrite(mode: FileMode.writeOnlyAppend);
-  } else if (tempDownloadedFile.existsSync()) {
-    deleteFile(tempDownloadedFile);
+  } else if (await tempDownloadedFile.exists()) {
+    await deleteFile(tempDownloadedFile);
   }
   var responseWithClient = await sourceRequestStreamResponse(
     'GET',
@@ -1309,8 +1309,8 @@ Future<File> _downloadFile(
   } catch (_) {
     responseClient.close(force: true);
     if (cancelToken?.isCancelled == true) {
-      if (tempDownloadedFile.existsSync()) {
-        deleteFile(tempDownloadedFile);
+      if (await tempDownloadedFile.exists()) {
+        await deleteFile(tempDownloadedFile);
       }
       throw DownloadCancelledError();
     }
@@ -1324,11 +1324,11 @@ Future<File> _downloadFile(
     onProgress(progress);
   }
   if (response.statusCode < 200 || response.statusCode > 299) {
-    deleteFile(tempDownloadedFile);
+    await deleteFile(tempDownloadedFile);
     throw response.reasonPhrase;
   }
-  if (tempDownloadedFile.existsSync()) {
-    tempDownloadedFile.renameSync(downloadedFile.path);
+  if (await tempDownloadedFile.exists()) {
+    await tempDownloadedFile.rename(downloadedFile.path);
   }
   responseClient.close();
   return downloadedFile;
@@ -1705,7 +1705,7 @@ class AppsProvider with ChangeNotifier {
       app.allowIdChange = false;
       var originalAppId = app.id;
       app.id = newInfo.packageName!;
-      downloadedFile = downloadedFile.renameSync(
+      downloadedFile = await downloadedFile.rename(
         '${downloadedFile.parent.path}/${app.id}-${downloadUrl.hashCode}.${downloadedFile.path.split('.').last}',
       );
       if (apps[originalAppId] != null) {
@@ -1920,7 +1920,7 @@ class AppsProvider with ChangeNotifier {
         String apkDirPath = '${downloadedFile.path}-dir';
         await unzipFile(downloadedFile.path, '${downloadedFile.path}-dir');
         extractedDir = Directory(apkDirPath);
-        var apks = extractedDir.listSync().where((e) => isApk(e.path)).toList();
+        var apks = (await extractedDir.list().toList()).where((e) => isApk(e.path)).toList();
 
         FileSystemEntity? temp;
         apks.removeWhere((element) {
@@ -1976,12 +1976,12 @@ class AppsProvider with ChangeNotifier {
         downloadUrl,
       );
       // Delete older versions of the file if any
-      for (var file in downloadedFile.parent.listSync()) {
+      for (var file in await downloadedFile.parent.list().toList()) {
         var fn = file.path.split('/').last;
         if (fn.startsWith('${app.id}-') &&
-            FileSystemEntity.isFileSync(file.path) &&
+            await FileSystemEntity.isFile(file.path) &&
             file.path != downloadedFile.path) {
-          file.delete(recursive: true);
+          await file.delete(recursive: true);
         }
       }
       if (isAPK) {
@@ -2112,10 +2112,12 @@ class AppsProvider with ChangeNotifier {
       (await getInstalledInfo('com.berdik.letmedowngrade')) != null;
 
   Future<void> unzipFile(String filePath, String destinationPath) async {
-    await ZipFile.extractToDirectory(
-      zipFile: File(filePath),
-      destinationDir: Directory(destinationPath),
-    );
+    await Isolate.run<void>(() async {
+      await ZipFile.extractToDirectory(
+        zipFile: File(filePath),
+        destinationDir: Directory(destinationPath),
+      );
+    }, debugName: 'apk-unzip');
   }
 
   Uri? _documentUriFromSafPluginResult(dynamic pluginResult) {
@@ -2201,11 +2203,11 @@ class AppsProvider with ChangeNotifier {
         );
         if (reproducibleBuildEnforcementBlocksInstall(app, source)) {
           try {
-            if (dir.file.existsSync()) {
-              dir.file.deleteSync();
+            if (await dir.file.exists()) {
+              await dir.file.delete();
             }
-            if (dir.extracted.existsSync()) {
-              dir.extracted.deleteSync(recursive: true);
+            if (await dir.extracted.exists()) {
+              await dir.extracted.delete(recursive: true);
             }
           } catch (_) {}
           throw ObtainiumError(reproducibleBuildEnforcedBlockedMessage());
@@ -2238,12 +2240,12 @@ class AppsProvider with ChangeNotifier {
           if (enforceAttest &&
               attestationStatus != githubAttestationStatusVerified) {
             try {
-              if (dir.file.existsSync()) {
-                dir.file.deleteSync();
-              }
-              if (dir.extracted.existsSync()) {
-                dir.extracted.deleteSync(recursive: true);
-              }
+              if (await dir.file.exists()) {
+              await dir.file.delete();
+            }
+              if (await dir.extracted.exists()) {
+              await dir.extracted.delete(recursive: true);
+            }
             } catch (_) {}
             throw ObtainiumError(
               tr(
@@ -2258,8 +2260,7 @@ class AppsProvider with ChangeNotifier {
       MultiAppMultiError errors = MultiAppMultiError();
       List<File> apkFiles = [];
       for (var file
-          in dir.extracted
-              .listSync(recursive: true, followLinks: false)
+          in (await dir.extracted.list(recursive: true, followLinks: false).toList())
               .whereType<File>()) {
         if (isApk(file.path)) {
           apkFiles.add(file);
@@ -2296,7 +2297,7 @@ class AppsProvider with ChangeNotifier {
           skipApkSaveFolderPersistForPrimaryApk: true,
           thirdPartyHandoffContainerPath:
               settingsProvider.installerMode == 'legacy' &&
-                  dir.file.existsSync()
+                  await dir.file.exists()
               ? dir.file.path
               : null,
         );
@@ -2330,7 +2331,7 @@ class AppsProvider with ChangeNotifier {
           saveApkCopies &&
           appForSave != null &&
           resolvedApkSaveUri != null &&
-          dir.file.existsSync()) {
+          await dir.file.exists()) {
         try {
           bundleCopiedOk = await _chunkedCopyApkToSafTree(
             dir.file,
@@ -2348,7 +2349,7 @@ class AppsProvider with ChangeNotifier {
           appForSave != null && isSkipActiveForCurrentLatest(appForSave);
       final bool hasSaveFolder = saveApkCopies && resolvedApkSaveUri != null;
       final bool shouldDeleteBundle;
-      if (hasSaveFolder && appForSave != null && dir.file.existsSync()) {
+      if (hasSaveFolder && appForSave != null && await dir.file.exists()) {
         shouldDeleteBundle =
             bundleCopiedOk && (somethingInstalled || skipLatest);
       } else if (!saveApkCopies) {
@@ -2367,12 +2368,12 @@ class AppsProvider with ChangeNotifier {
         shouldDeleteBundle =
             somethingInstalled || (!somethingInstalled && skipLatest);
       }
-      if (shouldDeleteBundle && dir.file.existsSync()) {
+      if (shouldDeleteBundle && await dir.file.exists()) {
         try {
-          dir.file.deleteSync();
+          await dir.file.delete();
         } catch (_) {}
       }
-      dir.extracted.delete(recursive: true);
+      unawaited(dir.extracted.delete(recursive: true));
     } catch (exception, stackTrace) {
       logs.add(
         'Post-install bundle disposition failed: ${exception.toString()}\n$stackTrace',
@@ -2413,12 +2414,12 @@ class AppsProvider with ChangeNotifier {
         );
         if (reproducibleBuildEnforcementBlocksInstall(app, source)) {
           try {
-            if (file.file.existsSync()) {
-              file.file.deleteSync();
+            if (await file.file.exists()) {
+              await file.file.delete();
             }
             for (var additionalApk in additionalAPKs) {
-              if (additionalApk.file.existsSync()) {
-                additionalApk.file.deleteSync();
+              if (await additionalApk.file.exists()) {
+                await additionalApk.file.delete();
               }
             }
           } catch (_) {}
@@ -2452,13 +2453,13 @@ class AppsProvider with ChangeNotifier {
           if (enforceAttest &&
               attestationStatus != githubAttestationStatusVerified) {
             try {
-              if (file.file.existsSync()) {
-                file.file.deleteSync();
-              }
+              if (await file.file.exists()) {
+              await file.file.delete();
+            }
               for (var a in additionalAPKs) {
-                if (a.file.existsSync()) {
-                  a.file.deleteSync();
-                }
+                if (await a.file.exists()) {
+              await a.file.delete();
+            }
               }
             } catch (_) {}
             throw ObtainiumError(
@@ -2474,8 +2475,11 @@ class AppsProvider with ChangeNotifier {
       if (firstTimeWithContext != null &&
           settingsProvider.beforeNewInstallsShareToAppVerifier &&
           (await getInstalledInfo('dev.soupslurpr.appverifier')) != null) {
+        final Uint8List apkBytes = await Isolate.run<Uint8List>(() async {
+          return await file.file.readAsBytes();
+        }, debugName: 'apk-read-bytes');
         XFile f = XFile.fromData(
-          file.file.readAsBytesSync(),
+          apkBytes,
           mimeType: 'application/vnd.android.package-archive',
         );
         Fluttertoast.showToast(
@@ -2489,9 +2493,9 @@ class AppsProvider with ChangeNotifier {
       );
       if (newInfo == null) {
         try {
-          deleteFile(file.file);
+          await deleteFile(file.file);
           for (var a in additionalAPKs) {
-            deleteFile(a.file);
+            await deleteFile(a.file);
           }
         } catch (e) {
           //
@@ -2530,7 +2534,7 @@ class AppsProvider with ChangeNotifier {
         }
         final String thirdPartyPathsArg;
         if (thirdPartyHandoffContainerPath != null &&
-            File(thirdPartyHandoffContainerPath).existsSync()) {
+            await File(thirdPartyHandoffContainerPath).exists()) {
           thirdPartyPathsArg = thirdPartyHandoffContainerPath;
         } else {
           thirdPartyPathsArg = [
@@ -2611,7 +2615,7 @@ class AppsProvider with ChangeNotifier {
       final bool hasSaveFolder = apkSaveTreeUri != null;
 
       var copiedOk = false;
-      if (hasSaveFolder && appRef != null && primaryFile.existsSync()) {
+      if (hasSaveFolder && appRef != null && await primaryFile.exists()) {
         try {
           copiedOk = await _chunkedCopyApkToSafTree(
             primaryFile,
@@ -2635,16 +2639,16 @@ class AppsProvider with ChangeNotifier {
         deletePrimary = !installReportedOk && skipLatest;
       }
 
-      if (deletePrimary && primaryFile.existsSync()) {
+      if (deletePrimary && await primaryFile.exists()) {
         try {
-          primaryFile.deleteSync();
+          await primaryFile.delete();
         } catch (_) {}
       }
       if (deletePrimary) {
         for (final suppliedApk in additionalAPKs) {
           try {
-            if (suppliedApk.file.existsSync()) {
-              suppliedApk.file.deleteSync();
+            if (await suppliedApk.file.exists()) {
+              await suppliedApk.file.delete();
             }
           } catch (_) {}
         }
@@ -2669,7 +2673,7 @@ class AppsProvider with ChangeNotifier {
     }
 
     String obbDirPath = "${await getStorageRootPath()}/Android/obb/$appId";
-    Directory(obbDirPath).createSync(recursive: true);
+    await Directory(obbDirPath).create(recursive: true);
 
     String obbFileName = file.path.split("/").last;
     await file.copy("$obbDirPath/$obbFileName");
@@ -3227,8 +3231,8 @@ class AppsProvider with ChangeNotifier {
     Directory appsDir = Directory(
       '${(await getAppStorageDir()).path}/app_data',
     );
-    if (!appsDir.existsSync()) {
-      appsDir.createSync();
+    if (!await appsDir.exists()) {
+      await appsDir.create();
     }
     return appsDir;
   }
@@ -3686,7 +3690,7 @@ class AppsProvider with ChangeNotifier {
     if (appId == null || apps[appId] == null) return;
 
     final File userIconFile = _userAppIconPngFile(appId);
-    if (userIconFile.existsSync()) {
+    if (await userIconFile.exists()) {
       try {
         final Uint8List iconBytes = await userIconFile.readAsBytes();
         if (_bytesLookLikePng(iconBytes)) {
@@ -3716,10 +3720,10 @@ class AppsProvider with ChangeNotifier {
     if (apps[appId]!.icon != null && !ignoreCache) return;
 
     var cachedIcon = File('${iconsCacheDir.path}/$appId.png');
-    if (ignoreCache && cachedIcon.existsSync()) {
+    if (ignoreCache && await cachedIcon.exists()) {
       await cachedIcon.delete();
     }
-    var alreadyCached = cachedIcon.existsSync() && !ignoreCache;
+    var alreadyCached = await cachedIcon.exists() && !ignoreCache;
     Uint8List? icon = alreadyCached
         ? await cachedIcon.readAsBytes()
         : await apps[appId]!.installedInfo?.applicationInfo?.getAppIcon();
@@ -3782,7 +3786,7 @@ class AppsProvider with ChangeNotifier {
   Future<Uint8List?> loadIconPreviewExcludingUserOverride(String appId) async {
     if (apps[appId] == null) return null;
     final File cachedIcon = File('${iconsCacheDir.path}/$appId.png');
-    if (cachedIcon.existsSync()) {
+    if (await cachedIcon.exists()) {
       try {
         return await cachedIcon.readAsBytes();
       } catch (e) {
@@ -3840,7 +3844,7 @@ class AppsProvider with ChangeNotifier {
   ) async {
     try {
       final File sourceFile = File(filePath);
-      if (!sourceFile.existsSync()) {
+      if (!await sourceFile.exists()) {
         return tr('unexpectedError');
       }
       final Uint8List bytes = await sourceFile.readAsBytes();
@@ -3854,8 +3858,8 @@ class AppsProvider with ChangeNotifier {
   Future<void> resetAppIconToDefault(String appId) async {
     if (apps[appId] == null) return;
     final File userFile = _userAppIconPngFile(appId);
-    if (userFile.existsSync()) {
-      deleteFile(userFile);
+    if (await userFile.exists()) {
+      await deleteFile(userFile);
     }
     await updateAppIcon(appId, ignoreCache: true);
   }
@@ -3900,6 +3904,27 @@ class AppsProvider with ChangeNotifier {
         notifyListeners();
       }
     }
+
+    // Batch pre-fetch: one `getInstalledPackages` call instead of N ×
+    // `getInstalledInfo` calls (each of which internally re-lists packages).
+    // For bulk saves (e.g. after a scan of 100+ apps) this eliminates
+    // hundreds of redundant platform-channel round-trips.
+    final Map<String, PackageInfo> installedByPackage;
+    final Map<String, String> labelsByPackage;
+    if (updateInstalledInfo && apps.isNotEmpty) {
+      final List<PackageInfo> allInstalled =
+          await getAllInstalledInfo(light: true);
+      installedByPackage = <String, PackageInfo>{
+        for (final pkg in allInstalled)
+          if (pkg.packageName != null) pkg.packageName!: pkg,
+      };
+      final List<String> appIds = apps.map((a) => a.id).toList();
+      labelsByPackage = await BulkImportService.getApplicationLabels(appIds);
+    } else {
+      installedByPackage = <String, PackageInfo>{};
+      labelsByPackage = <String, String>{};
+    }
+
     await Future.wait(
       apps.map((appToSave) async {
         var app = appToSave.deepCopy();
@@ -3917,6 +3942,33 @@ class AppsProvider with ChangeNotifier {
                   app.name.trim() == app.id ||
                   app.name.trim() == cachedName)) {
             app.name = cachedInMemory.app.name;
+          }
+        } else if (updateInstalledInfo && apps.isNotEmpty) {
+          // Use the pre-fetched batch data instead of per-app platform calls.
+          info = installedByPackage[app.id];
+          final bool installedUnchanged =
+              cachedInMemory != null &&
+                  cachedInMemory.installedInfo?.packageName == info?.packageName &&
+                  cachedInMemory.installedInfo?.versionName == info?.versionName &&
+                  cachedInMemory.installedInfo?.versionCode == info?.versionCode;
+          if (installedUnchanged) {
+            icon = cachedInMemory.icon;
+          } else {
+            icon = await info?.applicationInfo?.getAppIcon();
+            final String? localizedLabel = labelsByPackage[app.id]?.trim();
+            if (Platform.isAndroid && info != null) {
+              if (localizedLabel?.isNotEmpty != true) {
+                // Fallback: single app-specific call only when the batch
+                // lookup didn't produce a label (rare path).
+                info = await getInstalledInfo(app.id);
+              }
+            }
+            final String? appLabel = localizedLabel?.isNotEmpty == true
+                ? localizedLabel
+                : info?.applicationInfo?.nonLocalizedLabel?.toString().trim();
+            if (appLabel?.isNotEmpty == true) {
+              app.name = appLabel!;
+            }
           }
         } else {
           info = await getInstalledInfo(app.id);
@@ -3997,34 +4049,34 @@ class AppsProvider with ChangeNotifier {
     List<String> appIds, {
     bool deleteMainJson = true,
   }) async {
-    final List<FileSystemEntity> apkFiles = apkDir.listSync();
+    final List<FileSystemEntity> apkFiles = await apkDir.list().toList();
     final Directory appsDirectory = await getAppsDir();
     await Future.wait(
       appIds.map((String appId) async {
         if (deleteMainJson) {
           final File mainJson = File('${appsDirectory.path}/$appId.json');
-          if (mainJson.existsSync()) {
-            deleteFile(mainJson);
+          if (await mainJson.exists()) {
+            await deleteFile(mainJson);
           }
         }
         for (final FileSystemEntity element in apkFiles) {
           if (_fileBasename(element.path).startsWith('$appId-')) {
-            element.deleteSync(recursive: true);
+            await element.delete(recursive: true);
           }
         }
         final File standardIconCache = File('${iconsCacheDir.path}/$appId.png');
-        if (standardIconCache.existsSync()) {
-          deleteFile(standardIconCache);
+        if (await standardIconCache.exists()) {
+          await deleteFile(standardIconCache);
         }
         final File userIconStored = _userAppIconPngFile(appId);
-        if (userIconStored.existsSync()) {
-          deleteFile(userIconStored);
+        if (await userIconStored.exists()) {
+          await deleteFile(userIconStored);
         }
         final File legacyUserIconInCache = File(
           '${iconsCacheDir.path}/$appId.user.png',
         );
-        if (legacyUserIconInCache.existsSync()) {
-          deleteFile(legacyUserIconInCache);
+        if (await legacyUserIconInCache.exists()) {
+          await deleteFile(legacyUserIconInCache);
         }
       }),
     );
@@ -4047,18 +4099,18 @@ class AppsProvider with ChangeNotifier {
     final Directory pendingDir = Directory(
       '${appsDirectory.path}/pending_removal',
     );
-    if (!pendingDir.existsSync()) {
-      pendingDir.createSync(recursive: true);
+    if (!await pendingDir.exists()) {
+      await pendingDir.create(recursive: true);
     }
     final File sourceJson = File('${appsDirectory.path}/$appId.json');
-    if (!sourceJson.existsSync()) {
+    if (!await sourceJson.exists()) {
       return;
     }
     final File destinationJson = File('${pendingDir.path}/$appId.json');
-    if (destinationJson.existsSync()) {
-      deleteFile(destinationJson);
+    if (await destinationJson.exists()) {
+      await deleteFile(destinationJson);
     }
-    sourceJson.renameSync(destinationJson.path);
+    await sourceJson.rename(destinationJson.path);
   }
 
   Future<void> _restoreAppJsonFromPendingRemoval(String appId) async {
@@ -4067,14 +4119,14 @@ class AppsProvider with ChangeNotifier {
       '${appsDirectory.path}/pending_removal/$appId.json',
     );
     final File mainJson = File('${appsDirectory.path}/$appId.json');
-    if (!pendingJson.existsSync()) {
+    if (!await pendingJson.exists()) {
       return;
     }
-    if (mainJson.existsSync()) {
-      deleteFile(pendingJson);
+    if (await mainJson.exists()) {
+      await deleteFile(pendingJson);
       return;
     }
-    pendingJson.renameSync(mainJson.path);
+    await pendingJson.rename(mainJson.path);
   }
 
   /// Drops pending-removal JSON that no longer has an in-memory deferral (e.g. after process restart).
@@ -4083,10 +4135,10 @@ class AppsProvider with ChangeNotifier {
     final Directory pendingDir = Directory(
       '${appsDirectory.path}/pending_removal',
     );
-    if (!pendingDir.existsSync()) {
+    if (!await pendingDir.exists()) {
       return;
     }
-    for (final FileSystemEntity entity in pendingDir.listSync()) {
+    await for (final FileSystemEntity entity in pendingDir.list()) {
       if (entity is! File) continue;
       if (!entity.path.toLowerCase().endsWith('.json')) continue;
       final String fileName = _fileBasename(entity.path);
@@ -4094,7 +4146,7 @@ class AppsProvider with ChangeNotifier {
       if (_deferredObtainiumSnapshots.containsKey(appId)) {
         continue;
       }
-      deleteFile(entity);
+      await deleteFile(entity);
       await deleteObtainiumAppDiskData([appId], deleteMainJson: false);
     }
   }
@@ -4125,7 +4177,7 @@ class AppsProvider with ChangeNotifier {
       if (snapshot == null) continue;
       await _restoreAppJsonFromPendingRemoval(appId);
       final File mainJson = File('${(await getAppsDir()).path}/$appId.json');
-      if (!mainJson.existsSync()) {
+      if (!await mainJson.exists()) {
         await saveApps(
           [snapshot.app],
           onlyIfExists: false,
@@ -4144,20 +4196,20 @@ class AppsProvider with ChangeNotifier {
     _deferredObtainiumSnapshots.remove(appId);
     final Directory appsDirectory = await getAppsDir();
     final File mainJson = File('${appsDirectory.path}/$appId.json');
-    if (mainJson.existsSync()) {
+    if (await mainJson.exists()) {
       final File stalePending = File(
         '${appsDirectory.path}/pending_removal/$appId.json',
       );
-      if (stalePending.existsSync()) {
-        deleteFile(stalePending);
+      if (await stalePending.exists()) {
+        await deleteFile(stalePending);
       }
       return;
     }
     final File pendingJson = File(
       '${appsDirectory.path}/pending_removal/$appId.json',
     );
-    if (pendingJson.existsSync()) {
-      deleteFile(pendingJson);
+    if (await pendingJson.exists()) {
+      await deleteFile(pendingJson);
     }
     await deleteObtainiumAppDiskData([appId], deleteMainJson: false);
     export(isAuto: true);

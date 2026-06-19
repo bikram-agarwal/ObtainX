@@ -50,8 +50,8 @@ class BulkScanCache {
         await getExternalStorageDirectory() ??
         await getApplicationDocumentsDirectory();
     final Directory dir = Directory('${base.path}/$_relativeDir');
-    if (!dir.existsSync()) {
-      dir.createSync(recursive: true);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
     }
     return dir;
   }
@@ -68,7 +68,7 @@ class BulkScanCache {
     }
     try {
       final File file = await _file();
-      if (!file.existsSync()) {
+      if (!await file.exists()) {
         _cache = {};
         return {};
       }
@@ -162,9 +162,9 @@ class BulkScanCache {
         disk.clear();
       });
       // Also remove the (now-empty) file so a subsequent load short-circuits
-      // on `existsSync == false`.
+      // on `exists == false`.
       final File file = await _file();
-      if (file.existsSync()) {
+      if (await file.exists()) {
         await file.delete();
       }
     } catch (_) {
