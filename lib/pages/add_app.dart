@@ -370,6 +370,37 @@ class AddAppPageState extends State<AddAppPage> {
         gettingAppInfo = true;
       });
       try {
+        if (userInput.trim().toLowerCase().startsWith('http://')) {
+          bool proceed = false;
+          await showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (BuildContext dialogContext) {
+              return AlertDialog(
+                title: Text(tr('insecureConnection')),
+                content: Text(tr('cleartextWarningExplanation')),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop();
+                    },
+                    child: Text(tr('cancel')),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      proceed = true;
+                      Navigator.of(dialogContext).pop();
+                    },
+                    child: Text(tr('continue')),
+                  ),
+                ],
+              );
+            },
+          );
+          if (!proceed) {
+            throw ObtainiumError(tr('cancelled'));
+          }
+        }
         var userPickedTrackOnly = additionalSettings['trackOnly'] == true;
         App? app;
         if ((await getTrackOnlyConfirmationIfNeeded(userPickedTrackOnly)) &&

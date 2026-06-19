@@ -1788,6 +1788,39 @@ class AppsProvider with ChangeNotifier {
         app.url,
         additionalSettingsPlusSourceConfig,
       );
+      if (context != null &&
+          context.mounted &&
+          downloadUrl.toLowerCase().startsWith('http://')) {
+        bool proceed = false;
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: Text(tr('insecureDownloadUrl')),
+              content: Text(tr('cleartextDownloadWarningExplanation')),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: Text(tr('cancel')),
+                ),
+                TextButton(
+                  onPressed: () {
+                    proceed = true;
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: Text(tr('continue')),
+                ),
+              ],
+            );
+          },
+        );
+        if (!proceed) {
+          throw ObtainiumError(tr('cancelled'));
+        }
+      }
       var notif = DownloadNotification(app.finalName, 100);
       notificationsProvider?.cancel(notif.id);
       int? prevProg;
