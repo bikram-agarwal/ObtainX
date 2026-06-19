@@ -1435,6 +1435,11 @@ class AppsProvider with ChangeNotifier {
   Map<String, AppInMemory> apps = {};
   final Map<String, String> appPageErrors = {};
   bool loadingApps = false;
+  // Incremented inside checkUpdates() as each app finishes its check.
+  // O(1) access so _RefreshProgressBar can avoid iterating the full app
+  // list on every 250 ms progress tick. Reset to 0 at the start of each
+  // checkUpdates and loadApps run.
+  int progressCheckedCount = 0;
   Completer<void>? _loadingCompleter;
   bool gettingUpdates = false;
   LogsProvider logs = LogsProvider();
@@ -3458,6 +3463,7 @@ class AppsProvider with ChangeNotifier {
     _loadingCompleter = Completer<void>();
     if (!silent) {
       loadingApps = true;
+      progressCheckedCount = 0;
       notifyListeners();
     }
     await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
@@ -4467,6 +4473,7 @@ class AppsProvider with ChangeNotifier {
     MultiAppMultiError errors = MultiAppMultiError();
     if (!gettingUpdates) {
       gettingUpdates = true;
+      progressCheckedCount = 0;
       try {
         late List<String> appIds;
         if (specificIds != null) {
@@ -4527,12 +4534,6 @@ class AppsProvider with ChangeNotifier {
                 autoExportAfterSave: false,
               );
               appSaveCompleted = true;
-              final now = DateTime.now();
-              if (now.difference(lastProgressNotificationAt) >=
-                  progressNotificationInterval) {
-                lastProgressNotificationAt = now;
-                notifyListeners();
-              }
             } catch (error) {
               if ((error is RateLimitError || error is SocketException) &&
                   throwErrorsForRetry) {
@@ -4543,6 +4544,15 @@ class AppsProvider with ChangeNotifier {
               } else {
                 errors.add(appId, error, appName: apps[appId]?.name);
               }
+            }
+            // Increment AFTER try/catch so failed checks also contribute
+            // to progress — otherwise the bar would stall on an all-fail run.
+            progressCheckedCount += 1;
+            final now = DateTime.now();
+            if (now.difference(lastProgressNotificationAt) >=
+                progressNotificationInterval) {
+              lastProgressNotificationAt = now;
+              notifyListeners();
             }
             if (newApp != null) {
               updates.add(newApp);

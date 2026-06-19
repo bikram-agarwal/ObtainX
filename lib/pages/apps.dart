@@ -222,65 +222,49 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
 /// Progress bar shown during pull-to-refresh and initial app-load.
 ///
 /// Subscribes to [AppsProvider] via a narrow [context.select] that returns
-/// only `(loadingApps, checkedCount)`. As [AppsProvider.checkUpdates] saves
-/// each app and calls [AppsProvider.notifyListeners] (~ every 250 ms),
-/// `checkedCount` ticks up and only THIS widget rebuilds - the surrounding
-/// [AppsPage] (filter / sort / sliver list) does not.
+/// only `(loadingApps, progressCheckedCount)`. As [AppsProvider.checkUpdates]
+/// saves each app and calls [AppsProvider.notifyListeners] (~ every 250 ms),
+/// `progressCheckedCount` ticks up and only THIS widget rebuilds — the
+/// surrounding [AppsPage] (filter / sort / sliver list) does not.
 ///
 /// Counterpart to the deliberate exclusion of [App.lastUpdateCheck] from
 /// [_appsPageAppsRebuildToken]. That exclusion is what fixed the scroll
 /// stutter; this widget restores the live progress feedback that the
 /// exclusion would otherwise have stripped out.
+///
+/// Performance note: previously, the build callback iterated **every** app
+/// (O(n) with per-app `folderIdsForApp` List allocations) on every 250 ms
+/// progress tick. Now it reads two ints from the provider: O(1).
 class _RefreshProgressBar extends StatelessWidget {
   const _RefreshProgressBar({
     required this.refreshingSince,
     required this.progressDenominator,
-    required this.onDemandOnlyList,
-    required this.folderId,
   });
 
   final DateTime? refreshingSince;
   final int progressDenominator;
-  final bool onDemandOnlyList;
-  final String? folderId;
 
   @override
   Widget build(BuildContext context) {
+    // O(1): read two fields from the provider — no iteration, no allocation.
     final (bool loadingApps, int checkedCount) = context
-        .select<AppsProvider, (bool, int)>((p) {
-          if (p.loadingApps) {
-            return (true, 0);
-          }
-          final DateTime? since = refreshingSince;
-          if (since == null) {
-            return (false, 0);
-          }
-          int count = 0;
-          for (final a in p.apps.values) {
-            final last = a.app.lastUpdateCheck;
-            if (last == null || last.isBefore(since)) continue;
-            if (onDemandOnlyList &&
-                a.app.additionalSettings['onDemandOnly'] != true) {
-              continue;
-            }
-            final String? folder = folderId;
-            if (folder != null && !folderIdsForApp(a.app).contains(folder)) {
-              continue;
-            }
-            count++;
-          }
-          return (false, count);
-        });
+        .select<AppsProvider, (bool, int)>((p) => (p.loadingApps, p.progressCheckedCount));
     // M3 Expressive linear progress indicator. Wavy active track with a
     // stop-dot at the end (per the M3E spec). The widget draws two
     // separate lanes (active above, track below) with a fixed gap so the
     // active and inactive segments never overlap.
-    return LinearProgressIndicatorM3E(
-      value: loadingApps
-          ? null
-          : (progressDenominator > 0
-                ? checkedCount / progressDenominator
-                : 0.0),
+    //
+    // RepaintBoundary isolates this widget's animation repaints from the
+    // rest of the tree. Without it, the animated progress line forces a
+    // relayout/re-paint of its parent subtree every tick.
+    return RepaintBoundary(
+      child: LinearProgressIndicatorM3E(
+        value: loadingApps
+            ? null
+            : (progressDenominator > 0
+                  ? checkedCount / progressDenominator
+                  : 0.0),
+      ),
     );
   }
 }
@@ -3205,8 +3189,6 @@ class AppsPageState extends State<AppsPage> {
               child: _RefreshProgressBar(
                 refreshingSince: refreshingSince,
                 progressDenominator: progressDenominator,
-                onDemandOnlyList: widget.onDemandOnlyList,
-                folderId: progressFolderId,
               ),
             ),
           ),
