@@ -454,7 +454,7 @@ class GitHub extends AppSource {
       settingsProvider,
     );
     String? creds = sourceConfig['github-creds'];
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
+    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
       creds = null;
     }
     return tokenFromCreds(creds);
@@ -474,8 +474,14 @@ class GitHub extends AppSource {
     String standardUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
-      return 'https://${additionalSettings['GHReqPrefix']}/$assetUrl';
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
+      return 'https://${sourceConfig['GHReqPrefix']}/$assetUrl';
     }
     return assetUrl;
   }
@@ -485,8 +491,14 @@ class GitHub extends AppSource {
     String reqUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
-      return 'https://${additionalSettings['GHReqPrefix']}/$reqUrl';
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
+      return 'https://${sourceConfig['GHReqPrefix']}/$reqUrl';
     }
     return reqUrl;
   }
