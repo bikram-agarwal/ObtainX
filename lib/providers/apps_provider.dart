@@ -2142,8 +2142,17 @@ class AppsProvider with ChangeNotifier {
   Future<bool> _chunkedCopyApkToSafTree(
     File source,
     Uri treeUri,
-    String displayName,
-  ) async {
+    String displayName, {
+    String? mimeType,
+  }) async {
+    final String resolvedMime = mimeType ??
+        (displayName.toLowerCase().endsWith('.apk')
+            ? 'application/vnd.android.package-archive'
+            : (displayName.toLowerCase().endsWith('.zip')
+                ? 'application/zip'
+                : (displayName.toLowerCase().endsWith('.json')
+                    ? 'application/json'
+                    : '*/*')));
     final dynamic existing = await saf.findFile(treeUri, displayName);
     if (existing != null) {
       final Uri? existingUri = existing is Map
@@ -2160,7 +2169,7 @@ class AppsProvider with ChangeNotifier {
       if (isFirstChunk) {
         final dynamic created = await saf.createFile(
           treeUri,
-          mimeType: 'application/vnd.android.package-archive',
+          mimeType: resolvedMime,
           displayName: displayName,
           bytes: bytes,
         );
@@ -2180,7 +2189,7 @@ class AppsProvider with ChangeNotifier {
     if (isFirstChunk) {
       final dynamic created = await saf.createFile(
         treeUri,
-        mimeType: 'application/vnd.android.package-archive',
+        mimeType: resolvedMime,
         displayName: displayName,
         bytes: Uint8List(0),
       );
@@ -3183,10 +3192,23 @@ class AppsProvider with ChangeNotifier {
 
     Future<void> downloadFn(MapEntry<String, String> fileUrl, App app) async {
       try {
-        String downloadPath = '${await getStorageRootPath()}/Download';
-        await downloadFile(
+        final Uri? apkSaveTreeUri = await settingsProvider.getApkSaveDir(
+          warnIfInaccessible: true,
+        );
+
+        final String downloadPath;
+        final String fileName;
+        if (apkSaveTreeUri != null) {
+          downloadPath = apkDir.path;
+          fileName = 'temp_manual_${app.id}_${fileUrl.hashCode}';
+        } else {
+          downloadPath = '${await getStorageRootPath()}/Download';
+          fileName = sanitizeApkSaveDisplayName(fileUrl.key);
+        }
+
+        final File downloadedFile = await downloadFile(
           fileUrl.value,
-          sanitizeApkSaveDisplayName(fileUrl.key),
+          fileName,
           true,
           (double? progress) {
             notificationsProvider.notify(
@@ -3205,6 +3227,27 @@ class AppsProvider with ChangeNotifier {
           allowInsecure: app.additionalSettings['allowInsecure'] == true,
           logs: logs,
         );
+
+        if (apkSaveTreeUri != null) {
+          try {
+            final String targetName = sanitizeApkSaveDisplayName(fileUrl.key);
+            final bool copied = await _chunkedCopyApkToSafTree(
+              downloadedFile,
+              apkSaveTreeUri,
+              targetName,
+            );
+            if (!copied) {
+              throw ObtainiumError(tr('apkSaveFolderCopyFailed'));
+            }
+          } finally {
+            if (downloadedFile.existsSync()) {
+              try {
+                downloadedFile.deleteSync();
+              } catch (_) {}
+            }
+          }
+        }
+
         notificationsProvider.notify(
           DownloadedNotification(fileUrl.key, fileUrl.value),
         );
