@@ -744,7 +744,7 @@ class GitHub extends AppSource {
             var ext = e['name'].toString().toLowerCase().split('.').last;
             var url = !isInstallableExt(ext, includeZips: includeZips)
                 ? (e['browser_download_url'] ?? e['url'])
-                : (e['url'] ?? e['browser_download_url']);
+                : (e['browser_download_url'] ?? e['url']);
             url = undoGHProxyMod(url, sourceConfigSettingValues);
             e['final_url'] = (e['name'] != null) && (url != null)
                 ? MapEntry(e['name'] as String, url as String)
