@@ -480,8 +480,9 @@ class GitHub extends AppSource {
       additionalSettings,
       settingsProvider,
     );
-    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
-      return 'https://${sourceConfig['GHReqPrefix']}/$assetUrl';
+    var prefix = sourceConfig['GHReqPrefix'] ?? '';
+    if (prefix.isNotEmpty && !assetUrl.startsWith('https://$prefix/')) {
+      return 'https://$prefix/$assetUrl';
     }
     return assetUrl;
   }
