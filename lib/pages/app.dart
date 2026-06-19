@@ -3529,7 +3529,7 @@ class _AppPageState extends State<AppPage> {
             : '';
         final String label = isInstalling
             ? '${tr('installing')}…'
-            : 'Downloading ${dp.round()}%$bytesLabel';
+            : tr('downloadingX', args: ['${dp.round()}%$bytesLabel']);
         final Widget progressBar = ClipRRect(
           borderRadius: BorderRadius.circular(expressiveRadius),
           child: SizedBox(
