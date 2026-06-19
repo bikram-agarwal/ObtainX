@@ -436,9 +436,9 @@ class GitHub extends AppSource {
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Token $token';
     }
-    if (forAPKDownload == true) {
-      headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
-    }
+    // if (forAPKDownload == true) {
+    //   headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
+    // }
     if (headers.isNotEmpty) {
       return headers;
     } else {
@@ -466,6 +466,18 @@ class GitHub extends AppSource {
       return '${tr('githubSourceNote')} ${hostChanged ? tr('addInfoBelow') : tr('addInfoInSettings')}';
     }
     return null;
+  }
+
+  @override
+  Future<String> assetUrlPrefetchModifier(
+    String assetUrl,
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
+      return 'https://${additionalSettings['GHReqPrefix']}/$assetUrl';
+    }
+    return assetUrl;
   }
 
   @override
