@@ -454,9 +454,9 @@ class GitHub extends AppSource {
       settingsProvider,
     );
     String? creds = sourceConfig['github-creds'];
-    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
-      creds = null;
-    }
+    // if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
+    //   creds = null;
+    // }
     return tokenFromCreds(creds);
   }
 
