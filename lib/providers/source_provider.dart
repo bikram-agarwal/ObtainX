@@ -229,17 +229,30 @@ List<MapEntry<String, String>> assumed2DlistToStringMapList(
 
 // App JSON schema has changed multiple times over the many versions of Obtainium
 // This function takes an App JSON and modifies it if needed to conform to the latest (current) version
+// Per-source-type caches for appJSONCompatibilityModifiers. The flattened
+// app-specific form items and their default values are deterministic per source
+// type, but were previously rebuilt — clones + many tr() lookups — for every app
+// on load. (clone() already copies defaultValue by reference, so the original
+// code already shared default-value objects across apps; caching adds no new
+// mutation risk, and the working copy below is copied before being mutated.)
+final Map<String, List<GeneratedFormItem>> _flattenedFormItemsBySourceType = {};
+final Map<String, Map<String, dynamic>> _defaultSettingsBySourceType = {};
+
 Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
-  var source = SourceProvider().getSource(
+  // Read-only: only the source's type and (type-level) form items are needed
+  // here, so use the shared template and avoid constructing a source per app.
+  var source = SourceProvider().getSourceTemplate(
     json['url'],
     overrideSource: json['overrideSource'],
   );
-  var formItems = source.combinedAppSpecificSettingFormItems.reduce(
-    (value, element) => [...value, ...element],
+  final String sourceTypeKey = source.runtimeType.toString();
+  var formItems = _flattenedFormItemsBySourceType[sourceTypeKey] ??= source
+      .combinedAppSpecificSettingFormItems
+      .reduce((value, element) => [...value, ...element]);
+  Map<String, dynamic> additionalSettings = Map<String, dynamic>.from(
+    _defaultSettingsBySourceType[sourceTypeKey] ??=
+        getDefaultValuesFromFormItems([formItems]),
   );
-  Map<String, dynamic> additionalSettings = getDefaultValuesFromFormItems([
-    formItems,
-  ]);
   Map<String, dynamic> originalAdditionalSettings = {};
   if (json['additionalSettings'] != null) {
     originalAdditionalSettings = Map<String, dynamic>.from(
@@ -340,7 +353,7 @@ Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
   if (additionalSettings['dontSortReleasesList'] == true) {
     additionalSettings['sortMethodChoice'] = 'none';
   }
-  if (source.runtimeType == HTML().runtimeType) {
+  if (source is HTML) {
     // HTML key rename
     if (originalAdditionalSettings['sortByFileNamesNotLinks'] != null) {
       additionalSettings['sortByLastLinkSegment'] =
@@ -1484,89 +1497,153 @@ bool isVersionPseudo(App app) =>
 class SourceProvider {
   static final Map<String, RegExp> _sourceRegexCache = {};
 
-  // Add more source classes here so they are available via the service
-  List<AppSource> get sources => [
-    GitHub(),
-    GitLab(),
-    Codeberg(),
-    FDroid(),
-    FDroidRepo(),
-    IzzyOnDroid(),
-    SourceHut(),
-    APKPure(),
-    Aptoide(),
-    Uptodown(),
-    HuaweiAppGallery(),
-    Tencent(),
-    VivoAppStore(),
-    RuStore(),
-    Apk4Free(),
-    Farsroid(),
-    CoolApk(),
-    RockMods(),
-    LiteAPKs(),
-    Jenkins(),
-    APKMirror(),
-    TelegramApp(),
-    NeutronCode(),
-    DirectAPKLink(),
-    HTML(), // This should ALWAYS be the last option as they are tried in order
-  ];
+  // Add more source classes here so they are available via the service.
+  // Single source of truth: factories. Constructing an AppSource is expensive
+  // (each constructor builds its localized form-item tree via many tr() calls),
+  // and the previous `sources` getter rebuilt all ~25 of them on every access —
+  // and getSource() accessed it 1-2× per call, ~3× per app on load (≈30k
+  // constructions for a 400-app library). We now match against cached, never-
+  // mutated template instances and only construct ONE fresh source — the matched
+  // one — so each caller still gets its own isolated, mutable instance.
+  // HTML must ALWAYS be last as sources are tried in order.
+  static final List<AppSource Function()> _sourceFactories =
+      <AppSource Function()>[
+        () => GitHub(),
+        () => GitLab(),
+        () => Codeberg(),
+        () => FDroid(),
+        () => FDroidRepo(),
+        () => IzzyOnDroid(),
+        () => SourceHut(),
+        () => APKPure(),
+        () => Aptoide(),
+        () => Uptodown(),
+        () => HuaweiAppGallery(),
+        () => Tencent(),
+        () => VivoAppStore(),
+        () => RuStore(),
+        () => Apk4Free(),
+        () => Farsroid(),
+        () => CoolApk(),
+        () => RockMods(),
+        () => LiteAPKs(),
+        () => Jenkins(),
+        () => APKMirror(),
+        () => TelegramApp(),
+        () => NeutronCode(),
+        () => DirectAPKLink(),
+        () => HTML(),
+      ];
+
+  // Lazily-built, never-mutated, never-returned template instances used only for
+  // source matching (reading hosts / allowSubDomains). Built once for the app.
+  static List<AppSource>? _sourceTemplatesCache;
+  static List<AppSource> get _sourceTemplates => _sourceTemplatesCache ??=
+      _sourceFactories.map((factory) => factory()).toList();
+
+  // Public API unchanged: still returns fresh instances (callers may mutate).
+  List<AppSource> get sources =>
+      _sourceFactories.map((factory) => factory()).toList();
 
   // Add more mass url source classes here so they are available via the service
   List<MassAppUrlSource> massUrlSources = [GitHubStars()];
 
+  // `naiveStandardVersionDetection` depends only on the resolved source (which is
+  // a function of host + overrideSource), so cache it per host to avoid a
+  // getSource() per app in the install-status reconcile hot path.
+  static final Map<String, bool> _naiveStandardVersionDetectionCache = {};
+  bool naiveStandardVersionDetectionForUrl(
+    String url, {
+    String? overrideSource,
+  }) {
+    final String host = Uri.tryParse(url)?.host ?? url;
+    final String key = '${overrideSource ?? ''} $host';
+    return _naiveStandardVersionDetectionCache[key] ??= getSourceTemplate(
+      url,
+      overrideSource: overrideSource,
+    ).naiveStandardVersionDetection;
+  }
+
   AppSource getSource(String url, {String? overrideSource}) {
     url = preStandardizeUrl(url);
+    final int idx = _matchSourceIndexForStandardizedUrl(
+      url,
+      overrideSource: overrideSource,
+    );
+    final AppSource res = _sourceFactories[idx]();
     if (overrideSource != null) {
-      var srcs = sources.where(
-        (e) => e.runtimeType.toString() == overrideSource,
-      );
-      if (srcs.isEmpty) {
-        throw UnsupportedURLError();
-      }
-      var res = srcs.first;
-      var originalHosts = res.hosts;
-      var newHost = Uri.parse(url).host;
+      final originalHosts = res.hosts;
+      final newHost = Uri.parse(url).host;
       res.hosts = [newHost];
       res.hostChanged = true;
       if (originalHosts.contains(newHost)) {
         res.hostIdenticalDespiteAnyChange = true;
       }
-      return res;
     }
-    AppSource? source;
-    for (var s in sources.where((element) => element.hosts.isNotEmpty)) {
+    return res;
+  }
+
+  /// Read-only source resolution: returns the shared, never-mutated template for
+  /// the matched source instead of constructing a fresh instance. Use this on hot
+  /// paths that only need the source's type or its (type-level) form items /
+  /// flags — e.g. JSON compatibility migration and version-detection checks — so
+  /// loading a large library doesn't construct a source per app. Callers MUST NOT
+  /// mutate the returned instance.
+  AppSource getSourceTemplate(String url, {String? overrideSource}) {
+    return _sourceTemplates[_matchSourceIndexForStandardizedUrl(
+      preStandardizeUrl(url),
+      overrideSource: overrideSource,
+    )];
+  }
+
+  // Matches a (pre-standardized) URL to a source index without constructing any
+  // source. Matching only reads template hosts/flags and calls
+  // sourceSpecificStandardizeURL, which is a side-effect-free URL transform for
+  // the empty-host sources it is used on, so it is safe against shared templates.
+  int _matchSourceIndexForStandardizedUrl(
+    String url, {
+    String? overrideSource,
+  }) {
+    final List<AppSource> templates = _sourceTemplates;
+    if (overrideSource != null) {
+      final int idx = templates.indexWhere(
+        (e) => e.runtimeType.toString() == overrideSource,
+      );
+      if (idx < 0) {
+        throw UnsupportedURLError();
+      }
+      return idx;
+    }
+    for (int i = 0; i < templates.length; i++) {
+      final s = templates[i];
+      if (s.hosts.isEmpty) {
+        continue;
+      }
       try {
         final cacheKey = '${s.allowSubDomains}:${s.hosts.join(',')}';
         final regex = SourceProvider._sourceRegexCache[cacheKey] ??= RegExp(
           '^${s.allowSubDomains ? '([^\\.]+\\.)*' : '(www\\.)?'}(${getSourceRegex(s.hosts)})\$',
         );
         if (regex.hasMatch(Uri.parse(url).host)) {
-          source = s;
-          break;
+          return i;
         }
       } catch (e) {
         // Ignore
       }
     }
-    if (source == null) {
-      for (var s in sources.where(
-        (element) => element.hosts.isEmpty && !element.neverAutoSelect,
-      )) {
-        try {
-          s.sourceSpecificStandardizeURL(url, forSelection: true);
-          source = s;
-          break;
-        } catch (e) {
-          //
-        }
+    for (int i = 0; i < templates.length; i++) {
+      final s = templates[i];
+      if (s.hosts.isNotEmpty || s.neverAutoSelect) {
+        continue;
+      }
+      try {
+        s.sourceSpecificStandardizeURL(url, forSelection: true);
+        return i;
+      } catch (e) {
+        //
       }
     }
-    if (source == null) {
-      throw UnsupportedURLError();
-    }
-    return source;
+    throw UnsupportedURLError();
   }
 
   bool ifRequiredAppSpecificSettingsExist(AppSource source) {

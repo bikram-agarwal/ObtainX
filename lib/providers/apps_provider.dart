@@ -2145,14 +2145,15 @@ class AppsProvider with ChangeNotifier {
     String displayName, {
     String? mimeType,
   }) async {
-    final String resolvedMime = mimeType ??
+    final String resolvedMime =
+        mimeType ??
         (displayName.toLowerCase().endsWith('.apk')
             ? 'application/vnd.android.package-archive'
             : (displayName.toLowerCase().endsWith('.zip')
-                ? 'application/zip'
-                : (displayName.toLowerCase().endsWith('.json')
-                    ? 'application/json'
-                    : '*/*')));
+                  ? 'application/zip'
+                  : (displayName.toLowerCase().endsWith('.json')
+                        ? 'application/json'
+                        : '*/*')));
     final dynamic existing = await saf.findFile(treeUri, displayName);
     if (existing != null) {
       final Uri? existingUri = existing is Map
@@ -3289,7 +3290,9 @@ class AppsProvider with ChangeNotifier {
     if (app?.app == null) {
       return false;
     }
-    var source = SourceProvider().getSource(
+    // Read-only (type checks only) — use the template to avoid a per-call
+    // source construction.
+    var source = SourceProvider().getSourceTemplate(
       app!.app.url,
       overrideSource: app.app.overrideSource,
     );
@@ -3301,11 +3304,11 @@ class AppsProvider with ChangeNotifier {
         ? app.installedInfo?.versionCode.toString()
         : app.installedInfo?.versionName;
     bool isHTMLWithNoVersionDetection =
-        (source.runtimeType == HTML().runtimeType &&
+        (source is HTML &&
         (app.app.additionalSettings['versionExtractionRegEx'] as String?)
                 ?.isNotEmpty !=
             true);
-    bool isDirectAPKLink = source.runtimeType == DirectAPKLink().runtimeType;
+    bool isDirectAPKLink = source is DirectAPKLink;
     final bool hasCommitSha =
         realInstalledVersion != null &&
         (_commitHashLikeTokensFromVersion(realInstalledVersion).isNotEmpty ||
@@ -3361,9 +3364,10 @@ class AppsProvider with ChangeNotifier {
         app.additionalSettings['versionDetection'] == null;
     var naiveStandardVersionDetection =
         app.additionalSettings['naiveStandardVersionDetection'] == true ||
-        SourceProvider()
-            .getSource(app.url, overrideSource: app.overrideSource)
-            .naiveStandardVersionDetection;
+        SourceProvider().naiveStandardVersionDetectionForUrl(
+          app.url,
+          overrideSource: app.overrideSource,
+        );
     String? realInstalledVersion =
         app.additionalSettings['useVersionCodeAsOSVersion'] == true
         ? installedInfo?.versionCode.toString()
@@ -3532,108 +3536,128 @@ class AppsProvider with ChangeNotifier {
         ? _lastFullDiskLoadAt
         : null;
     final DateTime diskLoadStartedAt = DateTime.now();
-    await Future.wait(
-      (await (await getAppsDir()).list().toList()) // Parse Apps from JSON
-          .map((item) async {
-            if (!item.path.toLowerCase().endsWith('.json')) return;
-            final String fileName = item.path.split('/').last;
-            if (singleId != null &&
-                fileName.toLowerCase() != '${singleId.toLowerCase()}.json') {
-              return;
+    final List<FileSystemEntity> appDirItems = await (await getAppsDir())
+        .list()
+        .toList(); // Parse Apps from JSON
+    // Parse in bounded chunks, yielding to the event loop between each so the UI
+    // isolate can paint a frame and process touches during a large cold load.
+    // (Incremental reuse already keeps resumes cheap; this targets first launch.)
+    const int loadChunkSize = 16;
+    for (
+      int chunkStart = 0;
+      chunkStart < appDirItems.length;
+      chunkStart += loadChunkSize
+    ) {
+      final int chunkEnd = (chunkStart + loadChunkSize) < appDirItems.length
+          ? chunkStart + loadChunkSize
+          : appDirItems.length;
+      await Future.wait(
+        appDirItems.sublist(chunkStart, chunkEnd).map((item) async {
+          if (!item.path.toLowerCase().endsWith('.json')) return;
+          final String fileName = item.path.split('/').last;
+          if (singleId != null &&
+              fileName.toLowerCase() != '${singleId.toLowerCase()}.json') {
+            return;
+          }
+          // App JSON files are named `${app.id}.json`, so the id can be
+          // recovered from the filename without reading the file.
+          final String idFromFile = fileName.substring(
+            0,
+            fileName.length - '.json'.length,
+          );
+          App? app;
+          bool reused = false;
+          // Incremental parse: reuse the in-memory app when its JSON file
+          // has not changed since the last full load. Skips both the file
+          // read and the synchronous decode. stat() runs on the dart:io
+          // thread pool, off the UI isolate; the cold start (no watermark)
+          // skips stat entirely and parses everything.
+          final AppInMemory? existing = apps[idFromFile];
+          if (existing != null && reuseWatermark != null) {
+            try {
+              final FileStat stat = await item.stat();
+              if (stat.modified.isBefore(reuseWatermark)) {
+                app = existing.app;
+                reused = true;
+              }
+            } catch (_) {
+              // stat failed — fall through to a normal parse.
             }
-            // App JSON files are named `${app.id}.json`, so the id can be
-            // recovered from the filename without reading the file.
-            final String idFromFile = fileName.substring(
-              0,
-              fileName.length - '.json'.length,
-            );
-            App? app;
-            bool reused = false;
-            // Incremental parse: reuse the in-memory app when its JSON file
-            // has not changed since the last full load. Skips both the file
-            // read and the synchronous decode. stat() runs on the dart:io
-            // thread pool, off the UI isolate; the cold start (no watermark)
-            // skips stat entirely and parses everything.
-            final AppInMemory? existing = apps[idFromFile];
-            if (existing != null && reuseWatermark != null) {
-              try {
-                final FileStat stat = await item.stat();
-                if (stat.modified.isBefore(reuseWatermark)) {
-                  app = existing.app;
-                  reused = true;
-                }
-              } catch (_) {
-                // stat failed — fall through to a normal parse.
+          }
+          if (!reused) {
+            try {
+              app = App.fromJson(
+                jsonDecode(await File(item.path).readAsString()),
+              );
+            } catch (err) {
+              if (err is FormatException) {
+                logs.add(
+                  'Corrupt JSON when loading App (will be ignored): $err',
+                );
+                await item.rename('${item.path}.corrupt');
+              } else {
+                rethrow;
               }
             }
+          }
+          if (app != null) {
             if (!reused) {
-              try {
-                app = App.fromJson(
-                  jsonDecode(await File(item.path).readAsString()),
-                );
-              } catch (err) {
-                if (err is FormatException) {
-                  logs.add(
-                    'Corrupt JSON when loading App (will be ignored): $err',
-                  );
-                  await item.rename('${item.path}.corrupt');
-                } else {
-                  rethrow;
+              // Save the app to the in-memory list without grabbing any OS info first
+              apps.update(
+                app.id,
+                (value) => AppInMemory(
+                  app!,
+                  value.downloadProgress,
+                  value.installedInfo,
+                  value.icon,
+                ),
+                ifAbsent: () => AppInMemory(app!, null, null, null),
+              );
+            }
+            try {
+              // Validate the app's source resolves (no invalid apps loaded).
+              // Read-only — use the template to avoid constructing a source per
+              // app on load.
+              sp.getSourceTemplate(app.url, overrideSource: app.overrideSource);
+              // Reconcile install status against the device package list.
+              // This runs even for reused apps: the JSON may be unchanged
+              // while the package was installed/uninstalled/updated
+              // externally since the last load.
+              final PackageInfo? installedInfo = installedInfoByPackage[app.id];
+              var moddedApp = getCorrectedInstallStatusAppIfPossible(
+                app,
+                installedInfo,
+              );
+              if (moddedApp != null) {
+                app = moddedApp;
+                anyAppModded = true;
+                // Note the app ID if it was uninstalled externally
+                if (moddedApp.installedVersion == null) {
+                  removedAppIds.add(moddedApp.id);
                 }
               }
-            }
-            if (app != null) {
-              if (!reused) {
-                // Save the app to the in-memory list without grabbing any OS info first
-                apps.update(
-                  app.id,
-                  (value) => AppInMemory(
-                    app!,
-                    value.downloadProgress,
-                    value.installedInfo,
-                    value.icon,
-                  ),
-                  ifAbsent: () => AppInMemory(app!, null, null, null),
-                );
-              }
-              try {
-                // Try getting the app's source to ensure no invalid apps get loaded
-                sp.getSource(app.url, overrideSource: app.overrideSource);
-                // Reconcile install status against the device package list.
-                // This runs even for reused apps: the JSON may be unchanged
-                // while the package was installed/uninstalled/updated
-                // externally since the last load.
-                final PackageInfo? installedInfo =
-                    installedInfoByPackage[app.id];
-                var moddedApp = getCorrectedInstallStatusAppIfPossible(
-                  app,
+              // Update the app in memory with install info and corrections
+              apps.update(
+                app.id,
+                (value) => AppInMemory(
+                  app!,
+                  value.downloadProgress,
                   installedInfo,
-                );
-                if (moddedApp != null) {
-                  app = moddedApp;
-                  anyAppModded = true;
-                  // Note the app ID if it was uninstalled externally
-                  if (moddedApp.installedVersion == null) {
-                    removedAppIds.add(moddedApp.id);
-                  }
-                }
-                // Update the app in memory with install info and corrections
-                apps.update(
-                  app.id,
-                  (value) => AppInMemory(
-                    app!,
-                    value.downloadProgress,
-                    installedInfo,
-                    value.icon,
-                  ),
-                  ifAbsent: () => AppInMemory(app!, null, installedInfo, null),
-                );
-              } catch (e) {
-                errors.add([app!.id, app.finalName, e.toString()]);
-              }
+                  value.icon,
+                ),
+                ifAbsent: () => AppInMemory(app!, null, installedInfo, null),
+              );
+            } catch (e) {
+              errors.add([app!.id, app.finalName, e.toString()]);
             }
-          }),
-    );
+          }
+        }),
+      );
+      if (singleId == null && chunkEnd < appDirItems.length) {
+        // Let the UI isolate breathe between chunks of a large cold load.
+        await Future.delayed(Duration.zero);
+      }
+    }
     // Stamp the watermark only after a full load completed its parse pass, so
     // the next full load can reuse everything that hasn't changed since.
     if (singleId == null) {
@@ -3799,12 +3823,8 @@ class AppsProvider with ChangeNotifier {
       if (existing != null && existing.installedInfo != null) {
         apps.update(
           appId,
-          (value) => AppInMemory(
-            value.app,
-            value.downloadProgress,
-            null,
-            value.icon,
-          ),
+          (value) =>
+              AppInMemory(value.app, value.downloadProgress, null, value.icon),
         );
       }
       return null;
@@ -4715,10 +4735,12 @@ class AppsProvider with ChangeNotifier {
         })
         .map((e) {
           final appJson = e.app.toJson();
-          final Map<String, dynamic> additionalSettings = Map<String, dynamic>.from(
-            jsonDecode(appJson['additionalSettings'] as String),
-          );
-          final List<dynamic>? folderIds = additionalSettings['folderIds'] as List?;
+          final Map<String, dynamic> additionalSettings =
+              Map<String, dynamic>.from(
+                jsonDecode(appJson['additionalSettings'] as String),
+              );
+          final List<dynamic>? folderIds =
+              additionalSettings['folderIds'] as List?;
           if (folderIds != null && folderIds.isNotEmpty) {
             final Map<String, String> folderNames = {};
             final existingFolders = exportSettingsProvider.appFolders;
@@ -4880,15 +4902,21 @@ class AppsProvider with ChangeNotifier {
             .map((e) => App.fromJson(e))
             .toList();
 
-    final List<AppFolder> existingFolders = List<AppFolder>.from(settingsProvider.appFolders);
+    final List<AppFolder> existingFolders = List<AppFolder>.from(
+      settingsProvider.appFolders,
+    );
     final Map<String, String> backupIdToTargetId = {};
     final List<AppFolder> foldersToCreate = [];
 
     // Parse backup folders from settings if they exist
     final Map<String, String> backupFolderIdToName = {};
-    if (newFormat && decodedJSON['settings'] != null && decodedJSON['settings']['appFolders'] != null) {
+    if (newFormat &&
+        decodedJSON['settings'] != null &&
+        decodedJSON['settings']['appFolders'] != null) {
       try {
-        final list = jsonDecode(decodedJSON['settings']['appFolders'] as String) as List<dynamic>;
+        final list =
+            jsonDecode(decodedJSON['settings']['appFolders'] as String)
+                as List<dynamic>;
         for (var e in list) {
           final folder = AppFolder.fromJson(e as Map<String, dynamic>);
           backupFolderIdToName[folder.id] = folder.name;
@@ -4898,7 +4926,8 @@ class AppsProvider with ChangeNotifier {
 
     // Gather folder names from imported apps' folderNames map
     for (final app in importedApps) {
-      final Map<dynamic, dynamic>? appFolderNames = app.additionalSettings['folderNames'] as Map?;
+      final Map<dynamic, dynamic>? appFolderNames =
+          app.additionalSettings['folderNames'] as Map?;
       if (appFolderNames != null) {
         appFolderNames.forEach((key, val) {
           if (key is String && val is String) {
@@ -4936,7 +4965,7 @@ class AppsProvider with ChangeNotifier {
     for (final app in importedApps) {
       final folderIds = folderIdsForApp(app);
       final Map<String, dynamic> updatedFolderNames = {};
-      
+
       if (folderIds.isNotEmpty) {
         final List<String> updatedFolderIds = [];
         for (final id in folderIds) {
@@ -4963,7 +4992,7 @@ class AppsProvider with ChangeNotifier {
         }
         app.additionalSettings['folderIds'] = updatedFolderIds;
       }
-      
+
       final excludedFolderIds = excludedFolderIdsForApp(app);
       if (excludedFolderIds.isNotEmpty) {
         final List<String> updatedExcludedIds = [];
@@ -4999,7 +5028,10 @@ class AppsProvider with ChangeNotifier {
     if (newFormat && decodedJSON['settings'] != null) {
       var settingsMap = decodedJSON['settings'] as Map<String, Object?>;
       settingsMap.forEach((key, value) {
-        if (key == 'appFolders') return; // Skip folder settings as we already merged/saved them
+        if (key == 'appFolders') {
+          // Skip folder settings as we already merged/saved them
+          return;
+        }
         if (value is int) {
           settingsProvider.prefs?.setInt(key, value);
         } else if (value is double) {
