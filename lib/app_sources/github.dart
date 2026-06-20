@@ -436,9 +436,9 @@ class GitHub extends AppSource {
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Token $token';
     }
-    if (forAPKDownload == true) {
-      headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
-    }
+    // if (forAPKDownload == true) {
+    //   headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
+    // }
     if (headers.isNotEmpty) {
       return headers;
     } else {
@@ -454,9 +454,9 @@ class GitHub extends AppSource {
       settingsProvider,
     );
     String? creds = sourceConfig['github-creds'];
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
-      creds = null;
-    }
+    // if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
+    //   creds = null;
+    // }
     return tokenFromCreds(creds);
   }
 
@@ -469,13 +469,37 @@ class GitHub extends AppSource {
   }
 
   @override
+  Future<String> assetUrlPrefetchModifier(
+    String assetUrl,
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    var prefix = sourceConfig['GHReqPrefix'] ?? '';
+    if (prefix.isNotEmpty && !assetUrl.startsWith('https://$prefix/')) {
+      return 'https://$prefix/$assetUrl';
+    }
+    return assetUrl;
+  }
+
+  @override
   Future<String> generalReqPrefetchModifier(
     String reqUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
-      var uri = Uri.parse(reqUrl);
-      return 'https://${additionalSettings['GHReqPrefix']}/${uri.toString().substring('https://'.length)}';
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
+      return 'https://${sourceConfig['GHReqPrefix']}/$reqUrl';
     }
     return reqUrl;
   }
@@ -733,7 +757,7 @@ class GitHub extends AppSource {
             var ext = e['name'].toString().toLowerCase().split('.').last;
             var url = !isInstallableExt(ext, includeZips: includeZips)
                 ? (e['browser_download_url'] ?? e['url'])
-                : (e['url'] ?? e['browser_download_url']);
+                : (e['browser_download_url'] ?? e['url']);
             url = undoGHProxyMod(url, sourceConfigSettingValues);
             e['final_url'] = (e['name'] != null) && (url != null)
                 ? MapEntry(e['name'] as String, url as String)
@@ -1144,10 +1168,15 @@ class GitHub extends AppSource {
   String undoGHProxyMod(
     String reqUrl,
     Map<String, String> sourceConfigSettingValues,
-  ) => reqUrl.replaceFirst(
-    'https://${sourceConfigSettingValues['GHReqPrefix']}/',
-    '',
-  );
+  ) {
+    var prefix = sourceConfigSettingValues['GHReqPrefix'] ?? '';
+    if (prefix.isEmpty) return reqUrl;
+    var proxyPrefix = 'https://$prefix/';
+    if (reqUrl.startsWith(proxyPrefix)) {
+      return reqUrl.substring(proxyPrefix.length);
+    }
+    return reqUrl;
+  }
 
   @override
   Future<Map<String, List<String>>> search(
