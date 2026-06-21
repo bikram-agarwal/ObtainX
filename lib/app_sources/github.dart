@@ -454,13 +454,13 @@ class GitHub extends AppSource {
   }
 
   Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
-    // SettingsProvider settingsProvider = SettingsProvider();
-    // await settingsProvider.initializeSettings();
-    // var sourceConfig = await getSourceConfigValues(
-    //   additionalSettings,
-    //   settingsProvider,
-    // );
-    // String? creds = sourceConfig['github-creds'];
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+       additionalSettings,
+       settingsProvider,
+     );
+    String? creds = sourceConfig['github-creds'];
     // if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
     //   creds = null;
     // }
