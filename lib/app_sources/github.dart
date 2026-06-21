@@ -759,12 +759,14 @@ class GitHub extends AppSource {
         }
       }
 
+      var prefix = sourceConfigSettingValues['GHReqPrefix'] ?? '';
+      var hasGHReqPrefix = prefix.isNotEmpty;
       findReleaseAssetUrls(dynamic release) =>
           (release['assets'] as List<dynamic>?)?.map((e) {
             var ext = e['name'].toString().toLowerCase().split('.').last;
-            var url = !isInstallableExt(ext, includeZips: includeZips)
+            var url = !isInstallableExt(ext, includeZips: includeZips) && hasGHReqPrefix
                 ? (e['browser_download_url'] ?? e['url'])
-                : (e['browser_download_url'] ?? e['url']);
+                : (e['url'] ?? e['browser_download_url']);
             url = undoGHProxyMod(url, sourceConfigSettingValues);
             e['final_url'] = (e['name'] != null) && (url != null)
                 ? MapEntry(e['name'] as String, url as String)
