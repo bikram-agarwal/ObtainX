@@ -457,13 +457,10 @@ class GitHub extends AppSource {
     SettingsProvider settingsProvider = SettingsProvider();
     await settingsProvider.initializeSettings();
     var sourceConfig = await getSourceConfigValues(
-       additionalSettings,
-       settingsProvider,
-     );
+      additionalSettings,
+      settingsProvider,
+    );
     String? creds = sourceConfig['github-creds'];
-    // if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
-    //   creds = null;
-    // }
     return tokenFromCreds(creds);
   }
 
