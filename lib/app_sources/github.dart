@@ -454,13 +454,13 @@ class GitHub extends AppSource {
   }
 
   Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
-    SettingsProvider settingsProvider = SettingsProvider();
-    await settingsProvider.initializeSettings();
-    var sourceConfig = await getSourceConfigValues(
-      additionalSettings,
-      settingsProvider,
-    );
-    String? creds = sourceConfig['github-creds'];
+    // SettingsProvider settingsProvider = SettingsProvider();
+    // await settingsProvider.initializeSettings();
+    // var sourceConfig = await getSourceConfigValues(
+    //   additionalSettings,
+    //   settingsProvider,
+    // );
+    // String? creds = sourceConfig['github-creds'];
     // if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
     //   creds = null;
     // }
@@ -764,7 +764,7 @@ class GitHub extends AppSource {
       findReleaseAssetUrls(dynamic release) =>
           (release['assets'] as List<dynamic>?)?.map((e) {
             var ext = e['name'].toString().toLowerCase().split('.').last;
-            var url = !isInstallableExt(ext, includeZips: includeZips) && hasGHReqPrefix
+            var url = !isInstallableExt(ext, includeZips: includeZips) || hasGHReqPrefix
                 ? (e['browser_download_url'] ?? e['url'])
                 : (e['url'] ?? e['browser_download_url']);
             url = undoGHProxyMod(url, sourceConfigSettingValues);
