@@ -431,14 +431,21 @@ class GitHub extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
     var token = await getTokenIfAny(additionalSettings);
     var headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Token $token';
     }
-    // if (forAPKDownload == true) {
-    //   headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
-    // }
+    var prefix = sourceConfig['GHReqPrefix'] ?? '';
+    if (forAPKDownload == true && prefix.isEmpty) {
+      headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
+    }
     if (headers.isNotEmpty) {
       return headers;
     } else {
