@@ -71,10 +71,10 @@ class _SettingsPageState extends State<SettingsPage> {
   // we subscribe only to the values needed for the Scaffold chrome, and
   // let each section widget subscribe to its own narrow set.
   static int _scaffoldSettingsHash(SettingsProvider sp) => Object.hash(
-        sp.prefs,
-        sp.useGradientBackground,
-        sp.progressiveBlurEnabled,
-      );
+    sp.prefs,
+    sp.useGradientBackground,
+    sp.progressiveBlurEnabled,
+  );
 
   static const List<String> _settingsSectionKeys = [
     'updates',
@@ -105,8 +105,9 @@ class _SettingsPageState extends State<SettingsPage> {
     // Narrow watch: only the values needed for the Scaffold chrome.
     // Use context.select instead of context.watch to avoid rebuilding the
     // whole page on every unrelated settings change.
-    final int scaffoldHash =
-        context.select<SettingsProvider, int>(_scaffoldSettingsHash);
+    final int scaffoldHash = context.select<SettingsProvider, int>(
+      _scaffoldSettingsHash,
+    );
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
     SourceProvider sourceProvider = SourceProvider();
@@ -145,8 +146,9 @@ class _SettingsPageState extends State<SettingsPage> {
       'gestures',
       'categories',
     ];
-    final bool allSettingsSectionsExpanded =
-        visibleSettingsSectionKeys.every((k) => expandedState[k] ?? true);
+    final bool allSettingsSectionsExpanded = visibleSettingsSectionKeys.every(
+      (k) => expandedState[k] ?? true,
+    );
 
     Widget settingsCard(List<Widget> children) {
       return m3eExpressiveSettingsCard(
@@ -436,9 +438,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             collapsibleCard(
                               'appearance',
-                              _AppearanceSection(
-                                androidInfo: _androidInfo,
-                              ),
+                              _AppearanceSection(androidInfo: _androidInfo),
                             ),
                             // ── Gestures ─────────────────────────────────
                             sectionHeader(
@@ -511,30 +511,27 @@ class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
 /// Updates section with its own narrow provider subscription.
 /// Only rebuilds when update-related settings change.
 class _UpdatesSection extends StatelessWidget {
-  const _UpdatesSection({
-    required this.cs,
-    required this.androidInfo,
-  });
+  const _UpdatesSection({required this.cs, required this.androidInfo});
 
   final ColorScheme cs;
   final Future<AndroidDeviceInfo> androidInfo;
 
   static int _updateSettingsHash(SettingsProvider sp) => Object.hash(
-        sp.updateInterval,
-        sp.updateIntervalSliderVal,
-        sp.useFGService,
-        sp.enableBackgroundUpdates,
-        sp.bgUpdatesOnWiFiOnly,
-        sp.bgUpdatesWhileChargingOnly,
-        sp.checkOnStart,
-        sp.checkUpdateOnDetailPage,
-        sp.onlyCheckInstalledOrTrackOnlyApps,
-        sp.removeOnExternalUninstall,
-        sp.parallelDownloads,
-        sp.beforeNewInstallsShareToAppVerifier,
-        sp.installerMode,
-        sp.shizukuPretendToBeGooglePlay,
-      );
+    sp.updateInterval,
+    sp.updateIntervalSliderVal,
+    sp.useFGService,
+    sp.enableBackgroundUpdates,
+    sp.bgUpdatesOnWiFiOnly,
+    sp.bgUpdatesWhileChargingOnly,
+    sp.checkOnStart,
+    sp.checkUpdateOnDetailPage,
+    sp.onlyCheckInstalledOrTrackOnlyApps,
+    sp.removeOnExternalUninstall,
+    sp.parallelDownloads,
+    sp.beforeNewInstallsShareToAppVerifier,
+    sp.installerMode,
+    sp.shizukuPretendToBeGooglePlay,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -556,14 +553,10 @@ class _UpdatesSection extends StatelessWidget {
     ColorScheme cs,
     AsyncSnapshot<AndroidDeviceInfo> snapshot,
   ) {
-    final List<Widget> rows = <Widget>[
-      _UpdateIntervalSlider(cs: cs),
-    ];
+    final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
     final bool showBgControls =
         (sp.updateInterval > 0) &&
-        (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
-            sp.installerMode == 'shizuku' ||
-            sp.enableBackgroundUpdates);
+        (((snapshot.data?.version.sdkInt ?? 0) >= 30) || sp.useShizuku);
     if (showBgControls) {
       rows
         ..add(
@@ -602,8 +595,8 @@ class _UpdatesSection extends StatelessWidget {
                 ),
               ],
             ),
-            onTap: () => sp.enableBackgroundUpdates =
-                !sp.enableBackgroundUpdates,
+            onTap: () =>
+                sp.enableBackgroundUpdates = !sp.enableBackgroundUpdates,
           ),
         );
       if (sp.enableBackgroundUpdates) {
@@ -710,39 +703,34 @@ class _UpdatesSection extends StatelessWidget {
                 onSelectionChanged: (Set<String> selected) {
                   final String mode = selected.first;
                   if (mode == 'shizuku') {
-                    ShizukuApkInstaller().checkPermission().then(
-                      (String? resCode) {
-                        if (!context.mounted) return;
-                        if (resCode!.startsWith('granted')) {
-                          sp.installerMode = 'shizuku';
-                        } else {
-                          switch (resCode) {
-                            case 'services_not_found':
-                              showError(
-                                ObtainiumError(tr('shizukuBinderNotFound')),
-                                context,
-                              );
-                            case 'old_shizuku':
-                              showError(
-                                ObtainiumError(tr('shizukuOld')),
-                                context,
-                              );
-                            case 'old_android_with_adb':
-                              showError(
-                                ObtainiumError(
-                                  tr('shizukuOldAndroidWithADB'),
-                                ),
-                                context,
-                              );
-                            case 'denied':
-                              showError(
-                                ObtainiumError(tr('cancelled')),
-                                context,
-                              );
-                          }
+                    ShizukuApkInstaller().checkPermission().then((
+                      String? resCode,
+                    ) {
+                      if (!context.mounted) return;
+                      if (resCode!.startsWith('granted')) {
+                        sp.installerMode = 'shizuku';
+                      } else {
+                        switch (resCode) {
+                          case 'services_not_found':
+                            showError(
+                              ObtainiumError(tr('shizukuBinderNotFound')),
+                              context,
+                            );
+                          case 'old_shizuku':
+                            showError(
+                              ObtainiumError(tr('shizukuOld')),
+                              context,
+                            );
+                          case 'old_android_with_adb':
+                            showError(
+                              ObtainiumError(tr('shizukuOldAndroidWithADB')),
+                              context,
+                            );
+                          case 'denied':
+                            showError(ObtainiumError(tr('cancelled')), context);
                         }
-                      },
-                    );
+                      }
+                    });
                   } else {
                     sp.installerMode = mode;
                   }
@@ -805,7 +793,10 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
   }
 
   void _updateLabel(double val) {
-    final int index = val.round().clamp(0, _SettingsPageState.updateIntervalNodes.length);
+    final int index = val.round().clamp(
+      0,
+      _SettingsPageState.updateIntervalNodes.length,
+    );
     if (index == 0) {
       _localInterval = 0;
       _localLabel = tr('neverManualOnly');
@@ -849,17 +840,26 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                     trackHeight: 16,
                     trackShape: const _GappedTrackShape(),
                     thumbShape: const _VerticalBarThumbShape(),
-                    tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
-                    activeTickMarkColor: Theme.of(context).colorScheme.onPrimary,
-                    inactiveTickMarkColor: Theme.of(context).colorScheme.primary,
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+                    tickMarkShape: const RoundSliderTickMarkShape(
+                      tickMarkRadius: 3,
+                    ),
+                    activeTickMarkColor: Theme.of(
+                      context,
+                    ).colorScheme.onPrimary,
+                    inactiveTickMarkColor: Theme.of(
+                      context,
+                    ).colorScheme.primary,
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 20,
+                    ),
                   ),
                   child: Slider(
                     value: _localSliderVal.clamp(
                       0,
                       _SettingsPageState.updateIntervalNodes.length.toDouble(),
                     ),
-                    max: _SettingsPageState.updateIntervalNodes.length.toDouble(),
+                    max: _SettingsPageState.updateIntervalNodes.length
+                        .toDouble(),
                     divisions: _SettingsPageState.updateIntervalNodes.length,
                     label: _localLabel,
                     onChanged: (double value) {
@@ -869,7 +869,8 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                       });
                     },
                     onChangeEnd: (double value) {
-                      final SettingsProvider sp = context.read<SettingsProvider>();
+                      final SettingsProvider sp = context
+                          .read<SettingsProvider>();
                       setState(() {
                         sp.updateIntervalSliderVal = value;
                         sp.updateInterval = _localInterval;
@@ -984,17 +985,17 @@ class _AppearanceSection extends StatelessWidget {
   final Future<AndroidDeviceInfo> androidInfo;
 
   static int _appearanceSettingsHash(SettingsProvider sp) => Object.hash(
-        sp.forcedLocale?.toLanguageTag(),
-        sp.useSystemFont,
-        sp.appUiScale,
-        sp.cardCornerScale,
-        sp.showAppWebpage,
-        sp.hideTrackOnlyWarning,
-        sp.hideAPKOriginWarning,
-        sp.disablePageTransitions,
-        sp.reversePageTransitions,
-        sp.highlightTouchTargets,
-      );
+    sp.forcedLocale?.toLanguageTag(),
+    sp.useSystemFont,
+    sp.appUiScale,
+    sp.cardCornerScale,
+    sp.showAppWebpage,
+    sp.hideTrackOnlyWarning,
+    sp.hideAPKOriginWarning,
+    sp.disablePageTransitions,
+    sp.reversePageTransitions,
+    sp.highlightTouchTargets,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -1109,11 +1110,11 @@ class _LocaleMenu extends StatelessWidget {
         final Locale? selectedLocale = value == null || value == '_system'
             ? null
             : supportedLocales
-                .firstWhere(
-                  (MapEntry<Locale, String> localeEntry) =>
-                      localeEntry.key.toLanguageTag() == value,
-                )
-                .key;
+                  .firstWhere(
+                    (MapEntry<Locale, String> localeEntry) =>
+                        localeEntry.key.toLanguageTag() == value,
+                  )
+                  .key;
         sp.forcedLocale = selectedLocale;
         if (selectedLocale != null) {
           context.setLocale(selectedLocale);
@@ -1175,18 +1176,23 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                     trackHeight: 16,
                     trackShape: const _GappedTrackShape(),
                     thumbShape: const _VerticalBarThumbShape(),
-                    tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
+                    tickMarkShape: const RoundSliderTickMarkShape(
+                      tickMarkRadius: 3,
+                    ),
                     activeTickMarkColor: cs.onPrimary,
                     inactiveTickMarkColor: cs.primary,
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 20,
+                    ),
                   ),
                   child: Slider(
                     min: SettingsProvider.appUiScaleMin,
                     max: SettingsProvider.appUiScaleMax,
-                    divisions: ((SettingsProvider.appUiScaleMax -
-                                SettingsProvider.appUiScaleMin) /
-                            0.05)
-                        .round(),
+                    divisions:
+                        ((SettingsProvider.appUiScaleMax -
+                                    SettingsProvider.appUiScaleMin) /
+                                0.05)
+                            .round(),
                     label: '${(_localVal * 100).round()}%',
                     value: _localVal,
                     onChanged: (double value) {
@@ -1256,18 +1262,23 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                     trackHeight: 16,
                     trackShape: const _GappedTrackShape(),
                     thumbShape: const _VerticalBarThumbShape(),
-                    tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
+                    tickMarkShape: const RoundSliderTickMarkShape(
+                      tickMarkRadius: 3,
+                    ),
                     activeTickMarkColor: cs.onPrimary,
                     inactiveTickMarkColor: cs.primary,
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 20,
+                    ),
                   ),
                   child: Slider(
                     min: SettingsProvider.cardCornerScaleMin,
                     max: SettingsProvider.cardCornerScaleMax,
-                    divisions: ((SettingsProvider.cardCornerScaleMax -
-                                SettingsProvider.cardCornerScaleMin) /
-                            0.10)
-                        .round(),
+                    divisions:
+                        ((SettingsProvider.cardCornerScaleMax -
+                                    SettingsProvider.cardCornerScaleMin) /
+                                0.10)
+                            .round(),
                     label: '${(_localVal * 100).round()}%',
                     value: _localVal,
                     onChanged: (double value) {
@@ -1291,10 +1302,8 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
 class _GesturesSection extends StatelessWidget {
   const _GesturesSection();
 
-  static int _gesturesSettingsHash(SettingsProvider sp) => Object.hash(
-        sp.rightSwipeAction,
-        sp.leftSwipeAction,
-      );
+  static int _gesturesSettingsHash(SettingsProvider sp) =>
+      Object.hash(sp.rightSwipeAction, sp.leftSwipeAction);
 
   @override
   Widget build(BuildContext context) {
@@ -1302,8 +1311,7 @@ class _GesturesSection extends StatelessWidget {
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    final List<SwipeAction> actions =
-        swipeActionsSortedByLocalizedLabel();
+    final List<SwipeAction> actions = swipeActionsSortedByLocalizedLabel();
     final double swipeMenuWidth = appDropdownMenuWidth(
       context,
       actions.map((SwipeAction action) => tr('swipeAction_${action.name}')),
