@@ -779,16 +779,18 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
   late double _localSliderVal;
   late int _localInterval;
   late String _localLabel;
-  bool _initializing = true;
+  bool _initialized = false;
+  bool _isDragging = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final SettingsProvider sp = context.read<SettingsProvider>();
-    if (_initializing) {
+    final sp = context.watch<SettingsProvider>();
+    if (!_initialized ||
+        (!_isDragging && _localSliderVal != sp.updateIntervalSliderVal)) {
       _localSliderVal = sp.updateIntervalSliderVal;
       _updateLabel(_localSliderVal);
-      _initializing = false;
+      _initialized = true;
     }
   }
 
@@ -864,6 +866,7 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                     label: _localLabel,
                     onChanged: (double value) {
                       setState(() {
+                        _isDragging = true;
                         _localSliderVal = value;
                         _updateLabel(value);
                       });
@@ -872,6 +875,7 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                       final SettingsProvider sp = context
                           .read<SettingsProvider>();
                       setState(() {
+                        _isDragging = false;
                         sp.updateIntervalSliderVal = value;
                         sp.updateInterval = _localInterval;
                       });
@@ -1137,14 +1141,16 @@ class _UiScaleSlider extends StatefulWidget {
 
 class _UiScaleSliderState extends State<_UiScaleSlider> {
   late double _localVal;
-  bool _initializing = true;
+  bool _initialized = false;
+  bool _isDragging = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_initializing) {
-      _localVal = widget.sp.appUiScale;
-      _initializing = false;
+    final sp = context.watch<SettingsProvider>();
+    if (!_initialized || (!_isDragging && _localVal != sp.appUiScale)) {
+      _localVal = sp.appUiScale;
+      _initialized = true;
     }
   }
 
@@ -1196,10 +1202,16 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                     label: '${(_localVal * 100).round()}%',
                     value: _localVal,
                     onChanged: (double value) {
-                      setState(() => _localVal = value);
+                      setState(() {
+                        _isDragging = true;
+                        _localVal = value;
+                      });
                     },
                     onChangeEnd: (double value) {
-                      widget.sp.appUiScale = value;
+                      setState(() {
+                        _isDragging = false;
+                        widget.sp.appUiScale = value;
+                      });
                     },
                   ),
                 ),
@@ -1223,14 +1235,16 @@ class _CardCornerScaleSlider extends StatefulWidget {
 
 class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
   late double _localVal;
-  bool _initializing = true;
+  bool _initialized = false;
+  bool _isDragging = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_initializing) {
-      _localVal = widget.sp.cardCornerScale;
-      _initializing = false;
+    final sp = context.watch<SettingsProvider>();
+    if (!_initialized || (!_isDragging && _localVal != sp.cardCornerScale)) {
+      _localVal = sp.cardCornerScale;
+      _initialized = true;
     }
   }
 
@@ -1282,10 +1296,16 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                     label: '${(_localVal * 100).round()}%',
                     value: _localVal,
                     onChanged: (double value) {
-                      setState(() => _localVal = value);
+                      setState(() {
+                        _isDragging = true;
+                        _localVal = value;
+                      });
                     },
                     onChangeEnd: (double value) {
-                      widget.sp.cardCornerScale = value;
+                      setState(() {
+                        _isDragging = false;
+                        widget.sp.cardCornerScale = value;
+                      });
                     },
                   ),
                 ),
