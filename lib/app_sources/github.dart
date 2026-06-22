@@ -29,6 +29,7 @@ Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
 
 class GitHub extends AppSource {
   static const String githubCredsKey = 'github-creds';
+  static const String githubReqPrefixKey = 'GHReqPrefix';
   static const String enforceAttestationsKey = 'enforceGitHubAttestations';
   static const String buildVerificationModeKey = 'githubBuildVerificationMode';
   static const String buildVerificationOff = 'off';
@@ -58,7 +59,7 @@ class GitHub extends AppSource {
         assistAction: _validatePATFromSettingsForm,
       ),
       GeneratedFormTextField(
-        'GHReqPrefix',
+        githubReqPrefixKey,
         label: tr('GHReqPrefix'),
         hint: 'gh-proxy.org',
         required: false,
@@ -442,7 +443,7 @@ class GitHub extends AppSource {
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Token $token';
     }
-    var prefix = sourceConfig['GHReqPrefix'] ?? '';
+    var prefix = sourceConfig[githubReqPrefixKey] ?? '';
     if (forAPKDownload == true && prefix.isEmpty) {
       headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
     }
@@ -481,7 +482,7 @@ class GitHub extends AppSource {
       additionalSettings,
       settingsProvider,
     );
-    var prefix = sourceConfig['GHReqPrefix'] ?? '';
+    var prefix = sourceConfig[githubReqPrefixKey] ?? '';
     if (prefix.isNotEmpty && !assetUrl.startsWith('https://$prefix/')) {
       return 'https://$prefix/$assetUrl';
     }
@@ -499,8 +500,8 @@ class GitHub extends AppSource {
       additionalSettings,
       settingsProvider,
     );
-    if ((sourceConfig['GHReqPrefix'] ?? '').isNotEmpty) {
-      return 'https://${sourceConfig['GHReqPrefix']}/$reqUrl';
+    if ((sourceConfig[githubReqPrefixKey] ?? '').isNotEmpty) {
+      return 'https://${sourceConfig[githubReqPrefixKey]}/$reqUrl';
     }
     return reqUrl;
   }
@@ -753,7 +754,7 @@ class GitHub extends AppSource {
         }
       }
 
-      var prefix = sourceConfigSettingValues['GHReqPrefix'] ?? '';
+      var prefix = sourceConfigSettingValues[githubReqPrefixKey] ?? '';
       var hasGHReqPrefix = prefix.isNotEmpty;
       findReleaseAssetUrls(dynamic release) =>
           (release['assets'] as List<dynamic>?)?.map((e) {
@@ -1174,7 +1175,7 @@ class GitHub extends AppSource {
     String reqUrl,
     Map<String, String> sourceConfigSettingValues,
   ) {
-    var prefix = sourceConfigSettingValues['GHReqPrefix'] ?? '';
+    var prefix = sourceConfigSettingValues[githubReqPrefixKey] ?? '';
     if (prefix.isEmpty) return reqUrl;
     var proxyPrefix = 'https://$prefix/';
     if (reqUrl.startsWith(proxyPrefix)) {
@@ -1200,7 +1201,7 @@ class GitHub extends AppSource {
       },
       querySettings: querySettings,
     );
-    if ((sourceConfigSettingValues['GHReqPrefix'] ?? '').isNotEmpty) {
+    if ((sourceConfigSettingValues[githubReqPrefixKey] ?? '').isNotEmpty) {
       Map<String, List<String>> results2 = {};
       results.forEach((k, v) {
         results2[undoGHProxyMod(k, sourceConfigSettingValues)] = v;
