@@ -785,10 +785,12 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final sp = context.watch<SettingsProvider>();
+    final updateIntervalSliderVal = context.select<SettingsProvider, double>(
+      (s) => s.updateIntervalSliderVal,
+    );
     if (!_initialized ||
-        (!_isDragging && _localSliderVal != sp.updateIntervalSliderVal)) {
-      _localSliderVal = sp.updateIntervalSliderVal;
+        (!_isDragging && _localSliderVal != updateIntervalSliderVal)) {
+      _localSliderVal = updateIntervalSliderVal;
       _updateLabel(_localSliderVal);
       _initialized = true;
     }
@@ -1035,8 +1037,8 @@ class _AppearanceSection extends StatelessWidget {
           },
           future: androidInfo,
         ),
-        _UiScaleSlider(sp: sp),
-        _CardCornerScaleSlider(sp: sp),
+        _UiScaleSlider(),
+        _CardCornerScaleSlider(),
         SwitchListTile(
           title: Text(tr('showWebInAppView')),
           value: sp.showAppWebpage,
@@ -1131,9 +1133,7 @@ class _LocaleMenu extends StatelessWidget {
 }
 
 class _UiScaleSlider extends StatefulWidget {
-  const _UiScaleSlider({required this.sp});
-
-  final SettingsProvider sp;
+  const _UiScaleSlider();
 
   @override
   State<_UiScaleSlider> createState() => _UiScaleSliderState();
@@ -1147,9 +1147,11 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final sp = context.watch<SettingsProvider>();
-    if (!_initialized || (!_isDragging && _localVal != sp.appUiScale)) {
-      _localVal = sp.appUiScale;
+    final appUiScale = context.select<SettingsProvider, double>(
+      (s) => s.appUiScale,
+    );
+    if (!_initialized || (!_isDragging && _localVal != appUiScale)) {
+      _localVal = appUiScale;
       _initialized = true;
     }
   }
@@ -1210,7 +1212,7 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                     onChangeEnd: (double value) {
                       setState(() {
                         _isDragging = false;
-                        widget.sp.appUiScale = value;
+                        context.read<SettingsProvider>().appUiScale = value;
                       });
                     },
                   ),
@@ -1225,9 +1227,7 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
 }
 
 class _CardCornerScaleSlider extends StatefulWidget {
-  const _CardCornerScaleSlider({required this.sp});
-
-  final SettingsProvider sp;
+  const _CardCornerScaleSlider();
 
   @override
   State<_CardCornerScaleSlider> createState() => _CardCornerScaleSliderState();
@@ -1241,9 +1241,11 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final sp = context.watch<SettingsProvider>();
-    if (!_initialized || (!_isDragging && _localVal != sp.cardCornerScale)) {
-      _localVal = sp.cardCornerScale;
+    final cardCornerScale = context.select<SettingsProvider, double>(
+      (s) => s.cardCornerScale,
+    );
+    if (!_initialized || (!_isDragging && _localVal != cardCornerScale)) {
+      _localVal = cardCornerScale;
       _initialized = true;
     }
   }
@@ -1304,7 +1306,8 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                     onChangeEnd: (double value) {
                       setState(() {
                         _isDragging = false;
-                        widget.sp.cardCornerScale = value;
+                        context.read<SettingsProvider>().cardCornerScale =
+                            value;
                       });
                     },
                   ),
