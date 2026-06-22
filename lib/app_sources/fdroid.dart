@@ -425,8 +425,18 @@ class FDroid extends AppSource {
           .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
           .toList();
       final uniqueApkUrls = apkUrls.toSet().toList();
+      // Skip the per-check APK-size HEAD and the package-page fetch (icon/name)
+      // when the upstream version is unchanged since the last check. getApp()
+      // reuses the previous apkSizeBytes / iconUrl / name in that case (its
+      // `?? currentApp` fallbacks), so these network round-trips would just be
+      // wasted work on a no-op refresh.
+      final App? prevApp = previouslyCheckedApp;
+      final bool versionUnchanged =
+          prevApp != null &&
+          prevApp.rawLatestVersionFromSource != null &&
+          prevApp.rawLatestVersionFromSource == version;
       int? apkSizeBytes;
-      if (uniqueApkUrls.isNotEmpty) {
+      if (uniqueApkUrls.isNotEmpty && !versionUnchanged) {
         try {
           final headers = await getRequestHeaders(
             additionalSettings,
@@ -473,7 +483,7 @@ class FDroid extends AppSource {
           hostIdenticalDespiteAnyChange ||
           pageHost == 'f-droid.org' ||
           pageHost == 'www.f-droid.org';
-      if (canUseOfficialPackagePage) {
+      if (canUseOfficialPackagePage && !versionUnchanged) {
         try {
           final pkgName = packageLabel;
           if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {

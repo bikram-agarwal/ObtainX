@@ -4018,6 +4018,14 @@ class AppsProvider with ChangeNotifier {
     bool notifyListenersAfterSave = true,
     bool autoExportAfterSave = true,
     bool updateInstalledInfo = true,
+    // When provided, install info is read from this device-package snapshot
+    // instead of a per-app getInstalledInfo() call. getInstalledInfo()
+    // enumerates ALL installed packages on every call, so for a bulk save (e.g.
+    // an update-check scan of hundreds of apps) the caller should enumerate
+    // once and pass the map here to avoid O(apps × devicePackages) work. The
+    // map still carries the current device versions, so external-update
+    // detection is preserved.
+    Map<String, PackageInfo>? prefetchedInstalledInfo,
   }) async {
     attemptToCorrectInstallStatus = attemptToCorrectInstallStatus;
     if (!updateInstalledInfo) {
@@ -4070,12 +4078,14 @@ class AppsProvider with ChangeNotifier {
             app.name = cachedInMemory.app.name;
           }
         } else {
-          info = await getInstalledInfo(app.id);
+          info = prefetchedInstalledInfo != null
+              ? prefetchedInstalledInfo[app.id]
+              : await getInstalledInfo(app.id);
           // Reuse the cached icon whenever the installed package
           // hasn't changed since the last save. [getAppIcon] returns large PNG
-          // bytes via a JNI hop. We still call [getInstalledInfo]
-          // unconditionally because it is cheap and we need the current
-          // versionName to detect external uninstalls / updates.
+          // bytes via a JNI hop. The current versionName (from the prefetched
+          // snapshot or a fresh lookup) is what lets us detect external
+          // uninstalls / updates.
           final bool installedUnchanged =
               cachedInMemory != null &&
               cachedInMemory.installedInfo?.packageName == info?.packageName &&
@@ -4098,7 +4108,9 @@ class AppsProvider with ChangeNotifier {
                   await BulkImportService.getApplicationLabels([app.id]);
               localizedLabel = labelsByPackageName[app.id]?.trim();
               if (localizedLabel?.isNotEmpty != true) {
-                info = await getInstalledInfo(app.id);
+                info = prefetchedInstalledInfo != null
+                    ? prefetchedInstalledInfo[app.id]
+                    : await getInstalledInfo(app.id);
               }
             }
             final String? appLabel = localizedLabel?.isNotEmpty == true
@@ -4461,6 +4473,7 @@ class AppsProvider with ChangeNotifier {
     String appId, {
     bool notifyListenersAfterSave = true,
     bool autoExportAfterSave = true,
+    Map<String, PackageInfo>? prefetchedInstalledInfo,
   }) async {
     App? currentApp = apps[appId]!.app;
     // Pause update checks until the user resolves a pending repo rename.
@@ -4511,6 +4524,7 @@ class AppsProvider with ChangeNotifier {
       [appToSave],
       notifyListenersAfterSave: notifyListenersAfterSave,
       autoExportAfterSave: autoExportAfterSave,
+      prefetchedInstalledInfo: prefetchedInstalledInfo,
     );
     if (apkMirrorSizeDebug && currentApp.url.contains('apkmirror.com')) {
       final App? savedApp = apps[appId]?.app;
@@ -4616,6 +4630,17 @@ class AppsProvider with ChangeNotifier {
         final workerCount = appIds.length < maxParallelUpdateChecks
             ? appIds.length
             : maxParallelUpdateChecks;
+        // Enumerate installed packages ONCE for the whole scan. Each per-app
+        // saveApps would otherwise call getInstalledInfo(), which re-enumerates
+        // every device package — O(apps × devicePackages). The snapshot still
+        // holds current device versions, so external updates are still detected.
+        final List<PackageInfo> allInstalledForScan = await getAllInstalledInfo(
+          light: true,
+        );
+        final Map<String, PackageInfo> prefetchedInstalledInfo = {
+          for (final info in allInstalledForScan)
+            if (info.packageName != null) info.packageName!: info,
+        };
 
         Future<void> runUpdateCheckWorker() async {
           while (true) {
@@ -4631,6 +4656,7 @@ class AppsProvider with ChangeNotifier {
                 appId,
                 notifyListenersAfterSave: false,
                 autoExportAfterSave: false,
+                prefetchedInstalledInfo: prefetchedInstalledInfo,
               );
               appSaveCompleted = true;
               final now = DateTime.now();
