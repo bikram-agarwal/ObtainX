@@ -373,6 +373,7 @@
     "fgServiceNotice": "Ez az értesítés a háttérben történő frissítésellenőrzéshez szükséges (a rendszer beállításaiban elrejthető).",
     "excludeSecrets": "Érzékeny adatok (például: személyes hozzáférési tokenek) kihagyása",
     "GHReqPrefix": "„sky22333/hubproxy” példány a GitHub lekérdezéséhez",
+    "GHReqPrefixUseToken": "Személyes hozzáférési token használata GitHub proxy kérésekhez",
     "includeZips": "ZIP-fájlok belefoglalása",
     "zippedApkFilterRegEx": "APK-fájlok szűrése a ZIP-fájlon belül",
     "googleVerificationWarningP1": "A Google bejelentette, hogy 2026/2027-től kezdődően az összes alkalmazáshoz, amely „tanúsított” (certified) Android eszközökön fut, a fejlesztőknek a személyes azonosító adataikat közvetlenül a Google-nek kell majd benyújtaniuk.\n\nMivel az ObtainX alkalmazás fejlesztői nem fogadják el ezt a követelményt, ezért az ObtainX az említett időpont után már nem fog működni a tanúsított Android eszközökön.",

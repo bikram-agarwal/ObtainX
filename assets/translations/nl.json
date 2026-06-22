@@ -373,6 +373,7 @@
     "fgServiceNotice": "Deze melding is nodig voor het controleren op updates op de achtergrond (kan worden verborgen in de OS-instellingen)",
     "excludeSecrets": "Geheimen uitsluiten",
     "GHReqPrefix": "'sky22333/hubproxy' instantie voor GitHub verzoeken",
+    "GHReqPrefixUseToken": "Persoonlijk toegangstoken gebruiken voor GitHub-proxyverzoeken",
     "includeZips": "ZIP-bestanden opnemen",
     "zippedApkFilterRegEx": "APK's filteren in ZIP",
     "googleVerificationWarningP1": "Google heeft aangekondigd dat vanaf 2026/2027 alle apps op \"gecertificeerde\" Android-apparaten de ontwikkelaar nodig hebben om persoonlijke identiteitsgegevens rechtstreeks aan Google te verzenden.\n\nAangezien de ontwikkelaars van deze app niet akkoord gaan met deze eis, zal Progressionium niet meer werken op gecertificeerde Android-apparaten na die tijd.",

@@ -390,6 +390,7 @@
     "fgServiceNotice": "此通知用於背景更新檢查( 可以在 OS 設置中隱藏)",
     "excludeSecrets": "不包括機密內容",
     "GHReqPrefix": "GitHub 請求的 'sky22333/hubproxy' 實例",
+    "GHReqPrefixUseToken": "Github 代理請求是否使用個人訪問令牌",
     "includeZips": "包含 ZIP 文件",
     "zippedApkFilterRegEx": "在 ZIP 內過濾 APK",
     "googleVerificationWarningP1": "Google 已宣布，自 2026／2027 年起，所有在「通過認證（certified）」的 Android 裝置上執行的應用程式，都必須由開發者直接向 Google 提交個人身分資訊。\n\n由於本應用程式的開發者不同意此一要求，ObtainX 在該時間點之後將無法再於通過認證的 Android 裝置上運作。",

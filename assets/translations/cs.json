@@ -373,6 +373,7 @@
     "fgServiceNotice": "Toto oznámení je nutné pro kontrolu aktualizací na pozadí (lze jej skrýt v nastavení systému)",
     "excludeSecrets": "Vyloučit tajemství",
     "GHReqPrefix": "instance 'sky22333/hubproxy' pro požadavky GitHubu",
+    "GHReqPrefixUseToken": "Použít osobní přístupový token pro proxy požadavky GitHub",
     "includeZips": "Zahrnout soubory ZIP",
     "zippedApkFilterRegEx": "Filtrování souborů APK uvnitř ZIP",
     "googleVerificationWarningP1": "Společnost Google oznámila, že počínaje rokem 2026 / 2027 budou všechny aplikace na \"certifikovaných\" zařízeních pro Android vyžadovat, aby vývojář předložil osobní údaje o identitě přímo společnosti Google.\n\nVzhledem k tomu, vývojáři této aplikace nesouhlasí s tímto požadavkem, Obstainium již nebude pracovat na certifikovaných Android zařízení po této době.",

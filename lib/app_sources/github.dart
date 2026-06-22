@@ -30,6 +30,7 @@ Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
 class GitHub extends AppSource {
   static const String githubCredsKey = 'github-creds';
   static const String githubReqPrefixKey = 'GHReqPrefix';
+  static const String githubReqPrefixUseTokenKey = 'GHReqPrefixUseToken';
   static const String enforceAttestationsKey = 'enforceGitHubAttestations';
   static const String buildVerificationModeKey = 'githubBuildVerificationMode';
   static const String buildVerificationOff = 'off';
@@ -87,6 +88,11 @@ class GitHub extends AppSource {
           ),
           tooltip: tr('about'),
         ),
+      ),
+      GeneratedFormSwitch(
+        githubReqPrefixUseTokenKey,
+        label: tr('GHReqPrefixUseToken'),
+        defaultValue: true,
       ),
       GeneratedFormSwitch(
         'checkRepoRename',
@@ -456,6 +462,10 @@ class GitHub extends AppSource {
 
   Future<String?> getTokenIfAny(Map<String, String> sourceConfig) async {
     String? creds = sourceConfig[githubCredsKey];
+    if ((sourceConfig[githubReqPrefixKey] ?? '').isNotEmpty &&
+        sourceConfig[githubReqPrefixUseTokenKey] == 'false') {
+      creds = null;
+    }
     return tokenFromCreds(creds);
   }
 

@@ -373,6 +373,7 @@
     "fgServiceNotice": "Bu bildirim arka plan güncelleme denetlemesi için gereklidir (işletim sistemi ayarlarından gizlenebilir)",
     "excludeSecrets": "Sırları hariç tut",
     "GHReqPrefix": "GitHub istekleri için 'sky22333/hubproxy' örneği",
+    "GHReqPrefixUseToken": "GitHub proxy istekleri için kişisel erişim belirteci kullan",
     "includeZips": "ZIP dosyalarını dahil et",
     "zippedApkFilterRegEx": "ZIP içindeki APK'ları filtrele",
     "googleVerificationWarningP1": "Google, 2026/2027'den itibaren \"sertifikalı\" Android cihazlardaki bütün uygulamaların, geliştiricinin kişisel kimlik bilgilerini doğrudan Google'a göndermesini gerektireceğini duyurdu.\n\nBu uygulamanın geliştiricileri bu şartı kabul etmedikleri için, ObtainX bu tarihten sonra sertifikalı Android cihazlarda çalışmayacaktır.",

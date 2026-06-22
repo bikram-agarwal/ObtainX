@@ -373,6 +373,7 @@
     "fgServiceNotice": "Aquesta notificació és necessària per comprovar les actualitzacions en segon pla (la pots ocultar als paràmetres del Sistema Operatiu)",
     "excludeSecrets": "Exclou els secrets",
     "GHReqPrefix": "exemple per a les peticions de GitHub",
+    "GHReqPrefixUseToken": "Utilitzar token d'accés personal per a les sol·licituds de proxy de GitHub",
     "includeZips": "Inclou fitxers ZIPName",
     "zippedApkFilterRegEx": "Filtre APKs dins ZIPName",
     "googleVerificationWarningP1": "Google ha anunciat que, començant en 2026/2027, totes les aplicacions en dispositius d'Android \"que requereixen que el desenvolupador enviï els detalls personals directament a Google.\n\nDes que els desenvolupadors d'aquesta aplicació no estan d'acord amb aquest requisit, l' obtenció ja no funcionarà en els dispositius certificats d'Android.",

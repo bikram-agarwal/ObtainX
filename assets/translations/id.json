@@ -373,6 +373,7 @@
     "fgServiceNotice": "Pemberitahuan ini diperlukan untuk pemeriksaan pembaruan latar belakang (dapat disembunyikan dalam pengaturan OS)",
     "excludeSecrets": "Mengecualikan rahasia",
     "GHReqPrefix": "Instance 'sky22333/hubproxy' untuk permintaan GitHub",
+    "GHReqPrefixUseToken": "Gunakan token akses pribadi untuk permintaan proxy GitHub",
     "includeZips": "Menyertakan file ZIP",
     "zippedApkFilterRegEx": "Saring APK di dalam ZIP",
     "googleVerificationWarningP1": "Google has announced that, starting in 2026 / 2027, all apps on \"certified\" Android devices will needs the developer to submit personal identity details directly to Google.\n\nKarena pengembang aplikasi ini tidak setuju dengan persyaratan ini, ObtainX tidak akan lagi bekerja pada perangkat Android bersertifikat setelah waktu itu.",

@@ -373,6 +373,7 @@
     "fgServiceNotice": "この通知は、バックグラウンドでアップデートを確認するために必要です（OSの設定で非表示にできます）。",
     "excludeSecrets": "シークレットを除く",
     "GHReqPrefix": "GitHub リクエスト用の 'sky22333/hubproxy' インスタンス",
+    "GHReqPrefixUseToken": "GitHub プロキシリクエストで個人アクセストークンを使用するか",
     "includeZips": "ZIPファイルを含む",
     "zippedApkFilterRegEx": "ZIP内のAPKをフィルタリングする",
     "googleVerificationWarningP1": "Googleは、2026年から2027年以降、「認定」Androidデバイス上のすべてのアプリにおいて、開発者が個人情報をGoogleに直接提出することを義務付けると発表しました。\n\nこのアプリの開発者はこの要件に同意しないため、それ以降ObtainXは認定Androidデバイスでは動作しなくなります。",
