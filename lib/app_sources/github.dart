@@ -92,7 +92,7 @@ class GitHub extends AppSource {
       GeneratedFormSwitch(
         githubReqPrefixUseTokenKey,
         label: tr('GHReqPrefixUseToken'),
-        defaultValue: true,
+        defaultValue: false,
       ),
       GeneratedFormSwitch(
         'checkRepoRename',
@@ -463,7 +463,7 @@ class GitHub extends AppSource {
   Future<String?> getTokenIfAny(Map<String, String> sourceConfig) async {
     String? creds = sourceConfig[githubCredsKey];
     if ((sourceConfig[githubReqPrefixKey] ?? '').isNotEmpty &&
-        sourceConfig[githubReqPrefixUseTokenKey] == 'false') {
+        (sourceConfig[githubReqPrefixUseTokenKey] ?? 'false') == 'false') {
       creds = null;
     }
     return tokenFromCreds(creds);
