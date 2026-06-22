@@ -64,6 +64,18 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
+
+  // ── Scaffold-level subscriptions ────────────────────────────────────
+  // We deliberately avoid `context.watch<SettingsProvider>()`: that would
+  // rebuild this whole widget tree on every single setter change. Instead
+  // we subscribe only to the values needed for the Scaffold chrome, and
+  // let each section widget subscribe to its own narrow set.
+  static int _scaffoldSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.prefs,
+    sp.useGradientBackground,
+    sp.progressiveBlurEnabled,
+  );
+
   static const List<String> _settingsSectionKeys = [
     'updates',
     'sourceSpecific',
@@ -73,7 +85,7 @@ class _SettingsPageState extends State<SettingsPage> {
     'categories',
   ];
 
-  List<int> updateIntervalNodes = [
+  static const List<int> updateIntervalNodes = [
     15,
     30,
     60,
@@ -87,433 +99,86 @@ class _SettingsPageState extends State<SettingsPage> {
     20160,
     43200,
   ];
-  int updateInterval = 0;
-  String updateIntervalLabel = tr('neverManualOnly');
-
-  void processIntervalSliderValue(double val) {
-    final int index = val.round().clamp(0, updateIntervalNodes.length);
-    if (index == 0) {
-      updateInterval = 0;
-      updateIntervalLabel = tr('neverManualOnly');
-      return;
-    }
-    final int minutes = updateIntervalNodes[index - 1];
-    updateInterval = minutes;
-    if (minutes < 60) {
-      updateIntervalLabel = plural('minute', minutes);
-    } else if (minutes < 24 * 60) {
-      updateIntervalLabel = plural('hour', minutes ~/ 60);
-    } else {
-      updateIntervalLabel = plural('day', minutes ~/ (24 * 60));
-    }
-  }
-
-  List<Widget> _updatesCardItemList(
-    BuildContext context,
-    ColorScheme cs,
-    SettingsProvider settingsProvider,
-    AsyncSnapshot<AndroidDeviceInfo> snapshot,
-    Widget updatesIntervalHead,
-  ) {
-    final List<Widget> rows = <Widget>[updatesIntervalHead];
-    final bool showBgControls =
-        (settingsProvider.updateInterval > 0) &&
-        (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
-            settingsProvider.useShizuku);
-    if (showBgControls) {
-      rows.add(
-        ListTile(
-          title: Text(tr('foregroundServiceForUpdateChecking')),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              HelpHintIcon(
-                message: tr('foregroundServiceReliabilityNote'),
-                padding: EdgeInsets.zero,
-              ),
-              Switch(
-                value: settingsProvider.useFGService,
-                onChanged: (bool value) {
-                  settingsProvider.useFGService = value;
-                },
-              ),
-            ],
-          ),
-          onTap: () {
-            settingsProvider.useFGService = !settingsProvider.useFGService;
-          },
-        ),
-      );
-      rows.add(
-        ListTile(
-          title: Text(tr('enableBackgroundUpdates')),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              HelpHintIcon(
-                message:
-                    '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
-                padding: EdgeInsets.zero,
-              ),
-              Switch(
-                value: settingsProvider.enableBackgroundUpdates,
-                onChanged: (bool value) {
-                  settingsProvider.enableBackgroundUpdates = value;
-                },
-              ),
-            ],
-          ),
-          onTap: () {
-            settingsProvider.enableBackgroundUpdates =
-                !settingsProvider.enableBackgroundUpdates;
-          },
-        ),
-      );
-      if (settingsProvider.enableBackgroundUpdates) {
-        rows.add(
-          SwitchListTile(
-            title: Text(tr('bgUpdatesOnWiFiOnly')),
-            value: settingsProvider.bgUpdatesOnWiFiOnly,
-            onChanged: (bool value) {
-              settingsProvider.bgUpdatesOnWiFiOnly = value;
-            },
-          ),
-        );
-        rows.add(
-          SwitchListTile(
-            title: Text(tr('bgUpdatesWhileChargingOnly')),
-            value: settingsProvider.bgUpdatesWhileChargingOnly,
-            onChanged: (bool value) {
-              settingsProvider.bgUpdatesWhileChargingOnly = value;
-            },
-          ),
-        );
-      }
-    }
-    rows.addAll(<Widget>[
-      SwitchListTile(
-        title: Text(tr('checkOnStart')),
-        value: settingsProvider.checkOnStart,
-        onChanged: (bool value) {
-          settingsProvider.checkOnStart = value;
-        },
-      ),
-      SwitchListTile(
-        title: Text(tr('checkUpdateOnDetailPage')),
-        value: settingsProvider.checkUpdateOnDetailPage,
-        onChanged: (bool value) {
-          settingsProvider.checkUpdateOnDetailPage = value;
-        },
-      ),
-      SwitchListTile(
-        title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
-        value: settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
-        onChanged: (bool value) {
-          settingsProvider.onlyCheckInstalledOrTrackOnlyApps = value;
-        },
-      ),
-      SwitchListTile(
-        title: Text(tr('removeOnExternalUninstall')),
-        value: settingsProvider.removeOnExternalUninstall,
-        onChanged: (bool value) {
-          settingsProvider.removeOnExternalUninstall = value;
-        },
-      ),
-      SwitchListTile(
-        title: Text(tr('parallelDownloads')),
-        value: settingsProvider.parallelDownloads,
-        onChanged: (bool value) {
-          settingsProvider.parallelDownloads = value;
-        },
-      ),
-      ListTile(
-        title: Text(tr('beforeNewInstallsShareToAppVerifier')),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              tooltip: tr('about'),
-              onPressed: () {
-                launchUrlString(
-                  'https://github.com/soupslurpr/AppVerifier',
-                  mode: LaunchMode.externalApplication,
-                );
-              },
-              style: IconButton.styleFrom(
-                foregroundColor: cs.onSurfaceVariant,
-                iconSize: 20,
-                padding: const EdgeInsets.all(4),
-                minimumSize: const Size(32, 32),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-              icon: const Icon(Icons.open_in_new_rounded),
-            ),
-            Switch(
-              value: settingsProvider.beforeNewInstallsShareToAppVerifier,
-              onChanged: (bool value) {
-                settingsProvider.beforeNewInstallsShareToAppVerifier = value;
-              },
-            ),
-          ],
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(tr('installerMode')),
-            const SizedBox(height: 4),
-            SizedBox(
-              width: double.infinity,
-              child: SegmentedButton<String>(
-                segments: [
-                  ButtonSegment<String>(
-                    value: 'stock',
-                    label: Text(tr('installerModeStock')),
-                  ),
-                  ButtonSegment<String>(
-                    value: 'shizuku',
-                    label: Text(tr('installerModeShizuku')),
-                  ),
-                  ButtonSegment<String>(
-                    value: 'legacy',
-                    label: Text(tr('installerModeThirdParty')),
-                  ),
-                ],
-                selected: {settingsProvider.installerMode},
-                onSelectionChanged: (Set<String> selected) {
-                  final String mode = selected.first;
-                  if (mode == 'shizuku') {
-                    ShizukuApkInstaller().checkPermission().then((
-                      String? resCode,
-                    ) {
-                      if (!context.mounted) return;
-                      if (resCode!.startsWith('granted')) {
-                        settingsProvider.installerMode = 'shizuku';
-                      } else {
-                        switch (resCode) {
-                          case 'services_not_found':
-                            showError(
-                              ObtainiumError(tr('shizukuBinderNotFound')),
-                              context,
-                            );
-                          case 'old_shizuku':
-                            showError(
-                              ObtainiumError(tr('shizukuOld')),
-                              context,
-                            );
-                          case 'old_android_with_adb':
-                            showError(
-                              ObtainiumError(tr('shizukuOldAndroidWithADB')),
-                              context,
-                            );
-                          case 'denied':
-                            showError(ObtainiumError(tr('cancelled')), context);
-                        }
-                      }
-                    });
-                  } else {
-                    settingsProvider.installerMode = mode;
-                  }
-                },
-              ),
-            ),
-            if (settingsProvider.installerMode == 'shizuku')
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(tr('shizukuPretendToBeGooglePlay')),
-                value: settingsProvider.shizukuPretendToBeGooglePlay,
-                onChanged: (bool value) {
-                  settingsProvider.shizukuPretendToBeGooglePlay = value;
-                },
-              ),
-            if (settingsProvider.installerMode == 'legacy')
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: _ThirdPartyInstallerSelector(
-                  settingsProvider: settingsProvider,
-                ),
-              ),
-          ],
-        ),
-      ),
-    ]);
-    return rows;
-  }
 
   @override
   Widget build(BuildContext context) {
-    SettingsProvider settingsProvider = context.watch<SettingsProvider>();
+    // Narrow watch: only the values needed for the Scaffold chrome.
+    // Use context.select instead of context.watch to avoid rebuilding the
+    // whole page on every unrelated settings change.
+    final int scaffoldHash = context.select<SettingsProvider, int>(
+      _scaffoldSettingsHash,
+    );
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
     SourceProvider sourceProvider = SourceProvider();
-    if (settingsProvider.prefs == null) settingsProvider.initializeSettings();
-    processIntervalSliderValue(settingsProvider.updateIntervalSliderVal);
 
-    final Widget localeMenu = appDropdownField<String>(
-      key: ValueKey(
-        settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
-      ),
-      context: context,
-      value: settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
-      labelText: tr('language'),
-      menuWidth: appDropdownMenuWidth(
-        context,
-        [
-          tr('followSystem'),
-          ...supportedLocales.map(
-            (MapEntry<Locale, String> localeEntry) => localeEntry.value,
-          ),
-        ],
-        style: Theme.of(context).textTheme.bodyLarge,
-        horizontalPadding: 96,
-        minWidth: 150,
-      ),
-      items: [
-        DropdownMenuItem<String>(
-          value: '_system',
-          child: Text(tr('followSystem')),
-        ),
-        ...supportedLocales.map(
-          (MapEntry<Locale, String> localeEntry) => DropdownMenuItem<String>(
-            value: localeEntry.key.toLanguageTag(),
-            child: Text(localeEntry.value),
-          ),
-        ),
-      ],
-      onChanged: (String? value) {
-        final Locale? selectedLocale = value == null || value == '_system'
-            ? null
-            : supportedLocales
-                  .firstWhere(
-                    (MapEntry<Locale, String> localeEntry) =>
-                        localeEntry.key.toLanguageTag() == value,
-                  )
-                  .key;
-        settingsProvider.forcedLocale = selectedLocale;
-        if (selectedLocale != null) {
-          context.setLocale(selectedLocale);
-        } else {
-          settingsProvider.resetLocaleSafe(context);
-        }
-      },
+    // One-time initialization guard.
+    if (sp.prefs == null) sp.initializeSettings();
+
+    // Collapse state: persisted in SharedPreferences but toggled via local
+    // setState so toggling a section header does NOT trigger a global
+    // notifyListeners / full-page rebuild.
+    final Map<String, bool> expandedState = <String, bool>{
+      for (final key in _settingsSectionKeys)
+        key: sp.prefs?.getBool('settingsSection_$key') ?? true,
+    };
+
+    void setSectionExpanded(String key, bool value) {
+      sp.prefs?.setBool('settingsSection_$key', value);
+      setState(() {});
+    }
+
+    void setAllSettingsSectionsExpanded(bool value) {
+      for (final sectionKey in _settingsSectionKeys) {
+        sp.prefs?.setBool('settingsSection_$sectionKey', value);
+      }
+      setState(() {});
+    }
+
+    final List<String> visibleSettingsSectionKeys = [
+      'updates',
+      if (sourceProvider.sources.any(
+        (source) => source.sourceConfigSettingFormItems.isNotEmpty,
+      ))
+        'sourceSpecific',
+      'themes',
+      'appearance',
+      'gestures',
+      'categories',
+    ];
+    final bool allSettingsSectionsExpanded = visibleSettingsSectionKeys.every(
+      (k) => expandedState[k] ?? true,
     );
 
-    // M3 Expressive slider design - thick gapped track + vertical-bar thumb.
-    // Implemented via custom [SliderTrackShape] / [SliderComponentShape]
-    // painters at the bottom of this file. The slider_m3e package's
-    // "round" / "square" thumb variants don't match the M3E reference
-    // (which is a vertical-pill thumb), so we keep our spec-correct
-    // hand-built shapes.
-    var intervalSlider = SliderTheme(
-      data: SliderTheme.of(context).copyWith(
-        trackHeight: 16,
-        trackShape: const _GappedTrackShape(),
-        thumbShape: const _VerticalBarThumbShape(),
-        tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
-        activeTickMarkColor: Theme.of(context).colorScheme.onPrimary,
-        inactiveTickMarkColor: Theme.of(context).colorScheme.primary,
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-      ),
-      child: Slider(
-        value: settingsProvider.updateIntervalSliderVal.roundToDouble().clamp(
-          0,
-          updateIntervalNodes.length.toDouble(),
-        ),
-        max: updateIntervalNodes.length.toDouble(),
-        divisions: updateIntervalNodes.length,
-        label: updateIntervalLabel,
-        onChanged: (double value) {
-          setState(() {
-            settingsProvider.updateIntervalSliderVal = value;
-            processIntervalSliderValue(value);
-          });
-        },
-        onChangeEnd: (double value) {
-          setState(() {
-            settingsProvider.updateInterval = updateInterval;
-          });
-        },
-      ),
-    );
+    Widget settingsCard(List<Widget> children) {
+      return m3eExpressiveSettingsCard(
+        context: context,
+        colorScheme: cs,
+        items: children,
+      );
+    }
 
-    final List<Widget> sourceSpecificForms = sourceProvider.sources
-        .where((s) => s.sourceConfigSettingFormItems.isNotEmpty)
-        .map((source) {
-          return GeneratedForm(
-            outlinedInputFields: true,
-            items: source.sourceConfigSettingFormItems.map((item) {
-              final GeneratedFormItem formItem = item.clone();
-              if (formItem is GeneratedFormSwitch) {
-                formItem.defaultValue = settingsProvider.getSettingBool(
-                  formItem.key,
-                );
-              } else {
-                formItem.defaultValue = settingsProvider.getSettingString(
-                  formItem.key,
-                );
-              }
-              return [formItem];
-            }).toList(),
-            onValueChanges: (values, valid, isBuilding) {
-              if (valid && !isBuilding) {
-                if (source is GitHub) {
-                  final String? githubCreds = values[GitHub.githubCredsKey]
-                      ?.toString();
-                  if (!GitHub.hasValidatedPAT(githubCreds, settingsProvider)) {
-                    GitHub.clearPATValidation(settingsProvider);
-                  }
-                }
-                values.forEach((key, value) {
-                  final formItem = source.sourceConfigSettingFormItems
-                      .where((i) => i.key == key)
-                      .firstOrNull;
-                  if (formItem is GeneratedFormSwitch) {
-                    settingsProvider.setSettingBool(key, value == true);
-                  } else {
-                    settingsProvider.setSettingString(key, value ?? '');
-                  }
-                });
-              }
-            },
-          );
-        })
-        .toList();
-
-    final cs = Theme.of(context).colorScheme;
-
-    final Widget updatesIntervalHead = Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Icon(Icons.update_rounded, color: cs.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
-                      Text(updateIntervalLabel),
-                    ],
-                  ),
-                ),
-                intervalSlider,
-              ],
-            ),
+    Widget collapsibleCard(String key, Widget child) {
+      final bool expanded = expandedState[key] ?? true;
+      return ClipRect(
+        clipper: _SettingsSectionShadowClipper(expanded: expanded),
+        child: AnimatedAlign(
+          duration: const Duration(milliseconds: 360),
+          curve: Curves.easeInOutCubicEmphasized,
+          alignment: Alignment.topCenter,
+          heightFactor: expanded ? 1.0 : 0.0,
+          child: AnimatedOpacity(
+            duration: Duration(milliseconds: expanded ? 260 : 140),
+            curve: expanded ? Curves.easeOutCubic : Curves.easeInCubic,
+            opacity: expanded ? 1.0 : 0.0,
+            child: child,
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
 
     Widget sectionHeader(String title, IconData icon, String key) {
-      final bool expanded =
-          settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
+      final bool expanded = expandedState[key] ?? true;
       const Duration headerTransitionDuration = Duration(milliseconds: 300);
       const Curve headerTransitionCurve = Curves.easeInOutCubicEmphasized;
       final Color collapsedHeaderColor = Color.lerp(
@@ -546,10 +211,7 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Material(
             type: MaterialType.transparency,
             child: InkWell(
-              onTap: () => settingsProvider.setSettingBool(
-                'settingsSection_$key',
-                !expanded,
-              ),
+              onTap: () => setSectionExpanded(key, !expanded),
               borderRadius: BorderRadius.circular(expanded ? 8 : 28),
               splashFactory: NoSplash.splashFactory,
               splashColor: Colors.transparent,
@@ -673,66 +335,12 @@ class _SettingsPageState extends State<SettingsPage> {
       );
     }
 
-    Widget settingsCard(List<Widget> children) {
-      return m3eExpressiveSettingsCard(
-        context: context,
-        colorScheme: cs,
-        items: children,
-      );
-    }
-
-    Widget collapsibleCard(String key, List<Widget> children) {
-      final bool expanded =
-          settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
-      return ClipRect(
-        clipper: _SettingsSectionShadowClipper(expanded: expanded),
-        child: AnimatedAlign(
-          duration: const Duration(milliseconds: 360),
-          curve: Curves.easeInOutCubicEmphasized,
-          alignment: Alignment.topCenter,
-          heightFactor: expanded ? 1.0 : 0.0,
-          child: AnimatedOpacity(
-            duration: Duration(milliseconds: expanded ? 260 : 140),
-            curve: expanded ? Curves.easeOutCubic : Curves.easeInCubic,
-            opacity: expanded ? 1.0 : 0.0,
-            child: settingsCard(children),
-          ),
-        ),
-      );
-    }
-
-    final List<String> visibleSettingsSectionKeys = [
-      'updates',
-      if (sourceProvider.sources.any(
-        (source) => source.sourceConfigSettingFormItems.isNotEmpty,
-      ))
-        'sourceSpecific',
-      'themes',
-      'appearance',
-      'gestures',
-      'categories',
-    ];
-    final bool allSettingsSectionsExpanded = visibleSettingsSectionKeys.every(
-      (sectionKey) =>
-          settingsProvider.prefs?.getBool('settingsSection_$sectionKey') ??
-          true,
-    );
-
-    void setAllSettingsSectionsExpanded(bool expanded) {
-      for (final sectionKey in _settingsSectionKeys) {
-        settingsProvider.setSettingBool(
-          'settingsSection_$sectionKey',
-          expanded,
-        );
-      }
-    }
-
     return Scaffold(
       backgroundColor: cs.surface,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (settingsProvider.useGradientBackground)
+          if (sp.useGradientBackground)
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -756,7 +364,7 @@ class _SettingsPageState extends State<SettingsPage> {
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('settings'),
-                matchGradientBackground: settingsProvider.useGradientBackground,
+                matchGradientBackground: sp.useGradientBackground,
                 actions: [
                   IconButton(
                     tooltip: allSettingsSectionsExpanded
@@ -778,37 +386,25 @@ class _SettingsPageState extends State<SettingsPage> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: settingsProvider.prefs == null
+                  child: sp.prefs == null
                       ? const SizedBox()
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // ── Updates ──────────────────────────────────────────
+                            // ── Updates ───────────────────────────────────
                             sectionHeader(
                               tr('updates'),
                               Icons.update_rounded,
                               'updates',
                             ),
-                            FutureBuilder<AndroidDeviceInfo>(
-                              future: _androidInfo,
-                              builder:
-                                  (
-                                    BuildContext context,
-                                    AsyncSnapshot<AndroidDeviceInfo> snapshot,
-                                  ) {
-                                    return collapsibleCard(
-                                      'updates',
-                                      _updatesCardItemList(
-                                        context,
-                                        cs,
-                                        settingsProvider,
-                                        snapshot,
-                                        updatesIntervalHead,
-                                      ),
-                                    );
-                                  },
+                            collapsibleCard(
+                              'updates',
+                              _UpdatesSection(
+                                cs: cs,
+                                androidInfo: _androidInfo,
+                              ),
                             ),
-                            // ── Source-specific ──────────────────────────────────
+                            // ── Source-specific ───────────────────────────
                             if (sourceProvider.sources.any(
                               (s) => s.sourceConfigSettingFormItems.isNotEmpty,
                             )) ...[
@@ -817,32 +413,12 @@ class _SettingsPageState extends State<SettingsPage> {
                                 Icons.dns_rounded,
                                 'sourceSpecific',
                               ),
-                              collapsibleCard('sourceSpecific', [
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    8,
-                                    16,
-                                    8,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      for (
-                                        int i = 0;
-                                        i < sourceSpecificForms.length;
-                                        i++
-                                      ) ...[
-                                        if (i > 0) const SizedBox(height: 12),
-                                        sourceSpecificForms[i],
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ]),
+                              collapsibleCard(
+                                'sourceSpecific',
+                                const _SourceSpecificSection(),
+                              ),
                             ],
-                            // ── Themes ────────────────────────────────────────────
+                            // ── Themes ───────────────────────────────────
                             sectionHeader(
                               tr('settingsThemesSection'),
                               Icons.palette_rounded,
@@ -850,409 +426,49 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                             collapsibleCard(
                               'themes',
-                              buildThemesSettingsCardItems(
-                                context,
-                                _androidInfo,
+                              _ThemesSettingsSection(
+                                androidInfoFuture: _androidInfo,
                               ),
                             ),
-                            // ── Appearance ────────────────────────────────────────
+                            // ── Appearance ────────────────────────────────
                             sectionHeader(
                               tr('appearance'),
                               Icons.tune_rounded,
                               'appearance',
                             ),
-                            collapsibleCard('appearance', [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  12,
-                                  16,
-                                  4,
-                                ),
-                                child: localeMenu,
-                              ),
-                              FutureBuilder(
-                                builder: (ctx, val) {
-                                  return (val.data?.version.sdkInt ?? 0) >= 29
-                                      ? SwitchListTile(
-                                          title: Text(tr('useSystemFont')),
-                                          value: settingsProvider.useSystemFont,
-                                          onChanged: (useSystemFont) {
-                                            if (useSystemFont) {
-                                              NativeFeatures.loadSystemFont()
-                                                  .then((val) {
-                                                    settingsProvider
-                                                            .useSystemFont =
-                                                        true;
-                                                  });
-                                            } else {
-                                              settingsProvider.useSystemFont =
-                                                  false;
-                                            }
-                                          },
-                                        )
-                                      : const SizedBox.shrink();
-                                },
-                                future: _androidInfo,
-                              ),
-                              // ── UI scale slider ─────────────────────────
-                              // Lets users dial the in-app text/layout size
-                              // up or down. The slider is the sole knob -
-                              // when it's at 1.0 the MediaQuery override in
-                              // main.dart is a true no-op. Visual design
-                              // mirrors the [intervalSlider] above (gapped
-                              // track + vertical-bar thumb + tick marks)
-                              // for consistency across the settings page.
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.format_size_rounded,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(tr('uiScale')),
-                                                ),
-                                                Text(
-                                                  '${(settingsProvider.appUiScale * 100).round()}%',
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          SliderTheme(
-                                            data: SliderTheme.of(context).copyWith(
-                                              trackHeight: 16,
-                                              trackShape:
-                                                  const _GappedTrackShape(),
-                                              thumbShape:
-                                                  const _VerticalBarThumbShape(),
-                                              tickMarkShape:
-                                                  const RoundSliderTickMarkShape(
-                                                    tickMarkRadius: 3,
-                                                  ),
-                                              activeTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.onPrimary,
-                                              inactiveTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.primary,
-                                              overlayShape:
-                                                  const RoundSliderOverlayShape(
-                                                    overlayRadius: 20,
-                                                  ),
-                                            ),
-                                            child: Slider(
-                                              min: SettingsProvider
-                                                  .appUiScaleMin,
-                                              max: SettingsProvider
-                                                  .appUiScaleMax,
-                                              divisions:
-                                                  ((SettingsProvider
-                                                                  .appUiScaleMax -
-                                                              SettingsProvider
-                                                                  .appUiScaleMin) /
-                                                          0.05)
-                                                      .round(),
-                                              label:
-                                                  '${(settingsProvider.appUiScale * 100).round()}%',
-                                              value:
-                                                  settingsProvider.appUiScale,
-                                              onChanged: (double value) {
-                                                settingsProvider.appUiScale =
-                                                    value;
-                                              },
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.rounded_corner_rounded,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    tr('cardCorners'),
-                                                  ),
-                                                ),
-                                                Text(
-                                                  '${(settingsProvider.cardCornerScale * 100).round()}%',
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          SliderTheme(
-                                            data: SliderTheme.of(context).copyWith(
-                                              trackHeight: 16,
-                                              trackShape:
-                                                  const _GappedTrackShape(),
-                                              thumbShape:
-                                                  const _VerticalBarThumbShape(),
-                                              tickMarkShape:
-                                                  const RoundSliderTickMarkShape(
-                                                    tickMarkRadius: 3,
-                                                  ),
-                                              activeTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.onPrimary,
-                                              inactiveTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.primary,
-                                              overlayShape:
-                                                  const RoundSliderOverlayShape(
-                                                    overlayRadius: 20,
-                                                  ),
-                                            ),
-                                            child: Slider(
-                                              min: SettingsProvider
-                                                  .cardCornerScaleMin,
-                                              max: SettingsProvider
-                                                  .cardCornerScaleMax,
-                                              divisions:
-                                                  ((SettingsProvider
-                                                                  .cardCornerScaleMax -
-                                                              SettingsProvider
-                                                                  .cardCornerScaleMin) /
-                                                          0.10)
-                                                      .round(),
-                                              label:
-                                                  '${(settingsProvider.cardCornerScale * 100).round()}%',
-                                              value: settingsProvider
-                                                  .cardCornerScale,
-                                              onChanged: (double value) {
-                                                settingsProvider
-                                                        .cardCornerScale =
-                                                    value;
-                                              },
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('showWebInAppView')),
-                                value: settingsProvider.showAppWebpage,
-                                onChanged: (value) {
-                                  settingsProvider.showAppWebpage = value;
-                                },
-                              ),
-                              // [showFolderedAppsOnMainPage] toggle moved
-                              // to the apps-list view options sheet (open
-                              // via the apps tab's filter / view-options
-                              // entry point) - it's a main-tab-scoped
-                              // setting and belongs alongside the other
-                              // view options (sort / group / pin updates
-                              // etc.) rather than in the global Settings
-                              // page where it competed with truly app-wide
-                              // controls. See [showAppsViewOptionsSheet].
-                              SwitchListTile(
-                                title: Text(tr('dontShowTrackOnlyWarnings')),
-                                value: settingsProvider.hideTrackOnlyWarning,
-                                onChanged: (value) {
-                                  settingsProvider.hideTrackOnlyWarning = value;
-                                },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('dontShowAPKOriginWarnings')),
-                                value: settingsProvider.hideAPKOriginWarning,
-                                onChanged: (value) {
-                                  settingsProvider.hideAPKOriginWarning = value;
-                                },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('disablePageTransitions')),
-                                value: settingsProvider.disablePageTransitions,
-                                onChanged: (value) {
-                                  settingsProvider.disablePageTransitions =
-                                      value;
-                                },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('reversePageTransitions')),
-                                value: settingsProvider.reversePageTransitions,
-                                onChanged:
-                                    settingsProvider.disablePageTransitions
-                                    ? null
-                                    : (value) {
-                                        settingsProvider
-                                                .reversePageTransitions =
-                                            value;
-                                      },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('highlightTouchTargets')),
-                                value: settingsProvider.highlightTouchTargets,
-                                onChanged: (value) {
-                                  settingsProvider.highlightTouchTargets =
-                                      value;
-                                },
-                              ),
-                            ]),
-                            // ── Gestures ──────────────────────────────────────────
+                            collapsibleCard(
+                              'appearance',
+                              _AppearanceSection(androidInfo: _androidInfo),
+                            ),
+                            // ── Gestures ─────────────────────────────────
                             sectionHeader(
                               tr('gestures'),
                               Icons.swipe_rounded,
                               'gestures',
                             ),
-                            collapsibleCard('gestures', [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  12,
-                                  16,
-                                  12,
-                                ),
-                                child: (() {
-                                  final List<SwipeAction> actions =
-                                      swipeActionsSortedByLocalizedLabel();
-                                  final double swipeMenuWidth =
-                                      appDropdownMenuWidth(
-                                        context,
-                                        actions.map(
-                                          (SwipeAction action) =>
-                                              tr('swipeAction_${action.name}'),
-                                        ),
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodyLarge,
-                                        horizontalPadding: 120,
-                                        minWidth: 180,
-                                        maxWidthInset: 80,
-                                      );
-                                  List<DropdownMenuItem<SwipeAction>>
-                                  actionItems() {
-                                    return actions.map((SwipeAction action) {
-                                      return DropdownMenuItem<SwipeAction>(
-                                        value: action,
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              _swipeActionIcon(action),
-                                              size: 18,
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Text(
-                                              tr('swipeAction_${action.name}'),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    }).toList();
-                                  }
-
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      appDropdownField<SwipeAction>(
-                                        key: ValueKey(
-                                          'rightSwipeAction_${settingsProvider.rightSwipeAction}',
-                                        ),
-                                        context: context,
-                                        value:
-                                            settingsProvider.rightSwipeAction,
-                                        labelText: tr('rightSwipeAction'),
-                                        menuWidth: swipeMenuWidth,
-                                        items: actionItems(),
-                                        onChanged: (SwipeAction? value) {
-                                          if (value != null) {
-                                            settingsProvider.rightSwipeAction =
-                                                value;
-                                          }
-                                        },
-                                      ),
-                                      const SizedBox(height: 16),
-                                      appDropdownField<SwipeAction>(
-                                        key: ValueKey(
-                                          'leftSwipeAction_${settingsProvider.leftSwipeAction}',
-                                        ),
-                                        context: context,
-                                        value: settingsProvider.leftSwipeAction,
-                                        labelText: tr('leftSwipeAction'),
-                                        menuWidth: swipeMenuWidth,
-                                        items: actionItems(),
-                                        onChanged: (SwipeAction? value) {
-                                          if (value != null) {
-                                            settingsProvider.leftSwipeAction =
-                                                value;
-                                          }
-                                        },
-                                      ),
-                                    ],
-                                  );
-                                })(),
-                              ),
-                            ]),
-                            // ── Categories ────────────────────────────────────────
+                            collapsibleCard(
+                              'gestures',
+                              const _GesturesSection(),
+                            ),
+                            // ── Categories ───────────────────────────────
                             sectionHeader(
                               tr('categories'),
                               Icons.label_rounded,
                               'categories',
                             ),
-                            collapsibleCard('categories', [
-                              const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: CategoryEditorSelector(
-                                  showLabelWhenNotEmpty: false,
-                                  showSelectedCheckmark: true,
-                                  showChangeIntentIcons: false,
-                                ),
-                              ),
-                            ]),
+                            collapsibleCard(
+                              'categories',
+                              const _CategoriesSection(),
+                            ),
                             aboutSectionHeader(),
                             settingsCard([
-                              _AboutSectionContent(
-                                colorScheme: cs,
-                                settingsProvider: settingsProvider,
-                              ),
+                              _AboutSectionContent(colorScheme: cs),
                             ]),
                           ],
                         ),
                 ),
               ),
-              if (settingsProvider.progressiveBlurEnabled)
+              if (sp.progressiveBlurEnabled)
                 SliverToBoxAdapter(
                   child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
                 ),
@@ -1290,17 +506,932 @@ class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
   }
 }
 
-class _AboutSectionContent extends StatelessWidget {
-  const _AboutSectionContent({
-    required this.colorScheme,
-    required this.settingsProvider,
-  });
+// ── Section widgets ─────────────────────────────────────────────────────
 
-  final ColorScheme colorScheme;
-  final SettingsProvider settingsProvider;
+/// Updates section with its own narrow provider subscription.
+/// Only rebuilds when update-related settings change.
+class _UpdatesSection extends StatelessWidget {
+  const _UpdatesSection({required this.cs, required this.androidInfo});
+
+  final ColorScheme cs;
+  final Future<AndroidDeviceInfo> androidInfo;
+
+  static int _updateSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.updateInterval,
+    sp.updateIntervalSliderVal,
+    sp.useFGService,
+    sp.enableBackgroundUpdates,
+    sp.bgUpdatesOnWiFiOnly,
+    sp.bgUpdatesWhileChargingOnly,
+    sp.checkOnStart,
+    sp.checkUpdateOnDetailPage,
+    sp.onlyCheckInstalledOrTrackOnlyApps,
+    sp.removeOnExternalUninstall,
+    sp.parallelDownloads,
+    sp.beforeNewInstallsShareToAppVerifier,
+    sp.installerMode,
+    sp.shizukuPretendToBeGooglePlay,
+  );
 
   @override
   Widget build(BuildContext context) {
+    // Narrow watch — only rebuild when update-related settings change.
+    context.select<SettingsProvider, int>(_updateSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+
+    return FutureBuilder<AndroidDeviceInfo>(
+      future: androidInfo,
+      builder: (context, snapshot) {
+        return _buildSettingsCardContent(context, sp, cs, snapshot);
+      },
+    );
+  }
+
+  Widget _buildSettingsCardContent(
+    BuildContext context,
+    SettingsProvider sp,
+    ColorScheme cs,
+    AsyncSnapshot<AndroidDeviceInfo> snapshot,
+  ) {
+    final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
+    final bool showBgControls =
+        (sp.updateInterval > 0) &&
+        (((snapshot.data?.version.sdkInt ?? 0) >= 30) || sp.useShizuku);
+    if (showBgControls) {
+      rows
+        ..add(
+          ListTile(
+            title: Text(tr('foregroundServiceForUpdateChecking')),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                HelpHintIcon(
+                  message: tr('foregroundServiceReliabilityNote'),
+                  padding: EdgeInsets.zero,
+                ),
+                Switch(
+                  value: sp.useFGService,
+                  onChanged: (bool value) => sp.useFGService = value,
+                ),
+              ],
+            ),
+            onTap: () => sp.useFGService = !sp.useFGService,
+          ),
+        )
+        ..add(
+          ListTile(
+            title: Text(tr('enableBackgroundUpdates')),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                HelpHintIcon(
+                  message:
+                      '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
+                  padding: EdgeInsets.zero,
+                ),
+                Switch(
+                  value: sp.enableBackgroundUpdates,
+                  onChanged: (bool value) => sp.enableBackgroundUpdates = value,
+                ),
+              ],
+            ),
+            onTap: () =>
+                sp.enableBackgroundUpdates = !sp.enableBackgroundUpdates,
+          ),
+        );
+      if (sp.enableBackgroundUpdates) {
+        rows
+          ..add(
+            SwitchListTile(
+              title: Text(tr('bgUpdatesOnWiFiOnly')),
+              value: sp.bgUpdatesOnWiFiOnly,
+              onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
+            ),
+          )
+          ..add(
+            SwitchListTile(
+              title: Text(tr('bgUpdatesWhileChargingOnly')),
+              value: sp.bgUpdatesWhileChargingOnly,
+              onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
+            ),
+          );
+      }
+    }
+    rows.addAll(<Widget>[
+      SwitchListTile(
+        title: Text(tr('checkOnStart')),
+        value: sp.checkOnStart,
+        onChanged: (bool value) => sp.checkOnStart = value,
+      ),
+      SwitchListTile(
+        title: Text(tr('checkUpdateOnDetailPage')),
+        value: sp.checkUpdateOnDetailPage,
+        onChanged: (bool value) => sp.checkUpdateOnDetailPage = value,
+      ),
+      SwitchListTile(
+        title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
+        value: sp.onlyCheckInstalledOrTrackOnlyApps,
+        onChanged: (bool value) => sp.onlyCheckInstalledOrTrackOnlyApps = value,
+      ),
+      SwitchListTile(
+        title: Text(tr('removeOnExternalUninstall')),
+        value: sp.removeOnExternalUninstall,
+        onChanged: (bool value) => sp.removeOnExternalUninstall = value,
+      ),
+      SwitchListTile(
+        title: Text(tr('parallelDownloads')),
+        value: sp.parallelDownloads,
+        onChanged: (bool value) => sp.parallelDownloads = value,
+      ),
+      ListTile(
+        title: Text(tr('beforeNewInstallsShareToAppVerifier')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: tr('about'),
+              onPressed: () {
+                launchUrlString(
+                  'https://github.com/soupslurpr/AppVerifier',
+                  mode: LaunchMode.externalApplication,
+                );
+              },
+              style: IconButton.styleFrom(
+                foregroundColor: cs.onSurfaceVariant,
+                iconSize: 20,
+                padding: const EdgeInsets.all(4),
+                minimumSize: const Size(32, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+              icon: const Icon(Icons.open_in_new_rounded),
+            ),
+            Switch(
+              value: sp.beforeNewInstallsShareToAppVerifier,
+              onChanged: (bool value) =>
+                  sp.beforeNewInstallsShareToAppVerifier = value,
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(tr('installerMode')),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                segments: [
+                  ButtonSegment<String>(
+                    value: 'stock',
+                    label: Text(tr('installerModeStock')),
+                  ),
+                  ButtonSegment<String>(
+                    value: 'shizuku',
+                    label: Text(tr('installerModeShizuku')),
+                  ),
+                  ButtonSegment<String>(
+                    value: 'legacy',
+                    label: Text(tr('installerModeThirdParty')),
+                  ),
+                ],
+                selected: {sp.installerMode},
+                onSelectionChanged: (Set<String> selected) {
+                  final String mode = selected.first;
+                  if (mode == 'shizuku') {
+                    ShizukuApkInstaller().checkPermission().then((
+                      String? resCode,
+                    ) {
+                      if (!context.mounted) return;
+                      if (resCode!.startsWith('granted')) {
+                        sp.installerMode = 'shizuku';
+                      } else {
+                        switch (resCode) {
+                          case 'services_not_found':
+                            showError(
+                              ObtainiumError(tr('shizukuBinderNotFound')),
+                              context,
+                            );
+                          case 'old_shizuku':
+                            showError(
+                              ObtainiumError(tr('shizukuOld')),
+                              context,
+                            );
+                          case 'old_android_with_adb':
+                            showError(
+                              ObtainiumError(tr('shizukuOldAndroidWithADB')),
+                              context,
+                            );
+                          case 'denied':
+                            showError(ObtainiumError(tr('cancelled')), context);
+                        }
+                      }
+                    });
+                  } else {
+                    sp.installerMode = mode;
+                  }
+                },
+              ),
+            ),
+            if (sp.installerMode == 'shizuku')
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(tr('shizukuPretendToBeGooglePlay')),
+                value: sp.shizukuPretendToBeGooglePlay,
+                onChanged: (bool value) =>
+                    sp.shizukuPretendToBeGooglePlay = value,
+              ),
+            if (sp.installerMode == 'legacy')
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _ThirdPartyInstallerSelector(settingsProvider: sp),
+              ),
+          ],
+        ),
+      ),
+    ]);
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: rows,
+    );
+  }
+}
+
+/// Update-interval slider — a StatefulWidget so drag updates use local state.
+/// The SettingsProvider is only written to when the user lifts their finger
+/// (onChangeEnd), avoiding a notifyListeners → full-page rebuild on every
+/// slider tick during drag.
+class _UpdateIntervalSlider extends StatefulWidget {
+  const _UpdateIntervalSlider({required this.cs});
+
+  final ColorScheme cs;
+
+  @override
+  State<_UpdateIntervalSlider> createState() => _UpdateIntervalSliderState();
+}
+
+class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
+  late double _localSliderVal;
+  late int _localInterval;
+  late String _localLabel;
+  bool _initialized = false;
+  bool _isDragging = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final updateIntervalSliderVal = context.select<SettingsProvider, double>(
+      (s) => s.updateIntervalSliderVal,
+    );
+    if (!_initialized ||
+        (!_isDragging && _localSliderVal != updateIntervalSliderVal)) {
+      _localSliderVal = updateIntervalSliderVal;
+      _updateLabel(_localSliderVal);
+      _initialized = true;
+    }
+  }
+
+  void _updateLabel(double val) {
+    final int index = val.round().clamp(
+      0,
+      _SettingsPageState.updateIntervalNodes.length,
+    );
+    if (index == 0) {
+      _localInterval = 0;
+      _localLabel = tr('neverManualOnly');
+      return;
+    }
+    final int minutes = _SettingsPageState.updateIntervalNodes[index - 1];
+    _localInterval = minutes;
+    if (minutes < 60) {
+      _localLabel = plural('minute', minutes);
+    } else if (minutes < 24 * 60) {
+      _localLabel = plural('hour', minutes ~/ 60);
+    } else {
+      _localLabel = plural('day', minutes ~/ (24 * 60));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.update_rounded, color: widget.cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
+                      Text(_localLabel),
+                    ],
+                  ),
+                ),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 16,
+                    trackShape: const _GappedTrackShape(),
+                    thumbShape: const _VerticalBarThumbShape(),
+                    tickMarkShape: const RoundSliderTickMarkShape(
+                      tickMarkRadius: 3,
+                    ),
+                    activeTickMarkColor: Theme.of(
+                      context,
+                    ).colorScheme.onPrimary,
+                    inactiveTickMarkColor: Theme.of(
+                      context,
+                    ).colorScheme.primary,
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 20,
+                    ),
+                  ),
+                  child: Slider(
+                    value: _localSliderVal.clamp(
+                      0,
+                      _SettingsPageState.updateIntervalNodes.length.toDouble(),
+                    ),
+                    max: _SettingsPageState.updateIntervalNodes.length
+                        .toDouble(),
+                    divisions: _SettingsPageState.updateIntervalNodes.length,
+                    label: _localLabel,
+                    onChanged: (double value) {
+                      setState(() {
+                        _isDragging = true;
+                        _localSliderVal = value;
+                        _updateLabel(value);
+                      });
+                    },
+                    onChangeEnd: (double value) {
+                      final SettingsProvider sp = context
+                          .read<SettingsProvider>();
+                      setState(() {
+                        _isDragging = false;
+                        sp.updateIntervalSliderVal = value;
+                        sp.updateInterval = _localInterval;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Source-specific settings section — reads/writes generic source config.
+class _SourceSpecificSection extends StatelessWidget {
+  const _SourceSpecificSection();
+
+  @override
+  Widget build(BuildContext context) {
+    // Subscribe to any change in stored source settings.
+    context.select<SettingsProvider, bool>((s) => s.prefs != null);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final SourceProvider sourceProvider = SourceProvider();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    final sources = sourceProvider.sources
+        .where((s) => s.sourceConfigSettingFormItems.isNotEmpty)
+        .toList();
+
+    final forms = sources.map((source) {
+      return GeneratedForm(
+        outlinedInputFields: true,
+        items: source.sourceConfigSettingFormItems.map((item) {
+          final formItem = item.clone();
+          if (formItem is GeneratedFormSwitch) {
+            formItem.defaultValue = sp.getSettingBool(formItem.key);
+          } else {
+            formItem.defaultValue = sp.getSettingString(formItem.key);
+          }
+          return [formItem];
+        }).toList(),
+        onValueChanges: (values, valid, isBuilding) {
+          if (valid && !isBuilding) {
+            if (source is GitHub) {
+              final String? githubCreds = values[GitHub.githubCredsKey]
+                  ?.toString();
+              if (!GitHub.hasValidatedPAT(githubCreds, sp)) {
+                GitHub.clearPATValidation(sp);
+              }
+            }
+            values.forEach((key, value) {
+              final formItem = source.sourceConfigSettingFormItems
+                  .where((i) => i.key == key)
+                  .firstOrNull;
+              if (formItem is GeneratedFormSwitch) {
+                sp.setSettingBool(key, value == true);
+              } else {
+                sp.setSettingString(key, value ?? '');
+              }
+            });
+          }
+        },
+      );
+    }).toList();
+
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (int i = 0; i < forms.length; i++) ...[
+                if (i > 0) const SizedBox(height: 12),
+                forms[i],
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Themes section — delegates to external themes settings widget,
+/// using the existing optimized context.select pattern.
+class _ThemesSettingsSection extends StatelessWidget {
+  const _ThemesSettingsSection({required this.androidInfoFuture});
+
+  final Future<AndroidDeviceInfo> androidInfoFuture;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: buildThemesSettingsCardItems(context, androidInfoFuture),
+    );
+  }
+}
+
+/// Appearance section — locale, UI scale slider, card-corner slider, toggles.
+class _AppearanceSection extends StatelessWidget {
+  const _AppearanceSection({required this.androidInfo});
+
+  final Future<AndroidDeviceInfo> androidInfo;
+
+  static int _appearanceSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.forcedLocale?.toLanguageTag(),
+    sp.useSystemFont,
+    sp.appUiScale,
+    sp.cardCornerScale,
+    sp.showAppWebpage,
+    sp.hideTrackOnlyWarning,
+    sp.hideAPKOriginWarning,
+    sp.disablePageTransitions,
+    sp.reversePageTransitions,
+    sp.highlightTouchTargets,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    context.select<SettingsProvider, int>(_appearanceSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: _LocaleMenu(sp: sp),
+        ),
+        FutureBuilder(
+          builder: (ctx, val) {
+            return (val.data?.version.sdkInt ?? 0) >= 29
+                ? SwitchListTile(
+                    title: Text(tr('useSystemFont')),
+                    value: sp.useSystemFont,
+                    onChanged: (useSystemFont) {
+                      if (useSystemFont) {
+                        NativeFeatures.loadSystemFont().then((_) {
+                          sp.useSystemFont = true;
+                        });
+                      } else {
+                        sp.useSystemFont = false;
+                      }
+                    },
+                  )
+                : const SizedBox.shrink();
+          },
+          future: androidInfo,
+        ),
+        _UiScaleSlider(),
+        _CardCornerScaleSlider(),
+        SwitchListTile(
+          title: Text(tr('showWebInAppView')),
+          value: sp.showAppWebpage,
+          onChanged: (value) => sp.showAppWebpage = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('dontShowTrackOnlyWarnings')),
+          value: sp.hideTrackOnlyWarning,
+          onChanged: (value) => sp.hideTrackOnlyWarning = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('dontShowAPKOriginWarnings')),
+          value: sp.hideAPKOriginWarning,
+          onChanged: (value) => sp.hideAPKOriginWarning = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('disablePageTransitions')),
+          value: sp.disablePageTransitions,
+          onChanged: (value) => sp.disablePageTransitions = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('reversePageTransitions')),
+          value: sp.reversePageTransitions,
+          onChanged: sp.disablePageTransitions
+              ? null
+              : (value) => sp.reversePageTransitions = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('highlightTouchTargets')),
+          value: sp.highlightTouchTargets,
+          onChanged: (value) => sp.highlightTouchTargets = value,
+        ),
+      ],
+    );
+  }
+}
+
+class _LocaleMenu extends StatelessWidget {
+  const _LocaleMenu({required this.sp});
+
+  final SettingsProvider sp;
+
+  @override
+  Widget build(BuildContext context) {
+    return appDropdownField<String>(
+      key: ValueKey(sp.forcedLocale?.toLanguageTag() ?? '_system'),
+      context: context,
+      value: sp.forcedLocale?.toLanguageTag() ?? '_system',
+      labelText: tr('language'),
+      menuWidth: appDropdownMenuWidth(
+        context,
+        [
+          tr('followSystem'),
+          ...supportedLocales.map(
+            (MapEntry<Locale, String> localeEntry) => localeEntry.value,
+          ),
+        ],
+        style: Theme.of(context).textTheme.bodyLarge,
+        horizontalPadding: 96,
+        minWidth: 150,
+      ),
+      items: [
+        DropdownMenuItem<String>(
+          value: '_system',
+          child: Text(tr('followSystem')),
+        ),
+        ...supportedLocales.map(
+          (MapEntry<Locale, String> localeEntry) => DropdownMenuItem<String>(
+            value: localeEntry.key.toLanguageTag(),
+            child: Text(localeEntry.value),
+          ),
+        ),
+      ],
+      onChanged: (String? value) {
+        final Locale? selectedLocale = value == null || value == '_system'
+            ? null
+            : supportedLocales
+                  .firstWhere(
+                    (MapEntry<Locale, String> localeEntry) =>
+                        localeEntry.key.toLanguageTag() == value,
+                  )
+                  .key;
+        sp.forcedLocale = selectedLocale;
+        if (selectedLocale != null) {
+          context.setLocale(selectedLocale);
+        } else {
+          sp.resetLocaleSafe(context);
+        }
+      },
+    );
+  }
+}
+
+class _UiScaleSlider extends StatefulWidget {
+  const _UiScaleSlider();
+
+  @override
+  State<_UiScaleSlider> createState() => _UiScaleSliderState();
+}
+
+class _UiScaleSliderState extends State<_UiScaleSlider> {
+  late double _localVal;
+  bool _initialized = false;
+  bool _isDragging = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final appUiScale = context.select<SettingsProvider, double>(
+      (s) => s.appUiScale,
+    );
+    if (!_initialized || (!_isDragging && _localVal != appUiScale)) {
+      _localVal = appUiScale;
+      _initialized = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.format_size_rounded, color: cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(tr('uiScale'))),
+                      Text('${(_localVal * 100).round()}%'),
+                    ],
+                  ),
+                ),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 16,
+                    trackShape: const _GappedTrackShape(),
+                    thumbShape: const _VerticalBarThumbShape(),
+                    tickMarkShape: const RoundSliderTickMarkShape(
+                      tickMarkRadius: 3,
+                    ),
+                    activeTickMarkColor: cs.onPrimary,
+                    inactiveTickMarkColor: cs.primary,
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 20,
+                    ),
+                  ),
+                  child: Slider(
+                    min: SettingsProvider.appUiScaleMin,
+                    max: SettingsProvider.appUiScaleMax,
+                    divisions:
+                        ((SettingsProvider.appUiScaleMax -
+                                    SettingsProvider.appUiScaleMin) /
+                                0.05)
+                            .round(),
+                    label: '${(_localVal * 100).round()}%',
+                    value: _localVal,
+                    onChanged: (double value) {
+                      setState(() {
+                        _isDragging = true;
+                        _localVal = value;
+                      });
+                    },
+                    onChangeEnd: (double value) {
+                      setState(() {
+                        _isDragging = false;
+                        context.read<SettingsProvider>().appUiScale = value;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CardCornerScaleSlider extends StatefulWidget {
+  const _CardCornerScaleSlider();
+
+  @override
+  State<_CardCornerScaleSlider> createState() => _CardCornerScaleSliderState();
+}
+
+class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
+  late double _localVal;
+  bool _initialized = false;
+  bool _isDragging = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final cardCornerScale = context.select<SettingsProvider, double>(
+      (s) => s.cardCornerScale,
+    );
+    if (!_initialized || (!_isDragging && _localVal != cardCornerScale)) {
+      _localVal = cardCornerScale;
+      _initialized = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.rounded_corner_rounded, color: cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(tr('cardCorners'))),
+                      Text('${(_localVal * 100).round()}%'),
+                    ],
+                  ),
+                ),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 16,
+                    trackShape: const _GappedTrackShape(),
+                    thumbShape: const _VerticalBarThumbShape(),
+                    tickMarkShape: const RoundSliderTickMarkShape(
+                      tickMarkRadius: 3,
+                    ),
+                    activeTickMarkColor: cs.onPrimary,
+                    inactiveTickMarkColor: cs.primary,
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 20,
+                    ),
+                  ),
+                  child: Slider(
+                    min: SettingsProvider.cardCornerScaleMin,
+                    max: SettingsProvider.cardCornerScaleMax,
+                    divisions:
+                        ((SettingsProvider.cardCornerScaleMax -
+                                    SettingsProvider.cardCornerScaleMin) /
+                                0.10)
+                            .round(),
+                    label: '${(_localVal * 100).round()}%',
+                    value: _localVal,
+                    onChanged: (double value) {
+                      setState(() {
+                        _isDragging = true;
+                        _localVal = value;
+                      });
+                    },
+                    onChangeEnd: (double value) {
+                      setState(() {
+                        _isDragging = false;
+                        context.read<SettingsProvider>().cardCornerScale =
+                            value;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Gestures section — swipe action dropdowns.
+class _GesturesSection extends StatelessWidget {
+  const _GesturesSection();
+
+  static int _gesturesSettingsHash(SettingsProvider sp) =>
+      Object.hash(sp.rightSwipeAction, sp.leftSwipeAction);
+
+  @override
+  Widget build(BuildContext context) {
+    context.select<SettingsProvider, int>(_gesturesSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    final List<SwipeAction> actions = swipeActionsSortedByLocalizedLabel();
+    final double swipeMenuWidth = appDropdownMenuWidth(
+      context,
+      actions.map((SwipeAction action) => tr('swipeAction_${action.name}')),
+      style: Theme.of(context).textTheme.bodyLarge,
+      horizontalPadding: 120,
+      minWidth: 180,
+      maxWidthInset: 80,
+    );
+
+    List<DropdownMenuItem<SwipeAction>> actionItems() {
+      return actions.map((SwipeAction action) {
+        return DropdownMenuItem<SwipeAction>(
+          value: action,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_swipeActionIcon(action), size: 18),
+              const SizedBox(width: 12),
+              Text(tr('swipeAction_${action.name}')),
+            ],
+          ),
+        );
+      }).toList();
+    }
+
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              appDropdownField<SwipeAction>(
+                key: ValueKey('rightSwipeAction_${sp.rightSwipeAction}'),
+                context: context,
+                value: sp.rightSwipeAction,
+                labelText: tr('rightSwipeAction'),
+                menuWidth: swipeMenuWidth,
+                items: actionItems(),
+                onChanged: (SwipeAction? value) {
+                  if (value != null) sp.rightSwipeAction = value;
+                },
+              ),
+              const SizedBox(height: 16),
+              appDropdownField<SwipeAction>(
+                key: ValueKey('leftSwipeAction_${sp.leftSwipeAction}'),
+                context: context,
+                value: sp.leftSwipeAction,
+                labelText: tr('leftSwipeAction'),
+                menuWidth: swipeMenuWidth,
+                items: actionItems(),
+                onChanged: (SwipeAction? value) {
+                  if (value != null) sp.leftSwipeAction = value;
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Categories section — delegates to CategoryEditorSelector.
+class _CategoriesSection extends StatelessWidget {
+  const _CategoriesSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: const [
+        Padding(
+          padding: EdgeInsets.all(16),
+          child: CategoryEditorSelector(
+            showLabelWhenNotEmpty: false,
+            showSelectedCheckmark: true,
+            showChangeIntentIcons: false,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AboutSectionContent extends StatelessWidget {
+  const _AboutSectionContent({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final SettingsProvider sp = context.read<SettingsProvider>();
     final TextTheme textTheme = Theme.of(context).textTheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
@@ -1372,9 +1503,8 @@ class _AboutSectionContent extends StatelessWidget {
             child: SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: () => _openAboutUrl(settingsProvider.sourceUrl),
-                onLongPress: () =>
-                    _copyAboutUrl(context, settingsProvider.sourceUrl),
+                onPressed: () => _openAboutUrl(sp.sourceUrl),
+                onLongPress: () => _copyAboutUrl(context, sp.sourceUrl),
                 icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
                 label: Text(tr('aboutStarOnGithub')),
               ),
@@ -1398,10 +1528,8 @@ class _AboutSectionContent extends StatelessWidget {
                 Expanded(
                   child: FilledButton.tonalIcon(
                     style: _aboutSecondaryButtonStyle(colorScheme),
-                    onPressed: () =>
-                        _shareAboutUrl(settingsProvider.sourceUrl, 'ObtainX'),
-                    onLongPress: () =>
-                        _copyAboutUrl(context, settingsProvider.sourceUrl),
+                    onPressed: () => _shareAboutUrl(sp.sourceUrl, 'ObtainX'),
+                    onLongPress: () => _copyAboutUrl(context, sp.sourceUrl),
                     icon: const Icon(Icons.share_rounded),
                     label: Text(tr('share')),
                   ),
