@@ -437,7 +437,7 @@ class GitHub extends AppSource {
       additionalSettings,
       settingsProvider,
     );
-    var token = await getTokenIfAny(additionalSettings);
+    var token = await getTokenIfAny(sourceConfig);
     var headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Token $token';
@@ -453,20 +453,17 @@ class GitHub extends AppSource {
     }
   }
 
-  Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
-    SettingsProvider settingsProvider = SettingsProvider();
-    await settingsProvider.initializeSettings();
-    var sourceConfig = await getSourceConfigValues(
-      additionalSettings,
-      settingsProvider,
-    );
-    String? creds = sourceConfig['github-creds'];
+  Future<String?> getTokenIfAny(Map<String, String> sourceConfig) async {
+    String? creds = sourceConfig[githubCredsKey];
     return tokenFromCreds(creds);
   }
 
   @override
   Future<String?> getSourceNote() async {
-    if (!hostChanged && (await getTokenIfAny({})) == null) {
+    final sp = SettingsProvider();
+    await sp.initializeSettings();
+    final sourceConfig = await getSourceConfigValues({}, sp);
+    if (!hostChanged && (await getTokenIfAny(sourceConfig)) == null) {
       return '${tr('githubSourceNote')} ${hostChanged ? tr('addInfoBelow') : tr('addInfoInSettings')}';
     }
     return null;
