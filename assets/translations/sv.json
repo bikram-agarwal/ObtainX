@@ -373,6 +373,7 @@
     "fgServiceNotice": "Detta meddelande krävs för bakgrundsuppdateringskontroll (det kan döljas i OS-inställningarna)",
     "excludeSecrets": "Utesluta hemligheter",
     "GHReqPrefix": "Instansen \"sky22333/hubproxy\" för GitHub-förfrågningar",
+    "GHReqPrefixUseToken": "Använd personlig åtkomsttoken för GitHub-proxyförfrågningar",
     "includeZips": "Inkludera ZIP-filer",
     "zippedApkFilterRegEx": "Filtrera APK:er inuti ZIP",
     "googleVerificationWarningP1": "Google har meddelat att alla appar på \"certifierade\" Android-enheter kommer att kräva att utvecklaren skickar personuppgifter direkt till Google.\n\nEftersom utvecklarna av denna app inte samtycker till detta krav kommer ObtainX inte längre att arbeta med certifierade Android-enheter efter den tiden.",

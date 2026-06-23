@@ -373,6 +373,7 @@
     "fgServiceNotice": "Ovo obavještenje je obavezno radi provjera ažuriranja u pozadini (može se prikriti u postavkama sistema)",
     "excludeSecrets": "Izuzmi secrets",
     "GHReqPrefix": "'sky22333/hubproxy' istanca za GitHub zahtjeve",
+    "GHReqPrefixUseToken": "Koristiti lični pristupni token za GitHub proxy zahtjeve",
     "includeZips": "Uključi i ZIP datoteke",
     "zippedApkFilterRegEx": "Filtriraj APK-ove unutar ZIP datoteka",
     "googleVerificationWarningP1": "Google has announced that, starting in 2026/2027, all apps on \"certified\" Android devices will require the developer to submit personal identity details directly to Google.\n\nSince the developers of this app do not agree to this requirement, ObtainX will no longer work on certified Android devices after that time.",

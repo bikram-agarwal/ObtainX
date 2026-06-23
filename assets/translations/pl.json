@@ -373,6 +373,7 @@
     "fgServiceNotice": "To powiadomienie jest wymagane do sprawdzania aktualizacji w tle (można je ukryć w ustawieniach systemu operacyjnego).",
     "excludeSecrets": "Wyklucz sekrety",
     "GHReqPrefix": "Instancja \"sky22333/hubproxy\" dla żądań GitHub",
+    "GHReqPrefixUseToken": "Używaj osobistego tokena dostępu dla żądań proxy GitHub",
     "includeZips": "Dołączanie plików ZIP",
     "zippedApkFilterRegEx": "Filtrowanie plików APK wewnątrz ZIP",
     "googleVerificationWarningP1": "Google ogłosił, że począwszy od 2026 / 2027, wszystkie aplikacje na \"certyfikowanych\" urządzeń z systemem Android będą wymagać od dewelopera przekazania danych osobowych bezpośrednio do Google.\n\nPonieważ deweloperzy tej aplikacji nie zgadzają się na ten wymóg, po tym czasie nie będzie już działać na certyfikowanych urządzeniach z systemem Android.",

@@ -373,6 +373,7 @@
     "fgServiceNotice": "Cette notification est requise pour la vérification des mises à jour en arrière-plan (elle peut être masquée dans les paramètres du système)",
     "excludeSecrets": "Exclure les secrets",
     "GHReqPrefix": "Instance 'sky22333/hubproxy' pour les requêtes GitHub",
+    "GHReqPrefixUseToken": "Utiliser un jeton d'accès personnel pour les requêtes proxy GitHub",
     "includeZips": "Inclure les fichiers ZIP",
     "zippedApkFilterRegEx": "Filtrer les APK dans un fichier ZIP",
     "googleVerificationWarningP1": "Google a annoncé qu'à partir de 2026/2027, toutes les applications sur les appareils Android \"certifiés\" obligeront le développeur à soumettre ses données d'identité personnelles directement à Google.\n\nComme les développeurs de cette application ne sont pas d'accord avec cette exigence, ObtainX ne fonctionnera plus sur les appareils Android certifiés après cette date.",

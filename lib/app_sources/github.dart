@@ -29,6 +29,8 @@ Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
 
 class GitHub extends AppSource {
   static const String githubCredsKey = 'github-creds';
+  static const String githubReqPrefixKey = 'GHReqPrefix';
+  static const String githubReqPrefixUseTokenKey = 'GHReqPrefixUseToken';
   static const String enforceAttestationsKey = 'enforceGitHubAttestations';
   static const String buildVerificationModeKey = 'githubBuildVerificationMode';
   static const String buildVerificationOff = 'off';
@@ -58,7 +60,7 @@ class GitHub extends AppSource {
         assistAction: _validatePATFromSettingsForm,
       ),
       GeneratedFormTextField(
-        'GHReqPrefix',
+        githubReqPrefixKey,
         label: tr('GHReqPrefix'),
         hint: 'gh-proxy.org',
         required: false,
@@ -86,6 +88,11 @@ class GitHub extends AppSource {
           ),
           tooltip: tr('about'),
         ),
+      ),
+      GeneratedFormSwitch(
+        githubReqPrefixUseTokenKey,
+        label: tr('GHReqPrefixUseToken'),
+        defaultValue: false,
       ),
       GeneratedFormSwitch(
         'checkRepoRename',
@@ -431,12 +438,19 @@ class GitHub extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
-    var token = await getTokenIfAny(additionalSettings);
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    var token = await getTokenIfAny(sourceConfig);
     var headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Token $token';
     }
-    if (forAPKDownload == true) {
+    var prefix = sourceConfig[githubReqPrefixKey] ?? '';
+    if (forAPKDownload == true && prefix.isEmpty) {
       headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
     }
     if (headers.isNotEmpty) {
@@ -446,15 +460,10 @@ class GitHub extends AppSource {
     }
   }
 
-  Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
-    SettingsProvider settingsProvider = SettingsProvider();
-    await settingsProvider.initializeSettings();
-    var sourceConfig = await getSourceConfigValues(
-      additionalSettings,
-      settingsProvider,
-    );
-    String? creds = sourceConfig['github-creds'];
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
+  Future<String?> getTokenIfAny(Map<String, String> sourceConfig) async {
+    String? creds = sourceConfig[githubCredsKey];
+    if ((sourceConfig[githubReqPrefixKey] ?? '').isNotEmpty &&
+        (sourceConfig[githubReqPrefixUseTokenKey] ?? 'false') == 'false') {
       creds = null;
     }
     return tokenFromCreds(creds);
@@ -462,10 +471,32 @@ class GitHub extends AppSource {
 
   @override
   Future<String?> getSourceNote() async {
-    if (!hostChanged && (await getTokenIfAny({})) == null) {
+    final sp = SettingsProvider();
+    await sp.initializeSettings();
+    final sourceConfig = await getSourceConfigValues({}, sp);
+    if (!hostChanged && (await getTokenIfAny(sourceConfig)) == null) {
       return '${tr('githubSourceNote')} ${hostChanged ? tr('addInfoBelow') : tr('addInfoInSettings')}';
     }
     return null;
+  }
+
+  @override
+  Future<String> assetUrlPrefetchModifier(
+    String assetUrl,
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    var prefix = sourceConfig[githubReqPrefixKey] ?? '';
+    if (prefix.isNotEmpty && !assetUrl.startsWith('https://$prefix/')) {
+      return 'https://$prefix/$assetUrl';
+    }
+    return assetUrl;
   }
 
   @override
@@ -473,9 +504,14 @@ class GitHub extends AppSource {
     String reqUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
-    if ((additionalSettings['GHReqPrefix'] as String? ?? '').isNotEmpty) {
-      var uri = Uri.parse(reqUrl);
-      return 'https://${additionalSettings['GHReqPrefix']}/${uri.toString().substring('https://'.length)}';
+    SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    var sourceConfig = await getSourceConfigValues(
+      additionalSettings,
+      settingsProvider,
+    );
+    if ((sourceConfig[githubReqPrefixKey] ?? '').isNotEmpty) {
+      return 'https://${sourceConfig[githubReqPrefixKey]}/$reqUrl';
     }
     return reqUrl;
   }
@@ -728,10 +764,14 @@ class GitHub extends AppSource {
         }
       }
 
+      var prefix = sourceConfigSettingValues[githubReqPrefixKey] ?? '';
+      var hasGHReqPrefix = prefix.isNotEmpty;
       findReleaseAssetUrls(dynamic release) =>
           (release['assets'] as List<dynamic>?)?.map((e) {
             var ext = e['name'].toString().toLowerCase().split('.').last;
-            var url = !isInstallableExt(ext, includeZips: includeZips)
+            var url =
+                !isInstallableExt(ext, includeZips: includeZips) ||
+                    hasGHReqPrefix
                 ? (e['browser_download_url'] ?? e['url'])
                 : (e['url'] ?? e['browser_download_url']);
             url = undoGHProxyMod(url, sourceConfigSettingValues);
@@ -1161,10 +1201,15 @@ class GitHub extends AppSource {
   String undoGHProxyMod(
     String reqUrl,
     Map<String, String> sourceConfigSettingValues,
-  ) => reqUrl.replaceFirst(
-    'https://${sourceConfigSettingValues['GHReqPrefix']}/',
-    '',
-  );
+  ) {
+    var prefix = sourceConfigSettingValues[githubReqPrefixKey] ?? '';
+    if (prefix.isEmpty) return reqUrl;
+    var proxyPrefix = 'https://$prefix/';
+    if (reqUrl.startsWith(proxyPrefix)) {
+      return reqUrl.substring(proxyPrefix.length);
+    }
+    return reqUrl;
+  }
 
   @override
   Future<Map<String, List<String>>> search(
@@ -1183,7 +1228,7 @@ class GitHub extends AppSource {
       },
       querySettings: querySettings,
     );
-    if ((sourceConfigSettingValues['GHReqPrefix'] ?? '').isNotEmpty) {
+    if ((sourceConfigSettingValues[githubReqPrefixKey] ?? '').isNotEmpty) {
       Map<String, List<String>> results2 = {};
       results.forEach((k, v) {
         results2[undoGHProxyMod(k, sourceConfigSettingValues)] = v;
