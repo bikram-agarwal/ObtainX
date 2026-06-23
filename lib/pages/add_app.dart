@@ -1,6 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -1434,8 +1435,8 @@ class AddAppPageState extends State<AddAppPage> {
         children: [
           if (settingsProvider.useGradientBackground) buildGradientBackground(),
           CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
             key: const PageStorageKey<String>('add-app-tab-scroll'),
-            cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('addApp'),

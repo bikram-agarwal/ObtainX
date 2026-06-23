@@ -6,6 +6,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
@@ -102,12 +103,11 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Narrow watch: only the values needed for the Scaffold chrome.
-    // Use context.select instead of context.watch to avoid rebuilding the
-    // whole page on every unrelated settings change.
-    final int scaffoldHash = context.select<SettingsProvider, int>(
-      _scaffoldSettingsHash,
-    );
+    // Narrow watch: register a dependency only on the values needed for the
+    // Scaffold chrome (via context.select) so this page rebuilds when those
+    // change, without rebuilding on every unrelated settings change. The hash
+    // value itself is unused — the select call's dependency is the point.
+    context.select<SettingsProvider, int>(_scaffoldSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
     SourceProvider sourceProvider = SourceProvider();
@@ -359,8 +359,8 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
             key: const PageStorageKey<String>('settings-tab-scroll'),
-            cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('settings'),
@@ -776,49 +776,46 @@ class _UpdateIntervalSlider extends StatefulWidget {
 }
 
 class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
-  late double _localSliderVal;
-  late int _localInterval;
-  late String _localLabel;
-  bool _initialized = false;
-  bool _isDragging = false;
+  // Non-null only while the user is actively dragging; otherwise the displayed
+  // value comes from the provider (so external changes propagate and the
+  // committed value is reflected once onChangeEnd clears it). context.select
+  // MUST be read in build(), not didChangeDependencies, or Provider asserts
+  // ("Tried to use context.select outside of the build method").
+  double? _dragValue;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final updateIntervalSliderVal = context.select<SettingsProvider, double>(
-      (s) => s.updateIntervalSliderVal,
-    );
-    if (!_initialized ||
-        (!_isDragging && _localSliderVal != updateIntervalSliderVal)) {
-      _localSliderVal = updateIntervalSliderVal;
-      _updateLabel(_localSliderVal);
-      _initialized = true;
-    }
-  }
-
-  void _updateLabel(double val) {
+  int _intervalForVal(double val) {
     final int index = val.round().clamp(
       0,
       _SettingsPageState.updateIntervalNodes.length,
     );
     if (index == 0) {
-      _localInterval = 0;
-      _localLabel = tr('neverManualOnly');
-      return;
+      return 0;
     }
-    final int minutes = _SettingsPageState.updateIntervalNodes[index - 1];
-    _localInterval = minutes;
+    return _SettingsPageState.updateIntervalNodes[index - 1];
+  }
+
+  String _labelForVal(double val) {
+    final int minutes = _intervalForVal(val);
+    if (minutes == 0) {
+      return tr('neverManualOnly');
+    }
     if (minutes < 60) {
-      _localLabel = plural('minute', minutes);
+      return plural('minute', minutes);
     } else if (minutes < 24 * 60) {
-      _localLabel = plural('hour', minutes ~/ 60);
+      return plural('hour', minutes ~/ 60);
     } else {
-      _localLabel = plural('day', minutes ~/ (24 * 60));
+      return plural('day', minutes ~/ (24 * 60));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final double sliderVal =
+        _dragValue ??
+        context.select<SettingsProvider, double>(
+          (s) => s.updateIntervalSliderVal,
+        );
+    final String label = _labelForVal(sliderVal);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
       child: Row(
@@ -835,7 +832,7 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                   child: Row(
                     children: [
                       Expanded(child: Text(tr('bgUpdateCheckInterval'))),
-                      Text(_localLabel),
+                      Text(label),
                     ],
                   ),
                 ),
@@ -858,29 +855,23 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                     ),
                   ),
                   child: Slider(
-                    value: _localSliderVal.clamp(
+                    value: sliderVal.clamp(
                       0,
                       _SettingsPageState.updateIntervalNodes.length.toDouble(),
                     ),
                     max: _SettingsPageState.updateIntervalNodes.length
                         .toDouble(),
                     divisions: _SettingsPageState.updateIntervalNodes.length,
-                    label: _localLabel,
+                    label: label,
                     onChanged: (double value) {
-                      setState(() {
-                        _isDragging = true;
-                        _localSliderVal = value;
-                        _updateLabel(value);
-                      });
+                      setState(() => _dragValue = value);
                     },
                     onChangeEnd: (double value) {
                       final SettingsProvider sp = context
                           .read<SettingsProvider>();
-                      setState(() {
-                        _isDragging = false;
-                        sp.updateIntervalSliderVal = value;
-                        sp.updateInterval = _localInterval;
-                      });
+                      sp.updateIntervalSliderVal = value;
+                      sp.updateInterval = _intervalForVal(value);
+                      setState(() => _dragValue = null);
                     },
                   ),
                 ),
@@ -1037,8 +1028,8 @@ class _AppearanceSection extends StatelessWidget {
           },
           future: androidInfo,
         ),
-        _UiScaleSlider(),
-        _CardCornerScaleSlider(),
+        const _UiScaleSlider(),
+        const _CardCornerScaleSlider(),
         SwitchListTile(
           title: Text(tr('showWebInAppView')),
           value: sp.showAppWebpage,
@@ -1140,25 +1131,17 @@ class _UiScaleSlider extends StatefulWidget {
 }
 
 class _UiScaleSliderState extends State<_UiScaleSlider> {
-  late double _localVal;
-  bool _initialized = false;
-  bool _isDragging = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final appUiScale = context.select<SettingsProvider, double>(
-      (s) => s.appUiScale,
-    );
-    if (!_initialized || (!_isDragging && _localVal != appUiScale)) {
-      _localVal = appUiScale;
-      _initialized = true;
-    }
-  }
+  // See _UpdateIntervalSliderState: drag value overrides the provider value only
+  // while dragging; context.select is read in build(), never in
+  // didChangeDependencies.
+  double? _dragValue;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
+    final double value =
+        _dragValue ??
+        context.select<SettingsProvider, double>((s) => s.appUiScale);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
       child: Row(
@@ -1175,7 +1158,7 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                   child: Row(
                     children: [
                       Expanded(child: Text(tr('uiScale'))),
-                      Text('${(_localVal * 100).round()}%'),
+                      Text('${(value * 100).round()}%'),
                     ],
                   ),
                 ),
@@ -1201,19 +1184,17 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                                     SettingsProvider.appUiScaleMin) /
                                 0.05)
                             .round(),
-                    label: '${(_localVal * 100).round()}%',
-                    value: _localVal,
-                    onChanged: (double value) {
-                      setState(() {
-                        _isDragging = true;
-                        _localVal = value;
-                      });
+                    label: '${(value * 100).round()}%',
+                    value: value.clamp(
+                      SettingsProvider.appUiScaleMin,
+                      SettingsProvider.appUiScaleMax,
+                    ),
+                    onChanged: (double v) {
+                      setState(() => _dragValue = v);
                     },
-                    onChangeEnd: (double value) {
-                      setState(() {
-                        _isDragging = false;
-                        context.read<SettingsProvider>().appUiScale = value;
-                      });
+                    onChangeEnd: (double v) {
+                      context.read<SettingsProvider>().appUiScale = v;
+                      setState(() => _dragValue = null);
                     },
                   ),
                 ),
@@ -1234,25 +1215,17 @@ class _CardCornerScaleSlider extends StatefulWidget {
 }
 
 class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
-  late double _localVal;
-  bool _initialized = false;
-  bool _isDragging = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final cardCornerScale = context.select<SettingsProvider, double>(
-      (s) => s.cardCornerScale,
-    );
-    if (!_initialized || (!_isDragging && _localVal != cardCornerScale)) {
-      _localVal = cardCornerScale;
-      _initialized = true;
-    }
-  }
+  // See _UpdateIntervalSliderState: drag value overrides the provider value only
+  // while dragging; context.select is read in build(), never in
+  // didChangeDependencies.
+  double? _dragValue;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
+    final double value =
+        _dragValue ??
+        context.select<SettingsProvider, double>((s) => s.cardCornerScale);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
       child: Row(
@@ -1269,7 +1242,7 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                   child: Row(
                     children: [
                       Expanded(child: Text(tr('cardCorners'))),
-                      Text('${(_localVal * 100).round()}%'),
+                      Text('${(value * 100).round()}%'),
                     ],
                   ),
                 ),
@@ -1295,20 +1268,17 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                                     SettingsProvider.cardCornerScaleMin) /
                                 0.10)
                             .round(),
-                    label: '${(_localVal * 100).round()}%',
-                    value: _localVal,
-                    onChanged: (double value) {
-                      setState(() {
-                        _isDragging = true;
-                        _localVal = value;
-                      });
+                    label: '${(value * 100).round()}%',
+                    value: value.clamp(
+                      SettingsProvider.cardCornerScaleMin,
+                      SettingsProvider.cardCornerScaleMax,
+                    ),
+                    onChanged: (double v) {
+                      setState(() => _dragValue = v);
                     },
-                    onChangeEnd: (double value) {
-                      setState(() {
-                        _isDragging = false;
-                        context.read<SettingsProvider>().cardCornerScale =
-                            value;
-                      });
+                    onChangeEnd: (double v) {
+                      context.read<SettingsProvider>().cardCornerScale = v;
+                      setState(() => _dragValue = null);
                     },
                   ),
                 ),
@@ -1947,6 +1917,10 @@ class _LogsDialogState extends State<LogsDialog> {
     Future<String> getDiagnosticsText() async {
       final buffer = StringBuffer();
       buffer.writeln('=== ObtainX Diagnostic Log ===');
+      // Captured before the first async gap below so context isn't used across
+      // an await.
+      final settingsProvider = context.read<SettingsProvider>();
+      final appsProvider = context.read<AppsProvider>();
 
       try {
         final packageInfo = await getInstalledInfo(
@@ -1979,8 +1953,6 @@ class _LogsDialogState extends State<LogsDialog> {
         buffer.writeln('Device Info: Unknown (Error fetching device info)');
       }
 
-      final settingsProvider = context.read<SettingsProvider>();
-      final appsProvider = context.read<AppsProvider>();
       buffer.writeln('Installer Mode: ${settingsProvider.installerMode}');
       buffer.writeln('Use Shizuku: ${settingsProvider.useShizuku}');
       buffer.writeln(

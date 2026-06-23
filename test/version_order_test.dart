@@ -1,9 +1,18 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:device_info_plus_platform_interface/device_info_plus_platform_interface.dart';
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart';
+// ignore: depend_on_referenced_packages
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+// ignore: depend_on_referenced_packages
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -174,8 +183,56 @@ class FakePackageInfo extends PackageInfo {
        );
 }
 
+class _FakePathProvider extends PathProviderPlatform
+    with MockPlatformInterfaceMixin {
+  _FakePathProvider(this._path);
+  final String _path;
+
+  @override
+  Future<String?> getTemporaryPath() async => _path;
+  @override
+  Future<String?> getApplicationSupportPath() async => _path;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => _path;
+  @override
+  Future<String?> getApplicationCachePath() async => _path;
+  @override
+  Future<String?> getExternalStoragePath() async => _path;
+  @override
+  Future<List<String>?> getExternalCachePaths() async => <String>[_path];
+  @override
+  Future<List<String>?> getExternalStoragePaths({
+    StorageDirectory? type,
+  }) async => <String>[_path];
+  @override
+  Future<String?> getDownloadsPath() async => _path;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // AppsProvider's constructor opens a sqflite DB (LogsProvider), reads
+  // SharedPreferences, resolves directories (path_provider), reads device info,
+  // and queries installed packages — provide test doubles for all of them.
+  setUpAll(() {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    PathProviderPlatform.instance = _FakePathProvider(
+      Directory.systemTemp.createTempSync('obtainx_test_').path,
+    );
+    DeviceInfoPlatform.instance = FakeAndroidDeviceInfoPlatform();
+    // No installed packages in the test VM.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('android_package_manager'),
+          (MethodCall call) async => null,
+        );
+  });
+
+  // The constructor's init runs as fire-and-forget async work; drain the event
+  // loop after each test so it completes within scope instead of leaking.
+  tearDown(() => pumpEventQueue());
 
   test(
     'semver with parenthetical decimal build is not version order unclear',
@@ -199,10 +256,9 @@ void main() {
   );
 
   test('release package lookup only includes debug build when requested', () {
-    expect(
-      packageNamesToTryForInstalledInfo('dev.bikram.obtainx'),
-      const ['dev.bikram.obtainx'],
-    );
+    expect(packageNamesToTryForInstalledInfo('dev.bikram.obtainx'), const [
+      'dev.bikram.obtainx',
+    ]);
     expect(
       packageNamesToTryForInstalledInfo(
         'dev.bikram.obtainx',
@@ -238,7 +294,7 @@ void main() {
   test(
     'unreconciled source tag version is preserved as installed pseudo version',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.revanced.android.youtube',
         'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
@@ -272,7 +328,7 @@ void main() {
   test(
     'disabled version detection does not overwrite source tag with manifest version',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.revanced.android.youtube',
         'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
@@ -306,7 +362,7 @@ void main() {
   test(
     'disabled version detection sets installedVersion to latestVersion when installed version is null',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.revanced.android.youtube',
         'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
@@ -343,7 +399,7 @@ void main() {
       // installed == realInstalledVersion == '9.18.50', but latest == '107' (different format).
       // The system must NOT silently coerce installedVersion → latestVersion here; that would hide
       // the available update. The update from '9.18.50' to '107' must remain visible.
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.revanced.android.youtube',
         'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
@@ -378,7 +434,7 @@ void main() {
   test(
     'disabled version detection keeps pseudo version when system installed version does not reconcile',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.revanced.android.youtube',
         'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
@@ -410,9 +466,9 @@ void main() {
   );
 
   test(
-    'unreconciled system installed version automatically disables version detection when installedVersion is null',
+    'system installed version that reconciles with latest is adopted (detection stays on) when installedVersion is null',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.revanced.android.youtube',
         'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
@@ -436,10 +492,17 @@ void main() {
         ),
       );
 
+      // The device version '4.15.0' DOES reconcile with the latest
+      // '26.06.01-de-vanced': the '26.06.01' prefix substring-matches the
+      // X.Y.Z standard format, so reconcileVersionDifferences returns
+      // <false, ...> ("same format, different value" - a normal update), the
+      // same signal a legit '1.2.3 -> 1.2.4-beta' bump gives. Version detection
+      // is therefore possible and is NOT auto-disabled: the previously-null
+      // installedVersion adopts the real device version and detection stays on.
       expect(correctedApp, isNotNull);
-      expect(app.installedVersion, '26.06.01-de-vanced');
+      expect(app.installedVersion, '4.15.0');
       expect(app.latestVersion, '26.06.01-de-vanced');
-      expect(app.additionalSettings['versionDetection'], 'pseudo');
+      expect(app.additionalSettings['versionDetection'], true);
     },
   );
 
@@ -587,16 +650,26 @@ void main() {
     );
 
     final apkMirror = AbiAwareReleaseAPKMirror();
+    const settings = {
+      'trackOnly': true,
+      'fallbackToOlderReleases': true,
+      'autoApkFilterByArch': true,
+    };
     final details = await apkMirror.getLatestAPKDetails(
       'https://www.apkmirror.com/apk/google-inc/youtube-music',
-      const {
-        'trackOnly': true,
-        'fallbackToOlderReleases': true,
-        'autoApkFilterByArch': true,
-      },
+      settings,
     );
 
     expect(details.version, '9.17.51');
+    // Size is resolved lazily (not in getLatestAPKDetails): the resolver walks
+    // the release page, ABI-filters the download candidates, and probes only
+    // the matching-ABI (arm64-v8a) download page. details.changeLog carries the
+    // release-page URL the resolver needs.
+    final apkSizeBytes = await apkMirror.resolveLatestApkSizeBytes(
+      releasePageUrl: details.changeLog,
+      additionalSettings: settings,
+    );
+    expect(apkSizeBytes, 60817408);
     expect(
       apkMirror.requestedUrls.where((url) {
         return url.contains('android-apk-download');
@@ -604,11 +677,6 @@ void main() {
       [
         'https://www.apkmirror.com/apk/google-inc/youtube-music/youtube-music-9-17-51-release/youtube-music-9-17-51-5-android-apk-download/',
       ],
-    );
-    expect(details.apkSizeBytes, 60817408);
-    expect(
-      details.changeLog,
-      'https://www.apkmirror.com/apk/google-inc/youtube-music/youtube-music-9-17-51-release/youtube-music-9-17-51-5-android-apk-download/',
     );
   });
 
@@ -623,67 +691,66 @@ void main() {
     );
   });
 
-  test('apk mirror probes download pages when release page is blocked', () async {
+  test('apk mirror resolves no size when the release page is blocked', () async {
     final apkMirror = ReleasePageBlockedAPKMirror();
+    const settings = {'trackOnly': true, 'fallbackToOlderReleases': true};
     final details = await apkMirror.getLatestAPKDetails(
       'https://www.apkmirror.com/apk/google-inc/youtube',
-      const {'trackOnly': true, 'fallbackToOlderReleases': true},
+      settings,
     );
 
     expect(details.version, '21.18.163 beta');
-    expect(details.apkSizeBytes, 186277274);
+    // The release page is blocked (non-200). Lazy size resolution deliberately
+    // does NOT fall back to speculative per-variant URL guessing (that probed up
+    // to ~20 URLs per app per refresh with an abysmal hit rate and was removed),
+    // so no size is resolved and no download pages are probed.
+    final apkSizeBytes = await apkMirror.resolveLatestApkSizeBytes(
+      releasePageUrl: details.changeLog,
+      additionalSettings: settings,
+    );
+    expect(apkSizeBytes, null);
     expect(
       apkMirror.requestedUrls
           .where((url) => url.contains('android-apk-download'))
           .toList(),
-      [
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-android-apk-download/',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-2-android-apk-download/',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-3-android-apk-download/',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-4-android-apk-download/',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-5-android-apk-download/',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-6-android-apk-download/',
-      ],
+      <String>[],
     );
   });
 
-  test(
-    'commit-sha-like version update does not disable version detection',
-    () {
-      final appsProvider = AppsProvider();
-      final app = App(
-        'app.example',
-        'https://github.com/example/example',
-        'example',
-        'example',
-        'debug-75094d8',
-        'debug-86094f9',
-        const <MapEntry<String, String>>[],
-        0,
-        {'versionDetection': true},
-        DateTime.now(),
-        false,
-      );
+  test('commit-sha-like version update does not disable version detection', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      'app.example',
+      'https://github.com/example/example',
+      'example',
+      'example',
+      'debug-75094d8',
+      'debug-86094f9',
+      const <MapEntry<String, String>>[],
+      0,
+      {'versionDetection': true},
+      DateTime.now(),
+      false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.example',
-          versionName: '1.5.3-DEV (75094D8)',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.example',
+        versionName: '1.5.3-DEV (75094D8)',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp, isNull);
-      expect(app.additionalSettings['versionDetection'], true);
-      expect(app.installedVersion, 'debug-75094d8');
-    },
-  );
+    expect(correctedApp, isNull);
+    expect(app.additionalSettings['versionDetection'], true);
+    expect(app.installedVersion, 'debug-75094d8');
+  });
 
   test(
     'releaseCommitShaAsVersion setting does not disable version detection even if commit hashes differ',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.example',
         'https://github.com/example/example',
@@ -716,7 +783,7 @@ void main() {
   test(
     'partially sha-like version updates (e.g. 26.06 to 26.07.1a2b3c4) do not disable version detection',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.example',
         'https://github.com/wxxsfxyzm/InstallerX-Revived',
@@ -749,7 +816,7 @@ void main() {
   test(
     'partially sha-like version update from null stored version does not disable version detection',
     () {
-      final appsProvider = AppsProvider();
+      final appsProvider = AppsProvider(isBg: true);
       final app = App(
         'app.example',
         'https://github.com/wxxsfxyzm/InstallerX-Revived',
@@ -794,7 +861,8 @@ void main() {
         0,
         {
           'versionDetection': true,
-          'lastInstalledTime': 1780272000000, // June 1st, 2026 in ms since epoch
+          'lastInstalledTime':
+              1780272000000, // June 1st, 2026 in ms since epoch
         },
         DateTime.now(),
         false,
@@ -816,7 +884,8 @@ void main() {
         0,
         {
           'versionDetection': true,
-          'lastInstalledTime': 1780444800000, // June 3rd, 2026 in ms since epoch
+          'lastInstalledTime':
+              1780444800000, // June 3rd, 2026 in ms since epoch
         },
         DateTime.now(),
         false,
@@ -838,9 +907,7 @@ void main() {
         '26.06.8df31d',
         const <MapEntry<String, String>>[],
         0,
-        {
-          'versionDetection': true,
-        },
+        {'versionDetection': true},
         DateTime.now(),
         false,
         releaseDate: DateTime.utc(2026, 6, 2),

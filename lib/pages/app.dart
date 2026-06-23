@@ -6,6 +6,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -4223,8 +4224,8 @@ class _AppPageState extends State<AppPage> {
                         ],
                       )
                     : CustomScrollView(
+                        scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
                         controller: _appPageScrollController,
-                        cacheExtent: 1600,
                         physics: const AlwaysScrollableScrollPhysics(
                           parent: ClampingScrollPhysics(),
                         ),

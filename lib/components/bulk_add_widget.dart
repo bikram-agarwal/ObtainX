@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
@@ -846,8 +847,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                 child: ListView.builder(
                   // Bottom padding reserves space so the last item isn't
                   // hidden behind the FAB.
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
                   padding: EdgeInsets.only(bottom: _bottomActionListPadding()),
-                  cacheExtent: 1200,
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
                     final app = filtered[index];

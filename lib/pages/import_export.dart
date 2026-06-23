@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
@@ -669,8 +670,8 @@ class _ImportExportPageState extends State<ImportExportPage> {
               ),
             ),
           CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
             key: const PageStorageKey<String>('import-export-tab-scroll'),
-            cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('importExport'),

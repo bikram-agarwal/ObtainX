@@ -2912,33 +2912,33 @@ class AppsProvider with ChangeNotifier {
 
         if (downloadedFile != null) {
           if (needBGWorkaround) {
-            // ignore: use_build_context_synchronously
             installApk(
               downloadedFile,
+              // ignore: use_build_context_synchronously
               contextIfNewInstall,
               needsBGWorkaround: true,
               shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
             );
           } else {
-            // ignore: use_build_context_synchronously
             sayInstalled = await installApk(
               downloadedFile,
+              // ignore: use_build_context_synchronously
               contextIfNewInstall,
               shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
             );
           }
         } else {
           if (needBGWorkaround) {
-            // ignore: use_build_context_synchronously
             installApkDir(
               downloadedDir!,
+              // ignore: use_build_context_synchronously
               contextIfNewInstall,
               needsBGWorkaround: true,
             );
           } else {
-            // ignore: use_build_context_synchronously
             sayInstalled = await installApkDir(
               downloadedDir!,
+              // ignore: use_build_context_synchronously
               contextIfNewInstall,
               shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
             );

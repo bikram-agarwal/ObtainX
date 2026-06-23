@@ -6,6 +6,7 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
@@ -964,7 +965,9 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         }
       case SwipeAction.pin:
         if (app != null) {
-          provider.saveApps([app..pinned = !widget.isPinned], updateInstalledInfo: false);
+          provider.saveApps([
+            app..pinned = !widget.isPinned,
+          ], updateInstalledInfo: false);
         }
       case SwipeAction.appOptions:
         await _openAdditionalOptionsModal(widget.appId, context);
@@ -1227,7 +1230,9 @@ void showChangeLogDialog(
       }
     }
 
-    processedChangeLog = processedChangeLog!.replaceAllMapped(htmlImgRegex, (match) {
+    processedChangeLog = processedChangeLog!.replaceAllMapped(htmlImgRegex, (
+      match,
+    ) {
       final attrs = match.group(1) ?? '';
       final srcMatch = srcRegex.firstMatch(attrs);
       final altMatch = altRegex.firstMatch(attrs);
@@ -1240,7 +1245,9 @@ void showChangeLogDialog(
     });
 
     final mdImgRegex = RegExp(r'!\[([^\]]*)\]\(([^)]+)\)');
-    processedChangeLog = processedChangeLog.replaceAllMapped(mdImgRegex, (match) {
+    processedChangeLog = processedChangeLog.replaceAllMapped(mdImgRegex, (
+      match,
+    ) {
       final alt = match.group(1) ?? '';
       final src = match.group(2)!;
       final absoluteSrc = resolveUrl(src);
@@ -1274,51 +1281,51 @@ void showChangeLogDialog(
             }
             return appSource.changeLogIfAnyIsMarkDown
                 ? Markdown(
-                  controller: scrollController,
-                  padding: EdgeInsets.fromLTRB(
-                    20,
-                    8,
-                    20,
-                    24 + MediaQuery.viewPaddingOf(sheetContext).bottom,
-                  ),
-                  styleSheet: MarkdownStyleSheet(
-                    blockquoteDecoration: BoxDecoration(
-                      color: Theme.of(sheetContext).cardColor,
+                    controller: scrollController,
+                    padding: EdgeInsets.fromLTRB(
+                      20,
+                      8,
+                      20,
+                      24 + MediaQuery.viewPaddingOf(sheetContext).bottom,
                     ),
-                  ),
-                  data: displayChangeLog,
-                  onTapLink: (text, href, title) {
-                    if (href != null) {
-                      launchUrlString(
-                        href.startsWith('http://') ||
-                                href.startsWith('https://')
-                            ? href
-                            : '${Uri.parse(app.url).origin}/$href',
-                        mode: LaunchMode.externalApplication,
-                      );
-                    }
-                  },
-                  extensionSet: md.ExtensionSet(
-                    md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-                    [
-                      md.EmojiSyntax(),
-                      ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-                    ],
-                  ),
-                )
+                    styleSheet: MarkdownStyleSheet(
+                      blockquoteDecoration: BoxDecoration(
+                        color: Theme.of(sheetContext).cardColor,
+                      ),
+                    ),
+                    data: displayChangeLog,
+                    onTapLink: (text, href, title) {
+                      if (href != null) {
+                        launchUrlString(
+                          href.startsWith('http://') ||
+                                  href.startsWith('https://')
+                              ? href
+                              : '${Uri.parse(app.url).origin}/$href',
+                          mode: LaunchMode.externalApplication,
+                        );
+                      }
+                    },
+                    extensionSet: md.ExtensionSet(
+                      md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+                      [
+                        md.EmojiSyntax(),
+                        ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+                      ],
+                    ),
+                  )
                 : SingleChildScrollView(
-                  controller: scrollController,
-                  padding: EdgeInsets.fromLTRB(
-                    20,
-                    8,
-                    20,
-                    24 + MediaQuery.viewPaddingOf(sheetContext).bottom,
-                  ),
-                  child: SelectableText(
-                    displayChangeLog,
-                    style: textTheme.bodyMedium,
-                  ),
-                );
+                    controller: scrollController,
+                    padding: EdgeInsets.fromLTRB(
+                      20,
+                      8,
+                      20,
+                      24 + MediaQuery.viewPaddingOf(sheetContext).bottom,
+                    ),
+                    child: SelectableText(
+                      displayChangeLog,
+                      style: textTheme.bodyMedium,
+                    ),
+                  );
           }
 
           final Widget changeLogContent = linkedChangeLogFuture == null
@@ -2088,7 +2095,7 @@ class AppsPageState extends State<AppsPage> {
   // Groups start expanded. When the user collapses one its key goes here and
   // its child tiles are no longer built, saving widget-tree work on rebuilds.
   final Set<String> _collapsedGroups = {};
-  final Map<String, ExpansionTileController> _groupControllers = {};
+  final Map<String, ExpansibleController> _groupControllers = {};
 
   // ── Hero keep-alive ───────────────────────────────────────────────────────
   // Removed: previously held the appId of the row whose AppPage was open so
@@ -2468,7 +2475,9 @@ class AppsPageState extends State<AppsPage> {
       ),
     );
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
-    final existingFolderIds = settingsProvider.appFolders.map((f) => f.id).toSet();
+    final existingFolderIds = settingsProvider.appFolders
+        .map((f) => f.id)
+        .toSet();
     final double appsListGroupCardRadius = settingsProvider.cardCornerRadiusFor(
       kM3eGroupCardRadius,
     );
@@ -2571,7 +2580,11 @@ class AppsPageState extends State<AppsPage> {
         } else {
           refreshFuture = appsProvider.checkUpdates(
             specificIds: appsProvider.apps.values
-                .where((a) => folderIdsForApp(a.app).where((id) => existingFolderIds.contains(id)).isEmpty)
+                .where(
+                  (a) => folderIdsForApp(
+                    a.app,
+                  ).where((id) => existingFolderIds.contains(id)).isEmpty,
+                )
                 .map((a) => a.app.id)
                 .toList(),
           );
@@ -2683,7 +2696,11 @@ class AppsPageState extends State<AppsPage> {
         // On the main page only: hide apps that belong to any folder.
         // The on-demand page shows all on-demand apps regardless of folder membership.
         workingList = workingList
-            .where((appInMem) => folderIdsForApp(appInMem.app).where((id) => existingFolderIds.contains(id)).isEmpty)
+            .where(
+              (appInMem) => folderIdsForApp(
+                appInMem.app,
+              ).where((id) => existingFolderIds.contains(id)).isEmpty,
+            )
             .toList();
       }
 
@@ -3023,7 +3040,8 @@ class AppsPageState extends State<AppsPage> {
           categoryIndex < _listedCategoriesCache.length;
           categoryIndex++
         ) {
-          final String? categoryNullable = _listedCategoriesCache[categoryIndex];
+          final String? categoryNullable =
+              _listedCategoriesCache[categoryIndex];
           final String mapKey = categoryNullable ?? '__null__';
           final indices = <int>[];
           for (
@@ -3109,7 +3127,8 @@ class AppsPageState extends State<AppsPage> {
       if (effectiveGroupBy == AppsListGroupBy.appType) {
         _listedAppTypesCache = AppTypeGroup.values
             .where(
-              (t) => appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t),
+              (t) =>
+                  appsListedForAppTypeKeys.any((e) => classifyAppType(e) == t),
             )
             .toList();
 
@@ -3192,7 +3211,8 @@ class AppsPageState extends State<AppsPage> {
     }
 
     final activeGroupKeys = getActiveGroupKeys();
-    final bool allGroupsExpanded = activeGroupKeys.isNotEmpty &&
+    final bool allGroupsExpanded =
+        activeGroupKeys.isNotEmpty &&
         activeGroupKeys.every((key) => !_collapsedGroups.contains(key));
 
     Set<App> selectedApps = listedApps
@@ -3493,7 +3513,10 @@ class AppsPageState extends State<AppsPage> {
     getCategoryCollapsibleTile(int index) {
       final catKey = 'cat:${listedCategories[index] ?? '__null__'}';
       final isExpanded = !_collapsedGroups.contains(catKey);
-      final controller = _groupControllers.putIfAbsent(catKey, () => ExpansionTileController());
+      final controller = _groupControllers.putIfAbsent(
+        catKey,
+        () => ExpansibleController(),
+      );
 
       final String categoryMapKey = listedCategories[index] ?? '__null__';
       final matchingIndices =
@@ -3557,7 +3580,10 @@ class AppsPageState extends State<AppsPage> {
     getNonInstalledCollapsibleTile() {
       const nonInstalledKey = '__nonInstalled__';
       final isExpanded = !_collapsedGroups.contains(nonInstalledKey);
-      final controller = _groupControllers.putIfAbsent(nonInstalledKey, () => ExpansionTileController());
+      final controller = _groupControllers.putIfAbsent(
+        nonInstalledKey,
+        () => ExpansibleController(),
+      );
 
       final matchingIndices = _nonInstalledListedIndices;
       final tiles = isExpanded
@@ -3619,7 +3645,10 @@ class AppsPageState extends State<AppsPage> {
       final sourceKey = listedSources[index];
       final groupKey = 'src:$sourceKey';
       final isExpanded = !_collapsedGroups.contains(groupKey);
-      final controller = _groupControllers.putIfAbsent(groupKey, () => ExpansionTileController());
+      final controller = _groupControllers.putIfAbsent(
+        groupKey,
+        () => ExpansibleController(),
+      );
 
       final matchingIndices =
           _sourceGroupListedIndices[sourceKey] ?? const <int>[];
@@ -3705,7 +3734,10 @@ class AppsPageState extends State<AppsPage> {
       required List<int> matchingIndices,
     }) {
       final isExpanded = !_collapsedGroups.contains(groupKey);
-      final controller = _groupControllers.putIfAbsent(groupKey, () => ExpansionTileController());
+      final controller = _groupControllers.putIfAbsent(
+        groupKey,
+        () => ExpansibleController(),
+      );
       final tiles = isExpanded
           ? buildGroupedChildren(matchingIndices)
           : const <Widget>[];
@@ -4302,7 +4334,9 @@ class AppsPageState extends State<AppsPage> {
                           padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
                           child: (() {
                             double maxW = 0.0;
-                            final TextStyle? style = Theme.of(context).textTheme.bodyLarge;
+                            final TextStyle? style = Theme.of(
+                              context,
+                            ).textTheme.bodyLarge;
                             for (final sourceItem in sourceItems) {
                               final String text = sourceItem.value;
                               final textPainter = TextPainter(
@@ -4313,20 +4347,26 @@ class AppsPageState extends State<AppsPage> {
                                 maxW = textPainter.width;
                               }
                             }
-                            final double calculatedMenuWidth = (maxW + 64.0).clamp(120.0, MediaQuery.of(context).size.width - 88.0);
+                            final double calculatedMenuWidth = (maxW + 64.0)
+                                .clamp(
+                                  120.0,
+                                  MediaQuery.of(context).size.width - 88.0,
+                                );
                             return FormField<String>(
                               key: ValueKey(filter.sourceFilter),
                               initialValue: filter.sourceFilter,
                               builder: (FormFieldState<String> fieldState) {
-                                final InputDecoration decoration = InputDecoration(
-                                  labelText: tr('appSource'),
-                                  isDense: true,
-                                  border: const OutlineInputBorder(),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 10,
-                                  ),
-                                ).copyWith(errorText: fieldState.errorText);
+                                final InputDecoration decoration =
+                                    InputDecoration(
+                                      labelText: tr('appSource'),
+                                      isDense: true,
+                                      border: const OutlineInputBorder(),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 10,
+                                          ),
+                                    ).copyWith(errorText: fieldState.errorText);
                                 return ButtonTheme(
                                   alignedDropdown: true,
                                   child: InputDecorator(
@@ -4348,7 +4388,10 @@ class AppsPageState extends State<AppsPage> {
                                             .toList(),
                                         onChanged: (newValue) {
                                           fieldState.didChange(newValue);
-                                          update(() => filter.sourceFilter = newValue ?? '');
+                                          update(
+                                            () => filter.sourceFilter =
+                                                newValue ?? '',
+                                          );
                                         },
                                       ),
                                     ),
@@ -4792,6 +4835,7 @@ class AppsPageState extends State<AppsPage> {
                           ),
                         ),
                       CustomScrollView(
+                        scrollCacheExtent: const ScrollCacheExtent.pixels(1800),
                         key: PageStorageKey<String>(
                           'apps-scroll-${widget.folderId ?? (widget.onDemandOnlyList ? 'on-demand' : 'main')}',
                         ),
@@ -4799,7 +4843,6 @@ class AppsPageState extends State<AppsPage> {
                           parent: ClampingScrollPhysics(),
                         ),
                         controller: scrollController,
-                        cacheExtent: 1800,
                         slivers: <Widget>[
                           CustomAppBar(
                             leading:
@@ -4854,7 +4897,9 @@ class AppsPageState extends State<AppsPage> {
                                   onPressed: () {
                                     setState(() {
                                       if (allGroupsExpanded) {
-                                        _collapsedGroups.addAll(activeGroupKeys);
+                                        _collapsedGroups.addAll(
+                                          activeGroupKeys,
+                                        );
                                         for (final key in activeGroupKeys) {
                                           _groupControllers[key]?.collapse();
                                         }
@@ -5521,7 +5566,10 @@ class AppsPageState extends State<AppsPage> {
                       app.additionalSettings['onDemandOnly'] = false;
                     }
                   }
-                  await appsProvider.saveApps(apps.toList(), updateInstalledInfo: false);
+                  await appsProvider.saveApps(
+                    apps.toList(),
+                    updateInstalledInfo: false,
+                  );
                   if (!dCtx.mounted) return;
                   Navigator.of(dCtx).pop();
                 },

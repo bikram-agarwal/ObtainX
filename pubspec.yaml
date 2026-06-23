@@ -54,7 +54,11 @@ dependencies:
   permission_handler: ^12.0.1
   fluttertoast: ^9.0.0
   device_info_plus: ^13.1.0
-  file_picker: ^12.0.0-beta.2
+  # Pinned: 12.0.0-beta.7 fails to compile its Android sources (cascading
+  # "Unresolved reference 'FileUtils'" errors); beta.5 is the last known-good.
+  # The `^` caret let `pub upgrade` jump to the broken beta.7 — drop the pin
+  # once a fixed release ships.
+  file_picker: 12.0.0-beta.5
   animations: ^2.1.2
   android_package_installer: # TODO: See if PR will be accepted (dev may not be active), else remove this comment
     git:
@@ -124,6 +128,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
+  # FFI-backed sqflite so unit tests can construct AppsProvider (LogsProvider
+  # opens a DB on construction).
+  sqflite_common_ffi: any
 flutter_launcher_icons:
   android: "ic_launcher"
   image_path: "assets/graphics/icon.png"
