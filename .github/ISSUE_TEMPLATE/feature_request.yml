@@ -9,7 +9,7 @@ body:
       options:
         - label: I confirm this request is not part of an existing issue.
           required: true
-        - label: I have checked the Obtainium Wiki.
+        - label: I have checked the [Obtainium Wiki](https://wiki.obtainium.imranr.dev/).
           required: true
   - type: textarea
     id: feature-description
@@ -25,7 +25,6 @@ body:
         - One or more APK URL(s) for the latest release
         - Above details for previous releases (optional)
 
-        If you're not sure about 1 or 2, open a discussion item instead.
         Note that the Web scraper cannot deal with JavaScript-enabled content.
     validations:
       required: true
@@ -38,7 +37,7 @@ body:
 
         Note that app-specific Sources are less likely to be added. In those cases, see if the HTML Source will work for you.
     validations:
-      required: false
+      required: true
   - type: textarea
     id: additional-context
     attributes:
