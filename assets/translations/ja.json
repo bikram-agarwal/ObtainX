@@ -5,7 +5,7 @@
   "urlMatchesNoSource": "URLが既知のソースと一致しません",
   "cantInstallOlderVersion": "旧バージョンのアプリをインストールできません",
   "showAppDowngradeError": "アプリのダウングレードエラーを表示する",
-  "showBatteryOptimizationPrompt": "バッテリー最適化の確認ダイアログを表示する"
+  "showBatteryOptimizationPrompt": "バッテリー最適化の確認ダイアログを表示する",
   "tactileFeedbackEnabled": "触覚フィードバックを有効にする",
   "includePrereleasesByDefault": "デフォルトでプレリリースを含める",
   "appIdMismatch": "ダウンロードしたパッケージのIDが既存のApp IDと一致しません",
@@ -426,18 +426,18 @@
   "categoryNameHint": "カテゴリ名",
   "bulkCategorizeTitle": "カテゴリを一括編集",
   "bulkCategorizeSubtitleIntro": "タップして切り替え:",
-  "bulkCategorizeSubtitleAdd": "すべてに追加、"
-  "bulkCategorizeSubtitleRemove": "すべてから削除、もう一度タップでリセット"
-  "bulkCategorizeNoExisting": "保存済みのカテゴリはまだありません。まず下にカテゴリを追加してください。"
-  "bulkCategorizeApply": "適用"
-  "versionStringSource": "バージョン文字列として使用"
-  "versionStringSourceDefault": "デフォルト"
-  "versionStringSourceReleaseTitle": "リリースタイトル"
-  "versionStringSourceAssetName": "アセット名"
-  "versionStringSourceReleaseDate": "リリース日"
-  "versionStringSourceReleaseCommitSha": "リリースコミットSHA"
+  "bulkCategorizeSubtitleAdd": "すべてに追加、",
+  "bulkCategorizeSubtitleRemove": "すべてから削除、もう一度タップでリセット",
+  "bulkCategorizeNoExisting": "保存済みのカテゴリはまだありません。まず下にカテゴリを追加してください。",
+  "bulkCategorizeApply": "適用",
+  "versionStringSource": "バージョン文字列として使用",
+  "versionStringSourceDefault": "デフォルト",
+  "versionStringSourceReleaseTitle": "リリースタイトル",
+  "versionStringSourceAssetName": "アセット名",
+  "versionStringSourceReleaseDate": "リリース日",
+  "versionStringSourceReleaseCommitSha": "リリースコミットSHA",
   "aboutAppVersion": "ObtainX v{}",
-  "aboutTagline": "Obtainiumをさらに強化・モダン化したフォーク"
+  "aboutTagline": "Obtainiumをさらに強化・モダン化したフォーク",
   "aboutByline": "Bikram Agarwal が心を込めて制作 ❤️",
   "aboutStarOnGithub": "GitHubでスターを付ける",
   "aboutOpenWiki": "ウィキを開く",
@@ -456,12 +456,12 @@
   "deselectAll": "すべての選択を解除",
   "removeFromObtainX": "ObtainXから削除する",
   "onDemandOnly": "必要時のみ",
-  "onDemandOnlyDescription": "メインのアプリ一覧では非表示にします。更新確認は、「必要時のみ」画面でプルして更新したとき、またはこのアプリの詳細ページでのみ実行されます。"
+  "onDemandOnlyDescription": "メインのアプリ一覧では非表示にします。更新確認は、「必要時のみ」画面でプルして更新したとき、またはこのアプリの詳細ページでのみ実行されます。",
   "onDemandOnlyAppsTitle": "必要時のみ",
   "onDemandOnlyEmpty": "「必要時のみ」のアプリはありません。任意のアプリの追加オプションで「必要時のみ」を有効にしてください。",
   "additionalOptionsSectionTracking": "追跡動作",
   "additionalOptionsSectionVersion": "バージョンと検出",
   "additionalOptionsSectionApk": "APKの選択",
   "additionalOptionsSectionDisplay": "名前と詳細",
-  "additionalOptionsSectionAdvanced": "ネットワーク、バックグラウンド、自動化",
+  "additionalOptionsSectionAdvanced": "ネットワーク、バックグラウンド、自動化"
 }
