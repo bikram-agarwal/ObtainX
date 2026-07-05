@@ -49,10 +49,17 @@ class CategoryActionChip extends StatelessWidget {
   final CategoryActionChipState state;
   final VoidCallback? onPressed;
 
+  // computeLuminance() gamma-decodes all three channels — non-trivial, and these
+  // chips render in groups that rebuild on every keystroke in the bulk category
+  // editor. The light/dark decision depends only on the colour, so memoize it
+  // (Color overrides ==/hashCode, so it's a stable map key).
+  static final Map<Color, bool> _colorIsLightCache = {};
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorIsLight = color.computeLuminance() > 0.35;
+    final colorIsLight = _colorIsLightCache[color] ??=
+        color.computeLuminance() > 0.35;
     final onColor = colorIsLight ? Colors.black87 : Colors.white;
     final mutedContainerColor = Color.alphaBlend(
       color.withValues(alpha: 0.10),

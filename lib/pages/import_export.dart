@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
@@ -77,6 +77,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
     var settingsProvider = context.read<SettingsProvider>();
 
     var outlineButtonStyle = ButtonStyle(
+      foregroundColor: WidgetStateProperty.all(
+        Theme.of(context).colorScheme.onSurface,
+      ),
       shape: WidgetStateProperty.all(
         StadiumBorder(
           side: BorderSide(
@@ -165,7 +168,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
     }
 
     runObtainiumExport({bool pickOnly = false}) async {
-      HapticFeedback.selectionClick();
+      hapticSelection();
       appsProvider
           .export(
             pickOnly:
@@ -213,12 +216,17 @@ class _ImportExportPageState extends State<ImportExportPage> {
           ? await settingsProvider.getExportDir(requireAccess: false)
           : null;
       if (Platform.isAndroid) {
-        final List<Uri>? selectedUris = await saf.openDocument(
-          initialUri: exportDir,
-          grantWritePermission: false,
-          persistablePermission: false,
-          mimeType: '*/*',
-        );
+        final List<Uri>? selectedUris;
+        try {
+          selectedUris = await saf.openDocument(
+            initialUri: exportDir,
+            grantWritePermission: false,
+            persistablePermission: false,
+            mimeType: '*/*',
+          );
+        } catch (e) {
+          throw ObtainiumError(tr('noFilePickerAvailable'));
+        }
         if (selectedUris == null || selectedUris.isEmpty) {
           return null;
         }
@@ -231,10 +239,15 @@ class _ImportExportPageState extends State<ImportExportPage> {
         return selectedBackupData;
       }
 
-      final result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-      );
+      final FilePickerResult? result;
+      try {
+        result = await FilePicker.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['json'],
+        );
+      } catch (e) {
+        throw ObtainiumError(tr('noFilePickerAvailable'));
+      }
       if (result == null) {
         return null;
       }
@@ -242,7 +255,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
     }
 
     runObtainiumImport() async {
-      HapticFeedback.selectionClick();
+      hapticSelection();
       var importStarted = false;
       try {
         final String? backupData = await pickBackupDataFromSystemPicker();
@@ -266,33 +279,40 @@ class _ImportExportPageState extends State<ImportExportPage> {
       }
     }
 
-    runUrlImport() {
-      FilePicker.pickFiles().then((result) async {
-        if (result != null) {
-          // Async read so picking a large URL-list dump doesn't freeze the UI.
-          final String fileContents = await File(
-            result.files.single.path!,
-          ).readAsString();
-          if (!context.mounted) return;
-          urlListImport(
-            overrideInitValid: true,
-            initValue: RegExp('https?://[^"]+')
-                .allMatches(fileContents)
-                .map((e) => e.input.substring(e.start, e.end))
-                .toSet()
-                .toList()
-                .where((url) {
-                  try {
-                    sourceProvider.getSource(url);
-                    return true;
-                  } catch (e) {
-                    return false;
-                  }
-                })
-                .join('\n'),
-          );
+    runUrlImport() async {
+      final FilePickerResult? result;
+      try {
+        result = await FilePicker.pickFiles();
+      } catch (e) {
+        if (context.mounted) {
+          showError(ObtainiumError(tr('noFilePickerAvailable')), context);
         }
-      });
+        return;
+      }
+      if (result != null) {
+        // Async read so picking a large URL-list dump doesn't freeze the UI.
+        final String fileContents = await File(
+          result.files.single.path!,
+        ).readAsString();
+        if (!context.mounted) return;
+        urlListImport(
+          overrideInitValid: true,
+          initValue: RegExp('https?://[^"]+')
+              .allMatches(fileContents)
+              .map((e) => e.input.substring(e.start, e.end))
+              .toSet()
+              .toList()
+              .where((url) {
+                try {
+                  sourceProvider.getSource(url);
+                  return true;
+                } catch (e) {
+                  return false;
+                }
+              })
+              .join('\n'),
+        );
+      }
     }
 
     runSourceSearch(AppSource source) {
@@ -535,7 +555,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
         onLongPress: onReset == null
             ? null
             : () {
-                HapticFeedback.mediumImpact();
+                hapticMediumImpact();
                 onReset();
               },
         child: child,
@@ -654,23 +674,13 @@ class _ImportExportPageState extends State<ImportExportPage> {
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0, 0.38, 0.72, 1],
-                    colors: [
-                      impScheme.schemePageGradientTopColor,
-                      impScheme.schemePageGradientMidColor,
-                      impScheme.surface,
-                      impScheme.surface,
-                    ],
-                  ),
+                  gradient: impScheme.schemePageBackgroundGradient,
                 ),
               ),
             ),
           CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
             key: const PageStorageKey<String>('import-export-tab-scroll'),
-            cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('importExport'),
@@ -1211,24 +1221,27 @@ class _SelectionModalState extends State<SelectionModal> {
 
   @override
   Widget build(BuildContext context) {
-    Map<MapEntry<String, List<String>>, bool> filteredEntrySelections = {};
-    entrySelections.forEach((key, value) {
-      var searchableText = key.value.isEmpty ? key.key : key.value[0];
-      if (filterRegex.isEmpty || RegExp(filterRegex).hasMatch(searchableText)) {
-        filteredEntrySelections.putIfAbsent(key, () => value);
+    // Filter once with a single compiled RegExp. Previously a RegExp was
+    // compiled per entry — and twice over when the case-sensitive pass found
+    // nothing — i.e. O(entries) compilations on every keystroke over what can
+    // be a large mass-import list.
+    final List<MapEntry<String, List<String>>> filteredEntryKeys;
+    if (filterRegex.isEmpty) {
+      filteredEntryKeys = entrySelections.keys.toList();
+    } else {
+      String searchableFor(MapEntry<String, List<String>> key) =>
+          key.value.isEmpty ? key.key : key.value[0];
+      final RegExp rx = RegExp(filterRegex);
+      var matches = entrySelections.keys
+          .where((key) => rx.hasMatch(searchableFor(key)))
+          .toList();
+      if (matches.isEmpty) {
+        final RegExp rxInsensitive = RegExp(filterRegex, caseSensitive: false);
+        matches = entrySelections.keys
+            .where((key) => rxInsensitive.hasMatch(searchableFor(key)))
+            .toList();
       }
-    });
-    if (filterRegex.isNotEmpty && filteredEntrySelections.isEmpty) {
-      entrySelections.forEach((key, value) {
-        var searchableText = key.value.isEmpty ? key.key : key.value[0];
-        if (filterRegex.isEmpty ||
-            RegExp(
-              filterRegex,
-              caseSensitive: false,
-            ).hasMatch(searchableText)) {
-          filteredEntrySelections.putIfAbsent(key, () => value);
-        }
-      });
+      filteredEntryKeys = matches;
     }
     getSelectAllButton() {
       if (widget.onlyOneSelectionAllowed) {
@@ -1287,9 +1300,7 @@ class _SelectionModalState extends State<SelectionModal> {
           )
         : null;
 
-    final List<Widget> entryTileWidgets = filteredEntrySelections.keys.map((
-      entry,
-    ) {
+    Widget buildEntryTile(MapEntry<String, List<String>> entry) {
       selectThis(bool? value) {
         setState(() {
           value ??= false;
@@ -1408,11 +1419,11 @@ class _SelectionModalState extends State<SelectionModal> {
       return widget.onlyOneSelectionAllowed
           ? singleSelectTile
           : multiSelectTile;
-    }).toList();
+    }
 
     final List<Widget> sheetColumnChildren = [
       ?filterFormWidget,
-      ...entryTileWidgets,
+      for (final key in filteredEntryKeys) buildEntryTile(key),
     ];
 
     final List<Widget> selectionActions = [
@@ -1605,12 +1616,14 @@ class _SelectionModalState extends State<SelectionModal> {
                     const SizedBox(height: 8),
                   ],
                   Flexible(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: entryTileWidgets,
-                      ),
+                    // ListView.builder so only visible tiles are built; the
+                    // mass-import list can hold hundreds of entries and was
+                    // previously materialized in full inside a Column.
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: filteredEntryKeys.length,
+                      itemBuilder: (context, index) =>
+                          buildEntryTile(filteredEntryKeys[index]),
                     ),
                   ),
                   const Divider(height: 1),

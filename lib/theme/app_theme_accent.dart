@@ -240,6 +240,22 @@ extension ColorSchemeBoost on ColorScheme {
 
     return result;
   }
+
+  ColorScheme boostContainersForSeedThemes({required bool darkTheme}) {
+    final double primaryBlend = darkTheme ? 0.30 : 0.24;
+    final double secondaryBlend = darkTheme ? 0.26 : 0.20;
+    final double tertiaryBlend = darkTheme ? 0.28 : 0.22;
+
+    return copyWith(
+      primaryContainer: Color.lerp(primaryContainer, primary, primaryBlend),
+      secondaryContainer: Color.lerp(
+        secondaryContainer,
+        secondary,
+        secondaryBlend,
+      ),
+      tertiaryContainer: Color.lerp(tertiaryContainer, tertiary, tertiaryBlend),
+    );
+  }
 }
 
 extension ColorSchemeBlackTheme on ColorScheme {
@@ -294,6 +310,21 @@ extension ColorSchemePageScrims on ColorScheme {
     final double alpha = brightness == Brightness.dark ? 0.34 : 0.30;
     return surface.withValues(alpha: alpha);
   }
+
+  /// The standard full-page background gradient (top tint → mid tint → surface).
+  /// Single source of truth for the ~dozen page/pane backgrounds that used to
+  /// inline this identical gradient, so they can't drift apart.
+  LinearGradient get schemePageBackgroundGradient => LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    stops: const [0, 0.38, 0.72, 1],
+    colors: [
+      schemePageGradientTopColor,
+      schemePageGradientMidColor,
+      surface,
+      surface,
+    ],
+  );
 }
 
 ColorScheme colorSchemeForAccentSettings({

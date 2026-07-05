@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:obtainium/app_sources/app_package_formats.dart';
 
 import 'package:flutter/material.dart';
@@ -257,5 +258,68 @@ class GitLab extends AppSource {
     }).toList();
 
     return finalResult;
+  }
+
+  static String? patFingerprint(String? creds) {
+    if (creds == null || creds.isEmpty) {
+      return null;
+    }
+    return sha256.convert(utf8.encode(creds)).toString();
+  }
+
+  static const String validatedPATFingerprintKey =
+      'gitlab-validated-pat-fingerprint';
+
+  static bool hasValidatedPAT(
+    String? creds,
+    SettingsProvider settingsProvider,
+  ) {
+    final String? fingerprint = patFingerprint(creds);
+    if (fingerprint == null) {
+      return false;
+    }
+    return settingsProvider.getSettingString(validatedPATFingerprintKey) ==
+        fingerprint;
+  }
+
+  static void clearPATValidation(SettingsProvider settingsProvider) {
+    settingsProvider.setSettingString(validatedPATFingerprintKey, '');
+  }
+
+  static void storePATValidation(
+    String creds,
+    SettingsProvider settingsProvider,
+  ) {
+    final String? fingerprint = patFingerprint(creds);
+    if (fingerprint == null) return;
+    settingsProvider.setSettingString(validatedPATFingerprintKey, fingerprint);
+  }
+
+  static Future<String?> validatePAT(String creds) async {
+    final String token = creds.trim();
+    if (token.isEmpty) {
+      return tr('gitlabPATRequiredForDefaultVerification');
+    }
+    try {
+      final Response response = await get(
+        Uri.parse('https://gitlab.com/api/v4/user'),
+        headers: <String, String>{
+          'Authorization': 'Bearer $token',
+          HttpHeaders.userAgentHeader: 'Obtainium',
+        },
+      );
+      if (response.statusCode == 200) {
+        return null;
+      }
+      if (response.statusCode == 401) {
+        return tr('gitlabPATInvalid');
+      }
+      if (response.statusCode == 403 || response.statusCode == 429) {
+        return tr('gitlabPATValidationRateLimited');
+      }
+      return tr('gitlabPATValidationFailed');
+    } catch (_) {
+      return tr('gitlabPATValidationFailed');
+    }
   }
 }

@@ -3,14 +3,17 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
@@ -60,8 +63,7 @@ bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
   if (installedInfo == null) {
     return false;
   }
-  final String? realInstalledVersion =
-      appModel.additionalSettings['useVersionCodeAsOSVersion'] == true
+  final String? realInstalledVersion = _usesVersionCodeAsOsVersion(appModel)
       ? installedInfo.versionCode.toString()
       : installedInfo.versionName;
   if (realInstalledVersion == null || realInstalledVersion.isEmpty) {
@@ -71,6 +73,23 @@ bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
     realInstalledVersion,
     displayedInstalledVersion,
   );
+}
+
+bool _usesVersionCodeAsOsVersion(App appModel) {
+  return appModel.additionalSettings['useVersionCodeAsOSVersion'] == true ||
+      appModel.additionalSettings['versionDetection'] == 'versionCode';
+}
+
+/// The real OS-reported installed version (versionName, or versionCode when the
+/// app uses useVersionCodeAsOSVersion). Null when nothing is installed. Surfaced
+/// on the app page only when the displayed version is a pseudo-version, so the
+/// user can still see what's actually installed.
+String? _realOsInstalledVersion(AppInMemory appInMemory) {
+  final installedInfo = appInMemory.installedInfo;
+  if (installedInfo == null) return null;
+  return _usesVersionCodeAsOsVersion(appInMemory.app)
+      ? installedInfo.versionCode.toString()
+      : installedInfo.versionName;
 }
 
 /// Optional debug logger — guarded by the consolidated [apkMirrorSizeDebug]
@@ -228,7 +247,12 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
   return Object.hashAll([
     downloadsRunning,
     appId,
-    inMemory.downloadProgress,
+    // Only whether a download is active (start/stop) — NOT the live fraction.
+    // The fraction ticks ~4 Hz during a download; including it here forced the
+    // entire ~2700-line AppPage build to re-run on every tick. The live bar is
+    // now rendered by [_DownloadProgressAction], which subscribes to the
+    // fraction itself, so the page only rebuilds when the download begins/ends.
+    inMemory.downloadProgress != null,
     identityHashCode(inMemory.icon),
     inMemory.icon?.length,
     model.id,
@@ -267,8 +291,104 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
     settings.checkUpdateOnDetailPage,
     settings.highlightTouchTargets,
     settings.cardCornerScale,
-    settings.categories.hashCode,
+    Object.hashAll(
+      settings.categories.entries.map((e) => '${e.key}=${e.value}'),
+    ),
   );
+}
+
+/// The download/install progress button shown in the app action area.
+///
+/// Subscribes narrowly to its own app's [AppInMemory.downloadProgress] and
+/// [AppInMemory.downloadTotalBytes] via [context.select], so the ~4 Hz progress
+/// ticks rebuild only this small widget — not the whole ~2700-line [AppPage]
+/// build. The page-level rebuild token ([appPageAppsRebuildToken]) tracks only
+/// whether a download is active, so the page rebuilds once on start and once on
+/// finish; everything in between is this widget repainting alone.
+class _DownloadProgressAction extends StatelessWidget {
+  const _DownloadProgressAction({
+    required this.appId,
+    required this.actionTheme,
+    required this.expressiveRadius,
+  });
+
+  final String appId;
+  final ThemeData actionTheme;
+  final double expressiveRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    final (double? dpOrNull, int? totalBytes) = context
+        .select<AppsProvider, (double?, int?)>((p) {
+          final a = p.apps[appId];
+          return (a?.downloadProgress, a?.downloadTotalBytes);
+        });
+    // Race guard: the download may have ended between the page rebuild that
+    // mounted this widget and this build. The page will rebuild and remove us.
+    if (dpOrNull == null) {
+      return const SizedBox.shrink();
+    }
+    final double dp = dpOrNull;
+    final bool isInstalling = dp < 0;
+    final String bytesLabel = !isInstalling && totalBytes != null
+        ? ' · ${formatBytesForDisplay((dp / 100 * totalBytes).round())} / ${formatBytesForDisplay(totalBytes)}'
+        : '';
+    final String label = isInstalling
+        ? '${tr('installing')}…'
+        : tr('downloadingX', args: ['${dp.round()}%$bytesLabel']);
+    final Widget progressBar = ClipRRect(
+      borderRadius: BorderRadius.circular(expressiveRadius),
+      child: SizedBox(
+        height: 52,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(color: actionTheme.colorScheme.onSurface.withAlpha(31)),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: isInstalling ? 1.0 : dp / 100,
+                child: Container(
+                  color: actionTheme.colorScheme.primary.withAlpha(
+                    isInstalling ? 55 : 220,
+                  ),
+                ),
+              ),
+            ),
+            if (isInstalling)
+              LinearProgressIndicator(
+                backgroundColor: Colors.transparent,
+                color: actionTheme.colorScheme.primary.withAlpha(120),
+              ),
+            Center(
+              child: Text(
+                label,
+                style: actionTheme.textTheme.labelLarge?.copyWith(
+                  color: actionTheme.colorScheme.onSurface.withAlpha(200),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        progressBar,
+        if (!isInstalling)
+          Center(
+            child: TextButton(
+              onPressed: () =>
+                  context.read<AppsProvider>().cancelDownload(appId),
+              child: Text(tr('cancel')),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 enum _UnsavedAction { keepEditing, discard, saveAndExit }
@@ -280,6 +400,7 @@ class AppPage extends StatefulWidget {
     this.showOppositeOfPreferredView = false,
     this.openInEditMode = false,
     this.appsListHeroFolderId,
+    this.isEmbedded = false,
   });
 
   final String appId;
@@ -291,16 +412,26 @@ class AppPage extends StatefulWidget {
   /// When true (e.g. swipe-to-edit), enter inline edit mode once the app is loaded.
   final bool openInEditMode;
 
+  final bool isEmbedded;
+
   @override
   State<AppPage> createState() => _AppPageState();
 }
 
 class _AppPageState extends State<AppPage> {
   static const Duration _detailPageAutoCheckCooldown = Duration(minutes: 1);
-  static const double _versionRowLabelWidth = 120;
+  // 92 + the 8px gap after the label = a 100px value-column offset, matching
+  // the details card's detailRow (label width 100, no gap) so the two cards'
+  // value columns line up vertically.
+  static const double _versionRowLabelWidth = 92;
 
   late final WebViewController _webViewController;
   bool _webViewUrlLoaded = false;
+  // True while the in-app webpage is loading, to drive the loading indicator.
+  bool _webViewLoading = false;
+  // Height (logical px) of the translucent top bar the webpage scrolls behind.
+  // Injected into the page as top padding so its top content stays tappable.
+  double _webViewTopInset = 0;
   bool _scheduledDetailPageRefresh = false;
   bool _requestedMissingIconLoad = false;
   // Once true, the lazy APKMirror size resolver has fired for this AppPage
@@ -323,6 +454,13 @@ class _AppPageState extends State<AppPage> {
   String? _iconSchemeFailedCacheKey;
 
   final SourceProvider _sourceProvider = SourceProvider();
+
+  // Cache for the resolved AppSource. getSource() constructs a fresh source
+  // (running tr() in its constructor) on every call, but the result is a pure
+  // function of the app's url + overrideSource, which rarely change for an open
+  // page — so recompute only when that key changes instead of every build.
+  AppSource? _cachedSource;
+  String? _cachedSourceKey;
 
   /// Resolves to this app's store-availability map from [BulkScanCache], or null.
   Future<Map<String, String>?>? _storeAvailabilityCacheFuture;
@@ -409,7 +547,9 @@ class _AppPageState extends State<AppPage> {
   }
 
   void _handleBottomActionBarSizeChanged(Size size) {
-    if (!mounted || _bottomActionBarHeight == size.height) return;
+    if (!mounted) return;
+    if (size.height == 0) return;
+    if (_bottomActionBarHeight == size.height) return;
     setState(() {
       _bottomActionBarHeight = size.height;
     });
@@ -436,6 +576,7 @@ class _AppPageState extends State<AppPage> {
       _cachedPageTheme = null;
       _cachedPageThemeKey = null;
       _webViewUrlLoaded = false;
+      _webViewLoading = false;
       _scheduledDetailPageRefresh = false;
       _requestedMissingIconLoad = false;
       _attemptedApkMirrorSizeResolution = false;
@@ -527,6 +668,9 @@ class _AppPageState extends State<AppPage> {
   void _exitEditWithoutSaving() {
     _clearEditIconStaging();
     setState(() => _editMode = false);
+    if (_appPageScrollController.hasClients) {
+      _appPageScrollController.jumpTo(0);
+    }
   }
 
   // --- Unsaved changes dialog ---
@@ -735,14 +879,25 @@ class _AppPageState extends State<AppPage> {
     if (mounted) {
       _clearEditIconStaging();
       setState(() => _editMode = false);
+      if (_appPageScrollController.hasClients) {
+        _appPageScrollController.jumpTo(0);
+      }
     }
   }
 
   Future<void> _pickEditIcon(AppsProvider appsProvider) async {
-    final FilePickerResult? result = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['png'],
-    );
+    final FilePickerResult? result;
+    try {
+      result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['png'],
+      );
+    } catch (e) {
+      if (mounted) {
+        _showPageError(ObtainiumError(tr('noFilePickerAvailable')), context);
+      }
+      return;
+    }
     if (!mounted) return;
     if (result == null || result.files.isEmpty) return;
     final PlatformFile picked = result.files.single;
@@ -857,7 +1012,9 @@ class _AppPageState extends State<AppPage> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: showErrorDetails
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
           spacing: 12,
           children: [
             Container(
@@ -1455,8 +1612,35 @@ class _AppPageState extends State<AppPage> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
+          // The loading indicator covers only the initial page load (started
+          // when loadRequest is issued). We never re-show it on later
+          // navigations: sites like GitHub fire onPageStarted again after
+          // finishing, which would otherwise leave the spinner running for
+          // several seconds after the page is already visible.
+          onProgress: (int progress) {
+            if (progress >= 100 && mounted && _webViewLoading) {
+              setState(() => _webViewLoading = false);
+            }
+          },
+          onPageFinished: (String url) {
+            if (mounted && _webViewLoading) {
+              setState(() => _webViewLoading = false);
+            }
+            // Pad the page down by the translucent top bar's height so its top
+            // content (e.g. a sign-in button) stays tappable while the rest
+            // still scrolls behind the bar, visible through its translucency.
+            if (_webViewTopInset > 0) {
+              _webViewController.runJavaScript(
+                'if(document.body){document.body.style.paddingTop='
+                '"${_webViewTopInset.toStringAsFixed(0)}px";}',
+              );
+            }
+          },
           onWebResourceError: (WebResourceError error) {
             if (error.isForMainFrame == true) {
+              if (mounted && _webViewLoading) {
+                setState(() => _webViewLoading = false);
+              }
               _showPageError(
                 ObtainiumError(error.description, unexpected: true),
                 context,
@@ -1799,12 +1983,18 @@ class _AppPageState extends State<AppPage> {
         }
       });
     }
-    var source = app != null
-        ? _sourceProvider.getSource(
-            app.app.url,
-            overrideSource: app.app.overrideSource,
-          )
-        : null;
+    AppSource? source;
+    if (app != null) {
+      final String sourceKey = '${app.app.url} ${app.app.overrideSource ?? ''}';
+      if (sourceKey != _cachedSourceKey) {
+        _cachedSource = _sourceProvider.getSource(
+          app.app.url,
+          overrideSource: app.app.overrideSource,
+        );
+        _cachedSourceKey = sourceKey;
+      }
+      source = _cachedSource;
+    }
     final String? buildVerificationPersistentPageError =
         app != null &&
             source != null &&
@@ -1917,11 +2107,16 @@ class _AppPageState extends State<AppPage> {
     bool isVersionDetectionStandard =
         app?.app.additionalSettings['versionDetection'] == 'auto' ||
         app?.app.additionalSettings['versionDetection'] == 'standard' ||
+        app?.app.additionalSettings['versionDetection'] == 'versionCode' ||
         app?.app.additionalSettings['versionDetection'] == true ||
         app?.app.additionalSettings['versionDetection'] == null;
 
+    if (showAppWebpageFinal) {
+      _webViewTopInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
+    }
     if (showAppWebpageFinal && app != null && !_webViewUrlLoaded) {
       _webViewUrlLoaded = true;
+      _webViewLoading = true;
       final String webUrl = app.app.url;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -1977,7 +2172,33 @@ class _AppPageState extends State<AppPage> {
       String label,
       String value, {
       bool pseudoVersion = false,
+      bool versionCode = false,
+      String? osInstalledVersion,
     }) {
+      Widget versionChip(String text) {
+        final ColorScheme scheme = Theme.of(ctx).colorScheme;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: Color.alphaBlend(
+              scheme.primary.withValues(alpha: 0.08),
+              scheme.surfaceContainerHighest,
+            ),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.9),
+            ),
+          ),
+          child: Text(
+            text,
+            style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        );
+      }
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
@@ -2012,24 +2233,17 @@ class _AppPageState extends State<AppPage> {
                       fontStyle: pseudoVersion ? FontStyle.italic : null,
                     ),
                   ),
-                  if (pseudoVersion)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          ctx,
-                        ).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        tr('pseudoVersion'),
-                        style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w500,
-                        ),
+                  if (pseudoVersion) versionChip(tr('pseudoVersion')),
+                  if (versionCode) versionChip(tr('versionCode')),
+                  if (pseudoVersion &&
+                      osInstalledVersion != null &&
+                      osInstalledVersion.isNotEmpty)
+                    SelectableText(
+                      '${tr('osInstalledVersion')}: $osInstalledVersion',
+                      style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                 ],
@@ -2516,6 +2730,10 @@ class _AppPageState extends State<AppPage> {
               tr('installed'),
               app?.app.installedVersion ?? '',
               pseudoVersion: app != null && _isInstalledVersionPseudo(app),
+              versionCode: app != null && _usesVersionCodeAsOsVersion(app.app),
+              osInstalledVersion: app == null
+                  ? null
+                  : _realOsInstalledVersion(app),
             ),
           );
         } else {
@@ -3307,6 +3525,7 @@ class _AppPageState extends State<AppPage> {
       const heroIconSize = 48.0;
       final double dialogIconSize = small ? 70 : heroIconSize;
       final double dialogIconRadius = small ? 12 : 16;
+      final double placeholderIconSize = small ? dialogIconSize : 30;
       final iconWidget = _tappableAppIconDisplay(
         themeContext: themeContext,
         appInMemory: app,
@@ -3315,12 +3534,31 @@ class _AppPageState extends State<AppPage> {
         iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
         exclusiveIconMemoryBytes: _editStagedClearOverride,
         emptyPlaceholder: small
-            ? const SizedBox(height: 70, width: 70)
+            ? SizedBox(
+                height: dialogIconSize,
+                width: dialogIconSize,
+                child: Center(
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.rotationZ(0.31),
+                    child: Image(
+                      image: const AssetImage('assets/graphics/icon_small.png'),
+                      width: placeholderIconSize,
+                      height: placeholderIconSize,
+                      fit: BoxFit.contain,
+                      color: dialogColumnTheme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.5),
+                      colorBlendMode: BlendMode.modulate,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                ),
+              )
             : Container(
-                height: heroIconSize,
-                width: heroIconSize,
+                height: dialogIconSize,
+                width: dialogIconSize,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(dialogIconRadius),
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
@@ -3330,29 +3568,66 @@ class _AppPageState extends State<AppPage> {
                     ],
                   ),
                 ),
+                child: Center(
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.rotationZ(0.31),
+                    child: Image(
+                      image: const AssetImage('assets/graphics/icon_small.png'),
+                      width: placeholderIconSize,
+                      height: placeholderIconSize,
+                      fit: BoxFit.contain,
+                      color: Colors.white.withValues(alpha: 0.5),
+                      colorBlendMode: BlendMode.modulate,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                ),
               ),
       );
 
       if (small) {
+        // Header laid out like the normal app details page: icon on the left,
+        // with the name and developer left-aligned beside it (rather than
+        // centered and stacked).
         return Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 0),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [iconWidget],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              app?.name ?? tr('app'),
-              textAlign: TextAlign.center,
-              style: dialogColumnTheme.textTheme.displaySmall,
-            ),
-            Text(
-              tr('byX', args: [app?.author ?? tr('unknown')]),
-              textAlign: TextAlign.center,
-              style: dialogColumnTheme.textTheme.headlineSmall,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                iconWidget,
+                const SizedBox(width: 12),
+                // Flexible (not Expanded) so the icon + text sit centered as a
+                // block for short names, while long names can still wrap/shrink.
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        app?.name ?? tr('app'),
+                        style: dialogColumnTheme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        tr('byX', args: [app?.author ?? tr('unknown')]),
+                        style: dialogColumnTheme.textTheme.bodySmall?.copyWith(
+                          color: dialogColumnTheme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             SizedBox(height: settingsProvider.highlightTouchTargets ? 2 : 8),
             getInfoColumn(themeContext, small: true),
@@ -3447,7 +3722,7 @@ class _AppPageState extends State<AppPage> {
               ),
               TextButton(
                 onPressed: () {
-                  HapticFeedback.selectionClick();
+                  hapticSelection();
                   final App? updatedApp = app?.app.deepCopy();
                   if (updatedApp != null) {
                     updatedApp.installedVersion = updatedApp.latestVersion;
@@ -3519,69 +3794,15 @@ class _AppPageState extends State<AppPage> {
       final String markInstalledLabel = sizeAnnotated(tr('markInstalled'));
       final String markUpdatedLabel = sizeAnnotated(tr('markUpdated'));
 
-      // #2 — inline progress button replaces the action button while downloading/installing.
+      // #2 — inline progress button replaces the action button while
+      // downloading/installing. The live bar is its own widget so the ~4 Hz
+      // progress ticks don't rebuild the whole page (see [_DownloadProgressAction]
+      // and the note in [appPageAppsRebuildToken]).
       if (app?.downloadProgress != null) {
-        final double dp = app!.downloadProgress!;
-        final bool isInstalling = dp < 0;
-        final int? totalBytes = app.downloadTotalBytes;
-        final String bytesLabel = !isInstalling && totalBytes != null
-            ? ' · ${formatBytesForDisplay((dp / 100 * totalBytes).round())} / ${formatBytesForDisplay(totalBytes)}'
-            : '';
-        final String label = isInstalling
-            ? '${tr('installing')}…'
-            : tr('downloadingX', args: ['${dp.round()}%$bytesLabel']);
-        final Widget progressBar = ClipRRect(
-          borderRadius: BorderRadius.circular(expressiveRadius),
-          child: SizedBox(
-            height: 52,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Container(
-                  color: actionTheme.colorScheme.onSurface.withAlpha(31),
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FractionallySizedBox(
-                    widthFactor: isInstalling ? 1.0 : dp / 100,
-                    child: Container(
-                      color: actionTheme.colorScheme.primary.withAlpha(
-                        isInstalling ? 55 : 220,
-                      ),
-                    ),
-                  ),
-                ),
-                if (isInstalling)
-                  LinearProgressIndicator(
-                    backgroundColor: Colors.transparent,
-                    color: actionTheme.colorScheme.primary.withAlpha(120),
-                  ),
-                Center(
-                  child: Text(
-                    label,
-                    style: actionTheme.textTheme.labelLarge?.copyWith(
-                      color: actionTheme.colorScheme.onSurface.withAlpha(200),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            progressBar,
-            if (!isInstalling)
-              Center(
-                child: TextButton(
-                  onPressed: () => appsProvider.cancelDownload(app.app.id),
-                  child: Text(tr('cancel')),
-                ),
-              ),
-          ],
+        return _DownloadProgressAction(
+          appId: app!.app.id,
+          actionTheme: actionTheme,
+          expressiveRadius: expressiveRadius,
         );
       }
 
@@ -3691,7 +3912,7 @@ class _AppPageState extends State<AppPage> {
           final successMessage = installedVersionIsNull
               ? tr('installed')
               : tr('appsUpdated');
-          HapticFeedback.heavyImpact();
+          hapticHeavyImpact();
           final res = await appsProvider.downloadAndInstallLatestApps(
             app?.app.id != null ? [app!.app.id] : [],
             context,
@@ -3891,8 +4112,13 @@ class _AppPageState extends State<AppPage> {
     Widget getBottomActionBar(BuildContext themeContext) {
       final bool gestureNavigationActive =
           MediaQuery.systemGestureInsetsOf(themeContext).bottom > 0;
+      final bool isLandscapeEmbedded =
+          widget.isEmbedded &&
+          MediaQuery.orientationOf(themeContext) == Orientation.landscape;
       Widget actionBarContent = Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+        padding: isLandscapeEmbedded
+            ? const EdgeInsets.fromLTRB(16, 6, 16, 6)
+            : const EdgeInsets.fromLTRB(16, 10, 16, 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -3958,28 +4184,26 @@ class _AppPageState extends State<AppPage> {
                       color: Theme.of(themeContext).colorScheme.primary,
                       iconSize: 24,
                       onPressed: () {
-                        showDialog<void>(
+                        showAppModalSheet<void>(
                           context: context,
-                          builder: (BuildContext dialogRouteContext) {
+                          fullWidth: true,
+                          backgroundColor: pageThemeForPage.colorScheme.surface,
+                          builder: (BuildContext sheetRouteContext) {
                             return Theme(
                               data: pageThemeForPage,
                               child: Builder(
-                                builder: (BuildContext dialogThemedContext) {
-                                  return AlertDialog(
-                                    scrollable: true,
-                                    content: getFullInfoColumn(
-                                      dialogThemedContext,
-                                      small: true,
+                                builder: (BuildContext sheetThemedContext) {
+                                  return AppSheetContent(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      0,
+                                      0,
+                                      0,
+                                      16,
                                     ),
-                                    title: Text(app.name),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () {
-                                          Navigator.of(
-                                            dialogRouteContext,
-                                          ).pop();
-                                        },
-                                        child: Text(tr('continue')),
+                                    children: [
+                                      getFullInfoColumn(
+                                        sheetThemedContext,
+                                        small: true,
                                       ),
                                     ],
                                   );
@@ -4082,6 +4306,18 @@ class _AppPageState extends State<AppPage> {
           ],
         ),
       );
+      if (isLandscapeEmbedded) {
+        actionBarContent = IconButtonTheme(
+          data: IconButtonThemeData(
+            style: ButtonStyle(
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              minimumSize: WidgetStateProperty.all(const Size(36, 36)),
+              padding: WidgetStateProperty.all(const EdgeInsets.all(4)),
+            ),
+          ),
+          child: actionBarContent,
+        );
+      }
       if (gestureNavigationActive) {
         actionBarContent = SafeArea(top: false, child: actionBarContent);
       }
@@ -4090,7 +4326,9 @@ class _AppPageState extends State<AppPage> {
           color: Theme.of(themeContext).brightness == Brightness.dark
               ? Theme.of(themeContext).colorScheme.surfaceContainerHigh
               : Theme.of(themeContext).colorScheme.surfaceContainerHighest,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: isLandscapeEmbedded
+              ? const BorderRadius.vertical(top: Radius.circular(16))
+              : const BorderRadius.vertical(top: Radius.circular(24)),
           border: Border(
             top: BorderSide(
               color: Theme.of(themeContext).brightness == Brightness.dark
@@ -4189,12 +4427,37 @@ class _AppPageState extends State<AppPage> {
               }
             },
             child: Scaffold(
+              extendBody: true,
+              // Webpage mode: the WebView fills the whole body and renders
+              // behind a translucent top bar, so the page scrolls *behind* the
+              // bar (visible through its translucency). The page is padded down
+              // by the bar height (see the onPageFinished JS injection of
+              // _webViewTopInset) so its top content stays tappable instead of
+              // being trapped under the bar. A true gaussian blur isn't possible
+              // over an Android platform view, so this is a translucent tint.
+              extendBodyBehindAppBar: showAppWebpageFinal,
               resizeToAvoidBottomInset: true,
-              appBar: showAppWebpageFinal ? AppBar() : null,
-              backgroundColor: appPageDeeperSurfaceColor(
-                pageColorSchemeForPage.surface,
-                pageBrightness,
-              ),
+              appBar: showAppWebpageFinal
+                  ? AppBar(
+                      backgroundColor: appPageDeeperSurfaceColor(
+                        pageColorSchemeForPage.surface,
+                        pageBrightness,
+                      ).withValues(alpha: 0.82),
+                      surfaceTintColor: Colors.transparent,
+                      elevation: 0,
+                      scrolledUnderElevation: 0,
+                      iconTheme: IconThemeData(
+                        color: pageColorSchemeForPage.onSurface,
+                      ),
+                    )
+                  : null,
+              backgroundColor:
+                  settingsProvider.useGradientBackground && widget.isEmbedded
+                  ? Colors.transparent
+                  : appPageDeeperSurfaceColor(
+                      pageColorSchemeForPage.surface,
+                      pageBrightness,
+                    ),
               floatingActionButton: _editModeFloatingActionButtons(
                 themedPageContext,
                 app,
@@ -4207,12 +4470,36 @@ class _AppPageState extends State<AppPage> {
                 displacement: 20,
                 child: showAppWebpageFinal
                     ? Stack(
+                        // StackFit.expand gives the (non-positioned) WebView the
+                        // full body size; without it the Stack defaults to
+                        // StackFit.loose and collapses onto the normally-empty
+                        // error overlay, starving the WebView of size so it
+                        // renders blank.
+                        fit: StackFit.expand,
                         children: [
-                          Positioned.fill(
-                            child: getAppWebView(themedPageContext),
-                          ),
-                          SafeArea(
-                            bottom: false,
+                          // #3: WebView fills the whole body (behind the top
+                          // bar and bottom action bar) so it reaches the screen
+                          // edges instead of stopping above the action bar.
+                          getAppWebView(themedPageContext),
+                          // #1: loading indicator until the page finishes — the
+                          // WebView is blank for a few seconds otherwise.
+                          if (_webViewLoading)
+                            Center(
+                              child: ExpressiveLoadingIndicator(
+                                color: pageColorSchemeForPage.primary,
+                              ),
+                            ),
+                          // #4: error / verification banner pinned just below
+                          // the (translucent, body-overlapping) app bar at its
+                          // natural height. Positioned (not a non-positioned
+                          // child) so StackFit.expand can't stretch it to fill
+                          // the screen.
+                          Positioned(
+                            top:
+                                MediaQuery.paddingOf(themedPageContext).top +
+                                kToolbarHeight,
+                            left: 0,
+                            right: 0,
                             child: _buildPersistentPageError(
                               themedPageContext,
                               pageThemeForPage,
@@ -4222,106 +4509,122 @@ class _AppPageState extends State<AppPage> {
                           ),
                         ],
                       )
-                    : CustomScrollView(
-                        controller: _appPageScrollController,
-                        cacheExtent: 1600,
-                        physics: const AlwaysScrollableScrollPhysics(
-                          parent: ClampingScrollPhysics(),
-                        ),
-                        slivers: [
-                          SliverToBoxAdapter(
-                            child: SafeArea(
-                              top: true,
-                              bottom: false,
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 12),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        IconButton(
-                                          icon: const Icon(Icons.arrow_back),
-                                          // Pin to the per-app PRIMARY
-                                          // colour. The previous attempt
-                                          // used [colorScheme.onSurface],
-                                          // which on light themes is a
-                                          // near-black and on dark themes
-                                          // a near-white - effectively the
-                                          // same value the main app theme
-                                          // produces, so the per-app tint
-                                          // wasn't visible.
-                                          // [colorScheme.primary] is the
-                                          // accent derived from this app's
-                                          // icon, so the back button now
-                                          // visibly belongs to the page.
-                                          color: pageThemeForPage
-                                              .colorScheme
-                                              .primary,
-                                          onPressed: updating
-                                              ? null
-                                              : () => Navigator.of(
-                                                  themedPageContext,
-                                                ).maybePop(),
-                                          tooltip: MaterialLocalizations.of(
-                                            themedPageContext,
-                                          ).backButtonTooltip,
-                                        ),
-                                        Expanded(
-                                          child: buildDetailHeroContent(
-                                            themedPageContext,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (_editMode && app != null)
-                                      _buildEditMetadataSection(
-                                        themedPageContext,
-                                        app,
-                                        appsProvider,
-                                        settingsProvider,
-                                      )
-                                    else ...[
-                                      _buildPersistentPageError(
-                                        themedPageContext,
-                                        pageThemeForPage,
-                                        effectivePersistentPageError,
-                                        title:
-                                            buildVerificationPersistentPageError,
-                                      ),
-                                      getInfoColumn(
-                                        themedPageContext,
-                                        small: false,
-                                      ),
-                                    ],
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        16,
-                                        0,
-                                        16,
-                                        16,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: getBottomCenterActions(
-                                              themedPageContext,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    if (_editMode)
-                                      SizedBox(
-                                        height: _editModeBottomSpacerHeight,
-                                      ),
-                                  ],
+                    : Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (settingsProvider.useGradientBackground &&
+                              widget.isEmbedded)
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: pageColorSchemeForPage
+                                      .schemePageBackgroundGradient,
                                 ),
                               ),
                             ),
+                          CustomScrollView(
+                            scrollCacheExtent: const ScrollCacheExtent.pixels(
+                              1600,
+                            ),
+                            controller: _appPageScrollController,
+                            physics: const AlwaysScrollableScrollPhysics(
+                              parent: ClampingScrollPhysics(),
+                            ),
+                            slivers: [
+                              SliverToBoxAdapter(
+                                child: SafeArea(
+                                  top: true,
+                                  bottom: false,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            if (!widget.isEmbedded)
+                                              IconButton(
+                                                icon: const Icon(
+                                                  Icons.arrow_back,
+                                                ),
+                                                color: pageThemeForPage
+                                                    .colorScheme
+                                                    .primary,
+                                                onPressed: updating
+                                                    ? null
+                                                    : () => Navigator.of(
+                                                        themedPageContext,
+                                                      ).maybePop(),
+                                                tooltip:
+                                                    MaterialLocalizations.of(
+                                                      themedPageContext,
+                                                    ).backButtonTooltip,
+                                              ),
+                                            if (widget.isEmbedded)
+                                              const SizedBox(width: 16),
+                                            Expanded(
+                                              child: buildDetailHeroContent(
+                                                themedPageContext,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (_editMode && app != null)
+                                          _buildEditMetadataSection(
+                                            themedPageContext,
+                                            app,
+                                            appsProvider,
+                                            settingsProvider,
+                                          )
+                                        else ...[
+                                          _buildPersistentPageError(
+                                            themedPageContext,
+                                            pageThemeForPage,
+                                            effectivePersistentPageError,
+                                            title:
+                                                buildVerificationPersistentPageError,
+                                          ),
+                                          getInfoColumn(
+                                            themedPageContext,
+                                            small: false,
+                                          ),
+                                        ],
+                                        Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            16,
+                                            0,
+                                            16,
+                                            16,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: getBottomCenterActions(
+                                                  themedPageContext,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (_editMode)
+                                          SizedBox(
+                                            height: _editModeBottomSpacerHeight,
+                                          )
+                                        else
+                                          SizedBox(
+                                            height: _bottomActionBarHeight > 0
+                                                ? _bottomActionBarHeight
+                                                : 80,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -4332,14 +4635,107 @@ class _AppPageState extends State<AppPage> {
                   }
                 },
               ),
-              bottomNavigationBar: _MeasureSize(
-                onChange: _handleBottomActionBarSizeChanged,
-                child: getBottomActionBar(themedPageContext),
-              ),
+              bottomNavigationBar: widget.isEmbedded
+                  ? _ScrollLinkedAppPageFooter(
+                      key: ValueKey<bool>(_editMode),
+                      scrollController: _appPageScrollController,
+                      child: _MeasureSize(
+                        onChange: _handleBottomActionBarSizeChanged,
+                        child: getBottomActionBar(themedPageContext),
+                      ),
+                    )
+                  : _MeasureSize(
+                      onChange: _handleBottomActionBarSizeChanged,
+                      child: getBottomActionBar(themedPageContext),
+                    ),
             ),
           );
         },
       ),
+    );
+  }
+}
+
+class _ScrollLinkedAppPageFooter extends StatefulWidget {
+  const _ScrollLinkedAppPageFooter({
+    super.key,
+    required this.scrollController,
+    required this.child,
+  });
+
+  final ScrollController scrollController;
+  final Widget child;
+
+  @override
+  State<_ScrollLinkedAppPageFooter> createState() =>
+      _ScrollLinkedAppPageFooterState();
+}
+
+class _ScrollLinkedAppPageFooterState
+    extends State<_ScrollLinkedAppPageFooter> {
+  bool _footerExpanded = true;
+  double _previousOffset = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ScrollLinkedAppPageFooter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController.removeListener(_onScroll);
+      widget.scrollController.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final ScrollController controller = widget.scrollController;
+    if (!controller.hasClients) {
+      return;
+    }
+    final double currentOffset = controller.offset;
+    final double delta = currentOffset - _previousOffset;
+    _previousOffset = currentOffset;
+    if (currentOffset <= 24) {
+      if (!_footerExpanded) {
+        setState(() {
+          _footerExpanded = true;
+        });
+      }
+      return;
+    }
+    const double scrollSensitivity = 10;
+    if (delta > scrollSensitivity) {
+      if (_footerExpanded) {
+        setState(() {
+          _footerExpanded = false;
+        });
+      }
+    } else if (delta < -scrollSensitivity) {
+      if (!_footerExpanded) {
+        setState(() {
+          _footerExpanded = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSlide(
+      offset: _footerExpanded ? Offset.zero : const Offset(0, 1.0),
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.fastOutSlowIn,
+      child: widget.child,
     );
   }
 }

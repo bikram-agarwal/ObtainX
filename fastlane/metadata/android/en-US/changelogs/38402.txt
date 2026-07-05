@@ -1,4 +1,0 @@
-First release of ObtainX on F-Droid.
-
-ObtainX is a reworked fork of Obtainium with a Material 3 Expressive UI, bulk import from device, installer choice, folders, custom app icons,
-update-size preview, and more. See the in-app About page or the project README for the full feature list.

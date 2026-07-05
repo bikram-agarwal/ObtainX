@@ -120,6 +120,27 @@ class StoreSourceIconPaths {
   static const String apkmirror = 'assets/graphics/ic_apkmirror.png';
   static const String apkpure = 'assets/graphics/ic_apkpure.png';
   static const String github = 'assets/graphics/ic_github.png';
+  static const String gitlab = 'assets/graphics/ic_gitlab.png';
+  static const String codeberg = 'assets/graphics/ic_codeberg.png';
+  static const String sourcehut = 'assets/graphics/ic_sourcehut.png';
+  static const String sourceforge = 'assets/graphics/ic_sourceforge.png';
+  static const String itchio = 'assets/graphics/ic_itchio.png';
+  static const String apkcombo = 'assets/graphics/ic_apkcombo.png';
+  static const String aptoide = 'assets/graphics/ic_aptoide.png';
+  static const String uptodown = 'assets/graphics/ic_uptodown.png';
+  static const String huaweiAppGallery =
+      'assets/graphics/ic_huaweiappgallery.png';
+  static const String tencent = 'assets/graphics/ic_tencent.png';
+  static const String vivoAppStore = 'assets/graphics/ic_vivoappstore.png';
+  static const String rustore = 'assets/graphics/ic_rustore.png';
+  static const String apk4free = 'assets/graphics/ic_apk4free.png';
+  static const String farsroid = 'assets/graphics/ic_farsroid.png';
+  static const String coolapk = 'assets/graphics/ic_coolapk.png';
+  static const String rockmods = 'assets/graphics/ic_rockmods.png';
+  static const String liteapks = 'assets/graphics/ic_liteapks.png';
+  static const String telegram = 'assets/graphics/ic_telegram.png';
+  static const String neutroncode = 'assets/graphics/ic_neutroncode.png';
+  static const String mullvad = 'assets/graphics/ic_mullvad.png';
 
   /// IzzyOnDroid logo from https://codeberg.org/IzzyOnDroid/assets (IzzyOnDroidLogo.png).
   static const String izzydroid = 'assets/graphics/ic_izzydroid.png';
@@ -143,8 +164,70 @@ String? storeSourceAssetPathForHost(String host) {
   if (normalized.contains('github.com')) {
     return StoreSourceIconPaths.github;
   }
+  if (normalized.contains('gitlab.com')) {
+    return StoreSourceIconPaths.gitlab;
+  }
+  if (normalized.contains('codeberg.org')) {
+    return StoreSourceIconPaths.codeberg;
+  }
   if (normalized.contains('izzysoft.de')) {
     return StoreSourceIconPaths.izzydroid;
+  }
+  if (normalized.contains('git.sr.ht')) {
+    return StoreSourceIconPaths.sourcehut;
+  }
+  if (normalized.contains('sourceforge.net')) {
+    return StoreSourceIconPaths.sourceforge;
+  }
+  if (normalized.contains('itch.io')) {
+    return StoreSourceIconPaths.itchio;
+  }
+  if (normalized.contains('apkcombo.com')) {
+    return StoreSourceIconPaths.apkcombo;
+  }
+  if (normalized.contains('aptoide.com')) {
+    return StoreSourceIconPaths.aptoide;
+  }
+  if (normalized.contains('uptodown.com')) {
+    return StoreSourceIconPaths.uptodown;
+  }
+  if (normalized.contains('appgallery.huawei.com') ||
+      normalized.contains('appgallery.cloud.huawei.com')) {
+    return StoreSourceIconPaths.huaweiAppGallery;
+  }
+  if (normalized.contains('sj.qq.com')) {
+    return StoreSourceIconPaths.tencent;
+  }
+  if (normalized.contains('h5.appstore.vivo.com.cn') ||
+      normalized.contains('h5coml.vivo.com.cn')) {
+    return StoreSourceIconPaths.vivoAppStore;
+  }
+  if (normalized.contains('rustore.ru')) {
+    return StoreSourceIconPaths.rustore;
+  }
+  if (normalized.contains('apk4free.net')) {
+    return StoreSourceIconPaths.apk4free;
+  }
+  if (normalized.contains('farsroid.com')) {
+    return StoreSourceIconPaths.farsroid;
+  }
+  if (normalized.contains('coolapk.com')) {
+    return StoreSourceIconPaths.coolapk;
+  }
+  if (normalized.contains('rockmods.net')) {
+    return StoreSourceIconPaths.rockmods;
+  }
+  if (normalized.contains('liteapks.com')) {
+    return StoreSourceIconPaths.liteapks;
+  }
+  if (normalized.contains('telegram.org')) {
+    return StoreSourceIconPaths.telegram;
+  }
+  if (normalized.contains('neutroncode.com')) {
+    return StoreSourceIconPaths.neutroncode;
+  }
+  if (normalized.contains('mullvad.net')) {
+    return StoreSourceIconPaths.mullvad;
   }
   return null;
 }
@@ -162,6 +245,10 @@ String? storeSourceAssetPathForClassName(String className) {
   switch (className) {
     case 'GitHub':
       return StoreSourceIconPaths.github;
+    case 'GitLab':
+      return StoreSourceIconPaths.gitlab;
+    case 'Codeberg':
+      return StoreSourceIconPaths.codeberg;
     case 'FDroid':
       return StoreSourceIconPaths.fdroid;
     case 'APKMirror':
@@ -170,6 +257,42 @@ String? storeSourceAssetPathForClassName(String className) {
       return StoreSourceIconPaths.apkpure;
     case 'IzzyOnDroid':
       return StoreSourceIconPaths.izzydroid;
+    case 'SourceHut':
+      return StoreSourceIconPaths.sourcehut;
+    case 'SourceForge':
+      return StoreSourceIconPaths.sourceforge;
+    case 'ItchIO':
+      return StoreSourceIconPaths.itchio;
+    case 'APKCombo':
+      return StoreSourceIconPaths.apkcombo;
+    case 'Aptoide':
+      return StoreSourceIconPaths.aptoide;
+    case 'Uptodown':
+      return StoreSourceIconPaths.uptodown;
+    case 'HuaweiAppGallery':
+      return StoreSourceIconPaths.huaweiAppGallery;
+    case 'Tencent':
+      return StoreSourceIconPaths.tencent;
+    case 'VivoAppStore':
+      return StoreSourceIconPaths.vivoAppStore;
+    case 'RuStore':
+      return StoreSourceIconPaths.rustore;
+    case 'Apk4Free':
+      return StoreSourceIconPaths.apk4free;
+    case 'Farsroid':
+      return StoreSourceIconPaths.farsroid;
+    case 'CoolApk':
+      return StoreSourceIconPaths.coolapk;
+    case 'RockMods':
+      return StoreSourceIconPaths.rockmods;
+    case 'LiteAPKs':
+      return StoreSourceIconPaths.liteapks;
+    case 'TelegramApp':
+      return StoreSourceIconPaths.telegram;
+    case 'NeutronCode':
+      return StoreSourceIconPaths.neutroncode;
+    case 'Mullvad':
+      return StoreSourceIconPaths.mullvad;
     default:
       return null;
   }
@@ -226,8 +349,8 @@ class StoreSourceIconImage extends StatelessWidget {
   }
 }
 
-/// Icon for a tracked source URL: bundled asset for known hosts, favicon from
-/// cache for unknown hosts, [Icons.link] if neither resolves.
+/// Icon for a tracked source URL: bundled asset for known hosts, fetched
+/// favicon for unknown hosts, [Icons.link] if neither resolves.
 class StoreSourceIconForUrl extends StatefulWidget {
   const StoreSourceIconForUrl({
     super.key,
@@ -298,7 +421,7 @@ class _StoreSourceIconForUrlState extends State<StoreSourceIconForUrl> {
 
 /// Small source favicon badge overlaid on the app icon (Apps list, bulk import results).
 /// Known hosts use bundled assets; unknown hosts use a persistent disk-cached
-/// DuckDuckGo favicon so the network is only hit once per host.
+/// direct favicon first, with DuckDuckGo fallback only when the build allows it.
 class StoreSourceListBadge extends StatefulWidget {
   const StoreSourceListBadge({super.key, required this.host});
 

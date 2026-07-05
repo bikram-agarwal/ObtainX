@@ -8,7 +8,7 @@ const double kM3eOuterRadius = 14.0;
 const double kM3eInnerRadius = 4.0;
 const double kM3eItemGap = 3.0;
 
-/// Outer radius for elevated group cards (same as apps tab ExpansionTile Material).
+/// Outer radius for elevated grouped surfaces such as apps-list groups.
 const double kM3eGroupCardRadius = 20.0;
 
 /// Gap between expansion group header and first row in apps list body.
@@ -104,7 +104,7 @@ Widget m3eCompactDropdownScope({
   return Theme(data: m3eCompactDropdownTheme(Theme.of(context)), child: child);
 }
 
-/// Elevated group card matching apps tab [Material].
+/// Central Material 3 expressive row stack for settings-style grouped lists.
 Widget m3eExpressiveSettingsCard({
   required BuildContext context,
   required ColorScheme colorScheme,
@@ -112,13 +112,8 @@ Widget m3eExpressiveSettingsCard({
   double itemGap = kM3eItemGap,
 }) {
   final ThemeData theme = Theme.of(context);
-  final double cardCornerScale = context
-      .read<SettingsProvider>()
-      .cardCornerScale;
-  final double cardRadius = SettingsProvider.cardCornerRadiusForScale(
-    kM3eGroupCardRadius,
-    cardCornerScale,
-  );
+  final SettingsProvider settingsProvider = context.read<SettingsProvider>();
+  final double cardCornerScale = settingsProvider.cardCornerScale;
   final double itemOuterRadius = SettingsProvider.cardCornerRadiusForScale(
     kM3eOuterRadius,
     cardCornerScale,
@@ -127,40 +122,29 @@ Widget m3eExpressiveSettingsCard({
     colorScheme,
     alpha: 0.22,
   );
-  return Material(
-    elevation: 3,
-    shadowColor: colorScheme.shadow.withAlpha(100),
-    surfaceTintColor: colorScheme.surfaceTint,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(cardRadius),
-      side: blackThemeOutlineSide,
-    ),
-    color: m3eGroupedListBackdropFill(colorScheme),
-    clipBehavior: Clip.antiAlias,
-    child: Theme(
-      data: theme.copyWith(dividerColor: Colors.transparent),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
-            if (itemIndex > 0) SizedBox(height: itemGap),
-            Material(
-              color: m3eGroupedListRowFill(colorScheme),
-              shape: RoundedRectangleBorder(
-                borderRadius: m3eListGroupItemRadius(
-                  m3eFlatStackSlotPosition(itemIndex, items.length),
-                  flatListBody: true,
-                  outerRadius: itemOuterRadius,
-                ),
-                side: blackThemeOutlineSide,
+  return Theme(
+    data: theme.copyWith(dividerColor: Colors.transparent),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
+          if (itemIndex > 0) SizedBox(height: itemGap),
+          Material(
+            color: m3eGroupedListRowFill(colorScheme),
+            shape: RoundedRectangleBorder(
+              borderRadius: m3eListGroupItemRadius(
+                m3eFlatStackSlotPosition(itemIndex, items.length),
+                flatListBody: true,
+                outerRadius: itemOuterRadius,
               ),
-              clipBehavior: Clip.antiAlias,
-              child: items[itemIndex],
+              side: blackThemeOutlineSide,
             ),
-          ],
+            clipBehavior: Clip.antiAlias,
+            child: items[itemIndex],
+          ),
         ],
-      ),
+      ],
     ),
   );
 }

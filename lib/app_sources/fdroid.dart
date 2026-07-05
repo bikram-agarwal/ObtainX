@@ -171,7 +171,33 @@ class FDroid extends AppSource {
         hostIdenticalDespiteAnyChange ||
         host == 'f-droid.org' ||
         host == 'www.f-droid.org';
-    if (canUseOfficialMetadata) {
+    // Skip the per-refresh fdroiddata metadata YAML fetch (gitlab.com) only when
+    // the upstream release is unchanged AND the cached verdict is the terminal
+    // 'verified' state. An F-Droid build's reproducible status can flip from
+    // no_data / not_reproducible to verified hours after a release WITHOUT a
+    // versionCode change (the reproducible-build verification completes after
+    // the initial publish). So every non-verified status must keep re-checking
+    // to catch that flip; only 'verified' (which does not revert) is reused.
+    // This is never worse than always fetching, and saves the call for the
+    // already-verified majority.
+    final App? prevApp = previouslyCheckedApp;
+    final bool canReuseCachedMetadata =
+        prevApp != null &&
+        prevApp.rawLatestVersionFromSource != null &&
+        prevApp.rawLatestVersionFromSource == details.version &&
+        prevApp.latestReproducibleStatus == reproducibleBuildStatusVerified;
+    if (canUseOfficialMetadata && canReuseCachedMetadata) {
+      details.reproducibleStatus = prevApp.latestReproducibleStatus;
+      details.isReproducible = reproducibleBuildBoolFromStatus(
+        prevApp.latestReproducibleStatus,
+      );
+      if (prevApp.changeLog?.isNotEmpty == true) {
+        details.changeLog = prevApp.changeLog;
+      }
+      if (prevApp.author.trim().isNotEmpty) {
+        details.names.author = prevApp.author;
+      }
+    } else if (canUseOfficialMetadata) {
       try {
         var res = await sourceRequest(
           'https://gitlab.com/fdroid/fdroiddata/-/raw/master/metadata/$appId.yml',
@@ -399,8 +425,18 @@ class FDroid extends AppSource {
           .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
           .toList();
       final uniqueApkUrls = apkUrls.toSet().toList();
+      // Skip the per-check APK-size HEAD and the package-page fetch (icon/name)
+      // when the upstream version is unchanged since the last check. getApp()
+      // reuses the previous apkSizeBytes / iconUrl / name in that case (its
+      // `?? currentApp` fallbacks), so these network round-trips would just be
+      // wasted work on a no-op refresh.
+      final App? prevApp = previouslyCheckedApp;
+      final bool versionUnchanged =
+          prevApp != null &&
+          prevApp.rawLatestVersionFromSource != null &&
+          prevApp.rawLatestVersionFromSource == version;
       int? apkSizeBytes;
-      if (uniqueApkUrls.isNotEmpty) {
+      if (uniqueApkUrls.isNotEmpty && !versionUnchanged) {
         try {
           final headers = await getRequestHeaders(
             additionalSettings,
@@ -447,7 +483,7 @@ class FDroid extends AppSource {
           hostIdenticalDespiteAnyChange ||
           pageHost == 'f-droid.org' ||
           pageHost == 'www.f-droid.org';
-      if (canUseOfficialPackagePage) {
+      if (canUseOfficialPackagePage && !versionUnchanged) {
         try {
           final pkgName = packageLabel;
           if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {

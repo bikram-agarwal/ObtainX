@@ -6,17 +6,23 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:obtainium/app_distribution.dart';
+import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
+import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/installer_provider.dart' as installer;
 import 'package:obtainium/providers/logs_provider.dart';
@@ -24,6 +30,7 @@ import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -41,16 +48,11 @@ IconData _swipeActionIcon(SwipeAction action) => switch (action) {
   SwipeAction.none => Icons.block_rounded,
 };
 
-const String _aboutObtainXWebsiteUrl =
-    'https://bikram-agarwal.github.io/obtainx/';
-const String _aboutObtainXPrivacyUrl =
-    'https://bikram-agarwal.github.io/obtainx/privacy/';
-const String _aboutObtainXTermsUrl =
-    'https://bikram-agarwal.github.io/obtainx/terms/';
-const String _aboutRememberUrl =
-    'https://github.com/bikram-agarwal/Remember/releases/latest';
-const String _aboutFilePipeUrl =
-    'https://github.com/bikram-agarwal/FilePipe/releases/latest';
+String get _aboutObtainXWebsiteUrl => tr('aboutObtainXWebsiteUrl');
+String get _aboutObtainXPrivacyUrl => tr('aboutObtainXPrivacyUrl');
+String get _aboutObtainXTermsUrl => tr('aboutObtainXTermsUrl');
+String get _aboutRememberUrl => tr('aboutRememberUrl');
+String get _aboutFilePipeUrl => tr('aboutFilePipeUrl');
 const String _aboutAuthorUrl = 'https://github.com/bikram-agarwal';
 const String _aboutWikiUrl = 'https://wiki.obtainium.imranr.dev/';
 
@@ -58,22 +60,58 @@ class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
+  State<SettingsPage> createState() => SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+/// One entry in the large-screen settings master list (and its detail pane).
+class _SettingsCategory {
+  const _SettingsCategory({
+    required this.key,
+    required this.title,
+    required this.icon,
+    required this.widget,
+  });
+
+  final String key;
+  final String title;
+  final IconData icon;
+  final Widget widget;
+}
+
+class SettingsPageState extends State<SettingsPage> {
+  final GlobalKey<_SourceSpecificSectionState> _sourceSpecificKey =
+      GlobalKey<_SourceSpecificSectionState>();
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
+  final ValueNotifier<Map<String, bool>> _expandedSettingsSections =
+      ValueNotifier<Map<String, bool>>(<String, bool>{});
+  bool _expandedSettingsSectionsLoaded = false;
+
+  String? _selectedCategory;
+
+  // ── Scaffold-level subscriptions ────────────────────────────────────
+  // We deliberately avoid `context.watch<SettingsProvider>()`: that would
+  // rebuild this whole widget tree on every single setter change. Instead
+  // we subscribe only to the values needed for the Scaffold chrome, and
+  // let each section widget subscribe to its own narrow set.
+  static int _scaffoldSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.prefs,
+    sp.useGradientBackground,
+    sp.progressiveBlurEnabled,
+  );
+
   static const List<String> _settingsSectionKeys = [
     'updates',
+    'integrations',
+    'warnings',
     'sourceSpecific',
     'themes',
     'appearance',
-    'gestures',
+    'interaction',
     'categories',
   ];
 
-  List<int> updateIntervalNodes = [
+  static const List<int> updateIntervalNodes = [
     15,
     30,
     60,
@@ -87,176 +125,991 @@ class _SettingsPageState extends State<SettingsPage> {
     20160,
     43200,
   ];
-  int updateInterval = 0;
-  String updateIntervalLabel = tr('neverManualOnly');
 
-  void processIntervalSliderValue(double val) {
-    final int index = val.round().clamp(0, updateIntervalNodes.length);
-    if (index == 0) {
-      updateInterval = 0;
-      updateIntervalLabel = tr('neverManualOnly');
-      return;
-    }
-    final int minutes = updateIntervalNodes[index - 1];
-    updateInterval = minutes;
-    if (minutes < 60) {
-      updateIntervalLabel = plural('minute', minutes);
-    } else if (minutes < 24 * 60) {
-      updateIntervalLabel = plural('hour', minutes ~/ 60);
-    } else {
-      updateIntervalLabel = plural('day', minutes ~/ (24 * 60));
-    }
+  @override
+  void dispose() {
+    _expandedSettingsSections.dispose();
+    super.dispose();
   }
 
-  List<Widget> _updatesCardItemList(
+  Future<bool> confirmDiscardUnsavedChanges() async {
+    final sourceSpecificState = _sourceSpecificKey.currentState;
+    if (sourceSpecificState != null) {
+      if (sourceSpecificState.isGithubDirty ||
+          sourceSpecificState.isGitlabDirty) {
+        final bool? discard = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: Text(tr('discardUnsavedChangesQuestion')),
+              content: Text(tr('discardUnsavedPATChangesExplanation')),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: Text(tr('cancel')),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: Text(tr('continue')),
+                ),
+              ],
+            );
+          },
+        );
+        if (discard == true) {
+          sourceSpecificState.discardChanges();
+          return true;
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _loadExpandedSettingsSections(SettingsProvider sp) {
+    if (_expandedSettingsSectionsLoaded || sp.prefs == null) return;
+    _expandedSettingsSections.value = <String, bool>{
+      for (final key in _settingsSectionKeys)
+        key: sp.prefs?.getBool('settingsSection_$key') ?? true,
+    };
+    _expandedSettingsSectionsLoaded = true;
+  }
+
+  static bool _sectionExpanded(Map<String, bool> expandedState, String key) {
+    return expandedState[key] ?? true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Narrow watch: register a dependency only on the values needed for the
+    // Scaffold chrome (via context.select) so this page rebuilds when those
+    // change, without rebuilding on every unrelated settings change. The hash
+    // value itself is unused — the select call's dependency is the point.
+    context.select<SettingsProvider, int>(_scaffoldSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    SourceProvider sourceProvider = SourceProvider();
+
+    // One-time initialization guard.
+    if (sp.prefs == null) sp.initializeSettings();
+    _loadExpandedSettingsSections(sp);
+
+    void setSectionExpanded(String key, bool value) {
+      sp.prefs?.setBool('settingsSection_$key', value);
+      _expandedSettingsSections.value = <String, bool>{
+        ..._expandedSettingsSections.value,
+        key: value,
+      };
+    }
+
+    void setAllSettingsSectionsExpanded(bool value) {
+      for (final sectionKey in _settingsSectionKeys) {
+        sp.prefs?.setBool('settingsSection_$sectionKey', value);
+      }
+      _expandedSettingsSections.value = <String, bool>{
+        for (final sectionKey in _settingsSectionKeys) sectionKey: value,
+      };
+    }
+
+    final List<String> visibleSettingsSectionKeys = [
+      'updates',
+      'integrations',
+      'warnings',
+      if (sourceProvider.sourceTemplates.any(
+        (source) => source.sourceConfigSettingFormItems.isNotEmpty,
+      ))
+        'sourceSpecific',
+      'themes',
+      'appearance',
+      'interaction',
+      'categories',
+    ];
+    // Each section is wrapped in a RepaintBoundary so it composites to its own
+    // cached layer. The settings body is one eager Column inside a single
+    // SliverToBoxAdapter (unlike the apps list, which is a lazy ListView.builder
+    // that gets per-row RepaintBoundaries for free). Without boundaries the whole
+    // visible tree re-rasterizes every scroll frame — and because the scroll
+    // offset lands on sub-pixels, text/border anti-aliasing differs frame to
+    // frame, which reads as a shimmer/shiver while scrolling (made worse by the
+    // app bar's BackdropFilter, which forces the content beneath it to re-raster
+    // every frame). Cached layers just translate rigidly instead.
+    Widget settingsCard(List<Widget> children) {
+      return RepaintBoundary(
+        child: m3eExpressiveSettingsCard(
+          context: context,
+          colorScheme: cs,
+          items: children,
+        ),
+      );
+    }
+
+    Widget collapsibleCard(String key, Widget child) {
+      // RepaintBoundary: see settingsCard above for why each section is its own
+      // cached layer.
+      return RepaintBoundary(
+        child: ValueListenableBuilder<Map<String, bool>>(
+          valueListenable: _expandedSettingsSections,
+          child: child,
+          builder: (context, expandedState, child) {
+            final bool expanded = _sectionExpanded(expandedState, key);
+            return ClipRect(
+              clipper: _SettingsSectionShadowClipper(expanded: expanded),
+              child: AnimatedAlign(
+                duration: const Duration(milliseconds: 360),
+                curve: Curves.easeInOutCubicEmphasized,
+                alignment: Alignment.topCenter,
+                heightFactor: expanded ? 1.0 : 0.0,
+                child: child,
+              ),
+            );
+          },
+        ),
+      );
+    }
+
+    Widget sectionHeader(String title, IconData icon, String key) {
+      const Duration headerTransitionDuration = Duration(milliseconds: 300);
+      const Curve headerTransitionCurve = Curves.easeInOutCubicEmphasized;
+      final Color collapsedHeaderColor = Color.lerp(
+        cs.secondaryContainer,
+        cs.primaryContainer,
+        0.30,
+      )!;
+      final Color collapsedHeaderContentColor = cs.onSecondaryContainer;
+
+      // RepaintBoundary: see settingsCard above for why each section is its own
+      // cached layer.
+      return RepaintBoundary(
+        child: ValueListenableBuilder<Map<String, bool>>(
+          valueListenable: _expandedSettingsSections,
+          builder: (context, expandedState, _) {
+            final bool expanded = _sectionExpanded(expandedState, key);
+            final Color headerContentColor = expanded
+                ? cs.primary
+                : collapsedHeaderContentColor;
+            final BorderSide outlineSide = expanded
+                ? BorderSide.none
+                : m3ePureBlackOutlineSide(cs, alpha: 0.16);
+
+            return AnimatedPadding(
+              duration: headerTransitionDuration,
+              curve: headerTransitionCurve,
+              padding: EdgeInsets.fromLTRB(0, expanded ? 20 : 16, 0, 8),
+              child: AnimatedContainer(
+                duration: headerTransitionDuration,
+                curve: headerTransitionCurve,
+                decoration: BoxDecoration(
+                  color: expanded ? Colors.transparent : collapsedHeaderColor,
+                  borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+                  border: outlineSide == BorderSide.none
+                      ? null
+                      : Border.fromBorderSide(outlineSide),
+                ),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: InkWell(
+                    onTap: () => setSectionExpanded(key, !expanded),
+                    borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+                    splashFactory: NoSplash.splashFactory,
+                    splashColor: Colors.transparent,
+                    highlightColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
+                    child: AnimatedPadding(
+                      duration: headerTransitionDuration,
+                      curve: headerTransitionCurve,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: expanded ? 4 : 12,
+                        vertical: expanded ? 4 : 8,
+                      ),
+                      child: Row(
+                        children: [
+                          AnimatedContainer(
+                            duration: headerTransitionDuration,
+                            curve: headerTransitionCurve,
+                            width: expanded ? 20 : 30,
+                            height: expanded ? 20 : 30,
+                            decoration: BoxDecoration(
+                              color: expanded
+                                  ? Colors.transparent
+                                  : cs.primary.withValues(alpha: 0.16),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              icon,
+                              color: headerContentColor,
+                              size: expanded ? 16 : 17,
+                            ),
+                          ),
+                          SizedBox(width: expanded ? 8 : 10),
+                          Expanded(
+                            child: AnimatedDefaultTextStyle(
+                              duration: headerTransitionDuration,
+                              curve: headerTransitionCurve,
+                              style: TextStyle(
+                                fontWeight: expanded
+                                    ? FontWeight.w600
+                                    : FontWeight.w700,
+                                color: headerContentColor,
+                                fontSize: 13,
+                                letterSpacing: expanded ? 0 : 0.1,
+                                decoration: TextDecoration.none,
+                              ),
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          AnimatedContainer(
+                            duration: headerTransitionDuration,
+                            curve: headerTransitionCurve,
+                            width: expanded ? 20 : 32,
+                            height: expanded ? 20 : 32,
+                            decoration: BoxDecoration(
+                              color: expanded
+                                  ? Colors.transparent
+                                  : cs.surfaceContainerHighest,
+                              shape: BoxShape.circle,
+                            ),
+                            child: AnimatedRotation(
+                              turns: expanded ? 0.25 : 0,
+                              duration: headerTransitionDuration,
+                              curve: headerTransitionCurve,
+                              child: Icon(
+                                Icons.chevron_right_rounded,
+                                color: expanded
+                                    ? cs.primary
+                                    : cs.onSurfaceVariant,
+                                size: expanded ? 18 : 20,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    }
+
+    Widget aboutSectionHeader() {
+      // RepaintBoundary: see settingsCard above for why each section is its own
+      // cached layer.
+      return RepaintBoundary(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(0, 20, 0, 4),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+            child: Row(
+              children: [
+                Icon(Icons.info_rounded, color: cs.primary, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    tr('about'),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: cs.primary,
+                      fontSize: 13,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => _openLogsDialog(context),
+                  icon: const Icon(Icons.bug_report_outlined),
+                  tooltip: tr('appLogs'),
+                  color: cs.primary,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 40,
+                    height: 40,
+                  ),
+                  style: IconButton.styleFrom(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final double screenWidth = MediaQuery.sizeOf(context).width;
+    final bool isLargeScreen = screenWidth >= kLargeScreenWidthBreakpoint;
+
+    final List<_SettingsCategory> categoriesList = [
+      _SettingsCategory(
+        key: 'updates',
+        title: tr('updates'),
+        icon: Icons.update_rounded,
+        widget: _UpdatesSection(cs: cs, androidInfo: _androidInfo),
+      ),
+      _SettingsCategory(
+        key: 'integrations',
+        title: tr('integrations'),
+        icon: Icons.extension_rounded,
+        widget: const _IntegrationsSection(),
+      ),
+      _SettingsCategory(
+        key: 'warnings',
+        title: tr('warnings'),
+        icon: Icons.warning_rounded,
+        widget: const _WarningsSection(),
+      ),
+      if (sourceProvider.sourceTemplates.any(
+        (s) => s.sourceConfigSettingFormItems.isNotEmpty,
+      ))
+        _SettingsCategory(
+          key: 'sourceSpecific',
+          title: tr('sourceSpecific'),
+          icon: Icons.dns_rounded,
+          widget: _SourceSpecificSection(key: _sourceSpecificKey),
+        ),
+      _SettingsCategory(
+        key: 'themes',
+        title: tr('settingsThemesSection'),
+        icon: Icons.palette_rounded,
+        widget: _ThemesSettingsSection(androidInfoFuture: _androidInfo),
+      ),
+      _SettingsCategory(
+        key: 'appearance',
+        title: tr('appearance'),
+        icon: Icons.tune_rounded,
+        widget: _AppearanceSection(androidInfo: _androidInfo),
+      ),
+      _SettingsCategory(
+        key: 'interaction',
+        title: tr('interaction'),
+        icon: Icons.touch_app_rounded,
+        widget: const _InteractionSection(),
+      ),
+      _SettingsCategory(
+        key: 'categories',
+        title: tr('categories'),
+        icon: Icons.label_rounded,
+        widget: const _CategoriesSection(),
+      ),
+      _SettingsCategory(
+        key: 'about',
+        title: tr('about'),
+        icon: Icons.info_rounded,
+        widget: settingsCard([AboutSectionContent(colorScheme: cs)]),
+      ),
+    ];
+
+    Widget buildCategoryTile(_SettingsCategory categoryObj) {
+      final String key = categoryObj.key;
+      final String title = categoryObj.title;
+      final IconData icon = categoryObj.icon;
+      final bool selected = _selectedCategory == key;
+
+      final Color containerColor = selected
+          ? cs.secondaryContainer
+          : cs.surfaceContainerHigh;
+      final Color contentColor = selected
+          ? cs.onSecondaryContainer
+          : cs.onSurface;
+
+      final Color iconBoxColor = selected
+          ? cs.primary.withValues(alpha: 0.16)
+          : cs.primaryContainer.withValues(alpha: 0.48);
+
+      final Color iconColor = selected ? cs.primary : cs.onSurfaceVariant;
+
+      final Color chevronColor = cs.onSurfaceVariant;
+
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8.0),
+        child: Container(
+          decoration: BoxDecoration(
+            color: containerColor,
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: () async {
+                if (await confirmDiscardUnsavedChanges()) {
+                  setState(() {
+                    _selectedCategory = key;
+                  });
+                }
+              },
+              borderRadius: BorderRadius.circular(28),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: iconBoxColor,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(icon, color: iconColor, size: 18),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                          color: contentColor,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: chevronColor,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (isLargeScreen) {
+      _selectedCategory ??= categoriesList.first.key;
+      if (!categoriesList.any((c) => c.key == _selectedCategory)) {
+        _selectedCategory = categoriesList.first.key;
+      }
+      final selectedCategoryObj = categoriesList.firstWhere(
+        (c) => c.key == _selectedCategory,
+        orElse: () => categoriesList.first,
+      );
+
+      // Full-bleed page background painted *behind* both panes. The master
+      // pane's app-bar progressive-blur BackdropFilter samples its layer's
+      // backdrop, and in this Row the detail pane is painted after the master
+      // - so without a background here, the strip just past the master's right
+      // edge is transparent-black when the blur rasterizes, and the blur pulls
+      // that darkness into the right end of the master title bar (the two-panel
+      // "dark smudge"). Painting an opaque page background first gives the blur
+      // real pixels to sample at the seam. See custom_app_bar.dart's _buildBlur.
+      return Theme(
+        data: Theme.of(context).copyWith(
+          listTileTheme: const ListTileThemeData(
+            contentPadding: EdgeInsets.only(left: 16, right: 8),
+          ),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: sp.useGradientBackground
+                  ? DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: cs.schemePageBackgroundGradient,
+                      ),
+                    )
+                  : ColoredBox(color: cs.surface),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Theme(
+                    data: Theme.of(context).copyWith(
+                      scrollbarTheme: const ScrollbarThemeData(
+                        thumbColor: WidgetStatePropertyAll(Colors.transparent),
+                        trackColor: WidgetStatePropertyAll(Colors.transparent),
+                        trackBorderColor: WidgetStatePropertyAll(
+                          Colors.transparent,
+                        ),
+                        minThumbLength: 0,
+                      ),
+                    ),
+                    child: Scaffold(
+                      backgroundColor: sp.useGradientBackground
+                          ? Colors.transparent
+                          : cs.surface,
+                      body: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (sp.useGradientBackground)
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: cs.schemePageBackgroundGradient,
+                                ),
+                              ),
+                            ),
+                          ScrollConfiguration(
+                            behavior: const _NoScrollbarBehavior(),
+                            child: CustomScrollView(
+                              key: const PageStorageKey<String>(
+                                'settings-master-scroll',
+                              ),
+                              slivers: [
+                                CustomAppBar(
+                                  title: tr('settings'),
+                                  matchGradientBackground:
+                                      sp.useGradientBackground,
+                                  progressiveBlurOverlayColor: isLargeScreen
+                                      ? cs.surface.withValues(alpha: 0.72)
+                                      : null,
+                                ),
+                                SliverPadding(
+                                  padding: const EdgeInsets.all(16),
+                                  sliver: SliverList(
+                                    delegate: SliverChildBuilderDelegate(
+                                      (context, index) => buildCategoryTile(
+                                        categoriesList[index],
+                                      ),
+                                      childCount: categoriesList.length,
+                                    ),
+                                  ),
+                                ),
+                                if (sp.progressiveBlurEnabled)
+                                  SliverToBoxAdapter(
+                                    child: SizedBox(
+                                      height: MediaQuery.paddingOf(
+                                        context,
+                                      ).bottom,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                VerticalDivider(
+                  width: 1,
+                  thickness: 1,
+                  color: cs.outlineVariant.withAlpha(50),
+                ),
+                Expanded(
+                  flex: 4,
+                  child: Scaffold(
+                    backgroundColor: sp.useGradientBackground
+                        ? Colors.transparent
+                        : cs.surface,
+                    body: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (sp.useGradientBackground)
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: cs.schemePageBackgroundGradient,
+                              ),
+                            ),
+                          ),
+                        CustomScrollView(
+                          key: ValueKey(
+                            'settings-detail-${selectedCategoryObj.key}',
+                          ),
+                          slivers: [
+                            // No top app bar in the detail pane: it carried no
+                            // title, so it only added a blank frosted strip. The
+                            // status-bar inset is preserved with SliverSafeArea so
+                            // the content doesn't slide under the system bar.
+                            SliverSafeArea(
+                              top: true,
+                              bottom: false,
+                              sliver: SliverPadding(
+                                padding: const EdgeInsets.all(16),
+                                sliver: SliverToBoxAdapter(
+                                  child: selectedCategoryObj.widget,
+                                ),
+                              ),
+                            ),
+                            if (sp.progressiveBlurEnabled)
+                              SliverToBoxAdapter(
+                                child: SizedBox(
+                                  height: MediaQuery.paddingOf(context).bottom,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Theme(
+      data: Theme.of(context).copyWith(
+        listTileTheme: const ListTileThemeData(
+          contentPadding: EdgeInsets.only(left: 16, right: 8),
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: cs.surface,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (sp.useGradientBackground)
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: cs.schemePageBackgroundGradient,
+                  ),
+                ),
+              ),
+            CustomScrollView(
+              scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
+              key: const PageStorageKey<String>('settings-tab-scroll'),
+              slivers: <Widget>[
+                CustomAppBar(
+                  title: tr('settings'),
+                  matchGradientBackground: sp.useGradientBackground,
+                  actions: [
+                    ValueListenableBuilder<Map<String, bool>>(
+                      valueListenable: _expandedSettingsSections,
+                      builder: (context, expandedState, _) {
+                        final bool allSettingsSectionsExpanded =
+                            visibleSettingsSectionKeys.every(
+                              (key) => _sectionExpanded(expandedState, key),
+                            );
+                        return IconButton(
+                          tooltip: allSettingsSectionsExpanded
+                              ? tr('collapseAll')
+                              : tr('expandAll'),
+                          icon: Icon(
+                            allSettingsSectionsExpanded
+                                ? Icons.unfold_less_rounded
+                                : Icons.unfold_more_rounded,
+                          ),
+                          onPressed: () {
+                            setAllSettingsSectionsExpanded(
+                              !allSettingsSectionsExpanded,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ],
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: sp.prefs == null
+                        ? const SizedBox()
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // ── Updates ───────────────────────────────────
+                              sectionHeader(
+                                tr('updates'),
+                                Icons.update_rounded,
+                                'updates',
+                              ),
+                              collapsibleCard(
+                                'updates',
+                                _UpdatesSection(
+                                  cs: cs,
+                                  androidInfo: _androidInfo,
+                                ),
+                              ),
+                              // ── Integrations ─────────────────────────────
+                              sectionHeader(
+                                tr('integrations'),
+                                Icons.extension_rounded,
+                                'integrations',
+                              ),
+                              collapsibleCard(
+                                'integrations',
+                                const _IntegrationsSection(),
+                              ),
+                              // ── Warnings ─────────────────────────────────
+                              sectionHeader(
+                                tr('warnings'),
+                                Icons.warning_rounded,
+                                'warnings',
+                              ),
+                              collapsibleCard(
+                                'warnings',
+                                const _WarningsSection(),
+                              ),
+                              // ── Source-specific ───────────────────────────
+                              if (sourceProvider.sourceTemplates.any(
+                                (s) =>
+                                    s.sourceConfigSettingFormItems.isNotEmpty,
+                              )) ...[
+                                sectionHeader(
+                                  tr('sourceSpecific'),
+                                  Icons.dns_rounded,
+                                  'sourceSpecific',
+                                ),
+                                collapsibleCard(
+                                  'sourceSpecific',
+                                  _SourceSpecificSection(
+                                    key: _sourceSpecificKey,
+                                  ),
+                                ),
+                              ],
+                              // ── Themes ───────────────────────────────────
+                              sectionHeader(
+                                tr('settingsThemesSection'),
+                                Icons.palette_rounded,
+                                'themes',
+                              ),
+                              collapsibleCard(
+                                'themes',
+                                _ThemesSettingsSection(
+                                  androidInfoFuture: _androidInfo,
+                                ),
+                              ),
+                              // ── Appearance ────────────────────────────────
+                              sectionHeader(
+                                tr('appearance'),
+                                Icons.tune_rounded,
+                                'appearance',
+                              ),
+                              collapsibleCard(
+                                'appearance',
+                                _AppearanceSection(androidInfo: _androidInfo),
+                              ),
+                              // ── Interaction ──────────────────────────────
+                              sectionHeader(
+                                tr('interaction'),
+                                Icons.touch_app_rounded,
+                                'interaction',
+                              ),
+                              collapsibleCard(
+                                'interaction',
+                                const _InteractionSection(),
+                              ),
+                              // ── Categories ───────────────────────────────
+                              sectionHeader(
+                                tr('categories'),
+                                Icons.label_rounded,
+                                'categories',
+                              ),
+                              collapsibleCard(
+                                'categories',
+                                const _CategoriesSection(),
+                              ),
+                              aboutSectionHeader(),
+                              settingsCard([
+                                AboutSectionContent(colorScheme: cs),
+                              ]),
+                            ],
+                          ),
+                  ),
+                ),
+                if (sp.progressiveBlurEnabled)
+                  SliverToBoxAdapter(
+                    child: SizedBox(
+                      height: MediaQuery.paddingOf(context).bottom,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NoScrollbarBehavior extends MaterialScrollBehavior {
+  const _NoScrollbarBehavior();
+
+  @override
+  Widget buildScrollbar(
     BuildContext context,
-    ColorScheme cs,
-    SettingsProvider settingsProvider,
-    AsyncSnapshot<AndroidDeviceInfo> snapshot,
-    Widget updatesIntervalHead,
+    Widget child,
+    ScrollableDetails details,
   ) {
-    final List<Widget> rows = <Widget>[updatesIntervalHead];
+    return child;
+  }
+}
+
+class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
+  const _SettingsSectionShadowClipper({required this.expanded});
+
+  final bool expanded;
+
+  static const double shadowPaintAllowance = 32;
+
+  @override
+  Rect getClip(Size size) {
+    if (!expanded) {
+      return Offset.zero & size;
+    }
+    return Rect.fromLTRB(
+      -shadowPaintAllowance,
+      -shadowPaintAllowance,
+      size.width + shadowPaintAllowance,
+      size.height + shadowPaintAllowance,
+    );
+  }
+
+  @override
+  bool shouldReclip(_SettingsSectionShadowClipper oldClipper) {
+    return oldClipper.expanded != expanded;
+  }
+}
+
+// ── Section widgets ─────────────────────────────────────────────────────
+
+/// Updates section with its own narrow provider subscription.
+/// Only rebuilds when update-related settings change.
+class _UpdatesSection extends StatelessWidget {
+  const _UpdatesSection({required this.cs, required this.androidInfo});
+
+  final ColorScheme cs;
+  final Future<AndroidDeviceInfo> androidInfo;
+
+  static int _updateSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.updateInterval,
+    sp.updateIntervalSliderVal,
+    sp.useFGService,
+    sp.enableBackgroundUpdates,
+    sp.bgUpdatesOnWiFiOnly,
+    sp.bgUpdatesWhileChargingOnly,
+    sp.checkOnStart,
+    sp.checkUpdateOnDetailPage,
+    sp.onlyCheckInstalledOrTrackOnlyApps,
+    sp.removeOnExternalUninstall,
+    sp.parallelDownloads,
+    sp.installerMode,
+    sp.shizukuPretendToBeGooglePlay,
+    sp.includePrereleasesByDefault,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    // Narrow watch — only rebuild when update-related settings change.
+    context.select<SettingsProvider, int>(_updateSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+
+    return FutureBuilder<AndroidDeviceInfo>(
+      future: androidInfo,
+      builder: (context, snapshot) {
+        return _buildSettingsCardContent(context, sp, cs, snapshot);
+      },
+    );
+  }
+
+  Widget _buildSettingsCardContent(
+    BuildContext context,
+    SettingsProvider sp,
+    ColorScheme cs,
+    AsyncSnapshot<AndroidDeviceInfo> snapshot,
+  ) {
+    final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
     final bool showBgControls =
-        (settingsProvider.updateInterval > 0) &&
-        (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
-            settingsProvider.useShizuku);
+        (sp.updateInterval > 0) &&
+        (((snapshot.data?.version.sdkInt ?? 0) >= 30) || sp.useShizuku);
     if (showBgControls) {
-      rows.add(
-        ListTile(
-          title: Text(tr('foregroundServiceForUpdateChecking')),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              HelpHintIcon(
-                message: tr('foregroundServiceReliabilityNote'),
-                padding: EdgeInsets.zero,
-              ),
-              Switch(
-                value: settingsProvider.useFGService,
-                onChanged: (bool value) {
-                  settingsProvider.useFGService = value;
-                },
-              ),
-            ],
+      rows
+        ..add(
+          ListTile(
+            title: Text(tr('foregroundServiceForUpdateChecking')),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                HelpHintIcon(
+                  message: tr('foregroundServiceReliabilityNote'),
+                  padding: EdgeInsets.zero,
+                ),
+                Switch(
+                  value: sp.useFGService,
+                  onChanged: (bool value) => sp.useFGService = value,
+                ),
+              ],
+            ),
+            onTap: () => sp.useFGService = !sp.useFGService,
           ),
-          onTap: () {
-            settingsProvider.useFGService = !settingsProvider.useFGService;
-          },
-        ),
-      );
-      rows.add(
-        ListTile(
-          title: Text(tr('enableBackgroundUpdates')),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              HelpHintIcon(
-                message:
-                    '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
-                padding: EdgeInsets.zero,
-              ),
-              Switch(
-                value: settingsProvider.enableBackgroundUpdates,
-                onChanged: (bool value) {
-                  settingsProvider.enableBackgroundUpdates = value;
-                },
-              ),
-            ],
-          ),
-          onTap: () {
-            settingsProvider.enableBackgroundUpdates =
-                !settingsProvider.enableBackgroundUpdates;
-          },
-        ),
-      );
-      if (settingsProvider.enableBackgroundUpdates) {
-        rows.add(
-          SwitchListTile(
-            title: Text(tr('bgUpdatesOnWiFiOnly')),
-            value: settingsProvider.bgUpdatesOnWiFiOnly,
-            onChanged: (bool value) {
-              settingsProvider.bgUpdatesOnWiFiOnly = value;
-            },
+        )
+        ..add(
+          ListTile(
+            title: Text(tr('enableBackgroundUpdates')),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                HelpHintIcon(
+                  message:
+                      '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
+                  padding: EdgeInsets.zero,
+                ),
+                Switch(
+                  value: sp.enableBackgroundUpdates,
+                  onChanged: (bool value) => sp.enableBackgroundUpdates = value,
+                ),
+              ],
+            ),
+            onTap: () =>
+                sp.enableBackgroundUpdates = !sp.enableBackgroundUpdates,
           ),
         );
-        rows.add(
-          SwitchListTile(
-            title: Text(tr('bgUpdatesWhileChargingOnly')),
-            value: settingsProvider.bgUpdatesWhileChargingOnly,
-            onChanged: (bool value) {
-              settingsProvider.bgUpdatesWhileChargingOnly = value;
-            },
-          ),
-        );
+      if (sp.enableBackgroundUpdates) {
+        rows
+          ..add(
+            SwitchListTile(
+              title: Text(tr('bgUpdatesOnWiFiOnly')),
+              value: sp.bgUpdatesOnWiFiOnly,
+              onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
+            ),
+          )
+          ..add(
+            SwitchListTile(
+              title: Text(tr('bgUpdatesWhileChargingOnly')),
+              value: sp.bgUpdatesWhileChargingOnly,
+              onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
+            ),
+          );
       }
     }
     rows.addAll(<Widget>[
       SwitchListTile(
         title: Text(tr('checkOnStart')),
-        value: settingsProvider.checkOnStart,
-        onChanged: (bool value) {
-          settingsProvider.checkOnStart = value;
-        },
+        value: sp.checkOnStart,
+        onChanged: (bool value) => sp.checkOnStart = value,
       ),
       SwitchListTile(
         title: Text(tr('checkUpdateOnDetailPage')),
-        value: settingsProvider.checkUpdateOnDetailPage,
-        onChanged: (bool value) {
-          settingsProvider.checkUpdateOnDetailPage = value;
-        },
+        value: sp.checkUpdateOnDetailPage,
+        onChanged: (bool value) => sp.checkUpdateOnDetailPage = value,
+      ),
+      SwitchListTile(
+        title: Text(tr('includePrereleasesByDefault')),
+        value: sp.includePrereleasesByDefault,
+        onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
       SwitchListTile(
         title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
-        value: settingsProvider.onlyCheckInstalledOrTrackOnlyApps,
-        onChanged: (bool value) {
-          settingsProvider.onlyCheckInstalledOrTrackOnlyApps = value;
-        },
+        value: sp.onlyCheckInstalledOrTrackOnlyApps,
+        onChanged: (bool value) => sp.onlyCheckInstalledOrTrackOnlyApps = value,
       ),
       SwitchListTile(
         title: Text(tr('removeOnExternalUninstall')),
-        value: settingsProvider.removeOnExternalUninstall,
-        onChanged: (bool value) {
-          settingsProvider.removeOnExternalUninstall = value;
-        },
+        value: sp.removeOnExternalUninstall,
+        onChanged: (bool value) => sp.removeOnExternalUninstall = value,
       ),
       SwitchListTile(
         title: Text(tr('parallelDownloads')),
-        value: settingsProvider.parallelDownloads,
-        onChanged: (bool value) {
-          settingsProvider.parallelDownloads = value;
-        },
-      ),
-      ListTile(
-        title: Text(tr('beforeNewInstallsShareToAppVerifier')),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              tooltip: tr('about'),
-              onPressed: () {
-                launchUrlString(
-                  'https://github.com/soupslurpr/AppVerifier',
-                  mode: LaunchMode.externalApplication,
-                );
-              },
-              style: IconButton.styleFrom(
-                foregroundColor: cs.onSurfaceVariant,
-                iconSize: 20,
-                padding: const EdgeInsets.all(4),
-                minimumSize: const Size(32, 32),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-              icon: const Icon(Icons.open_in_new_rounded),
-            ),
-            Switch(
-              value: settingsProvider.beforeNewInstallsShareToAppVerifier,
-              onChanged: (bool value) {
-                settingsProvider.beforeNewInstallsShareToAppVerifier = value;
-              },
-            ),
-          ],
-        ),
+        value: sp.parallelDownloads,
+        onChanged: (bool value) => sp.parallelDownloads = value,
       ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -268,22 +1121,24 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 4),
             SizedBox(
               width: double.infinity,
-              child: SegmentedButton<String>(
+              child: AppSegmentedButton<String>(
                 segments: [
                   ButtonSegment<String>(
                     value: 'stock',
-                    label: Text(tr('installerModeStock')),
+                    label: AppSegmentedButtonLabel(tr('installerModeStock')),
                   ),
                   ButtonSegment<String>(
                     value: 'shizuku',
-                    label: Text(tr('installerModeShizuku')),
+                    label: AppSegmentedButtonLabel(tr('installerModeShizuku')),
                   ),
                   ButtonSegment<String>(
                     value: 'legacy',
-                    label: Text(tr('installerModeThirdParty')),
+                    label: AppSegmentedButtonLabel(
+                      tr('installerModeThirdParty'),
+                    ),
                   ),
                 ],
-                selected: {settingsProvider.installerMode},
+                selected: {sp.installerMode},
                 onSelectionChanged: (Set<String> selected) {
                   final String mode = selected.first;
                   if (mode == 'shizuku') {
@@ -292,7 +1147,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ) {
                       if (!context.mounted) return;
                       if (resCode!.startsWith('granted')) {
-                        settingsProvider.installerMode = 'shizuku';
+                        sp.installerMode = 'shizuku';
                       } else {
                         switch (resCode) {
                           case 'services_not_found':
@@ -316,47 +1171,705 @@ class _SettingsPageState extends State<SettingsPage> {
                       }
                     });
                   } else {
-                    settingsProvider.installerMode = mode;
+                    sp.installerMode = mode;
                   }
                 },
               ),
             ),
-            if (settingsProvider.installerMode == 'shizuku')
+            if (sp.installerMode == 'shizuku')
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(tr('shizukuPretendToBeGooglePlay')),
-                value: settingsProvider.shizukuPretendToBeGooglePlay,
-                onChanged: (bool value) {
-                  settingsProvider.shizukuPretendToBeGooglePlay = value;
-                },
+                value: sp.shizukuPretendToBeGooglePlay,
+                onChanged: (bool value) =>
+                    sp.shizukuPretendToBeGooglePlay = value,
               ),
-            if (settingsProvider.installerMode == 'legacy')
+            if (sp.installerMode == 'legacy')
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: _ThirdPartyInstallerSelector(
-                  settingsProvider: settingsProvider,
-                ),
+                child: _ThirdPartyInstallerSelector(settingsProvider: sp),
               ),
           ],
         ),
       ),
     ]);
-    return rows;
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: rows,
+    );
+  }
+}
+
+/// Update-interval slider — a StatefulWidget so drag updates use local state.
+/// The SettingsProvider is only written to when the user lifts their finger
+/// (onChangeEnd), avoiding a notifyListeners → full-page rebuild on every
+/// slider tick during drag.
+class _UpdateIntervalSlider extends StatefulWidget {
+  const _UpdateIntervalSlider({required this.cs});
+
+  final ColorScheme cs;
+
+  @override
+  State<_UpdateIntervalSlider> createState() => _UpdateIntervalSliderState();
+}
+
+class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  int _intervalForVal(double val) {
+    final int index = val.round().clamp(
+      0,
+      SettingsPageState.updateIntervalNodes.length,
+    );
+    if (index == 0) {
+      return 0;
+    }
+    return SettingsPageState.updateIntervalNodes[index - 1];
+  }
+
+  String _labelForVal(double val) {
+    final int minutes = _intervalForVal(val);
+    if (minutes == 0) {
+      return tr('neverManualOnly');
+    }
+    if (minutes < 60) {
+      return plural('minute', minutes);
+    } else if (minutes < 24 * 60) {
+      return plural('hour', minutes ~/ 60);
+    } else {
+      return plural('day', minutes ~/ (24 * 60));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    SettingsProvider settingsProvider = context.watch<SettingsProvider>();
-    SourceProvider sourceProvider = SourceProvider();
-    if (settingsProvider.prefs == null) settingsProvider.initializeSettings();
-    processIntervalSliderValue(settingsProvider.updateIntervalSliderVal);
-
-    final Widget localeMenu = appDropdownField<String>(
-      key: ValueKey(
-        settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
+    final double sliderVal =
+        _dragValue ??
+        context.select<SettingsProvider, double>(
+          (s) => s.updateIntervalSliderVal,
+        );
+    final String label = _labelForVal(sliderVal);
+    final isTV = context.read<SettingsProvider>().isTV;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.update_rounded, color: widget.cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
+                      Text(label),
+                    ],
+                  ),
+                ),
+                TVSliderWrapper(
+                  value: sliderVal,
+                  min: 0,
+                  max: SettingsPageState.updateIntervalNodes.length.toDouble(),
+                  divisions: SettingsPageState.updateIntervalNodes.length,
+                  onChanged: (double value) {
+                    setState(() => _dragValue = value);
+                  },
+                  onChangeEnd: (double value) {
+                    final SettingsProvider sp = context
+                        .read<SettingsProvider>();
+                    sp.updateIntervalSliderVal = value;
+                    sp.updateInterval = _intervalForVal(value);
+                    setState(() => _dragValue = null);
+                  },
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 16,
+                      trackShape: const _GappedTrackShape(),
+                      thumbShape: const _VerticalBarThumbShape(),
+                      tickMarkShape: const RoundSliderTickMarkShape(
+                        tickMarkRadius: 3,
+                      ),
+                      activeTickMarkColor: Theme.of(
+                        context,
+                      ).colorScheme.onPrimary,
+                      inactiveTickMarkColor: Theme.of(
+                        context,
+                      ).colorScheme.primary,
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 20,
+                      ),
+                    ),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      value: sliderVal.clamp(
+                        0,
+                        SettingsPageState.updateIntervalNodes.length.toDouble(),
+                      ),
+                      max: SettingsPageState.updateIntervalNodes.length
+                          .toDouble(),
+                      divisions: SettingsPageState.updateIntervalNodes.length,
+                      label: label,
+                      onChanged: (double value) {
+                        setState(() => _dragValue = value);
+                      },
+                      onChangeEnd: (double value) {
+                        final SettingsProvider sp = context
+                            .read<SettingsProvider>();
+                        sp.updateIntervalSliderVal = value;
+                        sp.updateInterval = _intervalForVal(value);
+                        setState(() => _dragValue = null);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+/// Source-specific settings section — reads/writes generic source config.
+class _SourceSpecificSection extends StatefulWidget {
+  const _SourceSpecificSection({super.key});
+
+  @override
+  State<_SourceSpecificSection> createState() => _SourceSpecificSectionState();
+}
+
+class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
+  late final TextEditingController _githubPatController;
+  late final TextEditingController _hubProxyController;
+  late final TextEditingController _gitlabPatController;
+  bool _githubChecking = false;
+  bool _gitlabChecking = false;
+
+  bool get isGithubDirty {
+    final String currentText = _githubPatController.text.trim();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String savedText = sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    return currentText != savedText;
+  }
+
+  bool get isGitlabDirty {
+    final String currentText = _gitlabPatController.text.trim();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String savedText = sp.getSettingString('gitlab-creds') ?? '';
+    return currentText != savedText;
+  }
+
+  void discardChanges() {
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    _githubPatController.text =
+        sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    _gitlabPatController.text = sp.getSettingString('gitlab-creds') ?? '';
+    setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    _githubPatController = TextEditingController(
+      text: sp.getSettingString(GitHub.githubCredsKey) ?? '',
+    );
+    _hubProxyController = TextEditingController(
+      text: sp.getSettingString(GitHub.githubReqPrefixKey) ?? '',
+    );
+    _gitlabPatController = TextEditingController(
+      text: sp.getSettingString('gitlab-creds') ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _githubPatController.dispose();
+    _hubProxyController.dispose();
+    _gitlabPatController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final SettingsProvider sp = context.watch<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    return m3eExpressiveSettingsCard(
       context: context,
-      value: settingsProvider.forcedLocale?.toLanguageTag() ?? '_system',
+      colorScheme: cs,
+      items: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    tr('personalAccessTokenPAT'),
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  HelpHintIcon(
+                    message: tr('patExplanationTooltip'),
+                    size: 18,
+                    padding: const EdgeInsets.only(left: 8),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _githubPatController,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: tr('githubPATLabel'),
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.open_in_new_rounded),
+                          onPressed: () => launchUrlString(
+                            'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+                            mode: LaunchMode.externalApplication,
+                          ),
+                          tooltip: tr('about'),
+                        ),
+                      ),
+                      onChanged: (val) {
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Builder(
+                    builder: (context) {
+                      final String enteredText = _githubPatController.text
+                          .trim();
+                      final String savedText =
+                          sp.getSettingString(GitHub.githubCredsKey) ?? '';
+                      final bool isDirty = enteredText != savedText;
+                      final bool isValidated = GitHub.hasValidatedPAT(
+                        enteredText,
+                        sp,
+                      );
+                      final bool buttonIsEnabled =
+                          isDirty || (enteredText.isNotEmpty && !isValidated);
+
+                      return SizedBox(
+                        width: 48,
+                        height: 56,
+                        child: Center(
+                          child: _githubChecking
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: ExpressiveLoadingIndicator(
+                                    color: cs.primary,
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: 20,
+                                      height: 20,
+                                    ),
+                                  ),
+                                )
+                              : (GitHub.hasValidatedPAT(enteredText, sp)
+                                    ? Tooltip(
+                                        message: tr('githubPATValidated'),
+                                        child: Icon(
+                                          Icons.verified_user,
+                                          color: cs.primary,
+                                        ),
+                                      )
+                                    : IconButton.filledTonal(
+                                        icon: const Icon(Icons.save_rounded),
+                                        onPressed: buttonIsEnabled
+                                            ? () async {
+                                                FocusManager
+                                                    .instance
+                                                    .primaryFocus
+                                                    ?.unfocus();
+                                                if (enteredText.isEmpty) {
+                                                  sp.setSettingString(
+                                                    GitHub.githubCredsKey,
+                                                    '',
+                                                  );
+                                                  GitHub.clearPATValidation(sp);
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        tr('dismiss'),
+                                                      ),
+                                                    ),
+                                                  );
+                                                  setState(() {});
+                                                  return;
+                                                }
+                                                setState(() {
+                                                  _githubChecking = true;
+                                                });
+                                                final String? error =
+                                                    await GitHub.validatePAT(
+                                                      enteredText,
+                                                    );
+                                                if (!context.mounted) return;
+                                                setState(() {
+                                                  _githubChecking = false;
+                                                });
+                                                if (error == null) {
+                                                  sp.setSettingString(
+                                                    GitHub.githubCredsKey,
+                                                    enteredText,
+                                                  );
+                                                  GitHub.storePATValidation(
+                                                    enteredText,
+                                                    sp,
+                                                  );
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        tr(
+                                                          'githubPATValidated',
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  );
+                                                } else {
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(error),
+                                                    ),
+                                                  );
+                                                }
+                                              }
+                                            : null,
+                                      )),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _hubProxyController,
+                decoration: InputDecoration(
+                  labelText: tr('GHReqPrefix'),
+                  hintText: 'gh-proxy.org',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    onPressed: () => launchUrlString(
+                      'https://github.com/sky22333/hubproxy',
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    tooltip: tr('about'),
+                  ),
+                ),
+                onChanged: (val) {
+                  sp.setSettingString(GitHub.githubReqPrefixKey, val.trim());
+                },
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                title: Text(tr('GHReqPrefixUseToken')),
+                value:
+                    sp.getSettingBool(GitHub.githubReqPrefixUseTokenKey) ??
+                    false,
+                onChanged: (val) {
+                  sp.setSettingBool(GitHub.githubReqPrefixUseTokenKey, val);
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+              SwitchListTile(
+                title: Text(tr('repoRenamedCheck')),
+                value: sp.getSettingBool('checkRepoRename') ?? false,
+                onChanged: (val) {
+                  sp.setSettingBool('checkRepoRename', val);
+                },
+                contentPadding: EdgeInsets.zero,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _gitlabPatController,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: tr('gitlabPATLabel'),
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.open_in_new_rounded),
+                          onPressed: () => launchUrlString(
+                            'https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html#create-a-personal-access-token',
+                            mode: LaunchMode.externalApplication,
+                          ),
+                          tooltip: tr('about'),
+                        ),
+                      ),
+                      onChanged: (val) {
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Builder(
+                    builder: (context) {
+                      final String enteredText = _gitlabPatController.text
+                          .trim();
+                      final String savedText =
+                          sp.getSettingString('gitlab-creds') ?? '';
+                      final bool isDirty = enteredText != savedText;
+                      final bool isValidated = GitLab.hasValidatedPAT(
+                        enteredText,
+                        sp,
+                      );
+                      final bool buttonIsEnabled =
+                          isDirty || (enteredText.isNotEmpty && !isValidated);
+
+                      return SizedBox(
+                        width: 48,
+                        height: 56,
+                        child: Center(
+                          child: _gitlabChecking
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: ExpressiveLoadingIndicator(
+                                    color: cs.primary,
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: 20,
+                                      height: 20,
+                                    ),
+                                  ),
+                                )
+                              : (GitLab.hasValidatedPAT(enteredText, sp)
+                                    ? Tooltip(
+                                        message: tr('gitlabPATValidated'),
+                                        child: Icon(
+                                          Icons.verified_user,
+                                          color: cs.primary,
+                                        ),
+                                      )
+                                    : IconButton.filledTonal(
+                                        icon: const Icon(Icons.save_rounded),
+                                        onPressed: buttonIsEnabled
+                                            ? () async {
+                                                FocusManager
+                                                    .instance
+                                                    .primaryFocus
+                                                    ?.unfocus();
+                                                if (enteredText.isEmpty) {
+                                                  sp.setSettingString(
+                                                    'gitlab-creds',
+                                                    '',
+                                                  );
+                                                  GitLab.clearPATValidation(sp);
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        tr('dismiss'),
+                                                      ),
+                                                    ),
+                                                  );
+                                                  setState(() {});
+                                                  return;
+                                                }
+                                                setState(() {
+                                                  _gitlabChecking = true;
+                                                });
+                                                final String? error =
+                                                    await GitLab.validatePAT(
+                                                      enteredText,
+                                                    );
+                                                if (!context.mounted) return;
+                                                setState(() {
+                                                  _gitlabChecking = false;
+                                                });
+                                                if (error == null) {
+                                                  sp.setSettingString(
+                                                    'gitlab-creds',
+                                                    enteredText,
+                                                  );
+                                                  GitLab.storePATValidation(
+                                                    enteredText,
+                                                    sp,
+                                                  );
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        tr(
+                                                          'gitlabPATValidated',
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  );
+                                                } else {
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(error),
+                                                    ),
+                                                  );
+                                                }
+                                              }
+                                            : null,
+                                      )),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Themes section — delegates to external themes settings widget,
+/// using the existing optimized context.select pattern.
+class _ThemesSettingsSection extends StatelessWidget {
+  const _ThemesSettingsSection({required this.androidInfoFuture});
+
+  final Future<AndroidDeviceInfo> androidInfoFuture;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: buildThemesSettingsCardItems(context, androidInfoFuture),
+    );
+  }
+}
+
+/// Appearance section — locale, UI scale slider, card-corner slider, toggles.
+class _AppearanceSection extends StatelessWidget {
+  const _AppearanceSection({required this.androidInfo});
+
+  final Future<AndroidDeviceInfo> androidInfo;
+
+  static int _appearanceSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.forcedLocale?.toLanguageTag(),
+    sp.useSystemFont,
+    sp.appUiScale,
+    sp.cardCornerScale,
+    sp.showAppWebpage,
+    sp.disablePageTransitions,
+    sp.reversePageTransitions,
+    sp.highlightTouchTargets,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    context.select<SettingsProvider, int>(_appearanceSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: _LocaleMenu(sp: sp),
+        ),
+        FutureBuilder(
+          builder: (ctx, val) {
+            return (val.data?.version.sdkInt ?? 0) >= 29
+                ? SwitchListTile(
+                    title: Text(tr('useSystemFont')),
+                    value: sp.useSystemFont,
+                    onChanged: (useSystemFont) {
+                      if (useSystemFont) {
+                        NativeFeatures.loadSystemFont().then((_) {
+                          sp.useSystemFont = true;
+                        });
+                      } else {
+                        sp.useSystemFont = false;
+                      }
+                    },
+                  )
+                : const SizedBox.shrink();
+          },
+          future: androidInfo,
+        ),
+        const _UiScaleSlider(),
+        const _CardCornerScaleSlider(),
+        SwitchListTile(
+          title: Text(tr('showWebInAppView')),
+          value: sp.showAppWebpage,
+          onChanged: (value) => sp.showAppWebpage = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('disablePageTransitions')),
+          value: sp.disablePageTransitions,
+          onChanged: (value) => sp.disablePageTransitions = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('reversePageTransitions')),
+          value: sp.reversePageTransitions,
+          onChanged: sp.disablePageTransitions
+              ? null
+              : (value) => sp.reversePageTransitions = value,
+        ),
+        SwitchListTile(
+          title: Text(tr('highlightTouchTargets')),
+          value: sp.highlightTouchTargets,
+          onChanged: (value) => sp.highlightTouchTargets = value,
+        ),
+      ],
+    );
+  }
+}
+
+class _LocaleMenu extends StatelessWidget {
+  const _LocaleMenu({required this.sp});
+
+  final SettingsProvider sp;
+
+  @override
+  Widget build(BuildContext context) {
+    return appDropdownField<String>(
+      key: ValueKey(sp.forcedLocale?.toLanguageTag() ?? '_system'),
+      context: context,
+      value: sp.forcedLocale?.toLanguageTag() ?? '_system',
       labelText: tr('language'),
       menuWidth: appDropdownMenuWidth(
         context,
@@ -391,104 +1904,53 @@ class _SettingsPageState extends State<SettingsPage> {
                         localeEntry.key.toLanguageTag() == value,
                   )
                   .key;
-        settingsProvider.forcedLocale = selectedLocale;
+        sp.forcedLocale = selectedLocale;
         if (selectedLocale != null) {
           context.setLocale(selectedLocale);
         } else {
-          settingsProvider.resetLocaleSafe(context);
+          sp.resetLocaleSafe(context);
         }
       },
     );
+  }
+}
 
-    // M3 Expressive slider design - thick gapped track + vertical-bar thumb.
-    // Implemented via custom [SliderTrackShape] / [SliderComponentShape]
-    // painters at the bottom of this file. The slider_m3e package's
-    // "round" / "square" thumb variants don't match the M3E reference
-    // (which is a vertical-pill thumb), so we keep our spec-correct
-    // hand-built shapes.
-    var intervalSlider = SliderTheme(
-      data: SliderTheme.of(context).copyWith(
-        trackHeight: 16,
-        trackShape: const _GappedTrackShape(),
-        thumbShape: const _VerticalBarThumbShape(),
-        tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 3),
-        activeTickMarkColor: Theme.of(context).colorScheme.onPrimary,
-        inactiveTickMarkColor: Theme.of(context).colorScheme.primary,
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-      ),
-      child: Slider(
-        value: settingsProvider.updateIntervalSliderVal.roundToDouble().clamp(
-          0,
-          updateIntervalNodes.length.toDouble(),
-        ),
-        max: updateIntervalNodes.length.toDouble(),
-        divisions: updateIntervalNodes.length,
-        label: updateIntervalLabel,
-        onChanged: (double value) {
-          setState(() {
-            settingsProvider.updateIntervalSliderVal = value;
-            processIntervalSliderValue(value);
-          });
-        },
-        onChangeEnd: (double value) {
-          setState(() {
-            settingsProvider.updateInterval = updateInterval;
-          });
-        },
-      ),
-    );
+class _UiScaleSlider extends StatefulWidget {
+  const _UiScaleSlider();
 
-    final List<Widget> sourceSpecificForms = sourceProvider.sources
-        .where((s) => s.sourceConfigSettingFormItems.isNotEmpty)
-        .map((source) {
-          return GeneratedForm(
-            outlinedInputFields: true,
-            items: source.sourceConfigSettingFormItems.map((item) {
-              final GeneratedFormItem formItem = item.clone();
-              if (formItem is GeneratedFormSwitch) {
-                formItem.defaultValue = settingsProvider.getSettingBool(
-                  formItem.key,
-                );
-              } else {
-                formItem.defaultValue = settingsProvider.getSettingString(
-                  formItem.key,
-                );
-              }
-              return [formItem];
-            }).toList(),
-            onValueChanges: (values, valid, isBuilding) {
-              if (valid && !isBuilding) {
-                if (source is GitHub) {
-                  final String? githubCreds = values[GitHub.githubCredsKey]
-                      ?.toString();
-                  if (!GitHub.hasValidatedPAT(githubCreds, settingsProvider)) {
-                    GitHub.clearPATValidation(settingsProvider);
-                  }
-                }
-                values.forEach((key, value) {
-                  final formItem = source.sourceConfigSettingFormItems
-                      .where((i) => i.key == key)
-                      .firstOrNull;
-                  if (formItem is GeneratedFormSwitch) {
-                    settingsProvider.setSettingBool(key, value == true);
-                  } else {
-                    settingsProvider.setSettingString(key, value ?? '');
-                  }
-                });
-              }
-            },
-          );
-        })
-        .toList();
+  @override
+  State<_UiScaleSlider> createState() => _UiScaleSliderState();
+}
 
-    final cs = Theme.of(context).colorScheme;
+class _UiScaleSliderState extends State<_UiScaleSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
 
-    final Widget updatesIntervalHead = Padding(
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    final double value =
+        _dragValue ??
+        context.select<SettingsProvider, double>((s) => s.appUiScale);
+    final isTV = context.read<SettingsProvider>().isTV;
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(Icons.update_rounded, color: cs.onSurfaceVariant),
+          Icon(Icons.format_size_rounded, color: cs.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -498,950 +1960,732 @@ class _SettingsPageState extends State<SettingsPage> {
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: Row(
                     children: [
-                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
-                      Text(updateIntervalLabel),
+                      Expanded(child: Text(tr('uiScale'))),
+                      Text('${(value * 100).round()}%'),
                     ],
                   ),
                 ),
-                intervalSlider,
+                TVSliderWrapper(
+                  value: value,
+                  min: SettingsProvider.appUiScaleMin,
+                  max: SettingsProvider.appUiScaleMax,
+                  divisions:
+                      ((SettingsProvider.appUiScaleMax -
+                                  SettingsProvider.appUiScaleMin) /
+                              0.05)
+                          .round(),
+                  onChanged: (double v) {
+                    setState(() => _dragValue = v);
+                  },
+                  onChangeEnd: (double v) {
+                    context.read<SettingsProvider>().appUiScale = v;
+                    setState(() => _dragValue = null);
+                  },
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 16,
+                      trackShape: const _GappedTrackShape(),
+                      thumbShape: const _VerticalBarThumbShape(),
+                      tickMarkShape: const RoundSliderTickMarkShape(
+                        tickMarkRadius: 3,
+                      ),
+                      activeTickMarkColor: cs.onPrimary,
+                      inactiveTickMarkColor: cs.primary,
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 20,
+                      ),
+                    ),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      min: SettingsProvider.appUiScaleMin,
+                      max: SettingsProvider.appUiScaleMax,
+                      divisions:
+                          ((SettingsProvider.appUiScaleMax -
+                                      SettingsProvider.appUiScaleMin) /
+                                  0.05)
+                              .round(),
+                      label: '${(value * 100).round()}%',
+                      value: value.clamp(
+                        SettingsProvider.appUiScaleMin,
+                        SettingsProvider.appUiScaleMax,
+                      ),
+                      onChanged: (double v) {
+                        setState(() => _dragValue = v);
+                      },
+                      onChangeEnd: (double v) {
+                        context.read<SettingsProvider>().appUiScale = v;
+                        setState(() => _dragValue = null);
+                      },
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+}
 
-    Widget sectionHeader(String title, IconData icon, String key) {
-      final bool expanded =
-          settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
-      const Duration headerTransitionDuration = Duration(milliseconds: 300);
-      const Curve headerTransitionCurve = Curves.easeInOutCubicEmphasized;
-      final Color collapsedHeaderColor = Color.lerp(
-        cs.secondaryContainer,
-        cs.primaryContainer,
-        0.30,
-      )!;
-      final Color collapsedHeaderContentColor = cs.onSecondaryContainer;
-      final Color headerContentColor = expanded
-          ? cs.primary
-          : collapsedHeaderContentColor;
-      final BorderSide outlineSide = expanded
-          ? BorderSide.none
-          : m3ePureBlackOutlineSide(cs, alpha: 0.16);
+class _CardCornerScaleSlider extends StatefulWidget {
+  const _CardCornerScaleSlider();
 
-      return AnimatedPadding(
-        duration: headerTransitionDuration,
-        curve: headerTransitionCurve,
-        padding: EdgeInsets.fromLTRB(0, expanded ? 20 : 16, 0, 8),
-        child: AnimatedContainer(
-          duration: headerTransitionDuration,
-          curve: headerTransitionCurve,
-          decoration: BoxDecoration(
-            color: expanded ? Colors.transparent : collapsedHeaderColor,
-            borderRadius: BorderRadius.circular(expanded ? 8 : 28),
-            border: outlineSide == BorderSide.none
-                ? null
-                : Border.fromBorderSide(outlineSide),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: InkWell(
-              onTap: () => settingsProvider.setSettingBool(
-                'settingsSection_$key',
-                !expanded,
-              ),
-              borderRadius: BorderRadius.circular(expanded ? 8 : 28),
-              splashFactory: NoSplash.splashFactory,
-              splashColor: Colors.transparent,
-              highlightColor: Colors.transparent,
-              hoverColor: Colors.transparent,
-              child: AnimatedPadding(
-                duration: headerTransitionDuration,
-                curve: headerTransitionCurve,
-                padding: EdgeInsets.symmetric(
-                  horizontal: expanded ? 4 : 12,
-                  vertical: expanded ? 4 : 8,
+  @override
+  State<_CardCornerScaleSlider> createState() => _CardCornerScaleSliderState();
+}
+
+class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    final double value =
+        _dragValue ??
+        context.select<SettingsProvider, double>((s) => s.cardCornerScale);
+    final isTV = context.read<SettingsProvider>().isTV;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(Icons.rounded_corner_rounded, color: cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(tr('cardCorners'))),
+                      Text('${(value * 100).round()}%'),
+                    ],
+                  ),
                 ),
+                TVSliderWrapper(
+                  value: value,
+                  min: SettingsProvider.cardCornerScaleMin,
+                  max: SettingsProvider.cardCornerScaleMax,
+                  divisions:
+                      ((SettingsProvider.cardCornerScaleMax -
+                                  SettingsProvider.cardCornerScaleMin) /
+                              0.10)
+                          .round(),
+                  onChanged: (double v) {
+                    setState(() => _dragValue = v);
+                  },
+                  onChangeEnd: (double v) {
+                    context.read<SettingsProvider>().cardCornerScale = v;
+                    setState(() => _dragValue = null);
+                  },
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 16,
+                      trackShape: const _GappedTrackShape(),
+                      thumbShape: const _VerticalBarThumbShape(),
+                      tickMarkShape: const RoundSliderTickMarkShape(
+                        tickMarkRadius: 3,
+                      ),
+                      activeTickMarkColor: cs.onPrimary,
+                      inactiveTickMarkColor: cs.primary,
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 20,
+                      ),
+                    ),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      min: SettingsProvider.cardCornerScaleMin,
+                      max: SettingsProvider.cardCornerScaleMax,
+                      divisions:
+                          ((SettingsProvider.cardCornerScaleMax -
+                                      SettingsProvider.cardCornerScaleMin) /
+                                  0.10)
+                              .round(),
+                      label: '${(value * 100).round()}%',
+                      value: value.clamp(
+                        SettingsProvider.cardCornerScaleMin,
+                        SettingsProvider.cardCornerScaleMax,
+                      ),
+                      onChanged: (double v) {
+                        setState(() => _dragValue = v);
+                      },
+                      onChangeEnd: (double v) {
+                        context.read<SettingsProvider>().cardCornerScale = v;
+                        setState(() => _dragValue = null);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Gestures section — swipe action dropdowns.
+/// Warnings section — visibility of operation warnings/prompts. All toggles are
+/// positive ("Show …", ON = visible). Track-only/APK-origin/battery wrap inverted
+/// hideX prefs; downgrade uses showAppDowngradeError directly.
+class _WarningsSection extends StatelessWidget {
+  const _WarningsSection();
+
+  static int _warningsSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.hideBatteryOptimizationWarning,
+    sp.hideTrackOnlyWarning,
+    sp.hideAPKOriginWarning,
+    sp.showAppDowngradeError,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    context.select<SettingsProvider, int>(_warningsSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        SwitchListTile(
+          title: Text(tr('showBatteryOptimizationPrompt')),
+          // Bound to the existing hideBatteryOptimizationWarning (inverted) so the
+          // launch dialog's "don't show again" and this toggle stay in sync.
+          value: !sp.hideBatteryOptimizationWarning,
+          onChanged: (value) => sp.hideBatteryOptimizationWarning = !value,
+        ),
+        SwitchListTile(
+          title: Text(tr('showTrackOnlyWarnings')),
+          value: !sp.hideTrackOnlyWarning,
+          onChanged: (value) => sp.hideTrackOnlyWarning = !value,
+        ),
+        SwitchListTile(
+          title: Text(tr('showAPKOriginWarnings')),
+          value: !sp.hideAPKOriginWarning,
+          onChanged: (value) => sp.hideAPKOriginWarning = !value,
+        ),
+        SwitchListTile(
+          title: Text(tr('showAppDowngradeError')),
+          value: sp.showAppDowngradeError,
+          onChanged: (value) => sp.showAppDowngradeError = value,
+        ),
+      ],
+    );
+  }
+}
+
+class _InteractionSection extends StatelessWidget {
+  const _InteractionSection();
+
+  static int _interactionSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.rightSwipeAction,
+    sp.leftSwipeAction,
+    sp.tactileFeedbackEnabled,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    context.select<SettingsProvider, int>(_interactionSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    final List<SwipeAction> actions = swipeActionsSortedByLocalizedLabel();
+    final double swipeMenuWidth = appDropdownMenuWidth(
+      context,
+      actions.map((SwipeAction action) => tr('swipeAction_${action.name}')),
+      style: Theme.of(context).textTheme.bodyLarge,
+      horizontalPadding: 120,
+      minWidth: 180,
+      maxWidthInset: 80,
+    );
+
+    List<DropdownMenuItem<SwipeAction>> actionItems() {
+      return actions.map((SwipeAction action) {
+        return DropdownMenuItem<SwipeAction>(
+          value: action,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_swipeActionIcon(action), size: 18, color: cs.primary),
+              const SizedBox(width: 12),
+              Text(tr('swipeAction_${action.name}')),
+            ],
+          ),
+        );
+      }).toList();
+    }
+
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        SwitchListTile(
+          title: Text(tr('tactileFeedbackEnabled')),
+          value: sp.tactileFeedbackEnabled,
+          onChanged: (value) => sp.tactileFeedbackEnabled = value,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              appDropdownField<SwipeAction>(
+                key: ValueKey('rightSwipeAction_${sp.rightSwipeAction}'),
+                context: context,
+                value: sp.rightSwipeAction,
+                labelText: tr('rightSwipeAction'),
+                menuWidth: swipeMenuWidth,
+                items: actionItems(),
+                onChanged: (SwipeAction? value) {
+                  if (value != null) sp.rightSwipeAction = value;
+                },
+              ),
+              const SizedBox(height: 16),
+              appDropdownField<SwipeAction>(
+                key: ValueKey('leftSwipeAction_${sp.leftSwipeAction}'),
+                context: context,
+                value: sp.leftSwipeAction,
+                labelText: tr('leftSwipeAction'),
+                menuWidth: swipeMenuWidth,
+                items: actionItems(),
+                onChanged: (SwipeAction? value) {
+                  if (value != null) sp.leftSwipeAction = value;
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _IntegrationsSection extends StatefulWidget {
+  const _IntegrationsSection();
+
+  @override
+  State<_IntegrationsSection> createState() => _IntegrationsSectionState();
+}
+
+class _IntegrationsSectionState extends State<_IntegrationsSection>
+    with WidgetsBindingObserver {
+  bool _appManagerInstalled = false;
+  bool _appVerifierInstalled = false;
+  bool _letMeDowngradeInstalled = false;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkInstalledApps();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkInstalledApps();
+    }
+  }
+
+  Future<void> _checkInstalledApps() async {
+    final results = await Future.wait([
+      getInstalledInfo('io.github.muntashirakon.AppManager'),
+      getInstalledInfo('dev.soupslurpr.appverifier'),
+      getInstalledInfo('com.berdik.letmedowngrade'),
+    ]);
+    if (mounted) {
+      setState(() {
+        _appManagerInstalled = results[0] != null;
+        _appVerifierInstalled = results[1] != null;
+        _letMeDowngradeInstalled = results[2] != null;
+        _loading = false;
+      });
+    }
+  }
+
+  static int _integrationsSettingsHash(SettingsProvider sp) => Object.hash(
+    sp.openAppInfoInAppManager,
+    sp.beforeNewInstallsShareToAppVerifier,
+    sp.enableLetMeDowngrade,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    context.select<SettingsProvider, int>(_integrationsSettingsHash);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final ColorScheme cs = Theme.of(context).colorScheme;
+
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: [
+        ListTile(
+          title: Text(
+            tr('openAppInfoInAppManager'),
+            style: TextStyle(
+              color: _loading
+                  ? cs.onSurface.withValues(alpha: 0.38)
+                  : _appManagerInstalled
+                  ? null
+                  : cs.onSurface.withValues(alpha: 0.38),
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: tr('about'),
+                onPressed: () {
+                  launchUrlString(
+                    tr('aboutAppManagerUrl'),
+                    mode: LaunchMode.externalApplication,
+                  );
+                },
+                style: IconButton.styleFrom(
+                  foregroundColor: cs.onSurfaceVariant,
+                  iconSize: 20,
+                  padding: const EdgeInsets.all(4),
+                  minimumSize: const Size(32, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: const Icon(Icons.open_in_new_rounded),
+              ),
+              Switch(
+                value:
+                    !_loading &&
+                    _appManagerInstalled &&
+                    sp.openAppInfoInAppManager,
+                onChanged: !_loading && _appManagerInstalled
+                    ? (bool value) => sp.openAppInfoInAppManager = value
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        ListTile(
+          title: Text(
+            tr('beforeNewInstallsShareToAppVerifier'),
+            style: TextStyle(
+              color: _loading
+                  ? cs.onSurface.withValues(alpha: 0.38)
+                  : _appVerifierInstalled
+                  ? null
+                  : cs.onSurface.withValues(alpha: 0.38),
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: tr('about'),
+                onPressed: () {
+                  launchUrlString(
+                    tr('aboutAppVerifierUrl'),
+                    mode: LaunchMode.externalApplication,
+                  );
+                },
+                style: IconButton.styleFrom(
+                  foregroundColor: cs.onSurfaceVariant,
+                  iconSize: 20,
+                  padding: const EdgeInsets.all(4),
+                  minimumSize: const Size(32, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: const Icon(Icons.open_in_new_rounded),
+              ),
+              Switch(
+                value:
+                    !_loading &&
+                    _appVerifierInstalled &&
+                    sp.beforeNewInstallsShareToAppVerifier,
+                onChanged: !_loading && _appVerifierInstalled
+                    ? (bool value) =>
+                          sp.beforeNewInstallsShareToAppVerifier = value
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        ListTile(
+          title: Text(
+            tr('enableLetMeDowngrade'),
+            style: TextStyle(
+              color: _loading
+                  ? cs.onSurface.withValues(alpha: 0.38)
+                  : _letMeDowngradeInstalled
+                  ? null
+                  : cs.onSurface.withValues(alpha: 0.38),
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: tr('about'),
+                onPressed: () {
+                  launchUrlString(
+                    tr('aboutLetMeDowngradeUrl'),
+                    mode: LaunchMode.externalApplication,
+                  );
+                },
+                style: IconButton.styleFrom(
+                  foregroundColor: cs.onSurfaceVariant,
+                  iconSize: 20,
+                  padding: const EdgeInsets.all(4),
+                  minimumSize: const Size(32, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: const Icon(Icons.open_in_new_rounded),
+              ),
+              Switch(
+                value:
+                    !_loading &&
+                    _letMeDowngradeInstalled &&
+                    sp.enableLetMeDowngrade,
+                onChanged: !_loading && _letMeDowngradeInstalled
+                    ? (bool value) => sp.enableLetMeDowngrade = value
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Categories section — delegates to CategoryEditorSelector.
+class _CategoriesSection extends StatelessWidget {
+  const _CategoriesSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return m3eExpressiveSettingsCard(
+      context: context,
+      colorScheme: cs,
+      items: const [
+        Padding(
+          padding: EdgeInsets.all(16),
+          child: CategoryEditorSelector(
+            showLabelWhenNotEmpty: false,
+            showSelectedCheckmark: true,
+            showChangeIntentIcons: false,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class AboutSectionContent extends StatelessWidget {
+  const AboutSectionContent({super.key, required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    final double screenWidth = MediaQuery.sizeOf(context).width;
+    final bool isLargeScreen = screenWidth >= kLargeScreenWidthBreakpoint;
+
+    return Stack(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              FutureBuilder<PackageInfo?>(
+                future: getInstalledInfo(
+                  obtainiumId,
+                  printErr: false,
+                  includeOwnDebugBuild: true,
+                ),
+                builder: (context, snapshot) {
+                  final String versionName =
+                      snapshot.data?.versionName ?? tr('unknown');
+                  return Text(
+                    tr('aboutAppVersion', args: [versionName]),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.displaySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onSurface,
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 6),
+              Text(
+                tr('aboutTagline'),
+                textAlign: TextAlign.center,
+                style: textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _AboutImageTile(
+                    assetPath: 'assets/graphics/icon_small.png',
+                    borderRadius: 24,
+                    semanticLabel: tr('about'),
+                    fit: BoxFit.contain,
+                    backgroundColor: colorScheme.surfaceContainerHighest,
+                  ),
+                  const SizedBox(width: 14),
+                  _AboutImageTile(
+                    assetPath: 'assets/graphics/me_600.webp',
+                    borderRadius: 18,
+                    semanticLabel: tr('aboutAuthorProfile'),
+                    onTap: () => _openAboutUrl(_aboutAuthorUrl),
+                    onLongPress: () => _copyAboutUrl(context, _aboutAuthorUrl),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                tr('aboutByline'),
+                textAlign: TextAlign.center,
+                style: textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 18),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () => _openAboutUrl(sp.sourceUrl),
+                    onLongPress: () => _copyAboutUrl(context, sp.sourceUrl),
+                    icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
+                    label: Text(tr('aboutStarOnGithub')),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
                 child: Row(
                   children: [
-                    AnimatedContainer(
-                      duration: headerTransitionDuration,
-                      curve: headerTransitionCurve,
-                      width: expanded ? 20 : 30,
-                      height: expanded ? 20 : 30,
-                      decoration: BoxDecoration(
-                        color: expanded
-                            ? Colors.transparent
-                            : cs.primary.withValues(alpha: 0.16),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        icon,
-                        color: headerContentColor,
-                        size: expanded ? 16 : 17,
-                      ),
-                    ),
-                    SizedBox(width: expanded ? 8 : 10),
                     Expanded(
-                      child: AnimatedDefaultTextStyle(
-                        duration: headerTransitionDuration,
-                        curve: headerTransitionCurve,
-                        style: TextStyle(
-                          fontWeight: expanded
-                              ? FontWeight.w600
-                              : FontWeight.w700,
-                          color: headerContentColor,
-                          fontSize: 13,
-                          letterSpacing: expanded ? 0 : 0.1,
-                          decoration: TextDecoration.none,
-                        ),
-                        child: Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      child: FilledButton.tonalIcon(
+                        style: _aboutSecondaryButtonStyle(colorScheme),
+                        onPressed: () => _openAboutUrl(_aboutWikiUrl),
+                        onLongPress: () =>
+                            _copyAboutUrl(context, _aboutWikiUrl),
+                        icon: const Icon(Icons.open_in_new_rounded),
+                        label: Text(tr('aboutOpenWiki')),
                       ),
                     ),
-                    AnimatedContainer(
-                      duration: headerTransitionDuration,
-                      curve: headerTransitionCurve,
-                      width: expanded ? 20 : 32,
-                      height: expanded ? 20 : 32,
-                      decoration: BoxDecoration(
-                        color: expanded
-                            ? Colors.transparent
-                            : cs.surfaceContainerHighest,
-                        shape: BoxShape.circle,
-                      ),
-                      child: AnimatedRotation(
-                        turns: expanded ? 0.25 : 0,
-                        duration: headerTransitionDuration,
-                        curve: headerTransitionCurve,
-                        child: Icon(
-                          Icons.chevron_right_rounded,
-                          color: expanded ? cs.primary : cs.onSurfaceVariant,
-                          size: expanded ? 18 : 20,
-                        ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        style: _aboutSecondaryButtonStyle(colorScheme),
+                        onPressed: () =>
+                            _shareAboutUrl(_aboutObtainXWebsiteUrl, 'ObtainX'),
+                        onLongPress: () =>
+                            _copyAboutUrl(context, _aboutObtainXWebsiteUrl),
+                        icon: const Icon(Icons.share_rounded),
+                        label: Text(tr('share')),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget aboutSectionHeader() {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(0, 20, 0, 4),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
-          child: Row(
-            children: [
-              Icon(Icons.info_rounded, color: cs.primary, size: 16),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  tr('about'),
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: cs.primary,
-                    fontSize: 13,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ),
-              IconButton(
-                onPressed: () => _openLogsDialog(context),
-                icon: const Icon(Icons.bug_report_outlined),
-                tooltip: tr('appLogs'),
-                color: cs.primary,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints.tightFor(
-                  width: 40,
-                  height: 40,
-                ),
-                style: IconButton.styleFrom(
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    Widget settingsCard(List<Widget> children) {
-      return m3eExpressiveSettingsCard(
-        context: context,
-        colorScheme: cs,
-        items: children,
-      );
-    }
-
-    Widget collapsibleCard(String key, List<Widget> children) {
-      final bool expanded =
-          settingsProvider.prefs?.getBool('settingsSection_$key') ?? true;
-      return ClipRect(
-        clipper: _SettingsSectionShadowClipper(expanded: expanded),
-        child: AnimatedAlign(
-          duration: const Duration(milliseconds: 360),
-          curve: Curves.easeInOutCubicEmphasized,
-          alignment: Alignment.topCenter,
-          heightFactor: expanded ? 1.0 : 0.0,
-          child: AnimatedOpacity(
-            duration: Duration(milliseconds: expanded ? 260 : 140),
-            curve: expanded ? Curves.easeOutCubic : Curves.easeInCubic,
-            opacity: expanded ? 1.0 : 0.0,
-            child: settingsCard(children),
-          ),
-        ),
-      );
-    }
-
-    final List<String> visibleSettingsSectionKeys = [
-      'updates',
-      if (sourceProvider.sources.any(
-        (source) => source.sourceConfigSettingFormItems.isNotEmpty,
-      ))
-        'sourceSpecific',
-      'themes',
-      'appearance',
-      'gestures',
-      'categories',
-    ];
-    final bool allSettingsSectionsExpanded = visibleSettingsSectionKeys.every(
-      (sectionKey) =>
-          settingsProvider.prefs?.getBool('settingsSection_$sectionKey') ??
-          true,
-    );
-
-    void setAllSettingsSectionsExpanded(bool expanded) {
-      for (final sectionKey in _settingsSectionKeys) {
-        settingsProvider.setSettingBool(
-          'settingsSection_$sectionKey',
-          expanded,
-        );
-      }
-    }
-
-    return Scaffold(
-      backgroundColor: cs.surface,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (settingsProvider.useGradientBackground)
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0, 0.38, 0.72, 1],
-                    colors: [
-                      cs.schemePageGradientTopColor,
-                      cs.schemePageGradientMidColor,
-                      cs.surface,
-                      cs.surface,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          CustomScrollView(
-            key: const PageStorageKey<String>('settings-tab-scroll'),
-            cacheExtent: 1600,
-            slivers: <Widget>[
-              CustomAppBar(
-                title: tr('settings'),
-                matchGradientBackground: settingsProvider.useGradientBackground,
-                actions: [
-                  IconButton(
-                    tooltip: allSettingsSectionsExpanded
-                        ? tr('collapseAll')
-                        : tr('expandAll'),
-                    icon: Icon(
-                      allSettingsSectionsExpanded
-                          ? Icons.unfold_less_rounded
-                          : Icons.unfold_more_rounded,
-                    ),
-                    onPressed: () {
-                      setAllSettingsSectionsExpanded(
-                        !allSettingsSectionsExpanded,
-                      );
-                    },
-                  ),
-                ],
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: settingsProvider.prefs == null
-                      ? const SizedBox()
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // ── Updates ──────────────────────────────────────────
-                            sectionHeader(
-                              tr('updates'),
-                              Icons.update_rounded,
-                              'updates',
-                            ),
-                            FutureBuilder<AndroidDeviceInfo>(
-                              future: _androidInfo,
-                              builder:
-                                  (
-                                    BuildContext context,
-                                    AsyncSnapshot<AndroidDeviceInfo> snapshot,
-                                  ) {
-                                    return collapsibleCard(
-                                      'updates',
-                                      _updatesCardItemList(
-                                        context,
-                                        cs,
-                                        settingsProvider,
-                                        snapshot,
-                                        updatesIntervalHead,
-                                      ),
-                                    );
-                                  },
-                            ),
-                            // ── Source-specific ──────────────────────────────────
-                            if (sourceProvider.sources.any(
-                              (s) => s.sourceConfigSettingFormItems.isNotEmpty,
-                            )) ...[
-                              sectionHeader(
-                                tr('sourceSpecific'),
-                                Icons.dns_rounded,
-                                'sourceSpecific',
-                              ),
-                              collapsibleCard('sourceSpecific', [
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    8,
-                                    16,
-                                    8,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      for (
-                                        int i = 0;
-                                        i < sourceSpecificForms.length;
-                                        i++
-                                      ) ...[
-                                        if (i > 0) const SizedBox(height: 12),
-                                        sourceSpecificForms[i],
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ]),
-                            ],
-                            // ── Themes ────────────────────────────────────────────
-                            sectionHeader(
-                              tr('settingsThemesSection'),
-                              Icons.palette_rounded,
-                              'themes',
-                            ),
-                            collapsibleCard(
-                              'themes',
-                              buildThemesSettingsCardItems(
-                                context,
-                                _androidInfo,
-                              ),
-                            ),
-                            // ── Appearance ────────────────────────────────────────
-                            sectionHeader(
-                              tr('appearance'),
-                              Icons.tune_rounded,
-                              'appearance',
-                            ),
-                            collapsibleCard('appearance', [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  12,
-                                  16,
-                                  4,
-                                ),
-                                child: localeMenu,
-                              ),
-                              FutureBuilder(
-                                builder: (ctx, val) {
-                                  return (val.data?.version.sdkInt ?? 0) >= 29
-                                      ? SwitchListTile(
-                                          title: Text(tr('useSystemFont')),
-                                          value: settingsProvider.useSystemFont,
-                                          onChanged: (useSystemFont) {
-                                            if (useSystemFont) {
-                                              NativeFeatures.loadSystemFont()
-                                                  .then((val) {
-                                                    settingsProvider
-                                                            .useSystemFont =
-                                                        true;
-                                                  });
-                                            } else {
-                                              settingsProvider.useSystemFont =
-                                                  false;
-                                            }
-                                          },
-                                        )
-                                      : const SizedBox.shrink();
-                                },
-                                future: _androidInfo,
-                              ),
-                              // ── UI scale slider ─────────────────────────
-                              // Lets users dial the in-app text/layout size
-                              // up or down. The slider is the sole knob -
-                              // when it's at 1.0 the MediaQuery override in
-                              // main.dart is a true no-op. Visual design
-                              // mirrors the [intervalSlider] above (gapped
-                              // track + vertical-bar thumb + tick marks)
-                              // for consistency across the settings page.
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.format_size_rounded,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(tr('uiScale')),
-                                                ),
-                                                Text(
-                                                  '${(settingsProvider.appUiScale * 100).round()}%',
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          SliderTheme(
-                                            data: SliderTheme.of(context).copyWith(
-                                              trackHeight: 16,
-                                              trackShape:
-                                                  const _GappedTrackShape(),
-                                              thumbShape:
-                                                  const _VerticalBarThumbShape(),
-                                              tickMarkShape:
-                                                  const RoundSliderTickMarkShape(
-                                                    tickMarkRadius: 3,
-                                                  ),
-                                              activeTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.onPrimary,
-                                              inactiveTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.primary,
-                                              overlayShape:
-                                                  const RoundSliderOverlayShape(
-                                                    overlayRadius: 20,
-                                                  ),
-                                            ),
-                                            child: Slider(
-                                              min: SettingsProvider
-                                                  .appUiScaleMin,
-                                              max: SettingsProvider
-                                                  .appUiScaleMax,
-                                              divisions:
-                                                  ((SettingsProvider
-                                                                  .appUiScaleMax -
-                                                              SettingsProvider
-                                                                  .appUiScaleMin) /
-                                                          0.05)
-                                                      .round(),
-                                              label:
-                                                  '${(settingsProvider.appUiScale * 100).round()}%',
-                                              value:
-                                                  settingsProvider.appUiScale,
-                                              onChanged: (double value) {
-                                                settingsProvider.appUiScale =
-                                                    value;
-                                              },
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.rounded_corner_rounded,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                            ),
-                                            child: Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    tr('cardCorners'),
-                                                  ),
-                                                ),
-                                                Text(
-                                                  '${(settingsProvider.cardCornerScale * 100).round()}%',
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          SliderTheme(
-                                            data: SliderTheme.of(context).copyWith(
-                                              trackHeight: 16,
-                                              trackShape:
-                                                  const _GappedTrackShape(),
-                                              thumbShape:
-                                                  const _VerticalBarThumbShape(),
-                                              tickMarkShape:
-                                                  const RoundSliderTickMarkShape(
-                                                    tickMarkRadius: 3,
-                                                  ),
-                                              activeTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.onPrimary,
-                                              inactiveTickMarkColor: Theme.of(
-                                                context,
-                                              ).colorScheme.primary,
-                                              overlayShape:
-                                                  const RoundSliderOverlayShape(
-                                                    overlayRadius: 20,
-                                                  ),
-                                            ),
-                                            child: Slider(
-                                              min: SettingsProvider
-                                                  .cardCornerScaleMin,
-                                              max: SettingsProvider
-                                                  .cardCornerScaleMax,
-                                              divisions:
-                                                  ((SettingsProvider
-                                                                  .cardCornerScaleMax -
-                                                              SettingsProvider
-                                                                  .cardCornerScaleMin) /
-                                                          0.10)
-                                                      .round(),
-                                              label:
-                                                  '${(settingsProvider.cardCornerScale * 100).round()}%',
-                                              value: settingsProvider
-                                                  .cardCornerScale,
-                                              onChanged: (double value) {
-                                                settingsProvider
-                                                        .cardCornerScale =
-                                                    value;
-                                              },
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('showWebInAppView')),
-                                value: settingsProvider.showAppWebpage,
-                                onChanged: (value) {
-                                  settingsProvider.showAppWebpage = value;
-                                },
-                              ),
-                              // [showFolderedAppsOnMainPage] toggle moved
-                              // to the apps-list view options sheet (open
-                              // via the apps tab's filter / view-options
-                              // entry point) - it's a main-tab-scoped
-                              // setting and belongs alongside the other
-                              // view options (sort / group / pin updates
-                              // etc.) rather than in the global Settings
-                              // page where it competed with truly app-wide
-                              // controls. See [showAppsViewOptionsSheet].
-                              SwitchListTile(
-                                title: Text(tr('dontShowTrackOnlyWarnings')),
-                                value: settingsProvider.hideTrackOnlyWarning,
-                                onChanged: (value) {
-                                  settingsProvider.hideTrackOnlyWarning = value;
-                                },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('dontShowAPKOriginWarnings')),
-                                value: settingsProvider.hideAPKOriginWarning,
-                                onChanged: (value) {
-                                  settingsProvider.hideAPKOriginWarning = value;
-                                },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('disablePageTransitions')),
-                                value: settingsProvider.disablePageTransitions,
-                                onChanged: (value) {
-                                  settingsProvider.disablePageTransitions =
-                                      value;
-                                },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('reversePageTransitions')),
-                                value: settingsProvider.reversePageTransitions,
-                                onChanged:
-                                    settingsProvider.disablePageTransitions
-                                    ? null
-                                    : (value) {
-                                        settingsProvider
-                                                .reversePageTransitions =
-                                            value;
-                                      },
-                              ),
-                              SwitchListTile(
-                                title: Text(tr('highlightTouchTargets')),
-                                value: settingsProvider.highlightTouchTargets,
-                                onChanged: (value) {
-                                  settingsProvider.highlightTouchTargets =
-                                      value;
-                                },
-                              ),
-                            ]),
-                            // ── Gestures ──────────────────────────────────────────
-                            sectionHeader(
-                              tr('gestures'),
-                              Icons.swipe_rounded,
-                              'gestures',
-                            ),
-                            collapsibleCard('gestures', [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  12,
-                                  16,
-                                  12,
-                                ),
-                                child: (() {
-                                  final List<SwipeAction> actions =
-                                      swipeActionsSortedByLocalizedLabel();
-                                  final double swipeMenuWidth =
-                                      appDropdownMenuWidth(
-                                        context,
-                                        actions.map(
-                                          (SwipeAction action) =>
-                                              tr('swipeAction_${action.name}'),
-                                        ),
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodyLarge,
-                                        horizontalPadding: 120,
-                                        minWidth: 180,
-                                        maxWidthInset: 80,
-                                      );
-                                  List<DropdownMenuItem<SwipeAction>>
-                                  actionItems() {
-                                    return actions.map((SwipeAction action) {
-                                      return DropdownMenuItem<SwipeAction>(
-                                        value: action,
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              _swipeActionIcon(action),
-                                              size: 18,
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Text(
-                                              tr('swipeAction_${action.name}'),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    }).toList();
-                                  }
-
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      appDropdownField<SwipeAction>(
-                                        key: ValueKey(
-                                          'rightSwipeAction_${settingsProvider.rightSwipeAction}',
-                                        ),
-                                        context: context,
-                                        value:
-                                            settingsProvider.rightSwipeAction,
-                                        labelText: tr('rightSwipeAction'),
-                                        menuWidth: swipeMenuWidth,
-                                        items: actionItems(),
-                                        onChanged: (SwipeAction? value) {
-                                          if (value != null) {
-                                            settingsProvider.rightSwipeAction =
-                                                value;
-                                          }
-                                        },
-                                      ),
-                                      const SizedBox(height: 16),
-                                      appDropdownField<SwipeAction>(
-                                        key: ValueKey(
-                                          'leftSwipeAction_${settingsProvider.leftSwipeAction}',
-                                        ),
-                                        context: context,
-                                        value: settingsProvider.leftSwipeAction,
-                                        labelText: tr('leftSwipeAction'),
-                                        menuWidth: swipeMenuWidth,
-                                        items: actionItems(),
-                                        onChanged: (SwipeAction? value) {
-                                          if (value != null) {
-                                            settingsProvider.leftSwipeAction =
-                                                value;
-                                          }
-                                        },
-                                      ),
-                                    ],
-                                  );
-                                })(),
-                              ),
-                            ]),
-                            // ── Categories ────────────────────────────────────────
-                            sectionHeader(
-                              tr('categories'),
-                              Icons.label_rounded,
-                              'categories',
-                            ),
-                            collapsibleCard('categories', [
-                              const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: CategoryEditorSelector(
-                                  showLabelWhenNotEmpty: false,
-                                  showSelectedCheckmark: true,
-                                  showChangeIntentIcons: false,
-                                ),
-                              ),
-                            ]),
-                            aboutSectionHeader(),
-                            settingsCard([
-                              _AboutSectionContent(
-                                colorScheme: cs,
-                                settingsProvider: settingsProvider,
-                              ),
-                            ]),
-                          ],
+              const SizedBox(height: 22),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        tr('aboutOtherApps'),
+                        style: textTheme.labelLarge?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w700,
                         ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _AboutAppPromo(
+                      colorScheme: colorScheme,
+                      assetPath: 'assets/graphics/logo_remember.png',
+                      accentColor: const Color(0xFF74B84A),
+                      name: tr('aboutRememberName'),
+                      tagline: tr('aboutRememberTagline'),
+                      url: _aboutRememberUrl,
+                      appId: tr('aboutRememberPackageId'),
+                    ),
+                    const SizedBox(height: 10),
+                    _AboutAppPromo(
+                      colorScheme: colorScheme,
+                      assetPath: 'assets/graphics/logo_filepipe.png',
+                      accentColor: const Color(0xFF5967D8),
+                      name: tr('aboutFilePipeName'),
+                      tagline: tr('aboutFilePipeTagline'),
+                      url: _aboutFilePipeUrl,
+                      appId: tr('aboutFilePipePackageId'),
+                    ),
+                    const SizedBox(height: 8),
+                    _AboutLegalLinks(colorScheme: colorScheme),
+                  ],
                 ),
-              ),
-              if (settingsProvider.progressiveBlurEnabled)
-                SliverToBoxAdapter(
-                  child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
-  const _SettingsSectionShadowClipper({required this.expanded});
-
-  final bool expanded;
-
-  static const double shadowPaintAllowance = 32;
-
-  @override
-  Rect getClip(Size size) {
-    if (!expanded) {
-      return Offset.zero & size;
-    }
-    return Rect.fromLTRB(
-      -shadowPaintAllowance,
-      -shadowPaintAllowance,
-      size.width + shadowPaintAllowance,
-      size.height + shadowPaintAllowance,
-    );
-  }
-
-  @override
-  bool shouldReclip(_SettingsSectionShadowClipper oldClipper) {
-    return oldClipper.expanded != expanded;
-  }
-}
-
-class _AboutSectionContent extends StatelessWidget {
-  const _AboutSectionContent({
-    required this.colorScheme,
-    required this.settingsProvider,
-  });
-
-  final ColorScheme colorScheme;
-  final SettingsProvider settingsProvider;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          FutureBuilder<PackageInfo?>(
-            future: getInstalledInfo(
-              obtainiumId,
-              printErr: false,
-              includeOwnDebugBuild: true,
-            ),
-            builder: (context, snapshot) {
-              final String versionName =
-                  snapshot.data?.versionName ?? tr('unknown');
-              return Text(
-                tr('aboutAppVersion', args: [versionName]),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.displaySmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: colorScheme.onSurface,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 6),
-          Text(
-            tr('aboutTagline'),
-            textAlign: TextAlign.center,
-            style: textTheme.bodyMedium?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _AboutImageTile(
-                assetPath: 'assets/graphics/icon_small.png',
-                borderRadius: 24,
-                semanticLabel: tr('about'),
-                fit: BoxFit.contain,
-                backgroundColor: colorScheme.surfaceContainerHighest,
-              ),
-              const SizedBox(width: 14),
-              _AboutImageTile(
-                assetPath: 'assets/graphics/me_600.webp',
-                borderRadius: 18,
-                semanticLabel: tr('aboutAuthorProfile'),
-                onTap: () => _openAboutUrl(_aboutAuthorUrl),
-                onLongPress: () => _copyAboutUrl(context, _aboutAuthorUrl),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          Text(
-            tr('aboutByline'),
-            textAlign: TextAlign.center,
-            style: textTheme.bodyMedium?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 18),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () => _openAboutUrl(settingsProvider.sourceUrl),
-                onLongPress: () =>
-                    _copyAboutUrl(context, settingsProvider.sourceUrl),
-                icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
-                label: Text(tr('aboutStarOnGithub')),
+        ),
+        if (isLargeScreen)
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              onPressed: () => _openLogsDialog(context),
+              icon: Icon(Icons.bug_report_outlined, color: colorScheme.primary),
+              tooltip: tr('appLogs'),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+              style: IconButton.styleFrom(
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),
           ),
-          const SizedBox(height: 10),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    style: _aboutSecondaryButtonStyle(colorScheme),
-                    onPressed: () => _openAboutUrl(_aboutWikiUrl),
-                    onLongPress: () => _copyAboutUrl(context, _aboutWikiUrl),
-                    icon: const Icon(Icons.open_in_new_rounded),
-                    label: Text(tr('aboutOpenWiki')),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    style: _aboutSecondaryButtonStyle(colorScheme),
-                    onPressed: () =>
-                        _shareAboutUrl(settingsProvider.sourceUrl, 'ObtainX'),
-                    onLongPress: () =>
-                        _copyAboutUrl(context, settingsProvider.sourceUrl),
-                    icon: const Icon(Icons.share_rounded),
-                    label: Text(tr('share')),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 22),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              tr('aboutOtherApps'),
-              style: textTheme.labelLarge?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          _AboutAppPromo(
-            colorScheme: colorScheme,
-            assetPath: 'assets/graphics/remember_logo.png',
-            accentColor: const Color(0xFF74B84A),
-            name: tr('aboutRememberName'),
-            tagline: tr('aboutRememberTagline'),
-            url: _aboutRememberUrl,
-          ),
-          const SizedBox(height: 10),
-          _AboutAppPromo(
-            colorScheme: colorScheme,
-            assetPath: 'assets/graphics/filepipe_logo.png',
-            accentColor: const Color(0xFF5967D8),
-            name: tr('aboutFilePipeName'),
-            tagline: tr('aboutFilePipeTagline'),
-            url: _aboutFilePipeUrl,
-          ),
-          const SizedBox(height: 8),
-          _AboutLegalLinks(colorScheme: colorScheme),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -1578,6 +2822,7 @@ class _AboutAppPromo extends StatelessWidget {
     required this.name,
     required this.tagline,
     required this.url,
+    this.appId,
   });
 
   final ColorScheme colorScheme;
@@ -1586,6 +2831,7 @@ class _AboutAppPromo extends StatelessWidget {
   final String name;
   final String tagline;
   final String url;
+  final String? appId;
 
   @override
   Widget build(BuildContext context) {
@@ -1603,7 +2849,8 @@ class _AboutAppPromo extends StatelessWidget {
       shape: shape,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => _openAboutUrl(url),
+        onTap: () =>
+            appId != null ? _openPromoApp(appId!, url) : _openAboutUrl(url),
         onLongPress: () => _copyAboutUrl(context, url),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1736,6 +2983,25 @@ Future<void> _openAboutUrl(String url) async {
   await launchUrlString(url, mode: LaunchMode.externalApplication);
 }
 
+Future<void> _openPromoApp(String appId, String webUrl) async {
+  if (AppDistribution.fdroid) {
+    try {
+      final String deepLink = 'fdroid.app:$appId';
+      final bool launched = await launchUrlString(
+        deepLink,
+        mode: LaunchMode.externalNonBrowserApplication,
+      );
+      if (!launched) {
+        await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {
+      await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+    }
+  } else {
+    await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+  }
+}
+
 Future<void> _copyAboutUrl(BuildContext context, String url) async {
   await Clipboard.setData(ClipboardData(text: url));
   if (!context.mounted) return;
@@ -1819,6 +3085,10 @@ class _LogsDialogState extends State<LogsDialog> {
     Future<String> getDiagnosticsText() async {
       final buffer = StringBuffer();
       buffer.writeln('=== ObtainX Diagnostic Log ===');
+      // Captured before the first async gap below so context isn't used across
+      // an await.
+      final settingsProvider = context.read<SettingsProvider>();
+      final appsProvider = context.read<AppsProvider>();
 
       try {
         final packageInfo = await getInstalledInfo(
@@ -1851,8 +3121,6 @@ class _LogsDialogState extends State<LogsDialog> {
         buffer.writeln('Device Info: Unknown (Error fetching device info)');
       }
 
-      final settingsProvider = context.read<SettingsProvider>();
-      final appsProvider = context.read<AppsProvider>();
       buffer.writeln('Installer Mode: ${settingsProvider.installerMode}');
       buffer.writeln('Use Shizuku: ${settingsProvider.useShizuku}');
       buffer.writeln(
@@ -2222,95 +3490,82 @@ class _ThirdPartyInstallerSelectorState
         ? '$currentPkg|$currentAct'
         : null;
 
-    showModalBottomSheet(
+    showAppModalSheet<void>(
       context: context,
-      isScrollControlled: true,
       builder: (sheetContext) {
         String? selectedValue = currentValue;
         return StatefulBuilder(
           builder: (builderContext, setSheetState) {
-            return DraggableScrollableSheet(
-              expand: false,
-              initialChildSize: 0.5,
-              maxChildSize: 0.85,
-              builder: (_, scrollController) {
-                return RadioGroup<String>(
-                  groupValue: selectedValue,
-                  onChanged: (String? value) {
-                    setSheetState(() => selectedValue = value);
-                    if (value != null) {
-                      final selected = _installerApps!.firstWhere(
-                        (a) => '${a.packageName}|${a.activityName}' == value,
-                      );
-                      widget.settingsProvider.legacyInstallerPackage =
-                          selected.packageName;
-                      widget.settingsProvider.legacyInstallerActivity =
-                          selected.activityName;
-                    }
-                    Navigator.pop(sheetContext);
-                  },
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(
-                          tr('thirdPartyInstallerSelect'),
-                          style: Theme.of(builderContext).textTheme.titleMedium,
-                        ),
-                      ),
-                      Expanded(
-                        child: ListView.builder(
-                          controller: scrollController,
-                          itemCount: _installerApps!.length,
-                          itemBuilder: (_, index) {
-                            final app = _installerApps![index];
-                            final radioValue =
-                                '${app.packageName}|${app.activityName}';
-                            return RadioListTile<String>(
-                              secondary:
-                                  app.icon != null && app.icon!.isNotEmpty
-                                  ? ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: Image.memory(
-                                        app.icon!,
-                                        width: 40,
-                                        height: 40,
-                                        fit: BoxFit.contain,
-                                        // Decode at the rendered size × DPR
-                                        // so a 512×512 launcher icon doesn't
-                                        // sit at full resolution in the
-                                        // raster cache for a 40-px row.
-                                        cacheWidth:
-                                            (40 *
-                                                    MediaQuery.devicePixelRatioOf(
-                                                      context,
-                                                    ))
-                                                .round(),
-                                        cacheHeight:
-                                            (40 *
-                                                    MediaQuery.devicePixelRatioOf(
-                                                      context,
-                                                    ))
-                                                .round(),
-                                        errorBuilder: (_, _, _) =>
-                                            const Icon(Icons.android, size: 40),
-                                      ),
-                                    )
-                                  : const Icon(Icons.android, size: 40),
-                              title: Text(app.label),
-                              subtitle: Text(
-                                app.packageName,
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                              value: radioValue,
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                );
+            return RadioGroup<String>(
+              groupValue: selectedValue,
+              onChanged: (String? value) {
+                setSheetState(() => selectedValue = value);
+                if (value != null) {
+                  final selected = _installerApps!.firstWhere(
+                    (a) => '${a.packageName}|${a.activityName}' == value,
+                  );
+                  widget.settingsProvider.legacyInstallerPackage =
+                      selected.packageName;
+                  widget.settingsProvider.legacyInstallerActivity =
+                      selected.activityName;
+                }
+                Navigator.pop(sheetContext);
               },
+              child: AppSheetContent(
+                padding: const EdgeInsets.only(bottom: 8),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(
+                        tr('thirdPartyInstallerSelect'),
+                        style: Theme.of(builderContext).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                  ..._installerApps!.map((app) {
+                    final radioValue = '${app.packageName}|${app.activityName}';
+                    return RadioListTile<String>(
+                      secondary: app.icon != null && app.icon!.isNotEmpty
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.memory(
+                                app.icon!,
+                                width: 40,
+                                height: 40,
+                                fit: BoxFit.contain,
+                                // Decode at the rendered size × DPR so a
+                                // 512×512 launcher icon doesn't sit at full
+                                // resolution in the raster cache for a 40-px row.
+                                cacheWidth:
+                                    (40 *
+                                            MediaQuery.devicePixelRatioOf(
+                                              context,
+                                            ))
+                                        .round(),
+                                cacheHeight:
+                                    (40 *
+                                            MediaQuery.devicePixelRatioOf(
+                                              context,
+                                            ))
+                                        .round(),
+                                errorBuilder: (_, _, _) =>
+                                    const Icon(Icons.android, size: 40),
+                              ),
+                            )
+                          : const Icon(Icons.android, size: 40),
+                      title: Text(app.label),
+                      subtitle: Text(
+                        app.packageName,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      value: radioValue,
+                    );
+                  }),
+                ],
+              ),
             );
           },
         );

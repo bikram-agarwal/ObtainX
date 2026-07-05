@@ -2,6 +2,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
@@ -43,8 +44,17 @@ Future<bool> persistAdditionalOptionsForm({
     app.additionalSettings,
   );
   syncVersionStringSourceSettings(originalSettings);
+  if (originalSettings['versionDetection'] == 'versionCode' ||
+      originalSettings['useVersionCodeAsOSVersion'] == true) {
+    originalSettings['versionDetection'] = 'versionCode';
+    originalSettings['useVersionCodeAsOSVersion'] = true;
+  } else {
+    originalSettings['useVersionCodeAsOSVersion'] = false;
+  }
   app.additionalSettings = {...originalSettings, ...formValues};
   syncVersionStringSourceSettings(app.additionalSettings);
+  app.additionalSettings['useVersionCodeAsOSVersion'] =
+      app.additionalSettings['versionDetection'] == 'versionCode';
   if (source is GitHub) {
     if (!source.canVerifyAttestations(
       app.additionalSettings,
@@ -66,11 +76,13 @@ Future<bool> persistAdditionalOptionsForm({
   final bool versionDetectionPreviouslyActive =
       originalSettings['versionDetection'] == 'auto' ||
       originalSettings['versionDetection'] == 'standard' ||
+      originalSettings['versionDetection'] == 'versionCode' ||
       originalSettings['versionDetection'] == true ||
       originalSettings['versionDetection'] == null;
   final bool versionDetectionCurrentlyActive =
       app.additionalSettings['versionDetection'] == 'auto' ||
       app.additionalSettings['versionDetection'] == 'standard' ||
+      app.additionalSettings['versionDetection'] == 'versionCode' ||
       app.additionalSettings['versionDetection'] == true ||
       app.additionalSettings['versionDetection'] == null;
 
@@ -100,7 +112,8 @@ Future<bool> persistAdditionalOptionsForm({
 
   if (versionDetectionEnabled) {
     if (app.additionalSettings['versionDetection'] != 'auto' &&
-        app.additionalSettings['versionDetection'] != 'standard') {
+        app.additionalSettings['versionDetection'] != 'standard' &&
+        app.additionalSettings['versionDetection'] != 'versionCode') {
       app.additionalSettings['versionDetection'] = 'auto';
     }
     if (app.additionalSettings['releaseDateAsVersion'] == true) {
@@ -189,6 +202,13 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     final Map<String, dynamic> appAdditionalSettings =
         Map<String, dynamic>.from(app.additionalSettings);
     syncVersionStringSourceSettings(appAdditionalSettings);
+    if (appAdditionalSettings['versionDetection'] == 'versionCode' ||
+        appAdditionalSettings['useVersionCodeAsOSVersion'] == true) {
+      appAdditionalSettings['versionDetection'] = 'versionCode';
+      appAdditionalSettings['useVersionCodeAsOSVersion'] = true;
+    } else {
+      appAdditionalSettings['useVersionCodeAsOSVersion'] = false;
+    }
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
     final AppSource source = SourceProvider().getSource(
       app.url,
@@ -620,8 +640,8 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           body: CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            cacheExtent: 1600,
             slivers: [
               CustomAppBar(
                 title: tr('additionalOptions'),

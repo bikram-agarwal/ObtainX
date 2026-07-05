@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
@@ -19,6 +20,8 @@ import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/gestures.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 
 const double _bulkBottomActionGap = 8.0;
 const double _bulkBottomActionHorizontalPadding = 16.0;
@@ -78,8 +81,16 @@ enum BulkStep { selectApps, scanning, results }
 class BulkAddWidget extends StatefulWidget {
   final bool standalone;
   final VoidCallback? onComplete;
+  final bool isLargeScreen;
+  final double? bottomActionBottomPadding;
 
-  const BulkAddWidget({super.key, this.standalone = false, this.onComplete});
+  const BulkAddWidget({
+    super.key,
+    this.standalone = false,
+    this.onComplete,
+    required this.isLargeScreen,
+    this.bottomActionBottomPadding,
+  });
 
   @override
   State<BulkAddWidget> createState() => BulkAddWidgetState();
@@ -158,6 +169,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   List<InstalledAppInfo> _cancelledApps = [];
   bool _scanCancelRequested = false;
   bool _addCancelRequested = false;
+  bool _githubRateLimited = false;
+  late final TapGestureRecognizer _githubPatTapRecognizer;
 
   /// Live maps while a bulk scan runs; used to show partial results as soon as
   /// the user cancels without waiting for in-flight HTTP to finish.
@@ -189,6 +202,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   @override
   void initState() {
     super.initState();
+    _githubPatTapRecognizer = TapGestureRecognizer();
   }
 
   @override
@@ -203,6 +217,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
   @override
   void dispose() {
+    _githubPatTapRecognizer.dispose();
     if (isScanning) {
       _abandonActiveScan();
     }
@@ -718,11 +733,12 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }
 
   double _bottomActionBottomPadding() =>
+      widget.bottomActionBottomPadding ??
       math.max(
-        MediaQuery.paddingOf(context).bottom,
-        _bulkBottomActionMinimumSafePadding,
-      ) +
-      _bulkBottomActionGap;
+            MediaQuery.paddingOf(context).bottom,
+            _bulkBottomActionMinimumSafePadding,
+          ) +
+          _bulkBottomActionGap;
 
   double _bottomActionListPadding() =>
       _bottomActionBottomPadding() +
@@ -737,119 +753,133 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
 
     return Stack(
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 8),
-            _buildAppTypeChipRow(),
-            const SizedBox(height: 8),
-            _buildStoreChipRow(),
-            const SizedBox(height: 8),
-            _buildOptionsChipRow(),
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+        CustomScrollView(
+          scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: tr('search'),
-                        prefixIcon: const Icon(Icons.search, size: 18),
-                        isDense: true,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                      ),
-                      onChanged: (String value) {
-                        // Debounced: coalesces fast typing into a single
-                        // setState after the user pauses for the window
-                        // duration. Instant-clear (empty value) skips the
-                        // debounce so the user sees the list reset right
-                        // away when they backspace to nothing.
-                        _searchDebounceTimer?.cancel();
-                        if (value.isEmpty) {
-                          if (_searchQuery.isNotEmpty) {
-                            setState(() => _searchQuery = '');
-                          }
-                          return;
-                        }
-                        _searchDebounceTimer = Timer(_searchDebounceWindow, () {
-                          if (!mounted) return;
-                          if (_searchQuery == value) return;
-                          setState(() => _searchQuery = value);
-                        });
-                      },
-                    ),
+                  SizedBox(
+                    height: widget.isLargeScreen && !widget.standalone
+                        ? MediaQuery.paddingOf(context).top + 8
+                        : 8,
                   ),
-                  if (_searchQuery.isNotEmpty)
-                    IconButton(
-                      icon: Icon(
-                        Icons.close,
-                        size: 20,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                      onPressed: () {
-                        _searchDebounceTimer?.cancel();
-                        _searchController.clear();
-                        setState(() => _searchQuery = '');
-                      },
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: Row(
-                children: [
-                  Text(
-                    tr(
-                      'selectedX',
-                      args: [
-                        '${_selectedPackages.length}/${_installedApps.length}',
+                  _buildAppTypeChipRow(),
+                  const SizedBox(height: 8),
+                  _buildStoreChipRow(),
+                  const SizedBox(height: 8),
+                  _buildOptionsChipRow(),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _searchController,
+                            decoration: InputDecoration(
+                              hintText: tr('search'),
+                              prefixIcon: const Icon(Icons.search, size: 18),
+                              isDense: true,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                            ),
+                            onChanged: (String value) {
+                              _searchDebounceTimer?.cancel();
+                              if (value.isEmpty) {
+                                if (_searchQuery.isNotEmpty) {
+                                  setState(() => _searchQuery = '');
+                                }
+                                return;
+                              }
+                              _searchDebounceTimer = Timer(
+                                _searchDebounceWindow,
+                                () {
+                                  if (!mounted) return;
+                                  if (_searchQuery == value) return;
+                                  setState(() => _searchQuery = value);
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                        if (_searchQuery.isNotEmpty)
+                          IconButton(
+                            icon: Icon(
+                              Icons.close,
+                              size: 20,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            onPressed: () {
+                              _searchDebounceTimer?.cancel();
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                          ),
                       ],
                     ),
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () => setState(
-                      () => _selectedPackages.addAll(
-                        filtered.map((a) => a.packageName),
-                      ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
                     ),
-                    child: Text(tr('selectAll')),
-                  ),
-                  TextButton(
-                    onPressed: () => setState(
-                      () => _selectedPackages.removeAll(
-                        filtered.map((a) => a.packageName),
-                      ),
+                    child: Row(
+                      children: [
+                        Text(
+                          tr(
+                            'selectedX',
+                            args: [
+                              '${_selectedPackages.length}/${_installedApps.length}',
+                            ],
+                          ),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => setState(
+                            () => _selectedPackages.addAll(
+                              filtered.map((a) => a.packageName),
+                            ),
+                          ),
+                          child: Text(tr('selectAll')),
+                        ),
+                        TextButton(
+                          onPressed: () => setState(
+                            () => _selectedPackages.removeAll(
+                              filtered.map((a) => a.packageName),
+                            ),
+                          ),
+                          child: Text(tr('deselectAll')),
+                        ),
+                      ],
                     ),
-                    child: Text(tr('deselectAll')),
                   ),
                 ],
               ),
             ),
             if (_loadingApps)
-              Expanded(child: Center(child: _m3LoadingIndicator()))
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: _m3LoadingIndicator()),
+              )
             else if (_installedApps.isEmpty)
-              Expanded(child: Center(child: Text(tr('noAppsFound'))))
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: Text(tr('noAppsFound'))),
+              )
             else
-              Expanded(
-                child: ListView.builder(
-                  // Bottom padding reserves space so the last item isn't
-                  // hidden behind the FAB.
-                  padding: EdgeInsets.only(bottom: _bottomActionListPadding()),
-                  cacheExtent: 1200,
-                  itemCount: filtered.length,
-                  itemBuilder: (context, index) {
+              SliverPadding(
+                padding: EdgeInsets.only(bottom: _bottomActionListPadding()),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate((context, index) {
                     final app = filtered[index];
                     final selected = _selectedPackages.contains(
                       app.packageName,
@@ -897,7 +927,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                             )
                           : null,
                     );
-                  },
+                  }, childCount: filtered.length),
                 ),
               ),
           ],
@@ -994,6 +1024,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     setState(() {
       _step = BulkStep.scanning;
       _scanStatus = '';
+      _githubRateLimited = false;
       _apkMirrorDone = 0;
       _apkMirrorTotal = 0;
       _apkPureDone = 0;
@@ -1251,6 +1282,13 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                     });
                   }
                 },
+                onRateLimit: () {
+                  if (mounted) {
+                    setState(() {
+                      _githubRateLimited = true;
+                    });
+                  }
+                },
               );
           if (!mounted || _bulkScanResultsCommitted) return;
           recordStoreCoverage('GitHub', githubResults);
@@ -1282,8 +1320,14 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   }
 
   Widget _buildScanningStep() {
+    final bool addTopPadding = widget.isLargeScreen && !widget.standalone;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+      padding: EdgeInsets.fromLTRB(
+        24,
+        16 + (addTopPadding ? MediaQuery.paddingOf(context).top : 0),
+        24,
+        24,
+      ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1433,83 +1477,190 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     final bool showFabDone = _addingDone || newFound.isEmpty;
     final bool showProgress = _addingApps && _addingTotal > 0;
 
-    // Build all list items; banner goes first so it scrolls away naturally.
-    final List<Widget> listItems = [
-      _buildSummaryBanner(newFound, alreadyFoundTracked, cancelledCount),
+    // Build item *factories*, not widgets. The results step rebuilds on every
+    // setState (e.g. each add-progress tick), and with hundreds of found apps an
+    // eager List<Widget> reconstructed every tile + its badge column on each
+    // rebuild. Deferring to thunks lets ListView.builder build only the visible
+    // rows per frame. Banner goes first so it scrolls away naturally.
+    final bool addTopPadding = widget.isLargeScreen && !widget.standalone;
+    final List<Widget Function()> listItems = [
+      if (addTopPadding)
+        () => SizedBox(height: MediaQuery.paddingOf(context).top),
+      () => _buildSummaryBanner(newFound, alreadyFoundTracked, cancelledCount),
     ];
     if (_addingDone) {
       if (_addedApps.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('added')} (${_addedApps.length})',
             colorScheme.primary,
           ),
         );
         listItems.addAll(
-          _addedApps.map((a) => _buildFoundAppTile(a, addedResult: true)),
+          _addedApps.map(
+            (a) =>
+                () => _buildFoundAppTile(a, addedResult: true),
+          ),
         );
       }
       if (_failedApps.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('failed')} (${_failedApps.length})',
             colorScheme.error,
           ),
         );
         listItems.addAll(
-          _failedApps.map((a) => _buildFoundAppTile(a, failedResult: true)),
+          _failedApps.map(
+            (a) =>
+                () => _buildFoundAppTile(a, failedResult: true),
+          ),
         );
       }
       if (_notFoundApps.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('notFound')} (${_notFoundApps.length})',
             colorScheme.error,
           ),
         );
-        listItems.addAll(_notFoundApps.map(_buildNotFoundTile));
+        listItems.addAll(
+          _notFoundApps.map(
+            (a) =>
+                () => _buildNotFoundTile(a),
+          ),
+        );
       }
     } else {
       if (newFound.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('found')} (${newFound.length})',
             colorScheme.primary,
           ),
         );
         listItems.addAll(
-          newFound.map((a) => _buildFoundAppTile(a, selectable: true)),
+          newFound.map(
+            (a) =>
+                () => _buildFoundAppTile(a, selectable: true),
+          ),
         );
       }
       if (alreadyFoundTracked.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('alreadyTracked')} (${alreadyFoundTracked.length})',
             colorScheme.tertiary,
           ),
         );
         listItems.addAll(
-          alreadyFoundTracked.map((a) => _buildFoundAppTile(a, tracked: true)),
+          alreadyFoundTracked.map(
+            (a) =>
+                () => _buildFoundAppTile(a, tracked: true),
+          ),
         );
       }
       if (_notFoundApps.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('notFound')} (${_notFoundApps.length})',
             colorScheme.error,
           ),
         );
-        listItems.addAll(_notFoundApps.map(_buildNotFoundTile));
+        listItems.addAll(
+          _notFoundApps.map(
+            (a) =>
+                () => _buildNotFoundTile(a),
+          ),
+        );
       }
       if (_cancelledApps.isNotEmpty) {
         listItems.add(
-          _buildSectionHeader(
+          () => _buildSectionHeader(
             '${tr('bulkScanCancelled')} (${_cancelledApps.length})',
             colorScheme.onSurfaceVariant,
           ),
         );
-        listItems.addAll(_cancelledApps.map(_bulkAddCancelledResultRow));
+        listItems.addAll(
+          _cancelledApps.map(
+            (a) =>
+                () => _bulkAddCancelledResultRow(a),
+          ),
+        );
       }
+    }
+
+    final Widget bottomActions = Padding(
+      padding: EdgeInsets.fromLTRB(
+        _bulkBottomActionHorizontalPadding,
+        24,
+        _bulkBottomActionHorizontalPadding,
+        _bottomActionBottomPadding(),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (showProgress) ...[
+            Expanded(child: _buildProgressPill()),
+            const SizedBox(width: 8),
+          ] else
+            const Spacer(),
+          showFabDone
+              ? FloatingActionButton.extended(
+                  heroTag: 'bulkResultsDone',
+                  onPressed: () {
+                    if (widget.standalone) {
+                      Navigator.pop(context);
+                    } else {
+                      widget.onComplete?.call();
+                    }
+                  },
+                  icon: const Icon(Icons.check_rounded),
+                  label: Text(tr('done')),
+                )
+              : _addingApps
+              ? FloatingActionButton.extended(
+                  heroTag: 'bulkResultsCancel',
+                  onPressed: () => setState(() => _addCancelRequested = true),
+                  backgroundColor: colorScheme.errorContainer,
+                  foregroundColor: colorScheme.onErrorContainer,
+                  icon: const Icon(Icons.stop_rounded),
+                  label: Text(tr('cancel')),
+                )
+              : FloatingActionButton.extended(
+                  heroTag: 'bulkResultsAdd',
+                  onPressed: selectedNewFoundCount == 0
+                      ? null
+                      : () {
+                          final List<BulkFoundApp> selectedToAdd = newFound
+                              .where(
+                                (BulkFoundApp a) => _selectedNewFoundPackages
+                                    .contains(a.info.packageName),
+                              )
+                              .toList();
+                          _addFoundApps(selectedToAdd);
+                        },
+                  icon: const Icon(Icons.save_rounded),
+                  label: Text(
+                    tr('addFoundApps', args: ['$selectedNewFoundCount']),
+                  ),
+                ),
+        ],
+      ),
+    );
+
+    if (widget.isLargeScreen && widget.standalone) {
+      if (_foundApps.isEmpty &&
+          _notFoundApps.isEmpty &&
+          _cancelledApps.isEmpty) {
+        return Center(child: Text(tr('noAppsFound')));
+      }
+      listItems.add(() => bottomActions);
+      return ListView.builder(
+        padding: EdgeInsets.zero,
+        itemCount: listItems.length,
+        itemBuilder: (context, index) => listItems[index](),
+      );
     }
 
     return Stack(
@@ -1517,80 +1668,16 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         // Full-height scrollable list; banner is item 0 so it scrolls away.
         _foundApps.isEmpty && _notFoundApps.isEmpty && _cancelledApps.isEmpty
             ? Center(child: Text(tr('noAppsFound')))
-            : ListView(
+            : ListView.builder(
                 // Reserve space for the bottom FAB row.
                 padding: EdgeInsets.only(bottom: _bottomActionListPadding()),
-                children: listItems,
+                itemCount: listItems.length,
+                itemBuilder: (context, index) => listItems[index](),
               ),
 
         // Bottom row: progress pill (when active, expanding to the left of the
         // FAB) + FAB. Both live in the same Positioned so they stay aligned.
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              _bulkBottomActionHorizontalPadding,
-              0,
-              _bulkBottomActionHorizontalPadding,
-              _bottomActionBottomPadding(),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (showProgress) ...[
-                  Expanded(child: _buildProgressPill()),
-                  const SizedBox(width: 8),
-                ] else
-                  const Spacer(),
-                showFabDone
-                    ? FloatingActionButton.extended(
-                        heroTag: 'bulkResultsDone',
-                        onPressed: () {
-                          if (widget.standalone) {
-                            Navigator.pop(context);
-                          } else {
-                            widget.onComplete?.call();
-                          }
-                        },
-                        icon: const Icon(Icons.check_rounded),
-                        label: Text(tr('done')),
-                      )
-                    : _addingApps
-                    ? FloatingActionButton.extended(
-                        heroTag: 'bulkResultsCancel',
-                        onPressed: () =>
-                            setState(() => _addCancelRequested = true),
-                        backgroundColor: colorScheme.errorContainer,
-                        foregroundColor: colorScheme.onErrorContainer,
-                        icon: const Icon(Icons.stop_rounded),
-                        label: Text(tr('cancel')),
-                      )
-                    : FloatingActionButton.extended(
-                        heroTag: 'bulkResultsAdd',
-                        onPressed: selectedNewFoundCount == 0
-                            ? null
-                            : () {
-                                final List<BulkFoundApp> selectedToAdd =
-                                    newFound
-                                        .where(
-                                          (BulkFoundApp a) =>
-                                              _selectedNewFoundPackages
-                                                  .contains(a.info.packageName),
-                                        )
-                                        .toList();
-                                _addFoundApps(selectedToAdd);
-                              },
-                        icon: const Icon(Icons.save_rounded),
-                        label: Text(
-                          tr('addFoundApps', args: ['$selectedNewFoundCount']),
-                        ),
-                      ),
-              ],
-            ),
-          ),
-        ),
+        Positioned(left: 0, right: 0, bottom: 0, child: bottomActions),
       ],
     );
   }
@@ -1749,9 +1836,48 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         color: colorScheme.secondaryContainer,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: metrics,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: metrics),
+          if (_githubRateLimited) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8.0),
+              child: Divider(height: 1),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 8.0,
+                vertical: 4.0,
+              ),
+              child: RichText(
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSecondaryContainer,
+                  ),
+                  children: [
+                    TextSpan(text: tr('githubRateLimitWarningText')),
+                    TextSpan(
+                      text: tr('githubRateLimitWarningLink'),
+                      style: TextStyle(
+                        color: colorScheme.primary,
+                        decoration: TextDecoration.underline,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      recognizer: TapGestureRecognizer()
+                        ..onTap = () {
+                          _showPatBottomSheet(context);
+                        },
+                    ),
+                    TextSpan(text: tr('githubRateLimitWarningTextEnd')),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -2175,15 +2301,41 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Future<bool> confirmCancelScanForNavigation(
     BuildContext dialogContext,
   ) async {
-    if (!isScanning) return true;
-    if (_navigationConfirmationFuture != null) {
+    if (isScanning) {
+      if (_navigationConfirmationFuture != null) {
+        return _navigationConfirmationFuture!;
+      }
+      _navigationConfirmationFuture =
+          _confirmCancelScanForNavigation(dialogContext).whenComplete(() {
+            _navigationConfirmationFuture = null;
+          });
       return _navigationConfirmationFuture!;
     }
-    _navigationConfirmationFuture =
-        _confirmCancelScanForNavigation(dialogContext).whenComplete(() {
-          _navigationConfirmationFuture = null;
-        });
-    return _navigationConfirmationFuture!;
+
+    if (_step == BulkStep.results && _foundApps.isNotEmpty && !_addingDone) {
+      final bool? discard = await showDialog<bool>(
+        context: dialogContext,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text(tr('discardUnsavedChangesQuestion')),
+            content: Text(tr('bulkScanDiscardResultsBody')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(tr('continue')),
+              ),
+            ],
+          );
+        },
+      );
+      return discard == true;
+    }
+
+    return true;
   }
 
   Future<bool> _confirmCancelScanForNavigation(
@@ -2218,6 +2370,34 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       }
     }
     return cancelSearch;
+  }
+
+  void _showPatBottomSheet(BuildContext context) {
+    final SettingsProvider settingsProvider = context.read<SettingsProvider>();
+    final String currentPat =
+        settingsProvider.getSettingString(GitHub.githubCredsKey) ?? '';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28.0)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+          ),
+          child: _GithubPatSheet(
+            initialPat: currentPat,
+            settingsProvider: settingsProvider,
+            onSearchAgain: () {
+              _startScanning();
+            },
+          ),
+        );
+      },
+    );
   }
 
   /// Called by [AddAppPageState.handleBack] when the Device tab is active.
@@ -2395,6 +2575,177 @@ class _LazyBulkAppIconState extends State<_LazyBulkAppIcon> {
         Icons.android_rounded,
         size: widget.size * 0.6,
         color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+}
+
+class _GithubPatSheet extends StatefulWidget {
+  final String initialPat;
+  final SettingsProvider settingsProvider;
+  final VoidCallback onSearchAgain;
+
+  const _GithubPatSheet({
+    required this.initialPat,
+    required this.settingsProvider,
+    required this.onSearchAgain,
+  });
+
+  @override
+  State<_GithubPatSheet> createState() => _GithubPatSheetState();
+}
+
+class _GithubPatSheetState extends State<_GithubPatSheet> {
+  late final TextEditingController _controller;
+  bool _isValidating = false;
+  String? _validationError;
+  bool _isSaved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialPat);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24.0, 8.0, 24.0, 24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 32,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16.0),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(2.0),
+                  ),
+                ),
+              ),
+              Text(
+                tr('personalAccessTokenPAT'),
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: tr('githubPATLabel'),
+                  errorText: _validationError,
+                  border: const OutlineInputBorder(),
+                ),
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                onChanged: (val) => setState(() {
+                  _isSaved = false;
+                  _validationError = null;
+                }),
+              ),
+              if (_isValidating) ...[
+                const SizedBox(height: 16),
+                Center(
+                  child: ExpressiveLoadingIndicator(
+                    color: Theme.of(context).colorScheme.primary,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 32,
+                      height: 32,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(_isSaved ? tr('close') : tr('cancel')),
+                  ),
+                  TextButton(
+                    onPressed:
+                        (_isValidating ||
+                            _controller.text.trim().isEmpty ||
+                            _isSaved)
+                        ? null
+                        : () async {
+                            setState(() {
+                              _isValidating = true;
+                              _validationError = null;
+                            });
+                            final String enteredText = _controller.text.trim();
+                            final String? error = await GitHub.validatePAT(
+                              enteredText,
+                            );
+                            if (!context.mounted) return;
+
+                            if (error == null) {
+                              widget.settingsProvider.setSettingString(
+                                GitHub.githubCredsKey,
+                                enteredText,
+                              );
+                              GitHub.storePATValidation(
+                                enteredText,
+                                widget.settingsProvider,
+                              );
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(tr('githubPATValidated')),
+                                  ),
+                                );
+                              }
+                              setState(() {
+                                _isValidating = false;
+                                _isSaved = true;
+                              });
+                            } else {
+                              GitHub.clearPATValidation(
+                                widget.settingsProvider,
+                              );
+                              setState(() {
+                                _isValidating = false;
+                                _validationError = error;
+                              });
+                            }
+                          },
+                    child: Text(_isSaved ? tr('saved') : tr('save')),
+                  ),
+                  TextButton(
+                    onPressed:
+                        !GitHub.hasValidatedPAT(
+                          widget.settingsProvider.getSettingString(
+                            GitHub.githubCredsKey,
+                          ),
+                          widget.settingsProvider,
+                        )
+                        ? null
+                        : () {
+                            Navigator.of(context).pop();
+                            widget.onSearchAgain();
+                          },
+                    child: Text(tr('searchAgain')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

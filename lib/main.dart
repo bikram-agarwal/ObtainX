@@ -1,9 +1,9 @@
 import 'dart:async' show unawaited;
-import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
@@ -62,7 +62,6 @@ List<MapEntry<Locale, String>> supportedLocales = const [
 ];
 const fallbackLocale = Locale('en');
 const localeDir = 'assets/translations';
-var fdroid = false;
 
 final globalNavigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -204,16 +203,6 @@ class MyTaskHandler extends TaskHandler {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   installDiagnosticErrorLogging();
-  try {
-    ByteData data = await PlatformAssetBundle().load(
-      'assets/ca/lets-encrypt-r3.pem',
-    );
-    SecurityContext.defaultContext.setTrustedCertificatesBytes(
-      data.buffer.asUint8List(),
-    );
-  } catch (e) {
-    // Already added, do nothing (see #375)
-  }
   await EasyLocalization.ensureInitialized();
   if ((await DeviceInfoPlugin().androidInfo).version.sdkInt >= 29) {
     SystemChrome.setSystemUIOverlayStyle(
@@ -260,6 +249,19 @@ class Obtainium extends StatefulWidget {
 
 class _ObtainiumState extends State<Obtainium> {
   var existingUpdateInterval = -1;
+
+  // Cache for the expensive boosted light/dark [ColorScheme]s.
+  // [ColorScheme.fromSeed] runs HCT colour-space math and the boost*
+  // extensions add several lerp/luminance passes on top. Recomputing both
+  // schemes on every MaterialApp rebuild — in particular on a light↔dark↔black
+  // flip, which changes none of the seed inputs — blocked the frame the switch
+  // landed on and was the dominant cause of the sluggish theme change. We now
+  // rebuild the pair only when an input that actually feeds the schemes
+  // changes; brightness (`theme`) is deliberately NOT a key, so a pure
+  // brightness flip reuses the already-built pair and skips the seed math.
+  int? _schemeCacheKey;
+  ColorScheme? _cachedLightScheme;
+  ColorScheme? _cachedDarkScheme;
 
   @override
   void initState() {
@@ -407,6 +409,79 @@ class _ObtainiumState extends State<Obtainium> {
     if (!mounted) return;
   }
 
+  /// Builds (or reuses) the boosted light + dark [ColorScheme] pair for the
+  /// current accent/palette/black/gradient/shading settings and the supplied
+  /// dynamic colour schemes. See [_schemeCacheKey] for why this is cached.
+  ({ColorScheme light, ColorScheme dark}) _resolveThemeSchemes(
+    SettingsProvider settings,
+    ColorScheme? lightDynamic,
+    ColorScheme? darkDynamic,
+  ) {
+    final int key = Object.hash(
+      settings.appAccentColorSource,
+      settings.appThemePaletteStyle,
+      settings.activeCustomSeedHex,
+      settings.useGradientBackground,
+      settings.shadingIntensity,
+      settings.useBlackTheme,
+      lightDynamic,
+      darkDynamic,
+    );
+    if (key == _schemeCacheKey &&
+        _cachedLightScheme != null &&
+        _cachedDarkScheme != null) {
+      return (light: _cachedLightScheme!, dark: _cachedDarkScheme!);
+    }
+
+    // Decide on a colour/brightness scheme based on OS and user settings
+    ColorScheme lightColorScheme = colorSchemeForAccentSettings(
+      brightness: Brightness.light,
+      accentSource: settings.appAccentColorSource,
+      paletteStyle: settings.appThemePaletteStyle,
+      lightDynamic: lightDynamic,
+      darkDynamic: darkDynamic,
+      activeCustomSeedHex: settings.activeCustomSeedHex,
+    );
+    ColorScheme darkColorScheme = colorSchemeForAccentSettings(
+      brightness: Brightness.dark,
+      accentSource: settings.appAccentColorSource,
+      paletteStyle: settings.appThemePaletteStyle,
+      lightDynamic: lightDynamic,
+      darkDynamic: darkDynamic,
+      activeCustomSeedHex: settings.activeCustomSeedHex,
+    );
+
+    // Boost surface containers toward primary — ports FilePipe's
+    // boostSurfaceContainersTowardPrimary* logic that makes surfaces vivid.
+    final bool useGradient = settings.useGradientBackground;
+    lightColorScheme = lightColorScheme.boostSurfaceContainersTowardPrimary(
+      darkTheme: false,
+      useGradient: useGradient,
+      shadingIntensity: settings.shadingIntensity,
+    );
+    darkColorScheme = darkColorScheme.boostSurfaceContainersTowardPrimary(
+      darkTheme: true,
+      useGradient: useGradient,
+      shadingIntensity: settings.shadingIntensity,
+    );
+    if (settings.appAccentColorSource != AppAccentColorSource.materialYou) {
+      lightColorScheme = lightColorScheme.boostContainersForSeedThemes(
+        darkTheme: false,
+      );
+      darkColorScheme = darkColorScheme.boostContainersForSeedThemes(
+        darkTheme: true,
+      );
+    }
+    if (settings.useBlackTheme) {
+      darkColorScheme = darkColorScheme.withPureBlackBackgrounds();
+    }
+
+    _schemeCacheKey = key;
+    _cachedLightScheme = lightColorScheme;
+    _cachedDarkScheme = darkColorScheme;
+    return (light: lightColorScheme, dark: darkColorScheme);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Same pattern as on the apps page: subscribe to a hash of the
@@ -455,7 +530,7 @@ class _ObtainiumState extends State<Obtainium> {
       if (isFirstRun) {
         logs.add('This is the first ever run of ObtainX.');
         // If this is the first run, add ObtainX to the Apps list
-        if (!fdroid) {
+        if (!AppDistribution.fdroid) {
           getInstalledInfo(obtainiumId, includeOwnDebugBuild: true)
               .then((value) {
                 if (value?.versionName != null) {
@@ -499,41 +574,10 @@ class _ObtainiumState extends State<Obtainium> {
     return WithForegroundTask(
       child: DynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-          // Decide on a colour/brightness scheme based on OS and user settings
-          ColorScheme lightColorScheme = colorSchemeForAccentSettings(
-            brightness: Brightness.light,
-            accentSource: settingsProvider.appAccentColorSource,
-            paletteStyle: settingsProvider.appThemePaletteStyle,
-            lightDynamic: lightDynamic,
-            darkDynamic: darkDynamic,
-            activeCustomSeedHex: settingsProvider.activeCustomSeedHex,
-          );
-          ColorScheme darkColorScheme = colorSchemeForAccentSettings(
-            brightness: Brightness.dark,
-            accentSource: settingsProvider.appAccentColorSource,
-            paletteStyle: settingsProvider.appThemePaletteStyle,
-            lightDynamic: lightDynamic,
-            darkDynamic: darkDynamic,
-            activeCustomSeedHex: settingsProvider.activeCustomSeedHex,
-          );
-
-          // Boost surface containers toward primary — ports FilePipe's
-          // boostSurfaceContainersTowardPrimary* logic that makes surfaces vivid.
-          final bool useGradient = settingsProvider.useGradientBackground;
-          lightColorScheme = lightColorScheme
-              .boostSurfaceContainersTowardPrimary(
-                darkTheme: false,
-                useGradient: useGradient,
-                shadingIntensity: settingsProvider.shadingIntensity,
-              );
-          darkColorScheme = darkColorScheme.boostSurfaceContainersTowardPrimary(
-            darkTheme: true,
-            useGradient: useGradient,
-            shadingIntensity: settingsProvider.shadingIntensity,
-          );
-          if (settingsProvider.useBlackTheme) {
-            darkColorScheme = darkColorScheme.withPureBlackBackgrounds();
-          }
+          final ({ColorScheme light, ColorScheme dark}) schemes =
+              _resolveThemeSchemes(settingsProvider, lightDynamic, darkDynamic);
+          final ColorScheme lightColorScheme = schemes.light;
+          final ColorScheme darkColorScheme = schemes.dark;
 
           final ColorScheme themeColorScheme =
               settingsProvider.theme == ThemeSettings.dark
@@ -626,6 +670,7 @@ class _ObtainiumState extends State<Obtainium> {
             navigatorKey: globalNavigatorKey,
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
+            themeAnimationDuration: Duration.zero,
             // App-wide UI scale. The user controls scaling via the
             // [SettingsProvider.appUiScale] slider in the Settings page.
             // When the slider is at the default 1.0 we return the child
@@ -655,6 +700,7 @@ class _ObtainiumState extends State<Obtainium> {
               scaffoldBackgroundColor: themeColorScheme.surface,
               canvasColor: themeColorScheme.surface,
               cardColor: themeColorScheme.surfaceContainer,
+              focusColor: themeColorScheme.primary.withValues(alpha: 0.12),
               fontFamily: settingsProvider.useSystemFont
                   ? 'SystemFont'
                   : 'Montserrat',
@@ -679,6 +725,7 @@ class _ObtainiumState extends State<Obtainium> {
               scaffoldBackgroundColor: darkThemeColorScheme.surface,
               canvasColor: darkThemeColorScheme.surface,
               cardColor: darkThemeColorScheme.surfaceContainer,
+              focusColor: darkThemeColorScheme.primary.withValues(alpha: 0.24),
               fontFamily: settingsProvider.useSystemFont
                   ? 'SystemFont'
                   : 'Montserrat',

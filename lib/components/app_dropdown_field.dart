@@ -21,7 +21,7 @@ double appDropdownMenuWidth(
   }
   return (maxTextWidth + horizontalPadding).clamp(
     minWidth,
-    MediaQuery.of(context).size.width - maxWidthInset,
+    MediaQuery.sizeOf(context).width - maxWidthInset,
   );
 }
 

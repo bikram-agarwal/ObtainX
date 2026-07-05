@@ -4,6 +4,7 @@ import 'package:hsluv/hsluv.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/category_action_chip.dart';
@@ -483,47 +484,34 @@ class _CategoryColorPickerSheetState extends State<_CategoryColorPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final name = _nameCtrl.text.trim();
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          20,
-          16,
-          MediaQuery.of(context).viewInsets.bottom + 8,
+    return AppSheetContent(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      children: [
+        CategoryEditorFields(
+          nameController: _nameCtrl,
+          color: _staged,
+          autofocusName: widget.initialName.isEmpty,
+          onNameChanged: (_) => setState(() {}),
+          onColorHexChanged: _stageHex,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            CategoryEditorFields(
-              nameController: _nameCtrl,
-              color: _staged,
-              autofocusName: widget.initialName.isEmpty,
-              onNameChanged: (_) => setState(() {}),
-              onColorHexChanged: _stageHex,
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(tr('cancel')),
             ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text(tr('cancel')),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: name.isEmpty
-                      ? null
-                      : () => Navigator.pop(context, (
-                          color: _staged,
-                          name: name,
-                        )),
-                  child: Text(tr('save')),
-                ),
-              ],
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: name.isEmpty
+                  ? null
+                  : () => Navigator.pop(context, (color: _staged, name: name)),
+              child: Text(tr('save')),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }
@@ -535,13 +523,8 @@ Future<({Color color, String name})?> showCategorySheet(
   required Color initialColor,
   required String initialName,
 }) {
-  return showModalBottomSheet<({Color color, String name})>(
+  return showAppModalSheet<({Color color, String name})>(
     context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
     builder: (_) => _CategoryColorPickerSheet(
       initialColor: initialColor,
       initialName: initialName,
@@ -814,7 +797,7 @@ class _CategoryHexInputFormatter extends TextInputFormatter {
         ? nextText.substring(1)
         : nextText;
     if (cleanText.length > 6 || !_validHex.hasMatch(cleanText)) {
-      HapticFeedback.vibrate();
+      hapticVibrate();
       SystemSound.play(SystemSoundType.alert);
       return oldValue;
     }
@@ -1147,10 +1130,17 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 key: formFieldKey,
                 autovalidateMode: AutovalidateMode.onUserInteraction,
                 onChanged: (value) {
-                  setState(() {
-                    values[formItem.key] = value;
-                    someValueChanged();
-                  });
+                  // No setState here: the field already shows the new text via
+                  // its own controller, and nothing else in this form renders
+                  // from a text field's value (switches/tag-inputs/subforms key
+                  // off their own values). someValueChanged() still runs the
+                  // form validator and notifies the parent of value+validity —
+                  // including per-field error display via _formKey.validate().
+                  // Previously every keystroke called setState, rebuilding the
+                  // entire form-input tree (all switches, tag inputs, subforms,
+                  // dropdowns) on each character.
+                  values[formItem.key] = value;
+                  someValueChanged();
                 },
                 decoration: baseDecoration.copyWith(
                   suffixIcon:

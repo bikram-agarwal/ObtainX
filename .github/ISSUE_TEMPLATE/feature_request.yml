@@ -1,0 +1,47 @@
+name: "Feature request"
+description: "Suggest a new Source, setting, or other feature."
+labels: ["enhancement", "to check"]
+body:
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I confirm this request is not part of an existing issue.
+          required: true
+        - label: I have checked the [Obtainium Wiki](https://wiki.obtainium.imranr.dev/).
+          required: true
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Describe the feature
+      description: |
+        A clear and concise description of what you want to happen.
+
+        For new Sources, please ensure:
+        1. It is not already possible to use the HTML Source for your purposes.
+        2. It must be possible to extract the following details from the Source in a reliable way:
+        - The App version (or any release-specific identifier - a "pseudo-version") for the latest release
+        - One or more APK URL(s) for the latest release
+        - Above details for previous releases (optional)
+
+        Note that the Web scraper cannot deal with JavaScript-enabled content.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered (if applicable)
+      description: |
+        A clear and concise description of any alternative solutions or features you've considered.
+
+        Note that app-specific Sources are less likely to be added. In those cases, see if the HTML Source will work for you.
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other context or screenshots about the feature request here.
+    validations:
+      required: false

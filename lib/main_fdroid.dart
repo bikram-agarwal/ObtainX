@@ -1,6 +1,8 @@
+import 'package:obtainium/app_distribution.dart';
+
 import 'main.dart' as m;
 
 void main() async {
-  m.fdroid = true;
+  AppDistribution.fdroid = true;
   m.main();
 }

@@ -1,8 +1,9 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/bulk_add_widget.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
@@ -12,6 +13,7 @@ import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/app.dart';
+import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -21,12 +23,14 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
+import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 const double _appVaultFabBottomGap = 8.0;
 const double _fabHorizontalMargin = 16.0;
+const double _fabMinimumSafeBottomPadding = 16.0;
 
 enum _AddMode { byUrl, search, fromDevice }
 
@@ -66,11 +70,62 @@ class AddAppPageState extends State<AddAppPage> {
       (_bulkWidgetKey.currentState?.isAdding ?? false);
 
   Future<bool> confirmCancelBulkScanForNavigation() async {
-    if (_mode != _AddMode.fromDevice) return true;
-    return _bulkWidgetKey.currentState?.confirmCancelScanForNavigation(
-          context,
-        ) ??
-        true;
+    if (_mode == _AddMode.fromDevice) {
+      final bool canNavigate =
+          await _bulkWidgetKey.currentState?.confirmCancelScanForNavigation(
+            context,
+          ) ??
+          true;
+      if (canNavigate) {
+        _resetAllInputStates();
+      }
+      return canNavigate;
+    }
+
+    final bool isUrlDirty =
+        _mode == _AddMode.byUrl && userInput.trim().isNotEmpty;
+    final bool isSearchDirty =
+        _mode == _AddMode.search &&
+        (searchQuery.trim().isNotEmpty ||
+            _searchHasSearched ||
+            _searchResults.isNotEmpty);
+
+    if (isUrlDirty || isSearchDirty) {
+      final String titleKey = isUrlDirty
+          ? 'discardUnsavedChangesQuestion'
+          : 'resetSearchQuestion';
+      final String explanationKey = isUrlDirty
+          ? 'discardUnsavedChangesUrlExplanation'
+          : 'discardUnsavedChangesSearchExplanation';
+
+      final bool? discard = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(tr(titleKey)),
+            content: Text(tr(explanationKey)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(tr('continue')),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (discard == true) {
+        _resetAllInputStates();
+        return true;
+      }
+      return false;
+    }
+
+    return true;
   }
 
   /// Called by [HomePageState] when the user presses back while this tab is
@@ -93,6 +148,14 @@ class AddAppPageState extends State<AddAppPage> {
   // ─── Search mode state ─────────────────────────────────────────────────
   bool searching = false;
   String searchQuery = '';
+  // Cache of past inline-search results. Instance-scoped (so it's discarded
+  // when leaving the page, rather than serving stale results across sessions)
+  // and size-bounded so it can't grow unbounded. The key includes the selected
+  // sources, and searches that prompt for per-source options are never cached
+  // (their results depend on that dialog input — see runInlineSearch).
+  final Map<String, Map<String, MapEntry<String, List<String>>>> _searchCache =
+      {};
+  static const int _searchCacheMaxEntries = 50;
   // Searchable-source names the user has selected (null = not yet initialised)
   Set<String>? _searchSelectedStores;
   // Interleaved search results: key=URL/identifier, value=(sourceName, subtitleLines)
@@ -230,6 +293,21 @@ class AddAppPageState extends State<AddAppPage> {
     _urlFieldController.clear();
   }
 
+  void _resetAllInputStates() {
+    setState(() {
+      _resetUrlModeInput();
+      searching = false;
+      searchQuery = '';
+      _searchResults = {};
+      _searchHasSearched = false;
+      _searchResultFilter = '';
+      _byUrlOpenedFromSearchPick = false;
+      _searchSomeSourcesController.clear();
+      _searchResultFilterController.clear();
+      _mode = _AddMode.byUrl;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     AppsProvider appsProvider = context.read<AppsProvider>();
@@ -265,7 +343,10 @@ class AddAppPageState extends State<AddAppPage> {
         ? coveredBottomInset
         : 0.0;
     final double appVaultFabBottomPadding =
-        bottomChromeClearance + _appVaultFabBottomGap;
+        (bottomChromeClearance > _fabMinimumSafeBottomPadding
+            ? bottomChromeClearance
+            : _fabMinimumSafeBottomPadding) +
+        _appVaultFabBottomGap;
     final bool urlHasInput =
         _mode == _AddMode.byUrl && userInput.trim().isNotEmpty;
     final bool showAppVaultFab =
@@ -469,6 +550,8 @@ class AddAppPageState extends State<AddAppPage> {
           if (appsProvider.apps.containsKey(app.id)) {
             throw ObtainiumError(tr('appAlreadyAdded'));
           }
+          app.additionalSettings['useVersionCodeAsOSVersion'] =
+              app.additionalSettings['versionDetection'] == 'versionCode';
           if (app.additionalSettings['trackOnly'] == true) {
             app.installedVersion = null;
             if (isTempId(app)) {
@@ -506,10 +589,19 @@ class AddAppPageState extends State<AddAppPage> {
           appWasAdded = true;
         }
         if (app != null) {
-          Navigator.push(
-            globalNavigatorKey.currentContext ?? context,
-            heroFriendlyAppPageRoute((_) => AppPage(appId: app!.id)),
-          );
+          if (!context.mounted) return;
+          final double screenWidth = MediaQuery.sizeOf(context).width;
+          final bool isLargeScreen = screenWidth >= kLargeScreenWidthBreakpoint;
+          final homeState = context.findAncestorStateOfType<HomePageState>();
+          if (isLargeScreen && homeState != null) {
+            _resetUrlModeInput();
+            homeState.switchToAppsTabAndOpenApp(app.id);
+          } else {
+            Navigator.push(
+              globalNavigatorKey.currentContext ?? context,
+              heroFriendlyAppPageRoute((_) => AppPage(appId: app!.id)),
+            );
+          }
         }
       } catch (e) {
         if (!context.mounted) return;
@@ -535,7 +627,7 @@ class AddAppPageState extends State<AddAppPage> {
     VoidCallback? urlAddAction() {
       if (urlAddDisabled()) return null;
       return () {
-        HapticFeedback.selectionClick();
+        hapticSelection();
         addApp();
       };
     }
@@ -547,6 +639,16 @@ class AddAppPageState extends State<AddAppPage> {
             ? pickedSource!.sourceConfigSettingFormItems.map((e) => [e])
             : []),
       ]);
+      // Pre-check the per-app "Include prereleases" switch for newly-added apps
+      // when the global default is on. Only affects defaults at add-time; saved
+      // values for existing apps still take precedence in GeneratedForm.
+      if (settingsProvider.includePrereleasesByDefault) {
+        for (final GeneratedFormItem item in items.expand((row) => row)) {
+          if (item is GeneratedFormSwitch && item.key == 'includePrereleases') {
+            item.defaultValue = true;
+          }
+        }
+      }
       if (pickedSource is GitHub) {
         final bool canVerifyGitHubBuild = (pickedSource as GitHub)
             .canVerifyAttestations(additionalSettings, settingsProvider);
@@ -659,6 +761,42 @@ class AddAppPageState extends State<AddAppPage> {
       );
     }
 
+    // Bottom-right action FAB overlay (App Vault / submit), shared by the
+    // large-screen and narrow layouts which previously inlined it identically.
+    Widget buildBottomActionFabOverlay() {
+      return Align(
+        alignment: Alignment.bottomRight,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            _fabHorizontalMargin,
+            0,
+            _fabHorizontalMargin,
+            appVaultFabBottomPadding,
+          ),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: showBottomActionFab ? 1 : 0),
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeInOutCubicEmphasized,
+            builder: (context, animationValue, child) {
+              return IgnorePointer(
+                ignoring: !showBottomActionFab,
+                child: Opacity(opacity: animationValue, child: child),
+              );
+            },
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+              child: buildBottomActionFab(),
+            ),
+          ),
+        ),
+      );
+    }
+
     Widget getUrlInputRow() {
       final bool showSupportedSourcesButton = userInput.trim().isEmpty;
       final bool addDisabled = urlAddDisabled();
@@ -675,7 +813,7 @@ class AddAppPageState extends State<AddAppPage> {
               textInputAction: TextInputAction.go,
               onSubmitted: (_) {
                 if (!addDisabled) {
-                  HapticFeedback.selectionClick();
+                  hapticSelection();
                   addApp();
                 }
               },
@@ -926,6 +1064,33 @@ class AddAppPageState extends State<AddAppPage> {
       _searchSomeSourcesFocusNode.unfocus();
       FocusManager.instance.primaryFocus?.unfocus();
       _searchResultFilterController.clear();
+
+      final List<AppSource> selectedSources = sourceProvider.sources
+          .where((e) => searchSelectedStores.contains(e.name))
+          .toList();
+      // Results from sources that prompt for per-search options depend on that
+      // dialog input, so such searches must not be served from / written to the
+      // cache (doing so would skip the prompt and reuse stale option values).
+      final bool cacheable = !selectedSources.any(
+        (e) => e.includeAdditionalOptsInMainSearch,
+      );
+      // Key on the query *and* the selected sources, so changing the source
+      // selection doesn't return the previous selection's results.
+      final String cacheKey =
+          '${searchQuery.trim().toLowerCase()} '
+          '${(searchSelectedStores.toList()..sort()).join(',')}';
+
+      if (cacheable && _searchCache.containsKey(cacheKey)) {
+        setState(() {
+          _searchResults = Map.of(_searchCache[cacheKey]!);
+          _searchHasSearched = true;
+          _byUrlOpenedFromSearchPick = false;
+          _searchResultFilter = '';
+          searching = false;
+        });
+        return;
+      }
+
       setState(() {
         searching = true;
         _byUrlOpenedFromSearchPick = false;
@@ -1032,6 +1197,14 @@ class AddAppPageState extends State<AddAppPage> {
         setState(() {
           _searchResults = res;
           _searchHasSearched = true;
+          if (cacheable) {
+            // Evict the oldest entry once the cache is full (insertion order).
+            if (_searchCache.length >= _searchCacheMaxEntries &&
+                !_searchCache.containsKey(cacheKey)) {
+              _searchCache.remove(_searchCache.keys.first);
+            }
+            _searchCache[cacheKey] = res;
+          }
         });
       } catch (e) {
         if (!context.mounted) return;
@@ -1077,7 +1250,7 @@ class AddAppPageState extends State<AddAppPage> {
                     : () {
                         _searchSomeSourcesFocusNode.unfocus();
                         FocusManager.instance.primaryFocus?.unfocus();
-                        HapticFeedback.selectionClick();
+                        hapticSelection();
                         runInlineSearch(
                           appsProvider: appsProvider,
                           settingsProvider: settingsProvider,
@@ -1110,7 +1283,7 @@ class AddAppPageState extends State<AddAppPage> {
               onSubmitted: (_) {
                 if (!(searchQuery.isEmpty || doingSomething)) {
                   _searchSomeSourcesFocusNode.unfocus();
-                  HapticFeedback.selectionClick();
+                  hapticSelection();
                   runInlineSearch(
                     appsProvider: appsProvider,
                     settingsProvider: settingsProvider,
@@ -1315,21 +1488,21 @@ class AddAppPageState extends State<AddAppPage> {
     Widget buildModeSelector() {
       return Padding(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-        child: SegmentedButton<_AddMode>(
+        child: AppSegmentedButton<_AddMode>(
           segments: [
             ButtonSegment(
               value: _AddMode.byUrl,
-              label: Text(tr('addByUrl')),
+              label: AppSegmentedButtonLabel(tr('addByUrl')),
               icon: const Icon(Icons.link_rounded),
             ),
             ButtonSegment(
               value: _AddMode.search,
-              label: Text(tr('addBySearch')),
+              label: AppSegmentedButtonLabel(tr('addBySearch')),
               icon: const Icon(Icons.search_rounded),
             ),
             ButtonSegment(
               value: _AddMode.fromDevice,
-              label: Text(tr('addFromDevice')),
+              label: AppSegmentedButtonLabel(tr('addFromDevice')),
               icon: const Icon(Icons.phone_android_rounded),
             ),
           ],
@@ -1346,7 +1519,6 @@ class AddAppPageState extends State<AddAppPage> {
               _mode = nextMode;
             });
           },
-          style: const ButtonStyle(visualDensity: VisualDensity.compact),
         ),
       );
     }
@@ -1374,6 +1546,270 @@ class AddAppPageState extends State<AddAppPage> {
     Widget buildGradientBackground() {
       return Positioned.fill(
         child: DecoratedBox(decoration: buildAddAppGradientDecoration()),
+      );
+    }
+
+    final double screenWidth = MediaQuery.sizeOf(context).width;
+    final bool isLargeScreen = isLargeScreenLayout(
+      screenWidth,
+      MediaQuery.orientationOf(context),
+    );
+
+    Widget buildModeTile(_AddMode modeObj, String title, IconData icon) {
+      final ColorScheme cs = Theme.of(context).colorScheme;
+      final bool selected = _mode == modeObj;
+
+      final Color containerColor = selected
+          ? cs.secondaryContainer
+          : cs.surfaceContainerHigh;
+      final Color contentColor = selected
+          ? cs.onSecondaryContainer
+          : cs.onSurface;
+
+      final Color iconBoxColor = selected
+          ? cs.primary.withValues(alpha: 0.16)
+          : cs.primaryContainer.withValues(alpha: 0.48);
+
+      final Color iconColor = selected ? cs.primary : cs.onSurfaceVariant;
+      final Color chevronColor = cs.onSurfaceVariant;
+
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8.0),
+        child: Container(
+          decoration: BoxDecoration(
+            color: containerColor,
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: () async {
+                if (modeObj == _mode) return;
+                if (!await confirmCancelBulkScanForNavigation()) {
+                  return;
+                }
+                setState(() {
+                  _byUrlOpenedFromSearchPick = false;
+                  _mode = modeObj;
+                });
+              },
+              borderRadius: BorderRadius.circular(28),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: iconBoxColor,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(icon, color: iconColor, size: 18),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                          color: contentColor,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: chevronColor,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (isLargeScreen) {
+      return Scaffold(
+        backgroundColor: addScheme.surface,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (settingsProvider.useGradientBackground)
+              buildGradientBackground(),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Scaffold(
+                    backgroundColor: settingsProvider.useGradientBackground
+                        ? Colors.transparent
+                        : addScheme.surface,
+                    body: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SizedBox(
+                          height:
+                              MediaQuery.paddingOf(context).top +
+                              kToolbarHeight,
+                          child: Padding(
+                            padding: EdgeInsetsDirectional.only(
+                              start: 20,
+                              top: MediaQuery.paddingOf(context).top,
+                              end: 20,
+                            ),
+                            child: Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: Text(
+                                tr('addApp'),
+                                style: Theme.of(context).textTheme.titleLarge!
+                                    .copyWith(color: addScheme.onSurface),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              buildModeTile(
+                                _AddMode.byUrl,
+                                tr('addByUrl'),
+                                Icons.link_rounded,
+                              ),
+                              buildModeTile(
+                                _AddMode.search,
+                                tr('addBySearch'),
+                                Icons.search_rounded,
+                              ),
+                              buildModeTile(
+                                _AddMode.fromDevice,
+                                tr('addFromDevice'),
+                                Icons.phone_android_rounded,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                VerticalDivider(
+                  width: 1,
+                  thickness: 1,
+                  color: addScheme.outlineVariant.withAlpha(50),
+                ),
+                Expanded(
+                  flex: 4,
+                  child: Scaffold(
+                    backgroundColor: settingsProvider.useGradientBackground
+                        ? Colors.transparent
+                        : addScheme.surface,
+                    body: Builder(
+                      builder: (context) {
+                        if (_mode == _AddMode.fromDevice) {
+                          return BulkAddWidget(
+                            key: _bulkWidgetKey,
+                            isLargeScreen: isLargeScreen,
+                            bottomActionBottomPadding: appVaultFabBottomPadding,
+                            onComplete: () => setState(() {
+                              _byUrlOpenedFromSearchPick = false;
+                              _mode = _AddMode.byUrl;
+                            }),
+                          );
+                        }
+
+                        return CustomScrollView(
+                          key: PageStorageKey<String>(
+                            'add-app-detail-${_mode.name}-scroll',
+                          ),
+                          slivers: [
+                            SliverSafeArea(
+                              top: true,
+                              bottom: false,
+                              sliver: SliverPadding(
+                                padding: const EdgeInsets.all(16),
+                                sliver: SliverToBoxAdapter(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      if (_mode == _AddMode.byUrl) ...[
+                                        const SizedBox(height: 8),
+                                        getUrlInputRow(),
+                                        const SizedBox(height: 16),
+                                        if (pickedSource != null)
+                                          getHTMLSourceOverrideDropdown(),
+                                        if (pickedSource != null)
+                                          FutureBuilder(
+                                            builder: (ctx, val) {
+                                              return val.data != null &&
+                                                      val.data!.isNotEmpty
+                                                  ? Text(
+                                                      val.data!,
+                                                      style: Theme.of(
+                                                        context,
+                                                      ).textTheme.bodySmall,
+                                                    )
+                                                  : const SizedBox();
+                                            },
+                                            future: pickedSource
+                                                ?.getSourceNote(),
+                                          ),
+                                        if (pickedSource != null)
+                                          getAdditionalOptsCol(),
+                                      ],
+                                      if (_mode == _AddMode.search) ...[
+                                        const SizedBox(height: 8),
+                                        getSearchBarRow(),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          tr('storesToSearch'),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelMedium
+                                              ?.copyWith(
+                                                color: Theme.of(
+                                                  context,
+                                                ).colorScheme.onSurfaceVariant,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        getSearchStoreChips(),
+                                        getSearchResultsList(),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (settingsProvider.progressiveBlurEnabled)
+                              SliverToBoxAdapter(
+                                child: SizedBox(height: bottomChromeClearance),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            buildBottomActionFabOverlay(),
+          ],
+        ),
       );
     }
 
@@ -1414,6 +1850,8 @@ class AddAppPageState extends State<AddAppPage> {
                 Expanded(
                   child: BulkAddWidget(
                     key: _bulkWidgetKey,
+                    isLargeScreen: isLargeScreen,
+                    bottomActionBottomPadding: appVaultFabBottomPadding,
                     onComplete: () => setState(() {
                       _byUrlOpenedFromSearchPick = false;
                       _mode = _AddMode.byUrl;
@@ -1428,14 +1866,19 @@ class AddAppPageState extends State<AddAppPage> {
     }
 
     return Scaffold(
+      // Don't let the keyboard resize the body (see the apps-list Scaffold): the
+      // per-frame resize repaint forces the app bar's progressive-blur
+      // BackdropFilter to re-rasterize every frame and stutters the keyboard
+      // slide. The URL / search field is at the top, so it stays visible.
+      resizeToAvoidBottomInset: false,
       backgroundColor: addScheme.surface,
       body: Stack(
         fit: StackFit.expand,
         children: [
           if (settingsProvider.useGradientBackground) buildGradientBackground(),
           CustomScrollView(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
             key: const PageStorageKey<String>('add-app-tab-scroll'),
-            cacheExtent: 1600,
             slivers: <Widget>[
               CustomAppBar(
                 title: tr('addApp'),
@@ -1523,37 +1966,7 @@ class AddAppPageState extends State<AddAppPage> {
                 ),
             ],
           ),
-          Align(
-            alignment: Alignment.bottomRight,
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                _fabHorizontalMargin,
-                0,
-                _fabHorizontalMargin,
-                appVaultFabBottomPadding,
-              ),
-              child: TweenAnimationBuilder<double>(
-                tween: Tween<double>(end: showBottomActionFab ? 1 : 0),
-                duration: const Duration(milliseconds: 320),
-                curve: Curves.easeInOutCubicEmphasized,
-                builder: (context, animationValue, child) {
-                  return IgnorePointer(
-                    ignoring: !showBottomActionFab,
-                    child: Opacity(opacity: animationValue, child: child),
-                  );
-                },
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, animation) {
-                    return FadeTransition(opacity: animation, child: child);
-                  },
-                  child: buildBottomActionFab(),
-                ),
-              ),
-            ),
-          ),
+          buildBottomActionFabOverlay(),
         ],
       ),
     );

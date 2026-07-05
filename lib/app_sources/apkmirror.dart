@@ -254,6 +254,92 @@ String _apkMirrorNormalizedText(String text) {
   return text.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
+bool _apkMirrorIsWhatsNewHeading(String text) =>
+    text.toLowerCase().startsWith("what's new in ");
+
+bool _apkMirrorIsChangeLogStopHeading(String text) {
+  final lowerText = text.toLowerCase();
+  return lowerText.startsWith('about ') ||
+      lowerText.startsWith('download ') ||
+      lowerText.contains(' screenshots') ||
+      lowerText.contains(' trailer');
+}
+
+bool _apkMirrorIsChangeLogNoise(String text) {
+  final lowerText = text.toLowerCase();
+  return lowerText == 'advertisement' ||
+      lowerText.startsWith('verified safe to install') ||
+      lowerText == 'scroll to available downloads' ||
+      lowerText == 'a more recent upload may be available below!';
+}
+
+String _apkMirrorBlockText(html_dom.Element element) {
+  final parts = <String>[];
+  for (final child in element.children) {
+    if (child.localName == 'ul' || child.localName == 'ol') {
+      parts.addAll(
+        child
+            .querySelectorAll('li')
+            .map((item) => _apkMirrorNormalizedText(item.text))
+            .where((text) => text.isNotEmpty)
+            .map((text) => '- $text'),
+      );
+    } else {
+      final text = _apkMirrorNormalizedText(child.text);
+      if (text.isNotEmpty) parts.add(text);
+    }
+  }
+  if (parts.isNotEmpty) {
+    return parts.join('\n');
+  }
+  return _apkMirrorNormalizedText(element.text);
+}
+
+String? _apkMirrorChangeLogFromPageText(String pageText) {
+  final lines = pageText
+      .split('\n')
+      .map(_apkMirrorNormalizedText)
+      .where((line) => line.isNotEmpty)
+      .toList();
+  final startIndex = lines.indexWhere(_apkMirrorIsWhatsNewHeading);
+  if (startIndex < 0) return null;
+  final changeLogLines = <String>[];
+  for (int lineIndex = startIndex + 1; lineIndex < lines.length; lineIndex++) {
+    final line = lines[lineIndex];
+    if (_apkMirrorIsChangeLogStopHeading(line)) break;
+    if (_apkMirrorIsChangeLogNoise(line)) continue;
+    changeLogLines.add(line);
+  }
+  final changeLog = changeLogLines.join('\n').trim();
+  return changeLog.isEmpty ? null : changeLog;
+}
+
+Future<String?> apkMirrorChangeLogFromReleasePageHtml(String html) async {
+  final doc = await parseHtmlOffIsolate(html);
+  html_dom.Element? whatsNewHeading;
+  for (final heading in doc.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+    if (_apkMirrorIsWhatsNewHeading(_apkMirrorNormalizedText(heading.text))) {
+      whatsNewHeading = heading;
+      break;
+    }
+  }
+  if (whatsNewHeading != null) {
+    final changeLogParts = <String>[];
+    html_dom.Element? sibling = whatsNewHeading.nextElementSibling;
+    while (sibling != null) {
+      final text = _apkMirrorBlockText(sibling);
+      if (_apkMirrorIsChangeLogStopHeading(text)) break;
+      if (text.isNotEmpty && !_apkMirrorIsChangeLogNoise(text)) {
+        changeLogParts.add(text);
+      }
+      sibling = sibling.nextElementSibling;
+    }
+    final changeLog = changeLogParts.join('\n\n').trim();
+    if (changeLog.isNotEmpty) return changeLog;
+  }
+  return _apkMirrorChangeLogFromPageText(doc.body?.text ?? html);
+}
+
 bool _apkMirrorTextIncludesVariantHint(String text) {
   return RegExp(
     r'\b(APK|BUNDLE|arm64-v8a|armeabi-v7a|arm-v7a|x86_64|x86)\b',

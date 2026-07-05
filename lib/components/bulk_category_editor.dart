@@ -1,7 +1,8 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/category_action_chip.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/generated_form.dart';
 
 enum BulkCategoryCoverageState { all, some, none }
@@ -241,11 +242,33 @@ class _BulkCategoryEditorSheetState extends State<BulkCategoryEditorSheet> {
     super.dispose();
   }
 
-  List<BulkCategoryCoverage> get _coverage => buildBulkCategoryCoverage(
-    availableCategoryColors: widget.availableCategoryColors,
-    selectedAppCategories: widget.selectedAppCategories,
-    extraCategories: _extraAddedCategories,
-  );
+  @override
+  void didUpdateWidget(BulkCategoryEditorSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(
+          oldWidget.availableCategoryColors,
+          widget.availableCategoryColors,
+        ) ||
+        !identical(
+          oldWidget.selectedAppCategories,
+          widget.selectedAppCategories,
+        )) {
+      _coverageCache = null;
+    }
+  }
+
+  // Coverage is an O(apps × categories) scan plus a sort. It depends only on the
+  // widget's category/app inputs and _extraAddedCategories — NOT on the text
+  // field or chip intents — so cache it instead of recomputing on every
+  // setState (the new-category name field rebuilds on each keystroke just to
+  // toggle its Add button). Invalidated in _stageNewCategory and didUpdateWidget.
+  List<BulkCategoryCoverage>? _coverageCache;
+  List<BulkCategoryCoverage> get _coverage =>
+      _coverageCache ??= buildBulkCategoryCoverage(
+        availableCategoryColors: widget.availableCategoryColors,
+        selectedAppCategories: widget.selectedAppCategories,
+        extraCategories: _extraAddedCategories,
+      );
 
   BulkCategoryIntentActions get _pendingActions =>
       resolveBulkCategoryIntentActions(
@@ -281,11 +304,12 @@ class _BulkCategoryEditorSheetState extends State<BulkCategoryEditorSheet> {
     final existingCoverage = _coverage.where(
       (item) => bulkCategoryKey(item.category) == key,
     );
-    HapticFeedback.selectionClick();
+    hapticSelection();
     setState(() {
       if (existingCoverage.isEmpty) {
         _extraAddedCategories.add(category);
         _newCategoryColorsByKey[key] = _newCategoryColor.toARGB32();
+        _coverageCache = null; // _extraAddedCategories changed → recompute.
       }
       _categoryIntents[key] = BulkCategoryIntent.add;
       _newCategoryNameController.clear();
@@ -300,121 +324,92 @@ class _BulkCategoryEditorSheetState extends State<BulkCategoryEditorSheet> {
     final coverage = _coverage;
     final pendingActions = _pendingActions;
 
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          12,
-          20,
-          MediaQuery.viewInsetsOf(context).bottom + 12,
+    return AppSheetContent(
+      children: [
+        Text(tr('bulkCategorizeTitle'), style: theme.textTheme.titleLarge),
+        const SizedBox(height: 6),
+        const _BulkCategorySubtitle(),
+        const SizedBox(height: 16),
+        if (coverage.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              tr('bulkCategorizeNoExisting'),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          )
+        else
+          CategoryActionChipGroup(
+            children: coverage.map((item) {
+              final key = bulkCategoryKey(item.category);
+              final intent =
+                  _categoryIntents[key] ?? BulkCategoryIntent.neutral;
+              return _BulkCategoryChip(
+                coverage: item,
+                color: Color(_categoryColor(item.category)),
+                intent: intent,
+                onPressed: () {
+                  hapticSelection();
+                  setState(() {
+                    _categoryIntents[key] = nextBulkCategoryIntent(
+                      item.state,
+                      intent,
+                    );
+                  });
+                },
+              );
+            }).toList(),
+          ),
+        const SizedBox(height: 12),
+        _CreateCategoryPullTab(
+          expanded: _createExpanded,
+          onPressed: () {
+            hapticSelection();
+            setState(() {
+              _createExpanded = !_createExpanded;
+            });
+          },
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOutCubic,
+          alignment: Alignment.topCenter,
+          child: _createExpanded
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: _InlineCategoryCreator(
+                    nameController: _newCategoryNameController,
+                    color: _newCategoryColor,
+                    onNameChanged: (_) => setState(() {}),
+                    onColorHexChanged: _stageCategoryHex,
+                    onStage: _stageNewCategory,
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(
-                    alpha: 0.4,
-                  ),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(tr('cancel')),
             ),
-            Text(tr('bulkCategorizeTitle'), style: theme.textTheme.titleLarge),
-            const SizedBox(height: 6),
-            const _BulkCategorySubtitle(),
-            const SizedBox(height: 16),
-            if (coverage.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(
-                  tr('bulkCategorizeNoExisting'),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              )
-            else
-              Flexible(
-                child: SingleChildScrollView(
-                  child: CategoryActionChipGroup(
-                    children: coverage.map((item) {
-                      final key = bulkCategoryKey(item.category);
-                      final intent =
-                          _categoryIntents[key] ?? BulkCategoryIntent.neutral;
-                      return _BulkCategoryChip(
-                        coverage: item,
-                        color: Color(_categoryColor(item.category)),
-                        intent: intent,
-                        onPressed: () {
-                          HapticFeedback.selectionClick();
-                          setState(() {
-                            _categoryIntents[key] = nextBulkCategoryIntent(
-                              item.state,
-                              intent,
-                            );
-                          });
-                        },
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            _CreateCategoryPullTab(
-              expanded: _createExpanded,
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                setState(() {
-                  _createExpanded = !_createExpanded;
-                });
-              },
-            ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeInOutCubic,
-              alignment: Alignment.topCenter,
-              child: _createExpanded
-                  ? Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: _InlineCategoryCreator(
-                        nameController: _newCategoryNameController,
-                        color: _newCategoryColor,
-                        onNameChanged: (_) => setState(() {}),
-                        onColorHexChanged: _stageCategoryHex,
-                        onStage: _stageNewCategory,
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text(tr('cancel')),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: pendingActions.hasPending
-                      ? () {
-                          widget.onApply(pendingActions);
-                          Navigator.pop(context);
-                        }
-                      : null,
-                  child: Text(tr('bulkCategorizeApply')),
-                ),
-              ],
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: pendingActions.hasPending
+                  ? () {
+                      widget.onApply(pendingActions);
+                      Navigator.pop(context);
+                    }
+                  : null,
+              child: Text(tr('bulkCategorizeApply')),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }

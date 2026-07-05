@@ -46,9 +46,18 @@ class BulkScanCache {
   static Future<void> _writeChainTail = Future<void>.value();
 
   static Future<Directory> _rootDir() async {
-    final Directory base =
-        await getExternalStorageDirectory() ??
-        await getApplicationDocumentsDirectory();
+    Directory base;
+    try {
+      final Directory? externalDir = await getExternalStorageDirectory();
+      if (externalDir != null) {
+        await externalDir.create(recursive: true);
+        base = externalDir;
+      } else {
+        base = await getApplicationDocumentsDirectory();
+      }
+    } catch (_) {
+      base = await getApplicationDocumentsDirectory();
+    }
     final Directory dir = Directory('${base.path}/$_relativeDir');
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);

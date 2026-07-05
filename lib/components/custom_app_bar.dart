@@ -15,6 +15,7 @@ class CustomAppBar extends StatefulWidget {
     this.searchWidget,
     this.titleStyle,
     this.matchGradientBackground = false,
+    this.progressiveBlurOverlayColor,
   });
 
   final String title;
@@ -37,6 +38,9 @@ class CustomAppBar extends StatefulWidget {
   /// Whether the non-blurred app bar should sample the page gradient behind it.
   final bool matchGradientBackground;
 
+  /// Optional tint override for progressive blur.
+  final Color? progressiveBlurOverlayColor;
+
   @override
   State<CustomAppBar> createState() => _CustomAppBarState();
 }
@@ -48,39 +52,16 @@ class _CustomAppBarState extends State<CustomAppBar> {
   // drops on mid-range Android during apps-list scroll. The colour tint
   // gradient handles the "progressive" feel that the second blur used to
   // provide.
-  static const double _blurSigma = 4.0;
+  // Kept gentle on purpose: the uniform single-pass blur is just a light
+  // frost, and the progressive colour-tint gradient (opaque top → transparent
+  // bottom) carries the "progressive" feel. See ProgressiveTopEdgeOverlay for
+  // why graduated multi-pass blur is deliberately avoided (GPU cost).
+  static const double _blurSigma = 3.0;
 
-  /// Progressive-blur widget passed straight to [SliverAppBar.flexibleSpace]
-  /// (not [FlexibleSpaceBar.background]) so it never fades during collapse.
-  /// Wrapped in [RepaintBoundary] to isolate the blur layer's composition
-  /// from neighbouring widgets' dirty rects.
   Widget _buildBlur(Color overlayColor) {
-    return IgnorePointer(
-      child: RepaintBoundary(
-        child: ClipRect(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              BackdropFilter(
-                filter: ImageFilter.blur(
-                  sigmaX: _blurSigma,
-                  sigmaY: _blurSigma,
-                ),
-                child: const SizedBox.expand(),
-              ),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [overlayColor, overlayColor.withValues(alpha: 0)],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return ScrollLinkedProgressiveBlur(
+      overlayColor: overlayColor,
+      blurSigma: _blurSigma,
     );
   }
 
@@ -102,17 +83,7 @@ class _CustomAppBarState extends State<CustomAppBar> {
               maxHeight: pageHeight,
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: const [0, 0.38, 0.72, 1],
-                    colors: [
-                      colorScheme.schemePageGradientTopColor,
-                      colorScheme.schemePageGradientMidColor,
-                      colorScheme.surface,
-                      colorScheme.surface,
-                    ],
-                  ),
+                  gradient: colorScheme.schemePageBackgroundGradient,
                 ),
                 child: SizedBox(
                   width: constraints.maxWidth,
@@ -143,13 +114,16 @@ class _CustomAppBarState extends State<CustomAppBar> {
     final bool blurEnabled = context.select<SettingsProvider, bool>(
       (settings) => settings.progressiveBlurEnabled,
     );
-    Widget? headerBackground;
+    final Widget headerBackground;
     if (blurEnabled) {
       headerBackground = _buildBlur(
-        colorScheme.schemeProgressiveBlurOverlayTint,
+        widget.progressiveBlurOverlayColor ??
+            colorScheme.schemeProgressiveBlurOverlayTint,
       );
     } else if (widget.matchGradientBackground) {
       headerBackground = _buildGradientBackground(context, colorScheme);
+    } else {
+      headerBackground = ColoredBox(color: colorScheme.surface);
     }
 
     if (widget.searchWidget != null) {
@@ -165,13 +139,9 @@ class _CustomAppBarState extends State<CustomAppBar> {
         elevation: 0,
         scrolledUnderElevation: 0,
         shadowColor: Colors.transparent,
-        backgroundColor: headerBackground != null
-            ? Colors.transparent
-            : colorScheme.surface,
-        surfaceTintColor: headerBackground != null
-            ? Colors.transparent
-            : colorScheme.surfaceTint,
-        forceMaterialTransparency: blurEnabled,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        forceMaterialTransparency: true,
         iconTheme: IconThemeData(color: colorScheme.onSurface),
         actionsIconTheme: IconThemeData(color: colorScheme.onSurface),
         flexibleSpace: headerBackground,
@@ -197,18 +167,20 @@ class _CustomAppBarState extends State<CustomAppBar> {
               // mechanical. Switching to [Curves.fastEaseInToSlowEaseOut]
               // matches the M3-emphasized motion curve we use elsewhere
               // for page transitions.
-              AnimatedSize(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.fastEaseInToSlowEaseOut,
-                alignment: AlignmentDirectional.centerStart,
-                child: AnimatedDefaultTextStyle(
+              if (widget.title.isNotEmpty) ...[
+                AnimatedSize(
                   duration: const Duration(milliseconds: 200),
                   curve: Curves.fastEaseInToSlowEaseOut,
-                  style: resolvedCompactTitle,
-                  child: Text(widget.title),
+                  alignment: AlignmentDirectional.centerStart,
+                  child: AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.fastEaseInToSlowEaseOut,
+                    style: resolvedCompactTitle,
+                    child: Text(widget.title),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
+                const SizedBox(width: 10),
+              ],
               Expanded(child: widget.searchWidget!),
             ],
           ),
@@ -230,8 +202,9 @@ class _CustomAppBarState extends State<CustomAppBar> {
           top: 16,
           bottom: 16,
         );
-    final Widget flexibleSpace = headerBackground != null
-        ? Stack(
+    final Widget flexibleSpace = widget.title.isEmpty
+        ? headerBackground
+        : Stack(
             fit: StackFit.expand,
             children: [
               headerBackground,
@@ -245,15 +218,6 @@ class _CustomAppBarState extends State<CustomAppBar> {
                 ),
               ),
             ],
-          )
-        : FlexibleSpaceBar(
-            titlePadding: expandingTitlePadding,
-            title: Text(
-              widget.title,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge!.copyWith(color: colorScheme.onSurface),
-            ),
           );
 
     return SliverAppBar(
@@ -262,21 +226,90 @@ class _CustomAppBarState extends State<CustomAppBar> {
       leading: widget.leading,
       leadingWidth: widget.leading != null ? kToolbarHeight : null,
       actions: widget.actions,
-      expandedHeight: 100,
+      expandedHeight: widget.title.isEmpty ? null : 100,
       bottom: widget.bottom,
       elevation: 0,
       scrolledUnderElevation: 0,
       shadowColor: Colors.transparent,
-      backgroundColor: headerBackground != null
-          ? Colors.transparent
-          : colorScheme.surface,
-      surfaceTintColor: headerBackground != null
-          ? Colors.transparent
-          : colorScheme.surfaceTint,
-      forceMaterialTransparency: blurEnabled,
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      forceMaterialTransparency: true,
       iconTheme: IconThemeData(color: colorScheme.onSurface),
       actionsIconTheme: IconThemeData(color: colorScheme.onSurface),
       flexibleSpace: flexibleSpace,
+    );
+  }
+}
+
+class ScrollLinkedProgressiveBlur extends StatelessWidget {
+  final Color overlayColor;
+  final double blurSigma;
+
+  const ScrollLinkedProgressiveBlur({
+    super.key,
+    required this.overlayColor,
+    required this.blurSigma,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scrollPosition = Scrollable.maybeOf(context)?.position;
+    if (scrollPosition == null) {
+      return _buildBlurContent(1.0);
+    }
+
+    return AnimatedBuilder(
+      animation: scrollPosition,
+      builder: (context, child) {
+        double opacity = 0.0;
+        if (scrollPosition.hasPixels) {
+          // Fades in over 36 pixels of scroll
+          opacity = (scrollPosition.pixels / 36.0).clamp(0.0, 1.0);
+        }
+        return _buildBlurContent(opacity);
+      },
+    );
+  }
+
+  Widget _buildBlurContent(double opacity) {
+    if (opacity <= 0.0) return const SizedBox.shrink();
+
+    // Ramp the fade-in via the blur sigma and the tint's alpha rather than
+    // wrapping the whole thing in an Opacity. Opacity forces an offscreen
+    // saveLayer every scroll frame, and a BackdropFilter inside that layer
+    // samples the (empty) layer instead of the screen behind it — so the old
+    // approach was both costly per-frame and didn't blur the content correctly.
+    // Same end state at full scroll; just a cleaner, cheaper ramp in between.
+    final double t = opacity.clamp(0.0, 1.0);
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: ClipRect(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: blurSigma * t,
+                  sigmaY: blurSigma * t,
+                ),
+                child: const SizedBox.expand(),
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      overlayColor.withValues(alpha: overlayColor.a * t),
+                      overlayColor.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

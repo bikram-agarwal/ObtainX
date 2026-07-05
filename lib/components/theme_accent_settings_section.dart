@@ -5,6 +5,7 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 
@@ -298,7 +299,7 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
   }
 
   void _rejectHexInput() {
-    HapticFeedback.vibrate();
+    hapticVibrate();
     SystemSound.play(SystemSoundType.alert);
   }
 
@@ -523,7 +524,7 @@ class CustomHueColorSlider extends StatelessWidget {
   }
 }
 
-class _HueColorSlider extends StatelessWidget {
+class _HueColorSlider extends StatefulWidget {
   const _HueColorSlider({
     required this.hex,
     required this.onChanged,
@@ -539,9 +540,28 @@ class _HueColorSlider extends StatelessWidget {
   final bool showHandleGap;
 
   @override
+  State<_HueColorSlider> createState() => _HueColorSliderState();
+}
+
+class _HueColorSliderState extends State<_HueColorSlider> {
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final double hue = _hueFromHexColor(hex);
+    final double hue = _hueFromHexColor(widget.hex);
     final Color thumbColor = _colorFromHue(
       hue,
       saturation: _kHueSliderThumbSaturation,
@@ -549,7 +569,7 @@ class _HueColorSlider extends StatelessWidget {
     );
     final bool lightPanel =
         scheme.surfaceContainerHighest.computeLuminance() > 0.5;
-    final double gapWidth = showHandleGap
+    final double gapWidth = widget.showHandleGap
         ? lightPanel
               ? _HueSliderTrackBackground.lightGapWidth
               : _HueSliderTrackBackground.defaultGapWidth
@@ -557,6 +577,7 @@ class _HueColorSlider extends StatelessWidget {
     final double handleWidth = lightPanel
         ? _HueSliderThumbShape.lightWidth
         : _HueSliderThumbShape.width;
+    final isTV = context.read<SettingsProvider>().isTV;
 
     return SizedBox(
       height: _HueSliderThumbShape.height,
@@ -568,32 +589,44 @@ class _HueColorSlider extends StatelessWidget {
             child: IgnorePointer(
               child: _HueSliderTrackBackground(
                 value: (hue / 360).clamp(0, 1).toDouble(),
-                gapColor: gapColor ?? scheme.surfaceContainerHighest,
+                gapColor: widget.gapColor ?? scheme.surfaceContainerHighest,
                 gapWidth: gapWidth,
                 handleWidth: handleWidth,
               ),
             ),
           ),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: _HueSliderTrackBackground.trackHeight,
-              activeTrackColor: Colors.transparent,
-              inactiveTrackColor: Colors.transparent,
-              secondaryActiveTrackColor: Colors.transparent,
-              disabledActiveTrackColor: Colors.transparent,
-              disabledInactiveTrackColor: Colors.transparent,
-              thumbColor: thumbColor,
-              overlayShape: SliderComponentShape.noOverlay,
-              thumbShape: _HueSliderThumbShape(handleWidth: handleWidth),
-              tickMarkShape: SliderTickMarkShape.noTickMark,
-            ),
-            child: Slider(
-              min: 0,
-              max: 360,
-              value: hue.clamp(0, 360).toDouble(),
-              onChanged: (double value) => onChanged(_colorHexFromHue(value)),
-              onChangeEnd: (double value) =>
-                  onChangeEnd(_colorHexFromHue(value)),
+          TVSliderWrapper(
+            value: hue.clamp(0, 360).toDouble(),
+            min: 0,
+            max: 360,
+            divisions: 72,
+            onChanged: (double value) =>
+                widget.onChanged(_colorHexFromHue(value)),
+            onChangeEnd: (double value) =>
+                widget.onChangeEnd(_colorHexFromHue(value)),
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: _HueSliderTrackBackground.trackHeight,
+                activeTrackColor: Colors.transparent,
+                inactiveTrackColor: Colors.transparent,
+                secondaryActiveTrackColor: Colors.transparent,
+                disabledActiveTrackColor: Colors.transparent,
+                disabledInactiveTrackColor: Colors.transparent,
+                thumbColor: thumbColor,
+                overlayShape: SliderComponentShape.noOverlay,
+                thumbShape: _HueSliderThumbShape(handleWidth: handleWidth),
+                tickMarkShape: SliderTickMarkShape.noTickMark,
+              ),
+              child: Slider(
+                focusNode: isTV ? _sliderFocusNode : null,
+                min: 0,
+                max: 360,
+                value: hue.clamp(0, 360).toDouble(),
+                onChanged: (double value) =>
+                    widget.onChanged(_colorHexFromHue(value)),
+                onChangeEnd: (double value) =>
+                    widget.onChangeEnd(_colorHexFromHue(value)),
+              ),
             ),
           ),
         ],

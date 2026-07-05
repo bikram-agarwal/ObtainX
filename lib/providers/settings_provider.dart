@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/main.dart';
@@ -21,6 +22,32 @@ String obtainiumTempId = 'bikram-agarwal_ObtainX_${GitHub().hosts[0]}';
 String obtainiumId = 'dev.bikram.obtainx';
 String obtainiumUrl = 'https://github.com/bikram-agarwal/ObtainX';
 Color obtainiumThemeColor = const Color(0xFF6438B5);
+
+// Cached mirror of [SettingsProvider.tactileFeedbackEnabled]. Haptic feedback fires
+// from deep widget trees and providers alike, so the guarded helpers below read this
+// cached flag instead of requiring a SettingsProvider instance at every call site.
+// Kept in sync by SettingsProvider.initializeSettings and the setter.
+bool _tactileFeedbackEnabled = true;
+
+void hapticSelection() {
+  if (_tactileFeedbackEnabled) HapticFeedback.selectionClick();
+}
+
+void hapticLightImpact() {
+  if (_tactileFeedbackEnabled) HapticFeedback.lightImpact();
+}
+
+void hapticMediumImpact() {
+  if (_tactileFeedbackEnabled) HapticFeedback.mediumImpact();
+}
+
+void hapticHeavyImpact() {
+  if (_tactileFeedbackEnabled) HapticFeedback.heavyImpact();
+}
+
+void hapticVibrate() {
+  if (_tactileFeedbackEnabled) HapticFeedback.vibrate();
+}
 
 enum ThemeSettings { system, light, dark }
 
@@ -72,6 +99,12 @@ class SettingsProvider with ChangeNotifier {
   // on every getter call. Null value means the key exists but has no override.
   final Map<String, Map<String, dynamic>?> _folderViewCache = {};
 
+  // Decoded 'savedCustomSeedHexList' cache, keyed by the raw stored string so it
+  // self-invalidates whenever the pref changes (no matter which write path) and
+  // avoids re-running jsonDecode on every theme-picker rebuild.
+  String? _savedSeedHexesRaw;
+  List<String>? _savedSeedHexesDecoded;
+
   String sourceUrl = 'https://github.com/bikram-agarwal/ObtainX';
 
   // Not done in constructor as we want to be able to await it
@@ -90,6 +123,32 @@ class SettingsProvider with ChangeNotifier {
     isTV =
         info.systemFeatures.contains('android.hardware.type.television') ||
         info.systemFeatures.contains('android.software.leanback');
+    _tactileFeedbackEnabled = prefs?.getBool('tactileFeedbackEnabled') ?? true;
+    notifyListeners();
+  }
+
+  bool get tactileFeedbackEnabled =>
+      prefs?.getBool('tactileFeedbackEnabled') ?? true;
+
+  set tactileFeedbackEnabled(bool val) {
+    prefs?.setBool('tactileFeedbackEnabled', val);
+    _tactileFeedbackEnabled = val;
+    notifyListeners();
+  }
+
+  bool get includePrereleasesByDefault =>
+      prefs?.getBool('includePrereleasesByDefault') ?? false;
+
+  set includePrereleasesByDefault(bool val) {
+    prefs?.setBool('includePrereleasesByDefault', val);
+    notifyListeners();
+  }
+
+  bool get showAppDowngradeError =>
+      prefs?.getBool('showAppDowngradeError') ?? true;
+
+  set showAppDowngradeError(bool val) {
+    prefs?.setBool('showAppDowngradeError', val);
     notifyListeners();
   }
 
@@ -307,7 +366,18 @@ class SettingsProvider with ChangeNotifier {
   }
 
   set theme(ThemeSettings t) {
+    if (theme == t) return;
     prefs?.setInt('theme', t.index);
+    notifyListeners();
+  }
+
+  void setThemeAppearance({
+    required ThemeSettings theme,
+    required bool useBlackTheme,
+  }) {
+    if (this.theme == theme && this.useBlackTheme == useBlackTheme) return;
+    prefs?.setInt('theme', theme.index);
+    prefs?.setBool('useBlackTheme', useBlackTheme);
     notifyListeners();
   }
 
@@ -391,16 +461,26 @@ class SettingsProvider with ChangeNotifier {
     if (raw == null || raw.isEmpty) {
       return [activeCustomSeedHex];
     }
-    try {
-      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
-      final List<String> out = decoded
-          .map((dynamic e) => normalizeCustomSeedHexOrNull(e.toString()))
-          .whereType<String>()
-          .toList();
-      return out.isNotEmpty ? out : [activeCustomSeedHex];
-    } catch (_) {
-      return [activeCustomSeedHex];
+    // Re-decode only when the raw pref string actually changes. The
+    // activeCustomSeedHex fallback stays outside the cache since it can change
+    // independently of this list.
+    List<String>? out = raw == _savedSeedHexesRaw
+        ? _savedSeedHexesDecoded
+        : null;
+    if (out == null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+        out = decoded
+            .map((dynamic e) => normalizeCustomSeedHexOrNull(e.toString()))
+            .whereType<String>()
+            .toList();
+      } catch (_) {
+        return [activeCustomSeedHex];
+      }
+      _savedSeedHexesRaw = raw;
+      _savedSeedHexesDecoded = out;
     }
+    return out.isNotEmpty ? out : [activeCustomSeedHex];
   }
 
   void _persistSavedCustomSeedHexes(List<String> list) {
@@ -533,6 +613,7 @@ class SettingsProvider with ChangeNotifier {
   }
 
   set useBlackTheme(bool useBlackTheme) {
+    if (this.useBlackTheme == useBlackTheme) return;
     prefs?.setBool('useBlackTheme', useBlackTheme);
     notifyListeners();
   }
@@ -561,6 +642,15 @@ class SettingsProvider with ChangeNotifier {
 
   set showTrackedStoreBadge(bool value) {
     prefs?.setBool('showTrackedStoreBadge', value);
+    notifyListeners();
+  }
+
+  bool get showCategoriesBadge {
+    return prefs?.getBool('showCategoriesBadge') ?? false;
+  }
+
+  set showCategoriesBadge(bool value) {
+    prefs?.setBool('showCategoriesBadge', value);
     notifyListeners();
   }
 
@@ -771,9 +861,13 @@ class SettingsProvider with ChangeNotifier {
     if (_categoriesMemory != null) {
       return Map<String, int>.from(_categoriesMemory!);
     }
-    return Map<String, int>.from(
+    // Lazily populate the in-memory cache on first read (mirrors [appFolders]).
+    // Previously this decoded the 'categories' JSON on every read until a write
+    // happened — and categories is read on every apps-list / settings rebuild.
+    _categoriesMemory = Map<String, int>.from(
       jsonDecode(prefs?.getString('categories') ?? '{}'),
     );
+    return Map<String, int>.from(_categoriesMemory!);
   }
 
   void setCategories(Map<String, int> cats, {AppsProvider? appsProvider}) {
@@ -982,6 +1076,24 @@ class SettingsProvider with ChangeNotifier {
 
   set removeOnExternalUninstall(bool show) {
     prefs?.setBool('removeOnExternalUninstall', show);
+    notifyListeners();
+  }
+
+  bool get openAppInfoInAppManager {
+    return prefs?.getBool('openAppInfoInAppManager') ?? false;
+  }
+
+  set openAppInfoInAppManager(bool value) {
+    prefs?.setBool('openAppInfoInAppManager', value);
+    notifyListeners();
+  }
+
+  bool get enableLetMeDowngrade {
+    return prefs?.getBool('enableLetMeDowngrade') ?? true;
+  }
+
+  set enableLetMeDowngrade(bool value) {
+    prefs?.setBool('enableLetMeDowngrade', value);
     notifyListeners();
   }
 

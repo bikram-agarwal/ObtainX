@@ -1,5 +1,8 @@
 Categories:
+  - App Manager
   - App Store & Updater
+  - Development
+  - Download
   - System
 License: GPL-3.0-only
 AuthorName: Bikram Agarwal
@@ -14,9 +17,9 @@ RepoType: git
 Repo: https://github.com/bikram-agarwal/ObtainX.git
 
 Builds:
-  - versionName: 2.8.3
-    versionCode: 38301
-    commit: 585942e8950f4d53fec7dc86d204260bb20d7d72
+  - versionName: 2.9.0
+    versionCode: 39001
+    commit: f32909e05b8c0cfe19ed91de265c476d8d2aa0d3
     sudo:
       - mkdir -p /home/runner/work/ObtainX
       - chown -R vagrant /home/runner
@@ -60,9 +63,9 @@ Builds:
       - $$reproducible-apk-tools$$/zipalign.py --page-size 16 --pad-like-apksigner
         --replace unaligned.apk $$OUT$$
 
-  - versionName: 2.8.3
-    versionCode: 38302
-    commit: 585942e8950f4d53fec7dc86d204260bb20d7d72
+  - versionName: 2.9.0
+    versionCode: 39002
+    commit: f32909e05b8c0cfe19ed91de265c476d8d2aa0d3
     sudo:
       - mkdir -p /home/runner/work/ObtainX
       - chown -R vagrant /home/runner
@@ -106,9 +109,9 @@ Builds:
       - $$reproducible-apk-tools$$/zipalign.py --page-size 16 --pad-like-apksigner
         --replace unaligned.apk $$OUT$$
 
-  - versionName: 2.8.3
-    versionCode: 38303
-    commit: 585942e8950f4d53fec7dc86d204260bb20d7d72
+  - versionName: 2.9.0
+    versionCode: 39003
+    commit: f32909e05b8c0cfe19ed91de265c476d8d2aa0d3
     sudo:
       - mkdir -p /home/runner/work/ObtainX
       - chown -R vagrant /home/runner
@@ -161,5 +164,5 @@ VercodeOperation:
   - 10*%c+2
   - 10*%c+3
 UpdateCheckData: pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
-CurrentVersion: 2.8.3
-CurrentVersionCode: 38303
+CurrentVersion: 2.9.0
+CurrentVersionCode: 39003

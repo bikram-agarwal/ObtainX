@@ -5,6 +5,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/pages/add_app.dart';
 import 'package:obtainium/pages/apps.dart';
@@ -22,7 +23,7 @@ class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomePage> createState() => HomePageState();
 }
 
 class NavigationPageItem {
@@ -33,7 +34,7 @@ class NavigationPageItem {
   NavigationPageItem(this.title, this.icon, this.widget);
 }
 
-class _HomePageState extends State<HomePage> {
+class HomePageState extends State<HomePage> {
   List<int> selectedIndexHistory = [];
   int pageSwitchRequestId = 0;
   int prevAppCount = -1;
@@ -56,10 +57,14 @@ class _HomePageState extends State<HomePage> {
     ),
     NavigationPageItem(
       tr('importExport'),
-      Icons.import_export,
+      Icons.backup_outlined,
       const ImportExportPage(),
     ),
-    NavigationPageItem(tr('settings'), Icons.settings, const SettingsPage()),
+    NavigationPageItem(
+      tr('settings'),
+      Icons.settings,
+      SettingsPage(key: GlobalKey<SettingsPageState>()),
+    ),
   ];
 
   @override
@@ -68,29 +73,37 @@ class _HomePageState extends State<HomePage> {
     initDeepLinks();
   }
 
+  /// Waits for [key.currentState] to become non-null by checking once per
+  /// frame instead of busy-looping with microsecond delays.
+  Future<T> _waitForState<T extends State>(GlobalKey<T> key) {
+    if (key.currentState != null) return Future.value(key.currentState!);
+    final completer = Completer<T>();
+    void check(Duration _) {
+      if (key.currentState != null) {
+        completer.complete(key.currentState!);
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback(check);
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback(check);
+    return completer.future;
+  }
+
+  Future<void> switchToAppsTabAndOpenApp(String appId) async {
+    await switchToPage(0);
+    final state = await _waitForState(
+      pages[0].widget.key as GlobalKey<AppsPageState>,
+    );
+    state.openAppById(appId);
+  }
+
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
 
-    /// Waits for [key.currentState] to become non-null by checking once per
-    /// frame instead of busy-looping with microsecond delays.
-    Future<T> waitForState<T extends State>(GlobalKey<T> key) {
-      if (key.currentState != null) return Future.value(key.currentState!);
-      final completer = Completer<T>();
-      void check(Duration _) {
-        if (key.currentState != null) {
-          completer.complete(key.currentState!);
-        } else {
-          WidgetsBinding.instance.addPostFrameCallback(check);
-        }
-      }
-
-      WidgetsBinding.instance.addPostFrameCallback(check);
-      return completer.future;
-    }
-
     goToAddApp(String data) async {
       switchToPage(1);
-      final state = await waitForState(
+      final state = await _waitForState(
         pages[1].widget.key as GlobalKey<AddAppPageState>,
       );
       state.linkFn(data);
@@ -99,7 +112,7 @@ class _HomePageState extends State<HomePage> {
     goToExistingApp(String appId) async {
       // Go to Apps page
       switchToPage(0);
-      final state = await waitForState(
+      final state = await _waitForState(
         pages[0].widget.key as GlobalKey<AppsPageState>,
       );
       // Navigate to the app
@@ -244,7 +257,7 @@ class _HomePageState extends State<HomePage> {
       shadowColor: transparent ? Colors.transparent : null,
       destinations: destinations,
       onDestinationSelected: (int index) async {
-        HapticFeedback.selectionClick();
+        hapticSelection();
         switchToPage(index);
       },
       selectedIndex: selectedIndex,
@@ -297,6 +310,9 @@ class _HomePageState extends State<HomePage> {
     if (currentKey is GlobalKey<AddAppPageState>) {
       return currentKey.currentState?.confirmCancelBulkScanForNavigation() ??
           true;
+    }
+    if (currentKey is GlobalKey<SettingsPageState>) {
+      return currentKey.currentState?.confirmDiscardUnsavedChanges() ?? true;
     }
     return true;
   }
@@ -352,6 +368,14 @@ class _HomePageState extends State<HomePage> {
             if (addAppPageState.handleBack()) return;
           }
         }
+        if (currentKey is GlobalKey<SettingsPageState>) {
+          final SettingsPageState? settingsPageState = currentKey.currentState;
+          if (settingsPageState != null) {
+            if (!await settingsPageState.confirmDiscardUnsavedChanges()) {
+              return;
+            }
+          }
+        }
         if (currentKey is GlobalKey<AppsPageState>) {
           if (currentKey.currentState?.handleBack() == true) return;
         }
@@ -373,43 +397,131 @@ class _HomePageState extends State<HomePage> {
         builder: (BuildContext context) {
           final ColorScheme scheme = Theme.of(context).colorScheme;
           final bool blurBottomNav = settingsProvider.progressiveBlurEnabled;
-          final List<NavigationDestination> homeNavDestinations = pages
-              .asMap()
-              .entries
-              .map(
-                (MapEntry<int, NavigationPageItem> entry) =>
-                    NavigationDestination(
-                      icon: entry.key == 0 && updateCount > 0
-                          ? Badge(
-                              label: Text(updateCount.toString()),
-                              child: Icon(entry.value.icon),
-                            )
-                          : Icon(entry.value.icon),
-                      label: entry.value.title,
-                    ),
-              )
-              .toList();
+          final double screenWidth = MediaQuery.sizeOf(context).width;
+          final bool isLargeScreen = screenWidth >= kLargeScreenWidthBreakpoint;
+
+          // Shared icon builder (adds the update-count badge to the first tab),
+          // and build only the destination list the current layout actually
+          // uses instead of both every frame.
+          Widget navIcon(MapEntry<int, NavigationPageItem> entry) =>
+              entry.key == 0 && updateCount > 0
+              ? Badge(
+                  label: Text(updateCount.toString()),
+                  child: Icon(entry.value.icon),
+                )
+              : Icon(entry.value.icon);
+
+          final List<NavigationDestination> homeNavDestinations = isLargeScreen
+              ? const <NavigationDestination>[]
+              : pages
+                    .asMap()
+                    .entries
+                    .map(
+                      (entry) => NavigationDestination(
+                        icon: navIcon(entry),
+                        label: entry.value.title,
+                      ),
+                    )
+                    .toList();
+
+          // NavigationRailDestination.selectedIcon defaults to [icon] when
+          // omitted, so the previous explicit duplicate isn't needed.
+          final List<NavigationRailDestination> homeNavRailDestinations =
+              isLargeScreen
+              ? pages
+                    .asMap()
+                    .entries
+                    .map(
+                      (entry) => NavigationRailDestination(
+                        icon: navIcon(entry),
+                        label: Text(entry.value.title),
+                      ),
+                    )
+                    .toList()
+              : const <NavigationRailDestination>[];
+
           final int homeNavSelectedIndex = selectedIndexHistory.isEmpty
               ? 0
               : selectedIndexHistory.last;
 
           return Scaffold(
+            // Don't resize the shell for the keyboard. A resize relays-out and
+            // lifts the bottom nav bar every frame of the keyboard animation,
+            // and the nav bar's progressive blur (a BackdropFilter) re-rasterizes
+            // on each of those frames — that is the staggered nav-bar slide and
+            // the keyboard-slide stutter. With this off the nav bar stays put and
+            // the keyboard simply overlays it, so the blur is never re-rastered.
+            // Note this also stops the shell consuming the bottom inset, so it
+            // reaches the nested Apps/Add-App Scaffolds — they are deliberately
+            // resizeToAvoidBottomInset:false too, because extendBody draws their
+            // bodies behind this blurred nav bar and a per-frame body relayout
+            // would re-raster the blur and bring the stutter back. Trade-off:
+            // the keyboard overlays bottom content rather than pushing it up
+            // (the search/URL fields are top-anchored, so they stay visible).
+            resizeToAvoidBottomInset: false,
             backgroundColor: scheme.surface,
-            extendBody: blurBottomNav,
-            body: Stack(
-              fit: StackFit.expand,
-              children: [
-                // IndexedStack keeps all four pages mounted so tab switches
-                // are a single paint op — no rebuild, no tear-down.
-                IndexedStack(
-                  index: selectedIndexHistory.isEmpty
-                      ? 0
-                      : selectedIndexHistory.last,
-                  children: pages.map((p) => p.widget).toList(),
-                ),
-              ],
-            ),
-            bottomNavigationBar: blurBottomNav
+            extendBody: blurBottomNav && !isLargeScreen,
+            body: isLargeScreen
+                ? Builder(
+                    builder: (BuildContext context) {
+                      return Row(
+                        children: [
+                          MediaQuery(
+                            data: MediaQuery.of(context).copyWith(
+                              padding: MediaQuery.of(context).padding.copyWith(
+                                left: MediaQuery.of(context).padding.left > 0
+                                    ? 24.0
+                                    : 0.0,
+                                right: MediaQuery.of(context).padding.right > 0
+                                    ? 24.0
+                                    : 0.0,
+                              ),
+                            ),
+                            child: NavigationRail(
+                              selectedIndex: homeNavSelectedIndex,
+                              onDestinationSelected: (int index) async {
+                                hapticSelection();
+                                switchToPage(index);
+                              },
+                              labelType: NavigationRailLabelType.all,
+                              destinations: homeNavRailDestinations,
+                              backgroundColor: scheme.surface,
+                            ),
+                          ),
+                          VerticalDivider(
+                            width: 1,
+                            thickness: 1,
+                            color: scheme.outlineVariant.withAlpha(50),
+                          ),
+                          Expanded(
+                            child: MediaQuery.removePadding(
+                              context: context,
+                              removeLeft: true,
+                              removeRight: true,
+                              child: IndexedStack(
+                                index: homeNavSelectedIndex,
+                                children: pages.map((p) => p.widget).toList(),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  )
+                : Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // IndexedStack keeps all four pages mounted so tab switches
+                      // are a single paint op — no rebuild, no tear-down.
+                      IndexedStack(
+                        index: homeNavSelectedIndex,
+                        children: pages.map((p) => p.widget).toList(),
+                      ),
+                    ],
+                  ),
+            bottomNavigationBar: isLargeScreen
+                ? null
+                : blurBottomNav
                 ? ClipRect(
                     child: Stack(
                       alignment: Alignment.bottomCenter,

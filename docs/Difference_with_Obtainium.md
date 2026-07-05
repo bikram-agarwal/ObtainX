@@ -1,5 +1,25 @@
 # ObtainX vs Obtainium – what's different and why it matters
 
+## Contents
+
+- [UI comparisons](#ui-comparisons)
+  - [Your apps list – cards, grouping, and swipe gestures](#your-apps-list--cards-grouping-and-swipe-gestures)
+  - [Filters – type and watch the list breathe](#filters--type-and-watch-the-list-breathe)
+  - [Themes and view options – on the Apps tab, where you use them](#themes-and-view-options--on-the-apps-tab-where-you-use-them)
+  - [App detail – verdict first, beauty that scales](#app-detail--verdict-first-beauty-that-scales)
+  - [Adding apps – one screen, three paths](#adding-apps--one-screen-three-paths)
+  - [Adding apps – paste a link](#adding-apps--paste-a-link)
+  - [Adding apps – search across stores](#adding-apps--search-across-stores)
+  - [Settings – cards, hierarchy, expressive controls](#settings--cards-hierarchy-expressive-controls)
+  - [Category management — color, rename, and bulk-edit without the wipe](#category-management--color-rename-and-bulk-edit-without-the-wipe)
+  - [Built for big screens – tablets, foldables, and landscape](#built-for-big-screens--tablets-foldables-and-landscape)
+- [Clearer app statuses](#clearer-app-statuses)
+- [Why this fork exists — installer choice](#why-this-fork-exists--installer-choice)
+- [Bulk add apps](#bulk-add-apps)
+- [Folders](#folders)
+- [On-Demand Only](#on-demand-only)
+- [More features worth knowing](#more-features-worth-knowing)
+
 ## UI comparisons
 
 **Material 3 Expressive everywhere** – Full M3 Expressive treatment across every screen: cards, motion, sliders, and controls that feel like one coherent product across your app list, app details, adding apps, and settings.
@@ -46,7 +66,7 @@ The main list is where you live. ObtainX rebuilt it around **clarity and speed**
 
 ### Themes and view options – on the Apps tab, where you use them
 
-Theme and view controls live on the Apps tab itself, so you can switch density, sorting, or look while you're still looking at your apps and see the change happen instantly. Obtainium keeps these under Settings tab, so you have to keep tapping back-n-forth; ObtainX surfaces them closer to where you'd reach for them.
+View options live on the Apps tab itself, so you can switch grouping, sorting, or pinning while you're still looking at your apps and see the change happen instantly. Obtainium keeps these under Settings tab, so you have to keep tapping back-n-forth; ObtainX surfaces them closer to where you'd reach for them.
 
 <table>
 <tr>
@@ -154,6 +174,92 @@ Settings gets the **same card-based layout** as the rest of the app: related opt
 
 - Settings organized into logical cards — much easier to scan and navigate.
 - Material 3 Expressive sliders and controls throughout.
+
+### Category management — color, rename, and bulk-edit without the wipe
+
+Both apps let you tag apps with categories, but Obtainium treats them as bare labels: colors cycle through a handful of fixed swatches, there's no real rename, and assigning a category to several apps at once **replaces** whatever they already had. ObtainX turns categories into a proper organization tool.
+
+<table>
+<tr>
+<td width="66%" align="center" valign="top">
+<img src="../assets/screenshots/Compare_Category_Create_1.jpg" alt="Obtainium create-category screen" width="260" /> <img src="../assets/screenshots/Compare_Category_Bulk_1.jpg" alt="Obtainium bulk category assignment" width="260" /><br /><strong>Obtainium — separate, limited flows</strong>
+</td>
+<td width="33%" align="center" valign="top">
+<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/12_BulkEdit.jpg" alt="ObtainX bulk category editor — create, color, and assign in one place" width="260" /><br /><strong>ObtainX — Rename, Choose Color, batch assign or remove</strong>
+</td>
+</tr>
+</table>
+
+- **Any color, not a fixed cycle** — pick an exact color with a hex field or hue slider when you create or edit a category. Label text automatically flips between black and white by brightness, so your colors stay readable.
+- **Bulk-edit merges, it never wipes** — select several apps and each category shows whether **all, some, or none** of them already have it. Add or remove just the ones you mean; every other category each app already had is left untouched. (Obtainium's bulk assign overwrites the whole set.)
+- **Rename once, applied everywhere** — rename a category and every app that had it is updated automatically. Delete one and it's cleanly removed from all apps — no orphaned tags.
+- **Filter and group by category** — Obtainium's category filter only lets you pick categories to *include*, matched as "any." ObtainX makes it a real query: tap a category once to **include** it, again to **exclude** it, and flip the whole match between **Any** (in at least one selected category) and **All** (in every one). You can also group the entire list by category.
+
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+<img src="../assets/screenshots/Compare_Category_Filter_1.jpg" alt="Obtainium category filter — include only, matched as any" width="300" /><br /><strong>Obtainium — include only, "any"</strong>
+</td>
+<td width="50%" align="center" valign="top">
+<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/03_filters.jpg" alt="ObtainX category filter — include or exclude, any or all" width="300" /><br /><strong>ObtainX — include / exclude, any / all</strong>
+</td>
+</tr>
+</table>
+
+And on the list itself — something Obtainium doesn't offer at all — every app row can show its categories as colored chips, with a "+N more" chip when an app has several:
+
+<p align="center">
+<img src="../assets/screenshots/Category_Badges.jpg" alt="ObtainX category chips shown on app rows" width="300" />
+</p>
+
+### Built for big screens – tablets, foldables, and landscape
+
+This is the difference you feel the moment you rotate your phone or open a foldable. Obtainium runs the **same single phone column** on every device — on a tablet you just get one stretched-out page with a lot of empty space. ObtainX is **adaptive**. On a large screen it reshapes into a proper big-screen layout. Unfolded foldables and large phones benefit too, not only true tablets.
+
+The result is an app that genuinely uses the screen you paid for, rather than a phone app blown up to fit.
+
+- **The apps list — one stretched column vs. two panes with details**
+
+    - Your app list sits **side-by-side with the app's detail page** in a true two-pane view — tap a row and it opens *in place* on the right, no full-screen push, no losing your place in the list. Editing happens in the same pane.
+    - **side navigation rail** replaces the bottom bar, reclaiming vertical space.
+
+    <table>
+    <tr>
+    <td width="50%" align="center" valign="top">
+    <img src="../assets/screenshots/Compare_Tablet_Apps.jpg" alt="Obtainium apps list on a tablet" width="400" /><br /><strong>Obtainium</strong>
+    </td>
+    <td width="50%" align="center" valign="top">
+    <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/tablet_01_apps.jpg" alt="ObtainX two-pane app list and detail on a tablet" width="400" /><br /><strong>ObtainX</strong>
+    </td>
+    </tr>
+    </table>
+
+- **Multi-select & batch actions**
+
+    <table>
+    <tr>
+    <td width="50%" align="center" valign="top">
+    <img src="../assets/screenshots/Compare_Tablet_MultiSelect_1.jpg" alt="Obtainium multi-select on a tablet" width="400" /><br /><strong>Obtainium</strong>
+    </td>
+    <td width="50%" align="center" valign="top">
+    <img src="../assets/screenshots/Compare_Tablet_MultiSelect_2.jpg" alt="ObtainX multi-select on a tablet" width="400" /><br /><strong>ObtainX</strong>
+    </td>
+    </tr>
+    </table>
+
+- **Settings — one long page vs. categories + detail**
+
+    Obtainium shows one long scrolling settings page. ObtainX splits it: pick a category on the left, its options open in the right pane.
+    <table>
+    <tr>
+    <td width="50%" align="center" valign="top">
+    <img src="../assets/screenshots/Compare_Tablet_Settings_1.jpg" alt="Obtainium settings on a tablet" width="400" /><br /><strong>Obtainium</strong>
+    </td>
+    <td width="50%" align="center" valign="top">
+    <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/tablet_04_settings.jpg" alt="ObtainX settings on a tablet — categories on the left, detail on the right" width="400" /><br /><strong>ObtainX</strong>
+    </td>
+    </tr>
+    </table>
 
 ---
 

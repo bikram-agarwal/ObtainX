@@ -119,16 +119,27 @@ ThemeData buildAppPageThemedData(
 
 final Map<String, ColorScheme> _extractedSchemeCache = {};
 
+// Bound the cache so navigating through a large library doesn't grow it without
+// limit; evict oldest-inserted entries (Dart Maps preserve insertion order).
+const int _extractedSchemeCacheMax = 64;
+
+// Content-based key: identityHashCode would miss whenever the same icon is
+// re-fetched into a new buffer (forcing an expensive ColorScheme re-extraction)
+// and could even collide onto a different icon. Both callers are single-icon
+// pages, so hashing one icon's bytes per lookup is cheap. Length-prefixed to
+// further shrink collision odds.
+String _iconSchemeCacheKey(Uint8List iconBytes, Brightness brightness) =>
+    '${iconBytes.length}_${Object.hashAll(iconBytes)}_${brightness.name}';
+
 ColorScheme? getCachedColorScheme(Uint8List iconBytes, Brightness brightness) {
-  final String key = '${identityHashCode(iconBytes)}_${brightness.name}';
-  return _extractedSchemeCache[key];
+  return _extractedSchemeCache[_iconSchemeCacheKey(iconBytes, brightness)];
 }
 
 Future<ColorScheme?> loadColorSchemeFromAppIcon({
   required Uint8List iconBytes,
   required Brightness brightness,
 }) async {
-  final String key = '${identityHashCode(iconBytes)}_${brightness.name}';
+  final String key = _iconSchemeCacheKey(iconBytes, brightness);
   if (_extractedSchemeCache.containsKey(key)) {
     return _extractedSchemeCache[key];
   }
@@ -138,6 +149,9 @@ Future<ColorScheme?> loadColorSchemeFromAppIcon({
       brightness: brightness,
       dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
     );
+    if (_extractedSchemeCache.length >= _extractedSchemeCacheMax) {
+      _extractedSchemeCache.remove(_extractedSchemeCache.keys.first);
+    }
     _extractedSchemeCache[key] = scheme;
     return scheme;
   } catch (_) {

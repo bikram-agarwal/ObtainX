@@ -75,32 +75,33 @@ jobs:
           VERSION=$(grep -oP "^version: [^\+]+" pubspec.yaml | tail -c +10)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      # Normal flavor: gradle-signed, public GitHub download with in-app self-update enabled.
+      # F-Droid flavor: must be reproducible and apksigcopier-compatible.
+      # build-tools >= 35 apksigner forcibly rewrites alignment padding, which breaks
+      # F-Droid's apksigcopier because the signature cannot be transplanted onto
+      # F-Droid's rebuild. Per the apksigcopier README, the fix is to build unsigned,
+      # apply the same apksigner-style padding F-Droid applies with reproducible-apk-tools
+      # zipalign.py --pad-like-apksigner pinned to the fdroiddata recipe version, then sign
+      # with --alignment-preserved so apksigner keeps that exact padding. The Gradle build-id
+      # strip already makes the .so byte-identical to F-Droid's build.
+      #
+      # zipalign.py is a vendored, reviewed copy of reproducible-apk-tools' zipalign.py,
+      # pinned to commit 719c3471, the exact version F-Droid's recipe uses. It is committed
+      # and auditable in this repo, not downloaded at build time.
       - name: Build APKs
         run: |
           set -e
           APK_DIR=build/app/outputs/flutter-apk
           VERSION=${{ steps.extract_version.outputs.version }}
 
-          # Normal flavor — gradle-signed, public GitHub download (in-app self-update enabled).
           flutter build apk --split-per-abi --flavor normal
           for f in "$APK_DIR"/app-*-normal-release.apk; do
             arch=$(basename "$f" | sed -E 's/^app-(.+)-normal-release\.apk$/\1/')
             mv "$f" "$APK_DIR/ObtainX-v${VERSION}-${arch}.apk"
           done
 
-          # F-Droid flavor — must be reproducible AND apksigcopier-compatible.
-          # build-tools >= 35 apksigner forcibly rewrites alignment padding, which breaks
-          # F-Droid's apksigcopier (the signature can't be transplanted onto F-Droid's
-          # rebuild). Per the apksigcopier README, the fix is: build UNSIGNED, apply the
-          # SAME apksigner-style padding F-Droid applies (reproducible-apk-tools zipalign.py
-          # --pad-like-apksigner, pinned to the version the fdroiddata recipe uses), then
-          # sign with --alignment-preserved so apksigner keeps that exact padding. The
-          # gradle build-id strip already makes the .so byte-identical to F-Droid's build.
-          rm -f android/key.properties          # build the fdroid flavor UNSIGNED
+          rm -f android/key.properties
           flutter build apk --split-per-abi --flavor fdroid -t lib/main_fdroid.dart
-          # zipalign.py is a VENDORED, reviewed copy of reproducible-apk-tools' zipalign.py
-          # (pinned to commit 719c3471 — the exact version F-Droid's recipe uses). It is
-          # committed and auditable in this repo and is NOT downloaded at build time.
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
           echo "Using apksigner: $APKSIGNER"
           for f in "$APK_DIR"/app-*-fdroid-release.apk; do

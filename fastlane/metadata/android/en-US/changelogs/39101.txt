@@ -1,0 +1,14 @@
+<b> ✨ New Features</b>
+- Option to open an app's info page in <b>App Manager</b> instead of the system settings screen.
+
+<b>🛠 Improved Features</b>
+- New "Integrations" section in Settings that consolidates 3rd party app integration options:
+    - <b>App Manager</b> for app info.
+    - <b>AppVerifier</b> for signature checking (moved here from Updates).
+    - <b>Let Me Downgrade</b> for allowing app downgrades.
+- ObtainX is now more usable on Android TV: sliders (theme color, update interval, UI scale, card corner radius, shading intensity) can now be adjusted with your remote's D-pad, with a clear focus outline showing which control is selected.
+- Completed missing German translations throughout the app.
+
+<b>🐛 Bug Fixes</b>
+- Fixed a bug where file sharing/opening could fail because the app was referencing an outdated internal file path.
+- Fixed crashes and storage errors on some devices (e.g. Xiaomi/HyperOS phones) where the app couldn't access its usual storage folder — it now falls back to an alternative storage location automatically instead of failing.
