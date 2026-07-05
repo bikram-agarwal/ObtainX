@@ -253,7 +253,7 @@
   "removeOnExternalUninstall": "自动删除列表中已卸载的应用",
   "openAppInfoInAppManager": "在 App Manager 中打开应用信息",
   "integrations": "集成",
-  "enableLetMeDowngrade": "启用\"Let Me Downgrade\"",
+  "enableLetMeDowngrade": "启用 Let Me Downgrade",
   "pickHighestVersionCode": "自动选取内部版本号最高的 APK 文件",
   "checkUpdateOnDetailPage": "打开应用详情页时进行检查",
   "disablePageTransitions": "禁用页面过渡动画效果",
