@@ -10,6 +10,7 @@ class Tencent extends AppSource {
     hosts = ['sj.qq.com'];
     naiveStandardVersionDetection = true;
     showReleaseDateAsVersionToggle = true;
+    canSearch = true;
   }
 
   @override
@@ -78,11 +79,89 @@ class Tencent extends AppSource {
           Uri.parse(apkUrl).queryParameters['fsname'] ??
           '${appId}_$version.apk';
 
-      return APKDetails(version, [
-        MapEntry(apkName, apkUrl),
-      ], AppNames(author, appName));
+      var iconUrl = json['iconUrl']?.toString();
+      int? apkSizeBytes;
+      try {
+        var rawSize = json['fileSize']?['bytes'];
+        if (rawSize != null) {
+          apkSizeBytes = int.parse(rawSize.toString());
+        }
+      } catch (_) {}
+
+      return APKDetails(
+        version,
+        [MapEntry(apkName, apkUrl)],
+        AppNames(author, appName),
+        iconUrl: iconUrl,
+        apkSizeBytes: apkSizeBytes,
+      );
     } else {
       throw getObtainiumHttpError(res);
     }
+  }
+
+  @override
+  Future<Map<String, List<String>>> search(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    var body = {
+      'head': {
+        'cmd': 'dc_pcyyb_official',
+        'authInfo': {'businessId': 'AuthName'},
+        'deviceInfo': {'platformType': 2, 'platform': 1},
+        'userInfo': {'guid': '1933d8ef-501b-49a7-89a0-46cbcb38a122'},
+        'expSceneIds': '',
+        'hostAppInfo': {'scene': 'search_result'},
+      },
+      'body': {
+        'bid': 'yybhome',
+        'offset': 0,
+        'size': 10,
+        'preview': false,
+        'listS': {
+          'region': {
+            'repStr': ['CN'],
+          },
+          'keyword': {
+            'repStr': [query],
+          },
+        },
+        'layout': 'yybn_search_result_list',
+      },
+    };
+    var res = await sourceRequest(
+      'https://yybadaccess.3g.qq.com/v2/dc_pcyyb_official',
+      querySettings,
+      postBody: body,
+    );
+    if (res.statusCode != 200) {
+      throw getObtainiumHttpError(res);
+    }
+    var json = jsonDecode(res.body);
+    if (json['ret'] != 0) {
+      throw NoReleasesError();
+    }
+    Map<String, List<String>> results = {};
+    var components = json['data']?['components'] as List<dynamic>?;
+    if (components != null && components.isNotEmpty) {
+      var itemData = components[0]?['data']?['itemData'] as List<dynamic>?;
+      if (itemData != null) {
+        for (var item in itemData) {
+          var pkgName = item['pkg_name']?.toString();
+          if (pkgName == null || pkgName.isEmpty) continue;
+          var url = 'https://sj.qq.com/appdetail/$pkgName';
+          try {
+            url = standardizeUrl(url);
+          } catch (_) {
+            continue;
+          }
+          var name = item['name']?.toString() ?? '';
+          var desc = item['developer']?.toString() ?? tr('noDescription');
+          results[url] = [name, desc];
+        }
+      }
+    }
+    return results;
   }
 }
