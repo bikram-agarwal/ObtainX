@@ -45,11 +45,21 @@ class VivoAppStore extends AppSource {
     var uploadTime = json['upload_time'].toString();
     var apkUrl = json['download_url'].toString();
     var apkName = '${packageName}_$versionCode.apk';
+    var iconUrl = json['icon_url']?.toString();
+    int? apkSizeBytes;
+    try {
+      var rawSize = json['size'];
+      if (rawSize != null) {
+        apkSizeBytes = int.parse(rawSize.toString()) * 1024;
+      }
+    } catch (_) {}
     return APKDetails(
       versionName,
       [MapEntry(apkName, apkUrl)],
       AppNames(developer, appName),
       releaseDate: DateTime.parse(uploadTime),
+      iconUrl: iconUrl,
+      apkSizeBytes: apkSizeBytes,
     );
   }
 
