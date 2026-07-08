@@ -14,6 +14,7 @@ class CoolApk extends AppSource {
     allowSubDomains = true;
     naiveStandardVersionDetection = true;
     allowOverride = false;
+    canSearch = true;
   }
 
   @override
@@ -87,6 +88,16 @@ class CoolApk extends AppSource {
 
     String apkName = '${appId}_$version.apk';
 
+    String? iconUrl = detail['logo']?.toString();
+
+    int? apkSizeBytes;
+    try {
+      var rawLength = detail['apklength'];
+      if (rawLength != null) {
+        apkSizeBytes = int.parse(rawLength.toString());
+      }
+    } catch (_) {}
+
     return APKDetails(
       version,
       [MapEntry(apkName, apkUrl)],
@@ -95,6 +106,8 @@ class CoolApk extends AppSource {
           ? DateTime.fromMillisecondsSinceEpoch(releaseDate)
           : null,
       changeLog: changelog,
+      iconUrl: iconUrl,
+      apkSizeBytes: apkSizeBytes,
     );
   }
 
@@ -138,7 +151,7 @@ class CoolApk extends AppSource {
       'X-App-Device': tokenPair['deviceCode']!,
       'X-Dark-Mode': '0',
       'X-App-Token': tokenPair['token']!,
-    };
+    }.map((key, value) => MapEntry(key.toLowerCase(), value));
   }
 
   Map<String, String> _getToken() {
@@ -190,5 +203,52 @@ class CoolApk extends AppSource {
     String finalToken = 'v2${base64.encode(reBcryptResult.codeUnits)}';
 
     return {'deviceCode': deviceCode, 'token': finalToken};
+  }
+
+  @override
+  Future<Map<String, List<String>>> search(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final searchUrl =
+        'https://api2.coolapk.com/v6/search'
+        '?type=apk'
+        '&feedType=all'
+        '&sort=default'
+        '&searchValue=${Uri.encodeQueryComponent(query)}'
+        '&pageType='
+        '&pageParam='
+        '&page=1'
+        '&showAnonymous=-1';
+    var headers = await getRequestHeaders(querySettings, searchUrl);
+    var res = await sourceRequest(searchUrl, querySettings);
+    if (res.statusCode != 200) {
+      throw getObtainiumHttpError(res);
+    }
+    var json = jsonDecode(res.body);
+    Map<String, List<String>> urlsWithDescriptions = {};
+    var dataList = json['data'] as List<dynamic>?;
+    if (dataList != null) {
+      for (var item in dataList) {
+        if (item['entityType'] != 'apk' || item['url'] == null) continue;
+        String url = item['url'].toString();
+        if (!url.startsWith('http')) {
+          url = 'https://www.coolapk.com$url';
+        }
+        try {
+          url = standardizeUrl(url);
+        } catch (_) {
+          continue;
+        }
+        String name = item['title']?.toString() ?? '';
+        String desc =
+            item['originData']?['shortDesc']?.toString() ??
+            item['developername']?.toString() ??
+            item['description']?.toString() ??
+            tr('noDescription');
+        urlsWithDescriptions[url] = [name, desc];
+      }
+    }
+    return urlsWithDescriptions;
   }
 }
