@@ -220,7 +220,6 @@ class CoolApk extends AppSource {
         '&pageParam='
         '&page=1'
         '&showAnonymous=-1';
-    var headers = await getRequestHeaders(querySettings, searchUrl);
     var res = await sourceRequest(searchUrl, querySettings);
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
