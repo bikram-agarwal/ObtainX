@@ -87,10 +87,21 @@ class Tencent extends AppSource {
       }
     } catch (_) {}
 
+    DateTime? releaseDate;
+    try {
+      var rawTime = appDetail['update_time']?.toString();
+      if (rawTime != null) {
+        releaseDate = DateTime.fromMillisecondsSinceEpoch(
+          int.parse(rawTime) * 1000,
+        );
+      }
+    } catch (_) {}
+
     return APKDetails(
       version,
       [MapEntry(apkName, apkUrl)],
       AppNames(author, appName),
+      releaseDate: releaseDate,
       iconUrl: iconUrl,
       apkSizeBytes: apkSizeBytes,
     );
