@@ -101,6 +101,18 @@ class Tencent extends AppSource {
   }
 
   @override
+  Future<Map<String, String>?> getRequestHeaders(
+    Map<String, dynamic> additionalSettings,
+    String url, {
+    bool forAPKDownload = false,
+  }) async {
+    return {
+      'user-agent':
+          'Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.138 Safari/537.36',
+    };
+  }
+
+  @override
   Future<Map<String, List<String>>> search(
     String query, {
     Map<String, dynamic> querySettings = const {},
