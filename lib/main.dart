@@ -234,6 +234,7 @@ void main() async {
         path: localeDir,
         fallbackLocale: fallbackLocale,
         useOnlyLangCode: false,
+        useFallbackTranslations: true,
         child: const Obtainium(),
       ),
     ),
