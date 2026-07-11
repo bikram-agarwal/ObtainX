@@ -72,6 +72,23 @@ const Set<String> validReproducibleBuildStatuses = {
   reproducibleBuildStatusError,
 };
 
+const String malwareScanStatusClean = 'clean';
+const String malwareScanStatusFlagged = 'flagged';
+const String malwareScanStatusError = 'error';
+
+const Set<String> validMalwareScanStatuses = {
+  malwareScanStatusClean,
+  malwareScanStatusFlagged,
+  malwareScanStatusError,
+};
+
+String? malwareScanStatusFromJsonValue(Object? value) {
+  if (value is String && validMalwareScanStatuses.contains(value)) {
+    return value;
+  }
+  return null;
+}
+
 String? githubAttestationStatusFromJsonValue(Object? value) {
   if (value is String && validGitHubAttestationStatuses.contains(value)) {
     return value;
@@ -549,6 +566,9 @@ class App {
   bool? latestIsReproducible;
   String? latestReproducibleStatus;
   String? latestAttestationStatus;
+  String? latestMalwareScanStatus;
+  String? latestMalwareScanDetail;
+  String? latestMalwareScanReportUrl;
   App(
     this.id,
     this.url,
@@ -576,6 +596,9 @@ class App {
     this.latestIsReproducible,
     this.latestReproducibleStatus,
     this.latestAttestationStatus,
+    this.latestMalwareScanStatus,
+    this.latestMalwareScanDetail,
+    this.latestMalwareScanReportUrl,
   });
 
   @override
@@ -643,6 +666,9 @@ class App {
     latestIsReproducible: latestIsReproducible,
     latestReproducibleStatus: latestReproducibleStatus,
     latestAttestationStatus: latestAttestationStatus,
+    latestMalwareScanStatus: latestMalwareScanStatus,
+    latestMalwareScanDetail: latestMalwareScanDetail,
+    latestMalwareScanReportUrl: latestMalwareScanReportUrl,
   );
 
   factory App.fromJson(Map<String, dynamic> json) {
@@ -698,6 +724,11 @@ class App {
       latestAttestationStatus: githubAttestationStatusFromJsonValue(
         json['latestAttestationStatus'] ?? json['latestIsAttested'],
       ),
+      latestMalwareScanStatus: malwareScanStatusFromJsonValue(
+        json['latestMalwareScanStatus'],
+      ),
+      latestMalwareScanDetail: json['latestMalwareScanDetail'] as String?,
+      latestMalwareScanReportUrl: json['latestMalwareScanReportUrl'] as String?,
     );
   }
 
@@ -734,6 +765,12 @@ class App {
       'latestReproducibleStatus': latestReproducibleStatus,
     if (latestAttestationStatus != null)
       'latestAttestationStatus': latestAttestationStatus,
+    if (latestMalwareScanStatus != null)
+      'latestMalwareScanStatus': latestMalwareScanStatus,
+    if (latestMalwareScanDetail != null)
+      'latestMalwareScanDetail': latestMalwareScanDetail,
+    if (latestMalwareScanReportUrl != null)
+      'latestMalwareScanReportUrl': latestMalwareScanReportUrl,
   };
 }
 
@@ -876,33 +913,38 @@ sourceRequestStreamResponse(
     var httpClient = createHttpClient(
       additionalSettings['allowInsecure'] == true,
     );
-    var request = await httpClient.openUrl(method, currentUrl);
-    if (requestHeaders != null) {
-      requestHeaders.forEach((key, value) {
-        request.headers.set(key, value);
-      });
-    }
-    request.cookies.addAll(cookies);
-    request.followRedirects = false;
-    if (postBody != null) {
-      request.headers.contentType = ContentType.json;
-      request.write(jsonEncode(postBody));
-    }
-    final response = await request.close();
-
-    if (followRedirects &&
-        (response.statusCode >= 300 && response.statusCode <= 399)) {
-      final location = response.headers.value(HttpHeaders.locationHeader);
-      if (location != null) {
-        currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
-        redirectCount++;
-        cookies = response.cookies;
-        httpClient.close();
-        continue;
+    try {
+      var request = await httpClient.openUrl(method, currentUrl);
+      if (requestHeaders != null) {
+        requestHeaders.forEach((key, value) {
+          request.headers.set(key, value);
+        });
       }
-    }
+      request.cookies.addAll(cookies);
+      request.followRedirects = false;
+      if (postBody != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(jsonEncode(postBody));
+      }
+      final response = await request.close();
 
-    return MapEntry(currentUrl, MapEntry(httpClient, response));
+      if (followRedirects &&
+          (response.statusCode >= 300 && response.statusCode <= 399)) {
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        if (location != null) {
+          currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
+          redirectCount++;
+          cookies = response.cookies;
+          httpClient.close();
+          continue;
+        }
+      }
+
+      return MapEntry(currentUrl, MapEntry(httpClient, response));
+    } catch (e) {
+      httpClient.close(force: true);
+      rethrow;
+    }
   }
   throw ObtainiumError('Too many redirects ($maxRedirects)');
 }
@@ -954,6 +996,7 @@ abstract class AppSource {
   bool urlsAlwaysHaveExtension = false;
   bool allowIncludeZips = false;
   bool allowIncludeTarballs = false;
+  bool regionalStore = false;
 
   /// Transient per-check context: the app as it was known before this update
   /// check, set by [SourceProvider.getApp] right before [getLatestAPKDetails].
@@ -1011,7 +1054,10 @@ abstract class AppSource {
       url,
     );
     requestHeaders ??= <String, String>{};
-    if (!requestHeaders.containsKey(HttpHeaders.userAgentHeader)) {
+    final hasUserAgent = requestHeaders.keys.any(
+      (key) => key.toLowerCase() == 'user-agent',
+    );
+    if (!hasUserAgent) {
       requestHeaders = Map<String, String>.from(requestHeaders)
         ..[HttpHeaders.userAgentHeader] = 'Obtainium';
     }

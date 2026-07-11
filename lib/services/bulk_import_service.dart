@@ -215,6 +215,37 @@ class BulkImportService {
     }
   }
 
+  /// Returns a list of candidate package IDs, including the original and any
+  /// flavor derivatives (e.g. stripping suffixes like .gh, .github, .fdroid).
+  static List<String> getPackageIdCandidates(String packageId) {
+    final List<String> candidates = [packageId];
+    const List<String> suffixes = [
+      '.gh',
+      '.github',
+      '.fdroid',
+      '.foss',
+      '.dev',
+      '.debug',
+      '.play',
+      '.playstore',
+      '.gp',
+      '.beta',
+      '.lite',
+      '.pro',
+      '.free',
+    ];
+    for (final String suffix in suffixes) {
+      if (packageId.endsWith(suffix)) {
+        final String base = packageId.substring(0, packageId.length - suffix.length);
+        if (base.contains('.')) {
+          candidates.add(base);
+        }
+        break;
+      }
+    }
+    return candidates;
+  }
+
   /// Checks APKMirror for a list of package names.
   /// Returns a map of packageName -> apkmirror URL (null if not found).
   /// Uses APKMirror's REST API with batch requests of 100 apps.
@@ -250,15 +281,30 @@ class BulkImportService {
       return result;
     }
 
+    final List<String> queryCandidates = [];
+    final Map<String, List<String>> candidateToOriginal = {};
+    final Map<String, Set<String>> pendingCandidates = {};
+
+    for (final String pkg in toQuery) {
+      final candidates = getPackageIdCandidates(pkg);
+      pendingCandidates[pkg] = candidates.toSet();
+      for (final String candidate in candidates) {
+        if (!queryCandidates.contains(candidate)) {
+          queryCandidates.add(candidate);
+        }
+        candidateToOriginal.putIfAbsent(candidate, () => []).add(pkg);
+      }
+    }
+
     const batchSize = 100;
     // Authorization header uses APKUpdater credentials to access the API endpoint
     const auth = 'Basic YXBpLWFwa3VwZGF0ZXI6cm01cmNmcnVVakt5MDRzTXB5TVBKWFc4';
 
-    for (int i = 0; i < toQuery.length; i += batchSize) {
+    for (int i = 0; i < queryCandidates.length; i += batchSize) {
       if (shouldAbort?.call() == true) {
         return result;
       }
-      final batch = toQuery.sublist(i, min(i + batchSize, toQuery.length));
+      final batch = queryCandidates.sublist(i, min(i + batchSize, queryCandidates.length));
       try {
         final response = await http
             .post(
@@ -280,25 +326,38 @@ class BulkImportService {
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
           final dataList = data['data'] as List? ?? [];
+          
+          final Map<String, ({bool exists, String? link})> batchResults = {};
           for (final item in dataList) {
             final pname = item['pname'] as String?;
-            final exists = item['exists'] as bool? ?? false;
-            // app.link is a relative path like /apk/google-inc/google-maps/
-            final appLink = item['app']?['link'] as String?;
-            if (pname != null && exists && appLink != null) {
-              result[pname] =
-                  _apkMirrorPreferredPackageUrls[pname] ??
-                  'https://www.apkmirror.com$appLink';
-            } else if (pname != null) {
-              result[pname] = null;
+            if (pname != null) {
+              batchResults[pname] = (
+                exists: item['exists'] as bool? ?? false,
+                link: item['app']?['link'] as String?,
+              );
             }
           }
-          // Mark any that weren't in the response as not found
-          for (final pkg in batch) {
-            result.putIfAbsent(pkg, () => null);
+
+          for (final String candidate in batch) {
+            final res = batchResults[candidate];
+            final exists = res?.exists ?? false;
+            final appLink = res?.link;
+            
+            final originals = candidateToOriginal[candidate] ?? [];
+            for (final original in originals) {
+              if (exists && appLink != null) {
+                if (result[original] == null || original == candidate) {
+                  result[original] =
+                      _apkMirrorPreferredPackageUrls[candidate] ??
+                      'https://www.apkmirror.com$appLink';
+                }
+              }
+              pendingCandidates[original]?.remove(candidate);
+              if (pendingCandidates[original]?.isEmpty == true) {
+                result.putIfAbsent(original, () => null);
+              }
+            }
           }
-        } else {
-          // Non-200 (rate limit, server error, etc.) — don't cache; retry next scan.
         }
       } catch (_) {
         // Network error or timeout — don't cache; retry next scan.
@@ -308,7 +367,7 @@ class BulkImportService {
         return result;
       }
       // Small delay between batches to respect rate limits
-      if (i + batchSize < toQuery.length) {
+      if (i + batchSize < queryCandidates.length) {
         await Future.delayed(const Duration(milliseconds: 500));
       }
     }
@@ -374,40 +433,43 @@ class BulkImportService {
         );
         await Future.wait(
           subChunk.map((pkg) async {
-            try {
-              final response = await http
-                  .get(
-                    Uri.parse(
-                      'https://tapi.pureapk.com/v3/get_app_his_version'
-                      '?package_name=$pkg&hl=en',
-                    ),
-                    headers: headers,
-                  )
-                  .timeout(const Duration(seconds: 15));
+            final candidates = getPackageIdCandidates(pkg);
+            for (final candidate in candidates) {
+              try {
+                final response = await http
+                    .get(
+                      Uri.parse(
+                        'https://tapi.pureapk.com/v3/get_app_his_version'
+                        '?package_name=$candidate&hl=en',
+                      ),
+                      headers: headers,
+                    )
+                    .timeout(const Duration(seconds: 15));
 
-              if (response.statusCode == 200) {
-                final body = jsonDecode(response.body);
-                final List<dynamic> versions = body is Map
-                    ? (body['version_list'] as List? ?? [])
-                    : [];
-                if (versions.isNotEmpty) {
-                  final first = versions.first;
-                  final appName = first is Map
-                      ? (first['title'] as String? ?? '')
-                      : '';
-                  result[pkg] = appName.isNotEmpty
-                      ? 'https://apkpure.net/${_slugify(appName)}/$pkg'
-                      : 'https://apkpure.net/$pkg';
-                } else {
-                  result[pkg] = null;
+                if (response.statusCode == 200) {
+                  final body = jsonDecode(response.body);
+                  final List<dynamic> versions = body is Map
+                      ? (body['version_list'] as List? ?? [])
+                      : [];
+                  if (versions.isNotEmpty) {
+                    final first = versions.first;
+                    final appName = first is Map
+                        ? (first['title'] as String? ?? '')
+                        : '';
+                    result[pkg] = appName.isNotEmpty
+                        ? 'https://apkpure.net/${_slugify(appName)}/$candidate'
+                        : 'https://apkpure.net/$candidate';
+                    return;
+                  }
                 }
-              } else {
-                // Non-200 — don't cache; retry next scan.
+              } catch (e) {
+                debugPrint('APKPure check failed for $candidate: $e');
+                if (candidate == pkg) {
+                  rethrow;
+                }
               }
-            } catch (e) {
-              debugPrint('APKPure check failed for $pkg: $e');
-              // Network error or timeout — don't cache; retry next scan.
             }
+            result[pkg] = null;
             reportProgress();
           }),
         );
@@ -522,17 +584,26 @@ class BulkImportService {
       onProgress: onProgress,
       shouldAbort: shouldAbort,
       runLookup: (http.Client client, String pkg) async {
-        final http.Response response = await client
-            .get(
-              Uri.parse('https://f-droid.org/api/v1/packages/$pkg'),
-              headers: {'User-Agent': 'ObtainX/1.4.0'},
-            )
-            .timeout(const Duration(seconds: 10));
-        if (response.statusCode == 200) {
-          result[pkg] = 'https://f-droid.org/packages/$pkg/';
-        } else if (response.statusCode == 404) {
-          result[pkg] = null;
+        final candidates = getPackageIdCandidates(pkg);
+        for (final candidate in candidates) {
+          try {
+            final http.Response response = await client
+                .get(
+                  Uri.parse('https://f-droid.org/api/v1/packages/$candidate'),
+                  headers: {'User-Agent': 'ObtainX/1.4.0'},
+                )
+                .timeout(const Duration(seconds: 10));
+            if (response.statusCode == 200) {
+              result[pkg] = 'https://f-droid.org/packages/$candidate/';
+              return;
+            }
+          } catch (_) {
+            if (candidate == pkg) {
+              rethrow;
+            }
+          }
         }
+        result[pkg] = null;
       },
     );
     _putMissingPackageKeysAsNull(result, packageNames);
@@ -701,7 +772,15 @@ class BulkImportService {
         if (shouldAbort?.call() == true) {
           return result;
         }
-        result[packageName] = packageIdToStoreUrl[packageName];
+        final candidates = getPackageIdCandidates(packageName);
+        String? foundUrl;
+        for (final candidate in candidates) {
+          if (packageIdToStoreUrl.containsKey(candidate)) {
+            foundUrl = packageIdToStoreUrl[candidate];
+            break;
+          }
+        }
+        result[packageName] = foundUrl;
         lookupDone++;
         if (lookupDone == 1 ||
             lookupDone == lookupTotal ||
@@ -721,45 +800,48 @@ class BulkImportService {
         onProgress: onProgress,
         shouldAbort: shouldAbort,
         runLookup: (http.Client client, String pkg) async {
-          final Uri uri = Uri.parse(
-            'https://apt.izzysoft.de/fdroid/api/v1/packages/$pkg',
-          );
-          http.Response response = await client
-              .get(uri, headers: requestHeaders)
-              .timeout(const Duration(seconds: 15));
-          if (response.statusCode == 429) {
-            await Future<void>.delayed(const Duration(seconds: 1));
-            response = await client
-                .get(uri, headers: requestHeaders)
-                .timeout(const Duration(seconds: 15));
-          }
-          if (response.statusCode == 200) {
+          final candidates = getPackageIdCandidates(pkg);
+          for (final candidate in candidates) {
             try {
-              final dynamic decoded = jsonDecode(response.body);
-              String? versionCodeStr = decoded['suggestedVersionCode']
-                  ?.toString();
-              if (versionCodeStr == null || versionCodeStr.isEmpty) {
-                final List<dynamic>? packages =
-                    decoded['packages'] as List<dynamic>?;
-                if (packages != null && packages.isNotEmpty) {
-                  final first = packages.first;
-                  if (first is Map) {
-                    versionCodeStr = first['versionCode']?.toString();
+              final Uri uri = Uri.parse(
+                'https://apt.izzysoft.de/fdroid/api/v1/packages/$candidate',
+              );
+              http.Response response = await client
+                  .get(uri, headers: requestHeaders)
+                  .timeout(const Duration(seconds: 15));
+              if (response.statusCode == 429) {
+                await Future<void>.delayed(const Duration(seconds: 1));
+                response = await client
+                    .get(uri, headers: requestHeaders)
+                    .timeout(const Duration(seconds: 15));
+              }
+              if (response.statusCode == 200) {
+                final dynamic decoded = jsonDecode(response.body);
+                String? versionCodeStr = decoded['suggestedVersionCode']
+                    ?.toString();
+                if (versionCodeStr == null || versionCodeStr.isEmpty) {
+                  final List<dynamic>? packages =
+                      decoded['packages'] as List<dynamic>?;
+                  if (packages != null && packages.isNotEmpty) {
+                    final first = packages.first;
+                    if (first is Map) {
+                      versionCodeStr = first['versionCode']?.toString();
+                    }
                   }
                 }
-              }
-              if (versionCodeStr != null && versionCodeStr.isNotEmpty) {
-                result[pkg] =
-                    'https://apt.izzysoft.de/fdroid/repo/${pkg}_$versionCodeStr.apk';
-              } else {
-                result[pkg] = null;
+                if (versionCodeStr != null && versionCodeStr.isNotEmpty) {
+                  result[pkg] =
+                      'https://apt.izzysoft.de/fdroid/repo/${candidate}_$versionCodeStr.apk';
+                  return;
+                }
               }
             } catch (_) {
-              result[pkg] = null;
+              if (candidate == pkg) {
+                rethrow;
+              }
             }
-          } else if (response.statusCode == 404) {
-            result[pkg] = null;
           }
+          result[pkg] = null;
         },
       );
       return result;

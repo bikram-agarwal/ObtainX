@@ -133,6 +133,7 @@ Instead of one long wall of options, settings are grouped into **separate boxes*
 ### Adding apps – search across stores
 
 Everything happens on one page. All stores are visible from the start. Tap Search and results load right there — no separate popups or screens to step through. Each result shows a small store badge so you always know where a result came from. Want to try a different store? Just tap it above and search again. Results replace inline, no backing up needed.
+<img width="1008" height="2244" alt="Search" src="" />
 
 <table>
 <tr>
@@ -140,7 +141,7 @@ Everything happens on one page. All stores are visible from the start. Tap Searc
 <img src="https://github.com/user-attachments/assets/cf630d89-e4c9-4bb6-8a7e-bbc96c1c05af" alt="Obtainium add app entry" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/47e8c75a-ed40-4633-a582-448b6943c8d8" alt="ObtainX add app modes and URL" width="300" /><br /><strong>ObtainX</strong>
+<img src="https://github.com/user-attachments/assets/7fba098b-5722-4169-9239-ab3634fe18ba" alt="ObtainX add app search mode with store chips" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 <tr>
@@ -148,12 +149,13 @@ Everything happens on one page. All stores are visible from the start. Tap Searc
 <img src="https://github.com/user-attachments/assets/b187f6a3-1776-4d15-b9d4-21ea3b060d56" alt="Obtainium add app search results" width="300" /><br /><strong>Obtainium</strong>
 </td>
 <td width="50%" align="center" valign="top">
-<img src="https://github.com/user-attachments/assets/0c5b7c42-f85a-40d9-961b-9deb3d92616f" alt="ObtainX add app search" width="300" /><br /><strong>ObtainX</strong>
+<img src="https://github.com/user-attachments/assets/11652dea-aa1a-4b7a-89fc-d77b64670f8c" alt="ObtainX add app search results" width="300" /><br /><strong>ObtainX</strong>
 </td>
 </tr>
 </table>
 
-- All stores visible upfront — pick one, search, and see results on the same page.
+- More stores are searchable than Obtainium.
+- All stores visible upfront — pick any, search, and see results on the same page.
 - Store badge on each result so you know at a glance where it comes from.
 - Switch store and search again without navigating away.
 
@@ -275,7 +277,7 @@ ObtainX surfaces **finer-grained states** rather than forcing every situation in
 What's on your device matches what the source is offering — you're current.
 </td>
 <td width="50%" align="center" valign="top">
-<img src="../assets/screenshots/App_Update.jpg" alt="ObtainX status: update available" width="300" /><br />
+<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/04_app.jpg" alt="ObtainX status: update available" width="300" /><br />
 <strong>Update available</strong><br />
 The source has a newer version than what's installed — time to update.
 </td>
@@ -386,8 +388,9 @@ ObtainX adds **Folders**: persistent named views that pull apps off the main lis
 - **Exclusions** — If you manually remove an app from a rule-based folder, it's excluded and the rule won't re-add it. Manually adding it back clears the exclusion.
 **Per-folder view settings** — Each folder (and the On-Demand Only page) remembers its own sort column, group-by mode, pinned state, and filter — completely independent from the main list and from each other.
 
-<img src="https://github.com/user-attachments/assets/5785396f-cee9-41e5-98e2-b052a73cbef3" alt="Folders with rules" width="300" />
-
+<p align="center">
+<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/10_folders.jpg" alt="Folders with rules" width="300" />
+</p>
 ---
 
 ## On-Demand Only

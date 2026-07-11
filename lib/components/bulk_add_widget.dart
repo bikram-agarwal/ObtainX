@@ -6,14 +6,15 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
+import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
@@ -22,6 +23,7 @@ import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/gestures.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 
 const double _bulkBottomActionGap = 8.0;
 const double _bulkBottomActionHorizontalPadding = 16.0;
@@ -232,6 +234,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget _buildAppTypeChipRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
@@ -276,6 +281,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget _buildStoreChipRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: _configurableBulkStores.map((store) {
@@ -310,6 +318,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget _buildOptionsChipRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
@@ -779,18 +790,23 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                         Expanded(
                           child: TextField(
                             controller: _searchController,
-                            decoration: InputDecoration(
-                              hintText: tr('search'),
-                              prefixIcon: const Icon(Icons.search, size: 18),
-                              isDense: true,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                            ),
+                            decoration:
+                                appPageOutlinedInputDecoration(
+                                  context,
+                                  labelText: null,
+                                  hintText: tr('search'),
+                                  isDense: true,
+                                  borderRadius: 30,
+                                ).copyWith(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.search,
+                                    size: 18,
+                                  ),
+                                ),
                             onChanged: (String value) {
                               _searchDebounceTimer?.cancel();
                               if (value.isEmpty) {
@@ -1439,7 +1455,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                     // M3 Expressive wavy progress bar. Owns its own height
                     // and shape per the spec, so we drop the previous
                     // ClipRRect/minHeight wrapping.
-                    LinearProgressIndicatorM3E(
+                    LinearRipplingWavyProgressIndicator(
                       value: started ? progressValue : null,
                     ),
                   ],
@@ -2318,6 +2334,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         builder: (BuildContext context) {
           return AlertDialog(
             title: Text(tr('discardUnsavedChangesQuestion')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('bulkScanDiscardResultsBody')),
             actions: [
               TextButton(
@@ -2326,6 +2343,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
               ),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
                 child: Text(tr('continue')),
               ),
             ],
@@ -2348,6 +2368,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           builder: (BuildContext context) {
             return AlertDialog(
               title: Text(tr('bulkScanNavigationCancelTitle')),
+              contentPadding: appDialogContentPadding,
               content: Text(tr('bulkScanNavigationCancelBody')),
               actions: [
                 TextButton(
@@ -2356,6 +2377,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(true),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
                   child: Text(tr('cancelBulkScan')),
                 ),
               ],
@@ -2642,11 +2666,10 @@ class _GithubPatSheetState extends State<_GithubPatSheet> {
               TextField(
                 controller: _controller,
                 autofocus: true,
-                decoration: InputDecoration(
+                decoration: appPageOutlinedInputDecoration(
+                  context,
                   labelText: tr('githubPATLabel'),
-                  errorText: _validationError,
-                  border: const OutlineInputBorder(),
-                ),
+                ).copyWith(errorText: _validationError),
                 obscureText: true,
                 enableSuggestions: false,
                 autocorrect: false,

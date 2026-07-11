@@ -21,6 +21,7 @@ import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
@@ -103,6 +104,7 @@ class AddAppPageState extends State<AddAppPage> {
         builder: (BuildContext dialogContext) {
           return AlertDialog(
             title: Text(tr(titleKey)),
+            contentPadding: appDialogContentPadding,
             content: Text(tr(explanationKey)),
             actions: [
               TextButton(
@@ -111,6 +113,9 @@ class AddAppPageState extends State<AddAppPage> {
               ),
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(dialogContext).colorScheme.error,
+                ),
                 child: Text(tr('continue')),
               ),
             ],
@@ -419,6 +424,7 @@ class AddAppPageState extends State<AddAppPage> {
         builder: (BuildContext dialogContext) {
           return AlertDialog(
             title: Text(tr('downloadAPKToIdentifyAppQuestion')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('downloadAPKToIdentifyAppExplanation')),
             actions: [
               TextButton(
@@ -459,6 +465,7 @@ class AddAppPageState extends State<AddAppPage> {
             builder: (BuildContext dialogContext) {
               return AlertDialog(
                 title: Text(tr('insecureConnection')),
+                contentPadding: appDialogContentPadding,
                 content: Text(tr('cleartextWarningExplanation')),
                 actions: [
                   TextButton(
@@ -1290,31 +1297,12 @@ class AddAppPageState extends State<AddAppPage> {
                   );
                 }
               },
-              decoration: InputDecoration(
+              decoration: appPageOutlinedInputDecoration(
+                context,
+                labelText: null,
                 hintText: tr('searchSomeSourcesLabel'),
                 isDense: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(30),
-                  borderSide: BorderSide(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.outline.withValues(alpha: 0.55),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(30),
-                  borderSide: BorderSide(
-                    color: Theme.of(context).colorScheme.primary,
-                    width: 2,
-                  ),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
+                borderRadius: 30,
               ),
             ),
           ),
@@ -1329,6 +1317,16 @@ class AddAppPageState extends State<AddAppPage> {
           .where((e) => e.canSearch)
           .toList();
       if (searchableSources.isEmpty) return const SizedBox.shrink();
+
+      searchableSources.sort((a, b) {
+        if (a.regionalStore && !b.regionalStore) {
+          return 1;
+        } else if (!a.regionalStore && b.regionalStore) {
+          return -1;
+        }
+        return a.name.compareTo(b.name);
+      });
+
       return Wrap(
         spacing: 8,
         runSpacing: 4,
@@ -1403,27 +1401,25 @@ class AddAppPageState extends State<AddAppPage> {
           TextField(
             controller: _searchResultFilterController,
             onChanged: (v) => setState(() => _searchResultFilter = v),
-            decoration: InputDecoration(
-              hintText: tr('filter'),
-              prefixIcon: const Icon(Icons.filter_list_rounded, size: 20),
-              suffixIcon: _searchResultFilter.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.close, size: 18),
-                      onPressed: () {
-                        _searchResultFilterController.clear();
-                        setState(() => _searchResultFilter = '');
-                      },
-                    )
-                  : null,
-              isDense: true,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(30),
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 10,
-              ),
-            ),
+            decoration:
+                appPageOutlinedInputDecoration(
+                  context,
+                  labelText: null,
+                  hintText: tr('filter'),
+                  isDense: true,
+                  borderRadius: 30,
+                ).copyWith(
+                  prefixIcon: const Icon(Icons.filter_list_rounded, size: 20),
+                  suffixIcon: _searchResultFilter.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.close, size: 18),
+                          onPressed: () {
+                            _searchResultFilterController.clear();
+                            setState(() => _searchResultFilter = '');
+                          },
+                        )
+                      : null,
+                ),
           ),
           if (entries.isEmpty)
             Padding(

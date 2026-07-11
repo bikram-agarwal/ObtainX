@@ -1,11 +1,13 @@
 import 'dart:async' show unawaited;
-import 'dart:ui' show PlatformDispatcher;
+import 'dart:ui' show PlatformDispatcher, PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/pages/home.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
+import 'package:obtainium/theme/app_text_button_theme.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/app_switch_theme.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -232,6 +234,7 @@ void main() async {
         path: localeDir,
         fallbackLocale: fallbackLocale,
         useOnlyLangCode: false,
+        useFallbackTranslations: true,
         child: const Obtainium(),
       ),
     ),
@@ -298,6 +301,7 @@ class _ObtainiumState extends State<Obtainium> {
       builder: (BuildContext alertContext) {
         return AlertDialog(
           title: Text(tr('batteryOptimizationWarningTitle')),
+          contentPadding: appDialogContentPadding,
           content: Text(tr('batteryOptimizationWarningBody')),
           actions: [
             TextButton(
@@ -663,6 +667,7 @@ class _ObtainiumState extends State<Obtainium> {
 
           return MaterialApp(
             title: 'ObtainX',
+            scrollBehavior: const AppScrollBehavior(),
             localizationsDelegates: context.localizationDelegates,
             supportedLocales: context.supportedLocales,
             locale: context.locale,
@@ -707,6 +712,8 @@ class _ObtainiumState extends State<Obtainium> {
               segmentedButtonTheme: appSegmentedButtonTheme(themeColorScheme),
               switchTheme: appSwitchTheme(themeColorScheme),
               tooltipTheme: tooltipThemeFor(themeColorScheme),
+              dialogTheme: appDialogTheme(),
+              textButtonTheme: appTextButtonTheme(),
               // splashFactory: deliberately NOT overridden. Briefly tried
               // [InkRipple.splashFactory] for a more visible
               // expanding-circle ripple, but its longer animation
@@ -734,6 +741,8 @@ class _ObtainiumState extends State<Obtainium> {
               ),
               switchTheme: appSwitchTheme(darkThemeColorScheme),
               tooltipTheme: tooltipThemeFor(darkThemeColorScheme),
+              dialogTheme: appDialogTheme(),
+              textButtonTheme: appTextButtonTheme(),
             ),
             home: Shortcuts(
               shortcuts: <LogicalKeySet, Intent>{
@@ -747,4 +756,16 @@ class _ObtainiumState extends State<Obtainium> {
       ),
     );
   }
+}
+
+class AppScrollBehavior extends MaterialScrollBehavior {
+  const AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.trackpad,
+    PointerDeviceKind.stylus,
+  };
 }

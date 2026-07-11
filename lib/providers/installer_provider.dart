@@ -30,19 +30,31 @@ Future<List<InstallerAppInfo>> getApkInstallerApps() async {
     'queryApkInstallerActivities',
   );
   if (rawList == null) return [];
-  return rawList.map((entry) {
-    final map = Map<String, dynamic>.from(entry as Map);
-    Uint8List? iconData;
-    if (map['icon'] != null) {
-      iconData = Uint8List.fromList(List<int>.from(map['icon']));
-    }
-    return InstallerAppInfo(
-      packageName: map['packageName']?.toString() ?? '',
-      activityName: map['activityName']?.toString() ?? '',
-      label: map['label']?.toString() ?? '',
-      icon: iconData,
-    );
-  }).toList();
+  return rawList
+      .map((entry) {
+        final map = Map<String, dynamic>.from(entry as Map);
+        Uint8List? iconData;
+        if (map['icon'] != null) {
+          iconData = Uint8List.fromList(List<int>.from(map['icon']));
+        }
+        return InstallerAppInfo(
+          packageName: map['packageName']?.toString() ?? '',
+          activityName: map['activityName']?.toString() ?? '',
+          label: map['label']?.toString() ?? '',
+          icon: iconData,
+        );
+      })
+      .where(_isSelectableInstallerActivity)
+      .toList();
+}
+
+bool _isSelectableInstallerActivity(InstallerAppInfo app) {
+  if (app.packageName.toLowerCase() !=
+      'io.github.muntashirakon.appmanager') {
+    return true;
+  }
+  return app.activityName.toLowerCase().endsWith('packageinstalleractivity') ||
+      app.label.trim().toLowerCase() == 'install';
 }
 
 void registerThirdPartyInstallPackageChangedCallback(

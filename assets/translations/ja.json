@@ -851,5 +851,7 @@
   "virusTotalErrorGeneric": "VirusTotalスキャンに失敗しました: {}",
   "virusTotalDetectionSummary": "{}/{} 個のエンジンがこのファイルを検出しました",
   "stayHere": "このまま残る",
-  "scanningWithVirusTotal": "VirusTotalでスキャン中"
+  "scanningWithVirusTotal": "VirusTotalでスキャン中",
+  "flaggedByVirusTotal": "VirusTotalでフラグ付け",
+  "virusTotalScanFailed": "VirusTotalスキャンに失敗しました"
 }

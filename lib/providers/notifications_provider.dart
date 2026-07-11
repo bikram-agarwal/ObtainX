@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
 class ObtainiumNotification {
@@ -159,6 +160,66 @@ class ErrorCheckingUpdatesNotification extends ObtainiumNotification {
       );
 }
 
+/// Fired ONCE per background/silent update batch, listing every app that was
+/// skipped because its VirusTotal scan came back flagged or couldn't be
+/// completed - see the install-flow rules in apps_provider.dart. Batched
+/// rather than one notification per app so a run with several flagged/failed
+/// scans doesn't spam the notification tray. Not fired for interactive
+/// installs, which show a dialog per app instead.
+class MalwareScanSkippedNotification extends ObtainiumNotification {
+  MalwareScanSkippedNotification(
+    List<({String appName, String status, String? detail})> skipped, {
+    int? id,
+  }) : super(
+         id ?? 8,
+         skipped.length == 1
+             ? tr(
+                 skipped[0].status == malwareScanStatusFlagged
+                     ? 'malwareScanFlaggedSkippedTitle'
+                     : 'malwareScanErrorSkippedTitle',
+                 args: [skipped[0].appName],
+               )
+             : plural(
+                 'malwareScanSkippedPluralTitle',
+                 skipped.length - 1,
+                 args: [skipped[0].appName, (skipped.length - 1).toString()],
+               ),
+         '',
+         'APK_MALWARE_SCAN_SKIPPED',
+         tr('malwareScanSkippedNotifChannel'),
+         tr('malwareScanSkippedNotifDescription'),
+         Importance.high,
+       ) {
+    message = skipped
+        .map(
+          (s) =>
+              '${s.appName}: ${s.detail ?? tr(s.status == malwareScanStatusFlagged ? 'malwareScanFlaggedTitle' : 'malwareScanErrorTitle')}',
+        )
+        .join('\n');
+    payload = '$title\n$message';
+  }
+}
+
+/// Fired when installing an already-downloaded update fails - kept distinct
+/// from [ErrorCheckingUpdatesNotification], which is reserved for failures
+/// of the update *check* itself. Conflating the two used to mislabel every
+/// install failure (bad download, downgrade blocked, VirusTotal-blocked,
+/// etc.) as "Error checking for updates", which is simply wrong - the check
+/// succeeded; installing what it found is what failed.
+class ErrorInstallingUpdatesNotification extends ObtainiumNotification {
+  ErrorInstallingUpdatesNotification(String error, {int? id})
+    : super(
+        id ?? 9,
+        tr('errorInstallingUpdate'),
+        error,
+        'BG_INSTALL_ERROR',
+        tr('errorInstallingUpdateNotifChannel'),
+        tr('errorInstallingUpdateNotifDescription'),
+        Importance.high,
+        payload: "${tr('errorInstallingUpdate')}\n$error",
+      );
+}
+
 class AppsRemovedNotification extends ObtainiumNotification {
   AppsRemovedNotification(List<List<String>> namedReasons)
     : super(
@@ -300,6 +361,7 @@ class NotificationsProvider {
         PageRouteBuilder(
           pageBuilder: (context, _, _) => AlertDialog(
             title: Text(title),
+            contentPadding: appDialogContentPadding,
             content: Text(content),
             actions: [
               TextButton(

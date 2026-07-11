@@ -11,6 +11,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
@@ -401,12 +402,16 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           data: dialogTheme,
           child: AlertDialog(
             title: Text(tr('appEditsUnsavedTitle')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('appEditsUnsavedBody')),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(
                   dialogContext,
                   _AdditionalOptionsUnsavedAction.discard,
+                ),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(dialogContext).colorScheme.error,
                 ),
                 child: Text(tr('discard')),
               ),

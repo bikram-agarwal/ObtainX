@@ -1,6 +1,6 @@
 # ObtainX
 
-<img alt="ObtainX — get Android app updates straight from the source" src="./fastlane/metadata/android/en-US/images/featureGraphic.png" />
+<img alt="ObtainX — get Android app updates straight from the source" src="fastlane/metadata/android/en-US/images/featureGraphic.png" />
 
 ObtainX is a modern and supercharged fork of Obtainium. Re-engineered with a stunning Material 3 Expressive UI, it delivers an ultra-smooth interface packed with power-user utilities that make managing your Android apps effortless. 
 
@@ -11,15 +11,12 @@ ObtainX is a modern and supercharged fork of Obtainium. Re-engineered with a stu
 <strong>Featured by HowToMen: Best Android Apps - May 2026! 🎊</strong>
 </p>
 <p align="center">
-  <a href="https://youtu.be/B59glf2bweo?si=8rTAqBJiW9uwtpTT&t=468"><img width="50%" alt="ObtainX: Best Android Apps - May 2026!" src="./assets/graphics/feature_htm.webp" /></a>
+  <a href="https://youtu.be/B59glf2bweo?si=8rTAqBJiW9uwtpTT&t=468"><img width="50%" alt="ObtainX: Best Android Apps - May 2026!" src="docs/assets/feature_htm.webp" /></a>
 </p>
 
 ## 📦 Installation
-[<img src="assets/graphics/badge_fdroid.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/dev.bikram.obtainx)
-[<img src="assets/graphics/badge_github.png" alt="Get it on GitHub" height="80">](https://github.com/bikram-agarwal/ObtainX/releases/latest)
-<!-- Coming soon. Placeholder code.
-[<img src="assets/graphics/badge_IzzyOnDroid.png" alt="Get it on IzzyOnDroid" height="80">](https://apt.izzysoft.de/fdroid/index/apk/dev.bikram.obtainx)
--->
+[<img src="docs/assets/badge_fdroid.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/dev.bikram.obtainx)
+[<img src="docs/assets/badge_github.png" alt="Get it on GitHub" height="80">](https://github.com/bikram-agarwal/ObtainX/releases/latest)
 
 ## 🔄 Seamlessly bring your data from Obtainium
 
@@ -35,7 +32,9 @@ These features have been built from the ground up and do not exist in Obtainium.
 
 ### 🛡️ Security & Integrity
 
-- **🛡️ Build Verification Checks** — Runs automated cryptographic checks (F-Droid/Izzy reproducible builds, GitHub Release Attestations) on apps you add to flag manipulated binaries before install. For total integrity, ObtainX's own updates are secured with GitHub Release Attestations as well. Learn more in the [Build Verification Guide](docs/build-verification-guide.md).
+- **🛡️ Build Verification Checks** — Runs automated cryptographic checks (F-Droid/Izzy reproducible builds, GitHub Release Attestations) on apps you add to flag tampered binaries before install. For total integrity, ObtainX's own updates are secured with GitHub Release Attestations as well. Learn more in the [Build Verification Guide](docs/build-verification-guide.md).
+
+- **🦠 VirusTotal APK scanning** — Optionally scan downloaded APKs with VirusTotal before installation. You are in control - flagged or failed scans ask you what to do during installs.
 
 - **📦 Third-Party Installer Support** — Hand off updates to third-party installers like InstallerX or App Manager to review APK metadata (trackers, permissions, target SDK etc.) before installing (data hidden by stock installers). Essential for devices running under Google _Advanced Protection_.
 
@@ -185,3 +184,26 @@ Optimizations made to legacy Obtainium features.
 ObtainX is a fork of Obtainium, licensed under [GPL-v3](LICENSE.txt). 
 
 Read the original Obtainium [README here](https://github.com/ImranR98/Obtainium/blob/main/README.md).
+
+## ➕ More Apps
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="https://github.com/bikram-agarwal/Remember">
+        <img src="docs/assets/feature_remember.jpg" alt="Remember feature graphic" width="100%">
+      <b>Remember</b></a>
+      <p>Notes, tasks, and reminders that keep coming back until they are done.</p>
+    </td>
+    <td width="50%" align="center">
+      <a href="https://github.com/bikram-agarwal/FilePipe">
+        <img src="docs/assets/feature_filepipe.jpg" alt="FilePipe feature graphic" width="100%">
+      <b>FilePipe</b></a>
+      <p>Your files, your rules. Automatically sort and move media with smart rules.</p>
+    </td>
+  </tr>
+</table>
+
+---
+
+Made with ❤️ by Bikram Agarwal

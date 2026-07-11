@@ -14,6 +14,8 @@ class CoolApk extends AppSource {
     allowSubDomains = true;
     naiveStandardVersionDetection = true;
     allowOverride = false;
+    regionalStore = true;
+    canSearch = true;
   }
 
   @override
@@ -49,7 +51,6 @@ class CoolApk extends AppSource {
 
     // get latest
     var detailUrl = '$apiUrl/v6/apk/detail?id=$appId';
-    var headers = await getRequestHeaders(additionalSettings, detailUrl);
     var res = await sourceRequest(detailUrl, additionalSettings);
 
     if (res.statusCode != 200) {
@@ -79,13 +80,23 @@ class CoolApk extends AppSource {
       appId,
       aid,
       version,
-      headers,
+      additionalSettings,
     );
     if (apkUrl.isEmpty) {
       throw NoAPKError();
     }
 
     String apkName = '${appId}_$version.apk';
+
+    String? iconUrl = detail['logo']?.toString();
+
+    int? apkSizeBytes;
+    try {
+      var rawLength = detail['apklength'];
+      if (rawLength != null) {
+        apkSizeBytes = int.parse(rawLength.toString());
+      }
+    } catch (_) {}
 
     return APKDetails(
       version,
@@ -95,6 +106,8 @@ class CoolApk extends AppSource {
           ? DateTime.fromMillisecondsSinceEpoch(releaseDate)
           : null,
       changeLog: changelog,
+      iconUrl: iconUrl,
+      apkSizeBytes: apkSizeBytes,
     );
   }
 
@@ -103,10 +116,14 @@ class CoolApk extends AppSource {
     String appId,
     String aid,
     String version,
-    Map<String, String>? headers,
+    Map<String, dynamic> additionalSettings,
   ) async {
     String url = '$apiUrl/v6/apk/download?pn=$appId&aid=$aid';
-    var res = await sourceRequest(url, {}, followRedirects: false);
+    var res = await sourceRequest(
+      url,
+      additionalSettings,
+      followRedirects: false,
+    );
     if (res.statusCode >= 300 && res.statusCode < 400) {
       String location = res.headers['location'] ?? '';
       return location;
@@ -123,7 +140,7 @@ class CoolApk extends AppSource {
     var tokenPair = _getToken();
     // CoolAPK header
     return {
-      'User-Agent':
+      'user-agent':
           'Dalvik/2.1.0 (Linux; U; Android 9; MI 8 SE MIUI/9.5.9) (#Build; Xiaomi; MI 8 SE; PKQ1.181121.001; 9) +CoolMarket/12.4.2-2208241-universal',
       'X-App-Id': 'com.coolapk.market',
       'X-Requested-With': 'XMLHttpRequest',
@@ -138,7 +155,7 @@ class CoolApk extends AppSource {
       'X-App-Device': tokenPair['deviceCode']!,
       'X-Dark-Mode': '0',
       'X-App-Token': tokenPair['token']!,
-    };
+    }.map((key, value) => MapEntry(key.toLowerCase(), value));
   }
 
   Map<String, String> _getToken() {
@@ -190,5 +207,51 @@ class CoolApk extends AppSource {
     String finalToken = 'v2${base64.encode(reBcryptResult.codeUnits)}';
 
     return {'deviceCode': deviceCode, 'token': finalToken};
+  }
+
+  @override
+  Future<Map<String, List<String>>> search(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final searchUrl =
+        'https://api2.coolapk.com/v6/search'
+        '?type=apk'
+        '&feedType=all'
+        '&sort=default'
+        '&searchValue=${Uri.encodeQueryComponent(query)}'
+        '&pageType='
+        '&pageParam='
+        '&page=1'
+        '&showAnonymous=-1';
+    var res = await sourceRequest(searchUrl, querySettings);
+    if (res.statusCode != 200) {
+      throw getObtainiumHttpError(res);
+    }
+    var json = jsonDecode(res.body);
+    Map<String, List<String>> urlsWithDescriptions = {};
+    var dataList = json['data'] as List<dynamic>?;
+    if (dataList != null) {
+      for (var item in dataList) {
+        if (item['entityType'] != 'apk' || item['url'] == null) continue;
+        String url = item['url'].toString();
+        if (!url.startsWith('http')) {
+          url = 'https://www.coolapk.com$url';
+        }
+        try {
+          url = standardizeUrl(url);
+        } catch (_) {
+          continue;
+        }
+        String name = item['title']?.toString() ?? '';
+        String desc =
+            item['originData']?['shortDesc']?.toString() ??
+            item['developername']?.toString() ??
+            item['description']?.toString() ??
+            tr('noDescription');
+        urlsWithDescriptions[url] = [name, desc];
+      }
+    }
+    return urlsWithDescriptions;
   }
 }

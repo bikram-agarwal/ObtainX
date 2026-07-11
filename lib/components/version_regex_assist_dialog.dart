@@ -2,6 +2,8 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 
 typedef RegexAssistRawVersionResolver =
     Future<String?> Function(Map<String, dynamic> currentValues);
@@ -638,6 +640,7 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
     final ThemeData theme = Theme.of(context);
     return AlertDialog(
       title: Text(_dialogTitle()),
+      contentPadding: appDialogContentPadding,
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -687,8 +690,9 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
               controller: _rawController,
               minLines: 1,
               maxLines: 4,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
+              decoration: appPageOutlinedInputDecoration(
+                context,
+                labelText: null,
                 hintText: tr('versionRegexAssistRawPlaceholder'),
               ),
               onChanged: (_) => setState(_rebuildCandidates),
@@ -755,8 +759,9 @@ class _RegexAssistDialogBodyState extends State<_RegexAssistDialogBody> {
             TextField(
               controller: _customController,
               focusNode: _customFocusNode,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
+              decoration: appPageOutlinedInputDecoration(
+                context,
+                labelText: null,
                 hintText: tr('versionRegexAssistCustomHint'),
               ),
               onChanged: (_) {

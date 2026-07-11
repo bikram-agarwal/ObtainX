@@ -110,6 +110,17 @@ class NativeFeatures {
     }
   }
 
+  static Future<bool> isDeviceInteractive() async {
+    try {
+      return await _powerChannel.invokeMethod<bool>('isDeviceInteractive') ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   static Future<Uri?> openPersistedDocumentTree({Uri? initialUri}) async {
     try {
       final uriString = await _storageChannel.invokeMethod<String>(

@@ -4,8 +4,8 @@ import 'dart:io';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
+import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form.dart';
@@ -14,6 +14,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
@@ -1018,7 +1019,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                       ),
                       if (importInProgress) ...[
                         const SizedBox(height: 14),
-                        const LinearProgressIndicatorM3E(),
+                        const LinearRipplingWavyProgressIndicator(),
                         const SizedBox(height: 14),
                       ],
                       importPageSectionTitle(
@@ -1103,6 +1104,7 @@ class _ImportErrorDialogState extends State<ImportErrorDialog> {
     return AlertDialog(
       scrollable: true,
       title: Text(tr('importErrors')),
+      contentPadding: appDialogContentPadding,
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1639,6 +1641,7 @@ class _SelectionModalState extends State<SelectionModal> {
     return AlertDialog(
       scrollable: true,
       title: Text(widget.title ?? tr('pick')),
+      contentPadding: appDialogContentPadding,
       content: Column(children: sheetColumnChildren),
       actions: selectionActions,
     );

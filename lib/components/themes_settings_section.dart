@@ -114,10 +114,13 @@ List<Widget> buildThemesSettingsCardItems(
             if (selected.isEmpty) return;
             _applyThemeSegment(settings, selected.first);
           },
-          style: SegmentedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          style: const ButtonStyle(
+            padding: WidgetStatePropertyAll(
+              EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            ),
             visualDensity: VisualDensity.standard,
             tapTargetSize: MaterialTapTargetSize.padded,
+            side: WidgetStatePropertyAll(BorderSide.none),
           ),
         ),
       ),

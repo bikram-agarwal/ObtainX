@@ -15,7 +15,9 @@ import 'dart:typed_data';
 
 import 'package:android_intent_plus/flag.dart';
 import 'package:android_package_installer/android_package_installer.dart';
-import 'package:android_package_manager/android_package_manager.dart';
+import 'package:android_package_manager/android_package_manager.dart'
+    hide LaunchMode;
+import 'package:background_fetch/background_fetch.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -33,6 +35,7 @@ import 'package:obtainium/components/generated_form.dart';
 import 'package:obtainium/components/generated_form_modal.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
@@ -43,6 +46,7 @@ import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_fgbg/flutter_fgbg.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:http/http.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter_archive/flutter_archive.dart';
@@ -52,6 +56,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 import 'package:obtainium/folders/app_folder.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 final pm = AndroidPackageManager();
 // Full flags — includes signing certs needed for cert-hash display/verification.
@@ -61,6 +66,13 @@ final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
 // Skipping getSigningCertificates makes getInstalledPackages ~10× faster and keeps
 // the Android platform thread free to dispatch touch events during the foreground load.
 final packageInfoFlagsLight = PackageInfoFlags({});
+
+/// MANUAL TEST HOOK - flip to `true` to force every VirusTotal scan to
+/// resolve as `flagged` (fake detail/report URL, no network call), so the
+/// flagged dialog/skip/notification paths can be exercised without a real
+/// API key or a real flagged APK. Gated on [kDebugMode] as a safety net in
+/// case this is ever left on by mistake. Revert to `false` when done testing.
+const bool debugForceFlaggedMalwareScan = false;
 
 List<String> packageNamesToTryForInstalledInfo(
   String packageName, {
@@ -1440,7 +1452,7 @@ class AppsProvider with ChangeNotifier {
 
   // In memory App state (should always be kept in sync with local storage versions)
   Map<String, AppInMemory> apps = {};
-  final Map<String, String> appPageErrors = {};
+  final Map<String, ({String? title, String message})> appPageErrors = {};
   bool loadingApps = false;
   Completer<void>? _loadingCompleter;
   bool gettingUpdates = false;
@@ -1541,6 +1553,131 @@ class AppsProvider with ChangeNotifier {
       logs.add('Error verifying GitHub attestation: ${e.toString()}');
     }
     return githubAttestationStatusError;
+  }
+
+  /// Whether a VirusTotal scan will actually run for the next install -
+  /// toggle on and a validated API key present. Shared with [downloadApp] so
+  /// its post-download progress sentinel can say "Scanning" instead of
+  /// flashing "Installing" first when a scan is about to happen.
+  bool willScanApkWithVirusTotal() {
+    if (kDebugMode && debugForceFlaggedMalwareScan) {
+      return true;
+    }
+    if (!settingsProvider.enableVirusTotalScanning) {
+      return false;
+    }
+    final String? apiKey = settingsProvider.getSettingString(
+      virusTotalApiKeyKey,
+    );
+    return apiKey != null &&
+        apiKey.isNotEmpty &&
+        hasValidatedApiKey(apiKey, settingsProvider);
+  }
+
+  /// Scans a downloaded APK with VirusTotal, if scanning is enabled and an
+  /// API key is configured. Returns null (no scan attempted, no state
+  /// change) when the feature is off or unconfigured - callers must treat
+  /// that as "no-op", distinct from a real [malwareScanStatusError] result.
+  /// Sets [app.latestMalwareScanDetail]/[app.latestMalwareScanReportUrl] as a
+  /// side effect (mirrors how [verifyGitHubAttestation] mutates app fields);
+  /// the caller is responsible for setting [app.latestMalwareScanStatus]
+  /// itself, same as it does for the attestation status.
+  Future<String?> scanApkWithVirusTotal(App app, File file) async {
+    if (kDebugMode && debugForceFlaggedMalwareScan) {
+      app.latestMalwareScanDetail =
+          '3/70 security vendors flagged this file (TEST result - '
+          'debugForceFlaggedMalwareScan is on)';
+      final hash = await sha256.bind(file.openRead()).first;
+      app.latestMalwareScanReportUrl =
+          'https://www.virustotal.com/gui/file/$hash';
+      return malwareScanStatusFlagged;
+    }
+    if (!willScanApkWithVirusTotal()) {
+      return null;
+    }
+    final String apiKey = settingsProvider.getSettingString(
+      virusTotalApiKeyKey,
+    )!;
+    try {
+      final hash = await sha256.bind(file.openRead()).first;
+      final result = await VirusTotalScanner().scan(
+        file,
+        hash.toString(),
+        apiKey,
+      );
+      app.latestMalwareScanDetail = result.detail;
+      app.latestMalwareScanReportUrl = result.reportUrl;
+      return result.status;
+    } catch (e) {
+      logs.add('Error scanning APK with VirusTotal: ${e.toString()}');
+      app.latestMalwareScanDetail = tr(
+        'virusTotalErrorGeneric',
+        args: [e.toString()],
+      );
+      app.latestMalwareScanReportUrl = null;
+    }
+    return malwareScanStatusError;
+  }
+
+  /// Acts on a [scanApkWithVirusTotal] result per the rules decided for this
+  /// feature: `clean` never interrupts anything; `flagged`/`error` always
+  /// pause with a decision dialog when someone's watching
+  /// ([malwareScanContext] != null), or skip the app (throwing
+  /// [MalwareScanBlockedError] for the caller to catch and notify on) when
+  /// there's no one to ask. [cleanupOnSkip] deletes whatever was downloaded -
+  /// callers provide it because the exact files/dirs to delete differ between
+  /// [installApk] and [installApkDir].
+  ///
+  /// Returns `true` if the install should proceed, `false` if the person
+  /// looking at the dialog chose not to install - that's a deliberate,
+  /// already-explained decision, not a failure, so callers must return
+  /// quietly on `false` rather than throwing (throwing would route it through
+  /// the generic per-app error pipeline and surface a persistent "Error
+  /// checking for updates" banner for something the user explicitly chose).
+  Future<bool> _handleMalwareScanResult({
+    required App app,
+    required String status,
+    required BuildContext? malwareScanContext,
+    required void Function() cleanupOnSkip,
+  }) async {
+    if (status == malwareScanStatusClean) {
+      if (malwareScanContext != null && malwareScanContext.mounted) {
+        Fluttertoast.showToast(
+          msg: tr('malwareScanCleanToast', args: [app.finalName]),
+        );
+      }
+      return true;
+    }
+    if (malwareScanContext != null) {
+      if (!malwareScanContext.mounted) {
+        return true;
+      }
+      final bool? proceed = await showDialog<bool>(
+        // ignore: use_build_context_synchronously
+        context: malwareScanContext,
+        barrierDismissible: false,
+        builder: (BuildContext ctx) => Theme(
+          data: Theme.of(malwareScanContext),
+          child: MalwareScanWarningDialog(
+            appName: app.finalName,
+            status: status,
+            detail: app.latestMalwareScanDetail,
+            reportUrl: app.latestMalwareScanReportUrl,
+          ),
+        ),
+      );
+      if (proceed == true) {
+        return true;
+      }
+      cleanupOnSkip();
+      return false;
+    }
+    cleanupOnSkip();
+    throw MalwareScanBlockedError(
+      status,
+      app.latestMalwareScanDetail,
+      appName: app.finalName,
+    );
   }
 
   void _pruneStaleDetailPageAutoCheckStarts(DateTime now, Duration cooldown) {
@@ -1828,6 +1965,7 @@ class AppsProvider with ChangeNotifier {
           builder: (BuildContext dialogContext) {
             return AlertDialog(
               title: Text(tr('insecureDownloadUrl')),
+              contentPadding: appDialogContentPadding,
               content: Text(tr('cleartextDownloadWarningExplanation')),
               actions: [
                 TextButton(
@@ -1921,9 +2059,17 @@ class AppsProvider with ChangeNotifier {
       );
       // Set to 90 for remaining steps, will make null in 'finally'
       if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = -1;
+        // If a VirusTotal scan is about to run, say so from the moment the
+        // download finishes - otherwise this briefly shows "Installing"
+        // before installApk/installApkDir overwrite it with "Scanning".
+        final progressSentinel = willScanApkWithVirusTotal() ? -2 : -1;
+        apps[app.id]!.downloadProgress = progressSentinel.toDouble();
         notifyListeners();
-        notif = DownloadNotification(app.finalName, -1, appId: app.id);
+        notif = DownloadNotification(
+          app.finalName,
+          progressSentinel,
+          appId: app.id,
+        );
         unawaited(
           NativeFeatures.showDownloadProgressNotification(
             id: notif.id,
@@ -1931,7 +2077,7 @@ class AppsProvider with ChangeNotifier {
             title: notif.title,
             message: notif.message,
             channelCode: notif.channelCode,
-            progressPercent: -1,
+            progressPercent: progressSentinel,
             indeterminate: true,
             cancelLabel: tr('cancel'),
           ),
@@ -2065,8 +2211,8 @@ class AppsProvider with ChangeNotifier {
       .where((element) => element.downloadProgress != null)
       .isNotEmpty;
 
-  void setAppPageError(String appId, Object error) {
-    appPageErrors[appId] = error.toString();
+  void setAppPageError(String appId, Object error, {String? title}) {
+    appPageErrors[appId] = (title: title, message: error.toString());
     notifyListeners();
   }
 
@@ -2285,6 +2431,9 @@ class AppsProvider with ChangeNotifier {
     BuildContext? firstTimeWithContext, {
     bool needsBGWorkaround = false,
     bool shizukuPretendToBeGooglePlay = false,
+
+    /// See [installApk]'s param of the same name.
+    BuildContext? malwareScanContext,
   }) async {
     // We don't know which APKs in an XAPK or ZIP are supported by the user's device
     // So we try installing all of them and assume success if at least one installed
@@ -2354,6 +2503,47 @@ class AppsProvider with ChangeNotifier {
             );
           }
         }
+        apps[dir.appId]?.downloadProgress = -2;
+        notifyListeners();
+        final String? malwareScanStatus = await scanApkWithVirusTotal(
+          app,
+          dir.file,
+        );
+        if (malwareScanStatus != null) {
+          app.latestMalwareScanStatus = malwareScanStatus;
+          final double progress = malwareScanStatus != malwareScanStatusClean ? -3 : -1;
+          apps[dir.appId] = AppInMemory(
+            app,
+            progress,
+            appInMemory.installedInfo,
+            appInMemory.icon,
+          );
+          notifyListeners();
+          final bool proceedAfterScan = await _handleMalwareScanResult(
+            app: app,
+            status: malwareScanStatus,
+            // ignore: use_build_context_synchronously
+            malwareScanContext: malwareScanContext,
+            cleanupOnSkip: () {
+              try {
+                if (dir.file.existsSync()) {
+                  dir.file.deleteSync();
+                }
+                if (dir.extracted.existsSync()) {
+                  dir.extracted.deleteSync(recursive: true);
+                }
+              } catch (_) {}
+            },
+          );
+          if (!proceedAfterScan) {
+            return false;
+          }
+          apps[dir.appId]?.downloadProgress = -1;
+          notifyListeners();
+        } else {
+          apps[dir.appId]?.downloadProgress = -1;
+          notifyListeners();
+        }
       }
       MultiAppMultiError errors = MultiAppMultiError();
       List<File> apkFiles = [];
@@ -2399,6 +2589,9 @@ class AppsProvider with ChangeNotifier {
                   dir.file.existsSync()
               ? dir.file.path
               : null,
+          // ignore: use_build_context_synchronously
+          malwareScanContext: malwareScanContext,
+          skipMalwareScan: true,
         );
         somethingInstalled = somethingInstalled || wasInstalled;
       } catch (e) {
@@ -2495,6 +2688,18 @@ class AppsProvider with ChangeNotifier {
     /// extracted split APK paths so installers like InstallerX see the same bundle
     /// as when opening the file from a file manager.
     String? thirdPartyHandoffContainerPath,
+
+    /// The context of the install call itself - unlike [firstTimeWithContext]
+    /// (only set for brand-new installs), this is non-null for *any*
+    /// interactive install/update. Used to decide whether a VirusTotal scan
+    /// result can be shown as a dialog (someone's watching) or must instead
+    /// skip the app and notify (background/silent - see [installFn]).
+    BuildContext? malwareScanContext,
+
+    /// Set by [installApkDir] when it calls this method for a split APK -
+    /// the container was already scanned once, so scanning each split part
+    /// again would waste VirusTotal's rate limit for no benefit.
+    bool skipMalwareScan = false,
   }) async {
     final bool saveApkCopiesRequested =
         settingsProvider.saveDownloadedApkCopies &&
@@ -2570,19 +2775,71 @@ class AppsProvider with ChangeNotifier {
             );
           }
         }
+        if (!skipMalwareScan) {
+          apps[file.appId]?.downloadProgress = -2;
+          notifyListeners();
+        }
+        final String? malwareScanStatus = skipMalwareScan
+            ? null
+            : await scanApkWithVirusTotal(app, file.file);
+        if (malwareScanStatus != null) {
+          app.latestMalwareScanStatus = malwareScanStatus;
+          final double progress = malwareScanStatus != malwareScanStatusClean ? -3 : -1;
+          apps[file.appId] = AppInMemory(
+            app,
+            progress,
+            appInMemory.installedInfo,
+            appInMemory.icon,
+          );
+          notifyListeners();
+          final bool proceedAfterScan = await _handleMalwareScanResult(
+            app: app,
+            status: malwareScanStatus,
+            // ignore: use_build_context_synchronously
+            malwareScanContext: malwareScanContext,
+            cleanupOnSkip: () {
+              try {
+                if (file.file.existsSync()) {
+                  file.file.deleteSync();
+                }
+                for (var a in additionalAPKs) {
+                  if (a.file.existsSync()) {
+                    a.file.deleteSync();
+                  }
+                }
+              } catch (_) {}
+            },
+          );
+          if (!proceedAfterScan) {
+            return false;
+          }
+          apps[file.appId]?.downloadProgress = -1;
+          notifyListeners();
+        } else {
+          if (!skipMalwareScan) {
+            apps[file.appId]?.downloadProgress = -1;
+            notifyListeners();
+          }
+        }
       }
       if (firstTimeWithContext != null &&
-          settingsProvider.beforeNewInstallsShareToAppVerifier &&
-          (await getInstalledInfo('dev.soupslurpr.appverifier')) != null) {
-        XFile f = XFile.fromData(
-          file.file.readAsBytesSync(),
+          settingsProvider.beforeNewInstallsShareToAppVerifier) {
+        XFile f = XFile(
+          file.file.path,
           mimeType: 'application/vnd.android.package-archive',
         );
         Fluttertoast.showToast(
           msg: tr('appVerifierInstructionToast'),
           toastLength: Toast.LENGTH_LONG,
         );
-        await SharePlus.instance.share(ShareParams(files: [f]));
+        try {
+          await SharePlus.instance.share(ShareParams(files: [f]));
+          if (firstTimeWithContext.mounted) {
+            await waitForUserToReturnToForeground(firstTimeWithContext);
+          }
+        } catch (e) {
+          logs.add('Share to App Verifier failed: $e');
+        }
       }
       var newInfo = await pm.getPackageArchiveInfo(
         archiveFilePath: file.file.path,
@@ -2963,6 +3220,12 @@ class AppsProvider with ChangeNotifier {
     // Prepare to download+install Apps
     MultiAppMultiError errors = MultiAppMultiError();
     List<String> installedIds = [];
+    // Apps skipped because of a flagged/failed VirusTotal scan during this
+    // batch - reported as ONE consolidated notification at the end instead
+    // of one per app (see the throw site below) and kept out of [errors] so
+    // they don't also trigger the generic install-error notification.
+    List<({String appName, String status, String? detail})> malwareScanSkips =
+        [];
 
     // Move Obtainium to the end of the line (let all other apps update first)
     appsToInstall = moveStrToEnd(
@@ -3004,6 +3267,8 @@ class AppsProvider with ChangeNotifier {
               contextIfNewInstall,
               needsBGWorkaround: true,
               shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
+              // ignore: use_build_context_synchronously
+              malwareScanContext: context,
             );
           } else {
             sayInstalled = await installApk(
@@ -3011,6 +3276,8 @@ class AppsProvider with ChangeNotifier {
               // ignore: use_build_context_synchronously
               contextIfNewInstall,
               shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
+              // ignore: use_build_context_synchronously
+              malwareScanContext: context,
             );
           }
         } else {
@@ -3020,6 +3287,8 @@ class AppsProvider with ChangeNotifier {
               // ignore: use_build_context_synchronously
               contextIfNewInstall,
               needsBGWorkaround: true,
+              // ignore: use_build_context_synchronously
+              malwareScanContext: context,
             );
           } else {
             sayInstalled = await installApkDir(
@@ -3027,6 +3296,8 @@ class AppsProvider with ChangeNotifier {
               // ignore: use_build_context_synchronously
               contextIfNewInstall,
               shizukuPretendToBeGooglePlay: shizukuPretendToBeGooglePlay,
+              // ignore: use_build_context_synchronously
+              malwareScanContext: context,
             );
           }
         }
@@ -3148,7 +3419,15 @@ class AppsProvider with ChangeNotifier {
           );
         } catch (exception) {
           var id = result['id'] as String;
-          errors.add(id, exception, appName: apps[id]?.name);
+          if (exception is MalwareScanBlockedError) {
+            malwareScanSkips.add((
+              appName: apps[id]?.name ?? id,
+              status: exception.status,
+              detail: exception.detail,
+            ));
+          } else {
+            errors.add(id, exception, appName: apps[id]?.name);
+          }
         }
         if (settingsProvider.installerMode == 'legacy') {
           needsLegacyInterInstallDelay = true;
@@ -3203,6 +3482,12 @@ class AppsProvider with ChangeNotifier {
       for (final appIdToProcess in appsToInstall) {
         await installDownloadResult(await downloadFn(appIdToProcess));
       }
+    }
+
+    if (malwareScanSkips.isNotEmpty) {
+      notificationsProvider?.notify(
+        MalwareScanSkippedNotification(malwareScanSkips),
+      );
     }
 
     if (errors.idsByErrorString.isNotEmpty) {
@@ -5315,6 +5600,7 @@ class _AppFilePickerState extends State<AppFilePicker> {
             ? tr('selectX', args: [lowerCaseIfEnglish(tr('releaseAsset'))])
             : tr('pickAnAPK'),
       ),
+      contentPadding: appDialogContentPadding,
       content: Column(
         children: [
           urlsToSelectFrom.length > 1
@@ -5394,6 +5680,7 @@ class _APKOriginWarningDialogState extends State<APKOriginWarningDialog> {
     return AlertDialog(
       scrollable: true,
       title: Text(tr('warning')),
+      contentPadding: appDialogContentPadding,
       content: Text(
         tr(
           'sourceIsXButPackageFromYPrompt',
@@ -5416,6 +5703,66 @@ class _APKOriginWarningDialogState extends State<APKOriginWarningDialog> {
             Navigator.of(context).pop(true);
           },
           child: Text(tr('continue')),
+        ),
+      ],
+    );
+  }
+}
+
+/// Shown for an interactive install when a VirusTotal scan comes back
+/// [malwareScanStatusFlagged] or [malwareScanStatusError] - the human decides
+/// whether to proceed. Returns true for "Install anyway", null for "Cancel
+/// install" (mirrors [APKOriginWarningDialog]'s pop convention).
+class MalwareScanWarningDialog extends StatelessWidget {
+  const MalwareScanWarningDialog({
+    super.key,
+    required this.appName,
+    required this.status,
+    required this.detail,
+    required this.reportUrl,
+  });
+
+  final String appName;
+  final String status;
+  final String? detail;
+  final String? reportUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool flagged = status == malwareScanStatusFlagged;
+    return AlertDialog(
+      scrollable: true,
+      title: Text(
+        tr(flagged ? 'malwareScanFlaggedTitle' : 'malwareScanErrorTitle'),
+      ),
+      contentPadding: appDialogContentPadding,
+      content: Text(
+        detail ??
+            tr(flagged ? 'malwareScanFlaggedTitle' : 'malwareScanErrorTitle'),
+      ),
+      actions: [
+        if (reportUrl != null)
+          TextButton(
+            onPressed: () {
+              launchUrlString(reportUrl!, mode: LaunchMode.externalApplication);
+            },
+            child: Text(tr('virusTotalViewReport')),
+          ),
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop(null);
+          },
+          child: Text(tr('cancelInstall')),
+        ),
+        TextButton(
+          onPressed: () {
+            hapticSelection();
+            Navigator.of(context).pop(true);
+          },
+          style: TextButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.error,
+          ),
+          child: Text(tr('installAnyway')),
         ),
       ],
     );
@@ -5465,6 +5812,10 @@ Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
   }
 
   params ??= {};
+
+  if (taskId == 'obtainium_interactive_retry') {
+    params['toCheck'] = [];
+  }
 
   bool firstEverUpdateTask =
       DateTime.fromMillisecondsSinceEpoch(
@@ -5689,6 +6040,30 @@ Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
     }
   } else {
     // In install mode...
+    if (await NativeFeatures.isDeviceInteractive()) {
+      logs.add(
+        'BG install task: Device is active (screen on). Postponing background installations.',
+      );
+      try {
+        await BackgroundFetch.scheduleTask(
+          TaskConfig(
+            taskId: 'obtainium_interactive_retry',
+            delay: 15 * 60 * 1000, // 15 minutes
+            periodic: false,
+            forceAlarmManager: true,
+            stopOnTerminate: false,
+            enableHeadless: true,
+          ),
+        );
+        logs.add(
+          'BG install task: Scheduled obtainium_interactive_retry task.',
+        );
+      } catch (err) {
+        logs.add('BG install task: Failed to schedule retry task: $err');
+      }
+      return;
+    }
+
     // If you haven't explicitly been given updates to install, grab all available silent updates
     logs.add('BG install task: Started (${toInstall.length}).');
     if (toInstall.isEmpty && !networkRestricted && !chargingRestricted) {
@@ -5725,7 +6100,9 @@ Future<void> bgUpdateCheck(String taskId, Map<String, dynamic>? params) async {
         if (e is MultiAppMultiError) {
           e.idsByErrorString.forEach((key, value) {
             notificationsProvider.notify(
-              ErrorCheckingUpdatesNotification(e.errorsAppsString(key, value)),
+              ErrorInstallingUpdatesNotification(
+                e.errorsAppsString(key, value),
+              ),
             );
           });
         } else {

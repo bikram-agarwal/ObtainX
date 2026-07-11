@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:provider/provider.dart';
 
 class ObtainiumError {
@@ -79,6 +80,25 @@ class DownloadCancelledError extends ObtainiumError {
   DownloadCancelledError() : super(tr('cancelled'));
 }
 
+/// Thrown when a background/silent install is skipped because its
+/// VirusTotal scan came back flagged or errored and there was no one to ask
+/// (see the install-flow rules in apps_provider.dart). Carries [status]/
+/// [detail] so the catch site can fire a notification naming the specific
+/// reason, distinct from a generic install failure.
+class MalwareScanBlockedError extends ObtainiumError {
+  final String status;
+  final String? detail;
+  MalwareScanBlockedError(this.status, this.detail, {required String appName})
+    : super(
+        tr(
+          status == malwareScanStatusFlagged
+              ? 'malwareScanFlaggedSkippedTitle'
+              : 'malwareScanErrorSkippedTitle',
+          args: [appName],
+        ),
+      );
+}
+
 class NotImplementedError extends ObtainiumError {
   NotImplementedError() : super(tr('functionNotImplemented'));
 }
@@ -144,6 +164,7 @@ void showMessage(
       builder: (BuildContext ctx) {
         final Widget dialog = AlertDialog(
           scrollable: true,
+          contentPadding: appDialogContentPadding,
           title: Text(
             e is MultiAppMultiError
                 ? tr(isError ? 'someErrors' : 'updates')
