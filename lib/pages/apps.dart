@@ -8,6 +8,7 @@ import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show
+        PaintingContext,
         ScrollCacheExtent,
         RenderSliverMainAxisGroup,
         SliverPhysicalParentData,
@@ -145,21 +146,15 @@ String visibilityFilterChipLabel(String label, CategoryFilterIntent intent) {
 /// header still reads as its own band.
 Color _appsListGroupHeaderColor(ColorScheme scheme) {
   if (scheme.usesPureBlackBackgrounds) return Colors.black;
-  final Color rowFill = m3eGroupedListRowFill(scheme);
-  Color header = Color.lerp(
-    scheme.surfaceContainerHighest,
-    scheme.primary,
-    0.11,
+  return Color.lerp(
+    scheme.secondaryContainer,
+    scheme.primaryContainer,
+    0.30,
   )!;
-  if ((header.computeLuminance() - rowFill.computeLuminance()).abs() < 0.032) {
-    header = Color.lerp(
-      header,
-      scheme.surfaceBright,
-      scheme.brightness == Brightness.light ? 0.22 : 0.14,
-    )!;
-  }
-  return header;
 }
+
+const Duration _appsGroupHeaderTransitionDuration = Duration(milliseconds: 300);
+const Curve _appsGroupTransitionCurve = Curves.easeInOutCubicEmphasized;
 
 class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
   final String title;
@@ -167,6 +162,7 @@ class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
   final bool isExpanded;
   final VoidCallback onTap;
   final double cardRadius;
+  final double collapsedRadius;
   final ColorScheme colorScheme;
 
   _AppsGroupHeaderDelegate({
@@ -175,14 +171,15 @@ class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
     required this.isExpanded,
     required this.onTap,
     required this.cardRadius,
+    required this.collapsedRadius,
     required this.colorScheme,
   });
 
   @override
-  double get minExtent => isExpanded ? 56.0 : 62.0;
+  double get minExtent => SettingsProvider.collapsedHeaderHeight + 6.0;
 
   @override
-  double get maxExtent => isExpanded ? 56.0 : 62.0;
+  double get maxExtent => SettingsProvider.collapsedHeaderHeight + 6.0;
 
   @override
   Widget build(
@@ -194,22 +191,20 @@ class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
     final ShapeBorder shape = isExpanded
         ? RoundedRectangleBorder(
             borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(cardRadius),
-              topRight: Radius.circular(cardRadius),
+              topLeft: Radius.circular(collapsedRadius),
+              topRight: Radius.circular(collapsedRadius),
               bottomLeft: const Radius.circular(kM3eInnerRadius),
               bottomRight: const Radius.circular(kM3eInnerRadius),
             ),
             side: m3ePureBlackOutlineSide(colorScheme, alpha: 0.22),
           )
         : RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(cardRadius)),
+            borderRadius: BorderRadius.all(Radius.circular(collapsedRadius)),
             side: m3ePureBlackOutlineSide(colorScheme, alpha: 0.22),
           );
 
     return Padding(
-      padding: isExpanded
-          ? const EdgeInsets.fromLTRB(12, 6, 12, 0)
-          : const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
       child: Material(
         elevation: 3,
         shadowColor: colorScheme.shadow.withAlpha(100),
@@ -220,17 +215,35 @@ class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
         child: InkWell(
           onTap: onTap,
           child: SizedBox(
-            height: 50.0,
+            height: SettingsProvider.collapsedHeaderHeight,
             child: Center(
               child: ListTile(
                 dense: true,
-                onTap: onTap,
+                onTap: null,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                leading: Icon(
-                  isExpanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  color: colorScheme.onSurfaceVariant,
+                leading: AnimatedContainer(
+                  duration: _appsGroupHeaderTransitionDuration,
+                  curve: _appsGroupTransitionCurve,
+                  width: isExpanded ? 20 : 32,
+                  height: isExpanded ? 20 : 32,
+                  decoration: BoxDecoration(
+                    color: isExpanded
+                        ? Colors.transparent
+                        : colorScheme.surfaceContainerHighest,
+                    shape: BoxShape.circle,
+                  ),
+                  child: AnimatedRotation(
+                    turns: isExpanded ? 0.25 : 0,
+                    duration: _appsGroupHeaderTransitionDuration,
+                    curve: _appsGroupTransitionCurve,
+                    child: Icon(
+                      Icons.chevron_right_rounded,
+                      color: isExpanded
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                      size: isExpanded ? 18 : 20,
+                    ),
+                  ),
                 ),
                 title: Text(
                   title,
@@ -256,6 +269,7 @@ class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
         oldDelegate.count != count ||
         oldDelegate.isExpanded != isExpanded ||
         oldDelegate.cardRadius != cardRadius ||
+        oldDelegate.collapsedRadius != collapsedRadius ||
         oldDelegate.colorScheme != colorScheme;
   }
 }
@@ -2787,8 +2801,14 @@ class AppsPageState extends State<AppsPage> {
     final double appsListGroupCardRadius = settingsProvider.cardCornerRadiusFor(
       kM3eGroupCardRadius,
     );
+    final double appsListCollapsedHeaderRadius = settingsProvider.cardCornerRadiusFor(
+      SettingsProvider.baseCollapsedHeaderRadius,
+    );
     final double appsListItemOuterRadius = settingsProvider.cardCornerRadiusFor(
       kM3eOuterRadius,
+    );
+    final double appsListItemInnerRadius = settingsProvider.cardCornerRadiusFor(
+      kM3eInnerRadius,
     );
     if (!initialAppLoadCompleted && !appsProvider.loadingApps) {
       initialAppLoadCompleted = true;
@@ -3768,6 +3788,7 @@ class AppsPageState extends State<AppsPage> {
               groupPosition,
               flatListBody: flatListBody,
               outerRadius: appsListItemOuterRadius,
+              innerRadius: appsListItemInnerRadius,
             )
           : null;
 
@@ -3875,6 +3896,7 @@ class AppsPageState extends State<AppsPage> {
             groupPosition,
             flatListBody: flatListBody,
             outerRadius: appsListItemOuterRadius,
+            innerRadius: appsListItemInnerRadius,
           ),
           child: swipeItem,
         );
@@ -3921,98 +3943,111 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    // Builds a position-aware children list with 2px gaps for M3E grouped style.
-    List<Widget> buildGroupedChildren(List<int> indices) {
-      final int n = indices.length;
-      return [
-        for (int i = 0; i < n; i++) ...[
-          if (i > 0) const SizedBox(height: kM3eItemGap),
-          getSingleAppHorizTile(
-            indices[i],
-            groupPosition: n == 1
-                ? M3eListGroupPosition.only
-                : i == 0
-                ? M3eListGroupPosition.first
-                : i == n - 1
-                ? M3eListGroupPosition.last
-                : M3eListGroupPosition.middle,
-          ),
-        ],
-      ];
-    }
-
     Widget buildCollapsibleTile({
       required String groupKey,
       required String title,
       required List<int> matchingIndices,
     }) {
-      final isExpanded = !_collapsedGroups.contains(groupKey);
-      final tiles = isExpanded
-          ? buildGroupedChildren(matchingIndices)
-          : const <Widget>[];
+      bool isExpanded = !_collapsedGroups.contains(groupKey);
+      bool showExpandedBody = isExpanded;
       final theme = Theme.of(context);
-      return _ZOrderSliverMainAxisGroup(
-        key: PageStorageKey(groupKey),
-        cardRadius: appsListGroupCardRadius,
-        slivers: [
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _AppsGroupHeaderDelegate(
-              title: title,
-              count: matchingIndices.length,
-              isExpanded: isExpanded,
-              cardRadius: appsListGroupCardRadius,
-              colorScheme: theme.colorScheme,
-              onTap: () {
-                setState(() {
-                  if (isExpanded) {
-                    _collapsedGroups.add(groupKey);
-                  } else {
-                    _collapsedGroups.remove(groupKey);
-                  }
-                  _saveCollapsedGroups([groupKey], add: isExpanded);
-                });
-              },
-            ),
-          ),
-          if (isExpanded && tiles.isNotEmpty)
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-              sliver: DecoratedSliver(
-                decoration: BoxDecoration(
-                  color: settingsProvider.useGradientBackground
-                      ? Colors.transparent
-                      : m3eGroupedListBackdropFill(theme.colorScheme),
-                  borderRadius: BorderRadius.vertical(
-                    bottom: Radius.circular(appsListGroupCardRadius),
-                  ),
-                  border: Border(
-                    left: m3ePureBlackOutlineSide(
-                      theme.colorScheme,
-                      alpha: 0.22,
-                    ),
-                    right: m3ePureBlackOutlineSide(
-                      theme.colorScheme,
-                      alpha: 0.22,
-                    ),
-                    bottom: m3ePureBlackOutlineSide(
-                      theme.colorScheme,
-                      alpha: 0.22,
-                    ),
-                  ),
-                ),
-                sliver: SliverPadding(
-                  padding: const EdgeInsets.only(top: kM3eHeaderToFirstCardGap),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) => tiles[index],
-                      childCount: tiles.length,
-                    ),
-                  ),
+      return StatefulBuilder(
+        key: ValueKey(groupKey),
+        builder: (context, setGroupState) {
+          return _ZOrderSliverMainAxisGroup(
+            cardRadius: appsListGroupCardRadius,
+            slivers: [
+              SliverPersistentHeader(
+                key: ValueKey('${groupKey}_header'),
+                pinned: true,
+                delegate: _AppsGroupHeaderDelegate(
+                  title: title,
+                  count: matchingIndices.length,
+                  isExpanded: isExpanded,
+                  cardRadius: appsListGroupCardRadius,
+                  collapsedRadius: appsListCollapsedHeaderRadius,
+                  colorScheme: theme.colorScheme,
+                  onTap: () {
+                    final bool wasExpanded = isExpanded;
+                    setGroupState(() {
+                      isExpanded = !isExpanded;
+                      if (wasExpanded) {
+                        showExpandedBody = false;
+                        _collapsedGroups.add(groupKey);
+                      } else {
+                        showExpandedBody = false;
+                        _collapsedGroups.remove(groupKey);
+                      }
+                    });
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      if (!wasExpanded && isExpanded) {
+                        setGroupState(() {
+                          showExpandedBody = true;
+                        });
+                      }
+                      _saveCollapsedGroups([groupKey], add: wasExpanded);
+                    });
+                  },
                 ),
               ),
-            ),
-        ],
+              if (showExpandedBody && matchingIndices.isNotEmpty)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                  sliver: DecoratedSliver(
+                    decoration: BoxDecoration(
+                      color: settingsProvider.useGradientBackground
+                          ? Colors.transparent
+                          : m3eGroupedListBackdropFill(theme.colorScheme),
+                      borderRadius: BorderRadius.vertical(
+                        bottom: Radius.circular(appsListGroupCardRadius),
+                      ),
+                      border: Border(
+                        left: m3ePureBlackOutlineSide(
+                          theme.colorScheme,
+                          alpha: 0.22,
+                        ),
+                        right: m3ePureBlackOutlineSide(
+                          theme.colorScheme,
+                          alpha: 0.22,
+                        ),
+                        bottom: m3ePureBlackOutlineSide(
+                          theme.colorScheme,
+                          alpha: 0.22,
+                        ),
+                      ),
+                    ),
+                    sliver: SliverPadding(
+                      padding: const EdgeInsets.only(
+                        top: kM3eHeaderToFirstCardGap,
+                      ),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final int tileIndex = index ~/ 2;
+                            if (index.isOdd) {
+                              return const SizedBox(height: kM3eItemGap);
+                            }
+                            return getSingleAppHorizTile(
+                              matchingIndices[tileIndex],
+                              groupPosition: matchingIndices.length == 1
+                                  ? M3eListGroupPosition.only
+                                  : tileIndex == 0
+                                  ? M3eListGroupPosition.first
+                                  : tileIndex == matchingIndices.length - 1
+                                  ? M3eListGroupPosition.last
+                                  : M3eListGroupPosition.middle,
+                            );
+                          },
+                          childCount: matchingIndices.length * 2 - 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       );
     }
 
@@ -5851,8 +5886,8 @@ class AppsPageState extends State<AppsPage> {
                                       Center(
                                         child: SingleChildScrollView(
                                           padding: const EdgeInsets.all(24),
-                                          child: m3eExpressiveSettingsCard(
-                                            context: context,
+                                          child: M3eExpressiveSettingsCard(
+
                                             colorScheme: Theme.of(
                                               context,
                                             ).colorScheme,

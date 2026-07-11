@@ -164,7 +164,7 @@ BoxDecoration appPageSectionCardDecoration(BuildContext context) {
   final bool isDark = Theme.of(context).brightness == Brightness.dark;
   final ColorScheme colorScheme = Theme.of(context).colorScheme;
   final double cardRadius = SettingsProvider.cardCornerRadiusForScale(
-    28,
+    SettingsProvider.baseCardRadius,
     context.read<SettingsProvider>().cardCornerScale,
   );
   final double sectionDeepen = isDark ? 0.055 : 0.045;

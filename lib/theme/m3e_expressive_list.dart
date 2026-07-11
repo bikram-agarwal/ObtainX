@@ -4,7 +4,7 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 
 /// Material 3 expressive grouped-list radii and gaps (matches apps tab list).
-const double kM3eOuterRadius = 14.0;
+const double kM3eOuterRadius = SettingsProvider.baseCardRadius;
 const double kM3eInnerRadius = 4.0;
 const double kM3eItemGap = 3.0;
 
@@ -22,19 +22,20 @@ BorderRadius m3eListGroupItemRadius(
   M3eListGroupPosition position, {
   required bool flatListBody,
   double outerRadius = kM3eOuterRadius,
+  double innerRadius = kM3eInnerRadius,
 }) {
   if (flatListBody) {
     return switch (position) {
       M3eListGroupPosition.first => BorderRadius.only(
         topLeft: Radius.circular(outerRadius),
         topRight: Radius.circular(outerRadius),
-        bottomLeft: const Radius.circular(kM3eInnerRadius),
-        bottomRight: const Radius.circular(kM3eInnerRadius),
+        bottomLeft: Radius.circular(innerRadius),
+        bottomRight: Radius.circular(innerRadius),
       ),
-      M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
+      M3eListGroupPosition.middle => BorderRadius.circular(innerRadius),
       M3eListGroupPosition.last => BorderRadius.only(
-        topLeft: const Radius.circular(kM3eInnerRadius),
-        topRight: const Radius.circular(kM3eInnerRadius),
+        topLeft: Radius.circular(innerRadius),
+        topRight: Radius.circular(innerRadius),
         bottomLeft: Radius.circular(outerRadius),
         bottomRight: Radius.circular(outerRadius),
       ),
@@ -47,17 +48,17 @@ BorderRadius m3eListGroupItemRadius(
     };
   }
   return switch (position) {
-    M3eListGroupPosition.first => BorderRadius.circular(kM3eInnerRadius),
-    M3eListGroupPosition.middle => BorderRadius.circular(kM3eInnerRadius),
+    M3eListGroupPosition.first => BorderRadius.circular(innerRadius),
+    M3eListGroupPosition.middle => BorderRadius.circular(innerRadius),
     M3eListGroupPosition.last => BorderRadius.only(
-      topLeft: const Radius.circular(kM3eInnerRadius),
-      topRight: const Radius.circular(kM3eInnerRadius),
+      topLeft: Radius.circular(innerRadius),
+      topRight: Radius.circular(innerRadius),
       bottomLeft: Radius.circular(outerRadius),
       bottomRight: Radius.circular(outerRadius),
     ),
     M3eListGroupPosition.only => BorderRadius.only(
-      topLeft: const Radius.circular(kM3eInnerRadius),
-      topRight: const Radius.circular(kM3eInnerRadius),
+      topLeft: Radius.circular(innerRadius),
+      topRight: Radius.circular(innerRadius),
       bottomLeft: Radius.circular(outerRadius),
       bottomRight: Radius.circular(outerRadius),
     ),
@@ -105,46 +106,62 @@ Widget m3eCompactDropdownScope({
 }
 
 /// Central Material 3 expressive row stack for settings-style grouped lists.
-Widget m3eExpressiveSettingsCard({
-  required BuildContext context,
-  required ColorScheme colorScheme,
-  required List<Widget> items,
-  double itemGap = kM3eItemGap,
-}) {
-  final ThemeData theme = Theme.of(context);
-  final SettingsProvider settingsProvider = context.read<SettingsProvider>();
-  final double cardCornerScale = settingsProvider.cardCornerScale;
-  final double itemOuterRadius = SettingsProvider.cardCornerRadiusForScale(
-    kM3eOuterRadius,
-    cardCornerScale,
-  );
-  final BorderSide blackThemeOutlineSide = m3ePureBlackOutlineSide(
-    colorScheme,
-    alpha: 0.22,
-  );
-  return Theme(
-    data: theme.copyWith(dividerColor: Colors.transparent),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
-          if (itemIndex > 0) SizedBox(height: itemGap),
-          Material(
-            color: m3eGroupedListRowFill(colorScheme),
-            shape: RoundedRectangleBorder(
-              borderRadius: m3eListGroupItemRadius(
-                m3eFlatStackSlotPosition(itemIndex, items.length),
-                flatListBody: true,
-                outerRadius: itemOuterRadius,
+class M3eExpressiveSettingsCard extends StatelessWidget {
+  const M3eExpressiveSettingsCard({
+    super.key,
+    required this.items,
+    this.colorScheme,
+    this.itemGap = kM3eItemGap,
+  });
+
+  final List<Widget> items;
+  final ColorScheme? colorScheme;
+  final double itemGap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme effectiveColorScheme = colorScheme ?? theme.colorScheme;
+    final double cardCornerScale = context.select<SettingsProvider, double>(
+      (s) => s.cardCornerScale,
+    );
+    final double itemOuterRadius = SettingsProvider.cardCornerRadiusForScale(
+      kM3eOuterRadius,
+      cardCornerScale,
+    );
+    final double itemInnerRadius = SettingsProvider.cardCornerRadiusForScale(
+      kM3eInnerRadius,
+      cardCornerScale,
+    );
+    final BorderSide blackThemeOutlineSide = m3ePureBlackOutlineSide(
+      effectiveColorScheme,
+      alpha: 0.22,
+    );
+    return Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
+            if (itemIndex > 0) SizedBox(height: itemGap),
+            Material(
+              color: m3eGroupedListRowFill(effectiveColorScheme),
+              shape: RoundedRectangleBorder(
+                borderRadius: m3eListGroupItemRadius(
+                  m3eFlatStackSlotPosition(itemIndex, items.length),
+                  flatListBody: true,
+                  outerRadius: itemOuterRadius,
+                  innerRadius: itemInnerRadius,
+                ),
+                side: blackThemeOutlineSide,
               ),
-              side: blackThemeOutlineSide,
+              clipBehavior: Clip.antiAlias,
+              child: items[itemIndex],
             ),
-            clipBehavior: Clip.antiAlias,
-            child: items[itemIndex],
-          ),
+          ],
         ],
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }

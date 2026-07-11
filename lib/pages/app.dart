@@ -2620,7 +2620,7 @@ class _AppPageState extends State<AppPage> {
       Widget? verdictStripe;
       Widget? verdictWatermark;
       final double verdictStripeTopRadius = settingsProvider
-          .cardCornerRadiusFor(28);
+          .cardCornerRadiusFor(SettingsProvider.baseCardRadius);
       if (!undeterminedTrackOnlyInstalled) {
         Color? stripeColor;
         Color? stripeTextColor;

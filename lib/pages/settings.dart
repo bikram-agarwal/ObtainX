@@ -103,6 +103,7 @@ class SettingsPageState extends State<SettingsPage> {
     sp.prefs,
     sp.useGradientBackground,
     sp.progressiveBlurEnabled,
+    sp.cardCornerScale,
   );
 
   static const List<String> _settingsSectionKeys = [
@@ -248,8 +249,7 @@ class SettingsPageState extends State<SettingsPage> {
     // every frame). Cached layers just translate rigidly instead.
     Widget settingsCard(List<Widget> children) {
       return RepaintBoundary(
-        child: m3eExpressiveSettingsCard(
-          context: context,
+        child: M3eExpressiveSettingsCard(
           colorScheme: cs,
           items: children,
         ),
@@ -304,6 +304,11 @@ class SettingsPageState extends State<SettingsPage> {
                 ? BorderSide.none
                 : m3ePureBlackOutlineSide(cs, alpha: 0.16);
 
+            final double collapsedRadius = SettingsProvider.cardCornerRadiusForScale(
+              SettingsProvider.baseCollapsedHeaderRadius,
+              context.select<SettingsProvider, double>((s) => s.cardCornerScale),
+            );
+
             return AnimatedPadding(
               duration: headerTransitionDuration,
               curve: headerTransitionCurve,
@@ -313,7 +318,7 @@ class SettingsPageState extends State<SettingsPage> {
                 curve: headerTransitionCurve,
                 decoration: BoxDecoration(
                   color: expanded ? Colors.transparent : collapsedHeaderColor,
-                  borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+                  borderRadius: BorderRadius.circular(expanded ? 8 : collapsedRadius),
                   border: outlineSide == BorderSide.none
                       ? null
                       : Border.fromBorderSide(outlineSide),
@@ -322,83 +327,88 @@ class SettingsPageState extends State<SettingsPage> {
                   type: MaterialType.transparency,
                   child: InkWell(
                     onTap: () => setSectionExpanded(key, !expanded),
-                    borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+                    borderRadius: BorderRadius.circular(expanded ? 8 : collapsedRadius),
                     splashFactory: NoSplash.splashFactory,
                     splashColor: Colors.transparent,
                     highlightColor: Colors.transparent,
                     hoverColor: Colors.transparent,
-                    child: AnimatedPadding(
-                      duration: headerTransitionDuration,
-                      curve: headerTransitionCurve,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: expanded ? 4 : 12,
-                        vertical: expanded ? 4 : 8,
-                      ),
-                      child: Row(
-                        children: [
-                          AnimatedContainer(
-                            duration: headerTransitionDuration,
-                            curve: headerTransitionCurve,
-                            width: expanded ? 20 : 30,
-                            height: expanded ? 20 : 30,
-                            decoration: BoxDecoration(
-                              color: expanded
-                                  ? Colors.transparent
-                                  : cs.primary.withValues(alpha: 0.16),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              icon,
-                              color: headerContentColor,
-                              size: expanded ? 16 : 17,
-                            ),
-                          ),
-                          SizedBox(width: expanded ? 8 : 10),
-                          Expanded(
-                            child: AnimatedDefaultTextStyle(
-                              duration: headerTransitionDuration,
-                              curve: headerTransitionCurve,
-                              style: TextStyle(
-                                fontWeight: expanded
-                                    ? FontWeight.w600
-                                    : FontWeight.w700,
-                                color: headerContentColor,
-                                fontSize: 13,
-                                letterSpacing: expanded ? 0 : 0.1,
-                                decoration: TextDecoration.none,
+                    child: SizedBox(
+                      height: expanded ? null : SettingsProvider.collapsedHeaderHeight,
+                      child: AnimatedPadding(
+                        duration: headerTransitionDuration,
+                        curve: headerTransitionCurve,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: expanded ? 4 : 12,
+                          vertical: expanded ? 4 : 8,
+                        ),
+                        child: Center(
+                          child: Row(
+                            children: [
+                              AnimatedContainer(
+                                duration: headerTransitionDuration,
+                                curve: headerTransitionCurve,
+                                width: expanded ? 20 : 30,
+                                height: expanded ? 20 : 30,
+                                decoration: BoxDecoration(
+                                  color: expanded
+                                      ? Colors.transparent
+                                      : cs.primary.withValues(alpha: 0.16),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  icon,
+                                  color: headerContentColor,
+                                  size: expanded ? 16 : 17,
+                                ),
                               ),
-                              child: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              SizedBox(width: expanded ? 8 : 10),
+                              Expanded(
+                                child: AnimatedDefaultTextStyle(
+                                  duration: headerTransitionDuration,
+                                  curve: headerTransitionCurve,
+                                  style: TextStyle(
+                                    fontWeight: expanded
+                                        ? FontWeight.w600
+                                        : FontWeight.w700,
+                                    color: headerContentColor,
+                                    fontSize: 13,
+                                    letterSpacing: expanded ? 0 : 0.1,
+                                    decoration: TextDecoration.none,
+                                  ),
+                                  child: Text(
+                                    title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                          AnimatedContainer(
-                            duration: headerTransitionDuration,
-                            curve: headerTransitionCurve,
-                            width: expanded ? 20 : 32,
-                            height: expanded ? 20 : 32,
-                            decoration: BoxDecoration(
-                              color: expanded
-                                  ? Colors.transparent
-                                  : cs.surfaceContainerHighest,
-                              shape: BoxShape.circle,
-                            ),
-                            child: AnimatedRotation(
-                              turns: expanded ? 0.25 : 0,
-                              duration: headerTransitionDuration,
-                              curve: headerTransitionCurve,
-                              child: Icon(
-                                Icons.chevron_right_rounded,
-                                color: expanded
-                                    ? cs.primary
-                                    : cs.onSurfaceVariant,
-                                size: expanded ? 18 : 20,
+                              AnimatedContainer(
+                                duration: headerTransitionDuration,
+                                curve: headerTransitionCurve,
+                                width: expanded ? 20 : 32,
+                                height: expanded ? 20 : 32,
+                                decoration: BoxDecoration(
+                                  color: expanded
+                                      ? Colors.transparent
+                                      : cs.surfaceContainerHighest,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: AnimatedRotation(
+                                  turns: expanded ? 0.25 : 0,
+                                  duration: headerTransitionDuration,
+                                  curve: headerTransitionCurve,
+                                  child: Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: expanded
+                                        ? cs.primary
+                                        : cs.onSurfaceVariant,
+                                    size: expanded ? 18 : 20,
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -538,12 +548,15 @@ class SettingsPageState extends State<SettingsPage> {
 
       final Color chevronColor = cs.onSurfaceVariant;
 
+      final double categoryTileRadius =
+          sp.cardCornerRadiusFor(SettingsProvider.baseCollapsedHeaderRadius);
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 8.0),
         child: Container(
           decoration: BoxDecoration(
             color: containerColor,
-            borderRadius: BorderRadius.circular(28),
+            borderRadius: BorderRadius.circular(categoryTileRadius),
           ),
           child: Material(
             type: MaterialType.transparency,
@@ -555,7 +568,7 @@ class SettingsPageState extends State<SettingsPage> {
                   });
                 }
               },
-              borderRadius: BorderRadius.circular(28),
+              borderRadius: BorderRadius.circular(categoryTileRadius),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -1206,8 +1219,7 @@ class _UpdatesSection extends StatelessWidget {
         ),
       ),
     ]);
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: rows,
     );
@@ -1427,8 +1439,7 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     final SettingsProvider sp = context.watch<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         Padding(
@@ -1793,8 +1804,7 @@ class _ThemesSettingsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: buildThemesSettingsCardItems(context, androidInfoFuture),
     );
@@ -1824,8 +1834,7 @@ class _AppearanceSection extends StatelessWidget {
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         Padding(
@@ -2182,8 +2191,7 @@ class _WarningsSection extends StatelessWidget {
     context.select<SettingsProvider, int>(_warningsSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         SwitchListTile(
@@ -2254,8 +2262,7 @@ class _InteractionSection extends StatelessWidget {
       }).toList();
     }
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         SwitchListTile(
@@ -2383,8 +2390,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         ListTile(
@@ -2689,8 +2695,7 @@ class _CategoriesSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: const [
         Padding(

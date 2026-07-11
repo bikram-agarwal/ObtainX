@@ -512,8 +512,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
     const double importPageBatchCellGap = 4;
 
     Widget importPageCard(List<Widget> cardItems) {
-      return m3eExpressiveSettingsCard(
-        context: context,
+      return M3eExpressiveSettingsCard(
         colorScheme: impScheme,
         items: cardItems,
       );

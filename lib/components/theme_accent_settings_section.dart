@@ -313,7 +313,8 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
     final SettingsProvider settings = context.watch<SettingsProvider>();
-    final double cardRadius = settings.cardCornerRadiusFor(28);
+    final double cardRadius =
+        settings.cardCornerRadiusFor(SettingsProvider.baseCardRadius);
 
     return Container(
       width: double.infinity,

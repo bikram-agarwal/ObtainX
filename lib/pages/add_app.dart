@@ -1569,12 +1569,15 @@ class AddAppPageState extends State<AddAppPage> {
       final Color iconColor = selected ? cs.primary : cs.onSurfaceVariant;
       final Color chevronColor = cs.onSurfaceVariant;
 
+      final double modeTileRadius = settingsProvider
+          .cardCornerRadiusFor(SettingsProvider.baseCollapsedHeaderRadius);
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 8.0),
         child: Container(
           decoration: BoxDecoration(
             color: containerColor,
-            borderRadius: BorderRadius.circular(28),
+            borderRadius: BorderRadius.circular(modeTileRadius),
           ),
           child: Material(
             type: MaterialType.transparency,
@@ -1589,7 +1592,7 @@ class AddAppPageState extends State<AddAppPage> {
                   _mode = modeObj;
                 });
               },
-              borderRadius: BorderRadius.circular(28),
+              borderRadius: BorderRadius.circular(modeTileRadius),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,

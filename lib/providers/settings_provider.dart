@@ -276,6 +276,9 @@ class SettingsProvider with ChangeNotifier {
   static const double cardCornerScaleMin = 0.5;
   static const double cardCornerScaleMax = 1.5;
   static const double cardCornerScaleDefault = 1.0;
+  static const double baseCardRadius = 14.0;
+  static const double baseCollapsedHeaderRadius = 28.0;
+  static const double collapsedHeaderHeight = 56.0;
 
   double get appUiScale {
     final double raw = prefs?.getDouble('appUiScale') ?? appUiScaleDefault;
