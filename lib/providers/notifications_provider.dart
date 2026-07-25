@@ -1,14 +1,86 @@
-// Exposes functions that can be used to send notifications to the user
-// Contains a set of pre-defined ObtainiumNotification objects that should be used throughout the app
+// Exposes functions that can be used to send notifications to the user.
+//
+// Contains a set of pre-defined ObtainiumNotification objects that should be used throughout the app.
 
-import 'dart:async';
+import 'dart:isolate';
+import 'dart:ui';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:obtainium/main.dart';
+import 'package:obtainium/providers/apps_provider.dart' show formatDownloadSize;
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/source_provider.dart';
+
+// Fixed notification IDs. Kept small and distinct so notifications of different
+// kinds never overwrite each other; per-download notifications live in a
+// separate, widened ID space below (see [downloadNotificationBaseId]).
+const int updateNotificationId = 2;
+const int silentUpdateNotificationId = 3;
+const int errorCheckingUpdatesNotificationId = 5;
+const int trackOnlyUpdateNotificationId = 7;
+const int silentUpdateAttemptNotificationId = 8;
+// ObtainX-only notification IDs, placed after the upstream fixed IDs so they
+// don't collide with them. Upstream now owns id 8 for silent-update attempts,
+// so these were bumped up from their original fork values (8 and 9).
+const int malwareScanSkippedNotificationId = 9;
+const int errorInstallingUpdatesNotificationId = 10;
+const int downloadNotificationBaseId = 100;
+
+/// Size of the ID space for per-download notifications. Kept just under the
+/// 32-bit signed max (minus [downloadNotificationBaseId]) so download IDs stay
+/// positive and clear of the small fixed IDs above, while making collisions
+/// between concurrently downloading apps as unlikely as a raw hashCode.
+const int downloadNotificationIdRange = 2000000000;
+
+/// Prefix for the download-notification Cancel action id; the app ID is appended
+/// so the tap handler knows which download to stop.
+const String cancelDownloadActionPrefix = 'cancel_download::';
+
+/// Name under which the main isolate registers a port to receive download-cancel
+/// requests forwarded from the notification-action background isolate.
+const String _downloadCancelPortName = 'obtainium_download_cancel';
+
+/// The app ID targeted by a download-cancel notification action, or null if
+/// [actionId] isn't a download-cancel action.
+String? _cancelActionAppId(String? actionId) {
+  if (actionId == null || !actionId.startsWith(cancelDownloadActionPrefix)) {
+    return null;
+  }
+  final appId = actionId.substring(cancelDownloadActionPrefix.length);
+  return appId.isEmpty ? null : appId;
+}
+
+/// Runs in a separate isolate when a notification action button is tapped (FLN
+/// routes action taps here, not to the foreground handler). It can't touch app
+/// state, so it forwards the cancel request to the main isolate via a named port.
+@pragma('vm:entry-point')
+void notificationTapBackground(NotificationResponse response) {
+  final appId = _cancelActionAppId(response.actionId);
+  if (appId != null) {
+    IsolateNameServer.lookupPortByName(_downloadCancelPortName)?.send(appId);
+  }
+}
+
+String _buildUpdateMessage(
+  List<App> updates, {
+  String? emptyKey,
+  required String singleKey,
+  required String pluralKey,
+  bool includeVersion = false,
+}) {
+  if (updates.isEmpty) return emptyKey != null ? tr(emptyKey) : '';
+  final name = updates[0].finalName;
+  final version = updates[0].latestVersion;
+  if (updates.length == 1) {
+    final args = includeVersion ? [name, version] : [name];
+    return tr(singleKey, args: args);
+  }
+  final count = updates.length - 1;
+  return plural(pluralKey, count, args: [name, count.toString()]);
+}
 
 class ObtainiumNotification {
   late int id;
@@ -21,7 +93,7 @@ class ObtainiumNotification {
   int? progPercent;
   bool onlyAlertOnce;
   String? payload;
-  String? downloadCancelAppId;
+  List<AndroidNotificationAction>? androidActions;
 
   ObtainiumNotification(
     this.id,
@@ -34,41 +106,26 @@ class ObtainiumNotification {
     this.onlyAlertOnce = false,
     this.progPercent,
     this.payload,
-    this.downloadCancelAppId,
+    this.androidActions,
   });
-}
-
-const String downloadCancelActionPrefix = 'cancelDownload:';
-
-FutureOr<void> Function(String appId)? _downloadCancelHandler;
-
-void registerDownloadNotificationCancelHandler(
-  FutureOr<void> Function(String appId)? handler,
-) {
-  _downloadCancelHandler = handler;
 }
 
 class UpdateNotification extends ObtainiumNotification {
   UpdateNotification(List<App> updates, {int? id})
     : super(
-        id ?? 2,
+        id ?? updateNotificationId,
         tr('updatesAvailable'),
-        '',
+        _buildUpdateMessage(
+          updates,
+          emptyKey: 'noNewUpdates',
+          singleKey: 'xHasAnUpdate',
+          pluralKey: 'xAndNMoreUpdatesAvailable',
+        ),
         'UPDATES_AVAILABLE',
         tr('updatesAvailableNotifChannel'),
         tr('updatesAvailableNotifDescription'),
         Importance.max,
-      ) {
-    message = updates.isEmpty
-        ? tr('noNewUpdates')
-        : updates.length == 1
-        ? tr('xHasAnUpdate', args: [updates[0].finalName])
-        : plural(
-            'xAndNMoreUpdatesAvailable',
-            updates.length - 1,
-            args: [updates[0].finalName, (updates.length - 1).toString()],
-          );
-  }
+      );
 }
 
 /// Update notification for track-only apps — apps ObtainX watches but does not
@@ -77,78 +134,63 @@ class UpdateNotification extends ObtainiumNotification {
 class TrackOnlyUpdateNotification extends ObtainiumNotification {
   TrackOnlyUpdateNotification(List<App> updates, {int? id})
     : super(
-        id ?? 7,
+        id ?? trackOnlyUpdateNotificationId,
         tr('trackOnlyUpdatesAvailable'),
-        '',
+        _buildUpdateMessage(
+          updates,
+          emptyKey: 'noNewUpdates',
+          singleKey: 'xHasAnUpdate',
+          pluralKey: 'xAndNMoreUpdatesAvailable',
+        ),
         'UPDATES_AVAILABLE',
         tr('updatesAvailableNotifChannel'),
         tr('updatesAvailableNotifDescription'),
         Importance.max,
-      ) {
-    message = updates.isEmpty
-        ? tr('noNewUpdates')
-        : updates.length == 1
-        ? tr('xHasAnUpdate', args: [updates[0].finalName])
-        : plural(
-            'xAndNMoreUpdatesAvailable',
-            updates.length - 1,
-            args: [updates[0].finalName, (updates.length - 1).toString()],
-          );
-  }
+      );
 }
 
 class SilentUpdateNotification extends ObtainiumNotification {
   SilentUpdateNotification(List<App> updates, bool succeeded, {int? id})
     : super(
-        id ?? 3,
+        id ?? silentUpdateNotificationId,
         succeeded ? tr('appsUpdated') : tr('appsNotUpdated'),
-        '',
+        _buildUpdateMessage(
+          updates,
+          singleKey: succeeded ? 'xWasUpdatedToY' : 'xWasNotUpdatedToY',
+          pluralKey: succeeded
+              ? 'xAndNMoreUpdatesInstalled'
+              : 'xAndNMoreUpdatesFailed',
+          includeVersion: true,
+        ),
         'APPS_UPDATED',
         tr('appsUpdatedNotifChannel'),
         tr('appsUpdatedNotifDescription'),
         Importance.defaultImportance,
-      ) {
-    message = updates.length == 1
-        ? tr(
-            succeeded ? 'xWasUpdatedToY' : 'xWasNotUpdatedToY',
-            args: [updates[0].finalName, updates[0].latestVersion],
-          )
-        : plural(
-            succeeded ? 'xAndNMoreUpdatesInstalled' : "xAndNMoreUpdatesFailed",
-            updates.length - 1,
-            args: [updates[0].finalName, (updates.length - 1).toString()],
-          );
-  }
+      );
 }
 
 class SilentUpdateAttemptNotification extends ObtainiumNotification {
   SilentUpdateAttemptNotification(List<App> updates, {int? id})
     : super(
-        id ?? 3,
+        id ?? silentUpdateAttemptNotificationId,
         tr('appsPossiblyUpdated'),
-        '',
+        _buildUpdateMessage(
+          updates,
+          singleKey: 'xWasPossiblyUpdatedToY',
+          pluralKey: 'xAndNMoreUpdatesPossiblyInstalled',
+          includeVersion: true,
+        ),
         'APPS_POSSIBLY_UPDATED',
         tr('appsPossiblyUpdatedNotifChannel'),
         tr('appsPossiblyUpdatedNotifDescription'),
         Importance.defaultImportance,
-      ) {
-    message = updates.length == 1
-        ? tr(
-            'xWasPossiblyUpdatedToY',
-            args: [updates[0].finalName, updates[0].latestVersion],
-          )
-        : plural(
-            'xAndNMoreUpdatesPossiblyInstalled',
-            updates.length - 1,
-            args: [updates[0].finalName, (updates.length - 1).toString()],
-          );
-  }
+      );
 }
 
 class ErrorCheckingUpdatesNotification extends ObtainiumNotification {
   ErrorCheckingUpdatesNotification(String error, {int? id})
     : super(
-        id ?? 5,
+        id ?? errorCheckingUpdatesNotificationId,
         tr('errorCheckingUpdates'),
         error,
         'BG_UPDATE_CHECK_ERROR',
@@ -156,6 +198,66 @@ class ErrorCheckingUpdatesNotification extends ObtainiumNotification {
         tr('errorCheckingUpdatesNotifDescription'),
         Importance.high,
         payload: "${tr('errorCheckingUpdates')}\n$error",
+      );
+}
+
+/// Fired ONCE per background/silent update batch, listing every app that was
+/// skipped because its VirusTotal scan came back flagged or couldn't be
+/// completed - see the install-flow rules in apps_provider.dart. Batched
+/// rather than one notification per app so a run with several flagged/failed
+/// scans doesn't spam the notification tray. Not fired for interactive
+/// installs, which show a dialog per app instead.
+class MalwareScanSkippedNotification extends ObtainiumNotification {
+  MalwareScanSkippedNotification(
+    List<({String appName, String status, String? detail})> skipped, {
+    int? id,
+  }) : super(
+         id ?? malwareScanSkippedNotificationId,
+         skipped.length == 1
+             ? tr(
+                 skipped[0].status == malwareScanStatusFlagged
+                     ? 'malwareScanFlaggedSkippedTitle'
+                     : 'malwareScanErrorSkippedTitle',
+                 args: [skipped[0].appName],
+               )
+             : plural(
+                 'malwareScanSkippedPluralTitle',
+                 skipped.length - 1,
+                 args: [skipped[0].appName, (skipped.length - 1).toString()],
+               ),
+         '',
+         'APK_MALWARE_SCAN_SKIPPED',
+         tr('malwareScanSkippedNotifChannel'),
+         tr('malwareScanSkippedNotifDescription'),
+         Importance.high,
+       ) {
+    message = skipped
+        .map(
+          (s) =>
+              '${s.appName}: ${s.detail ?? tr(s.status == malwareScanStatusFlagged ? 'malwareScanFlaggedTitle' : 'malwareScanErrorTitle')}',
+        )
+        .join('\n');
+    payload = '$title\n$message';
+  }
+}
+
+/// Fired when installing an already-downloaded update fails - kept distinct
+/// from [ErrorCheckingUpdatesNotification], which is reserved for failures
+/// of the update *check* itself. Conflating the two used to mislabel every
+/// install failure (bad download, downgrade blocked, VirusTotal-blocked,
+/// etc.) as "Error checking for updates", which is simply wrong - the check
+/// succeeded; installing what it found is what failed.
+class ErrorInstallingUpdatesNotification extends ObtainiumNotification {
+  ErrorInstallingUpdatesNotification(String error, {int? id})
+    : super(
+        id ?? errorInstallingUpdatesNotificationId,
+        tr('errorInstallingUpdate'),
+        error,
+        'BG_INSTALL_ERROR',
+        tr('errorInstallingUpdateNotifChannel'),
+        tr('errorInstallingUpdateNotifDescription'),
+        Importance.high,
+        payload: "${tr('errorInstallingUpdate')}\n$error",
       );
 }
 
@@ -170,41 +272,49 @@ class AppsRemovedNotification extends ObtainiumNotification {
         tr('appsRemovedNotifDescription'),
         Importance.max,
       ) {
-    message = '';
+    final buffer = StringBuffer();
     for (var r in namedReasons) {
-      message += '${tr('xWasRemovedDueToErrorY', args: [r[0], r[1]])} \n';
+      buffer.writeln(tr('xWasRemovedDueToErrorY', args: [r[0], r[1]]));
     }
-    message = message.trim();
+    message = buffer.toString().trim();
   }
 }
 
 class DownloadNotification extends ObtainiumNotification {
+  static const int _baseId = downloadNotificationBaseId;
   DownloadNotification(
     String appName,
     int progPercent, {
     String? appId,
-    String? message,
+    int? receivedBytes,
+    int? totalBytes,
   }) : super(
-         appName.hashCode,
+         _baseId + (appName.hashCode.abs() % downloadNotificationIdRange),
          tr('downloadingX', args: [appName]),
-         message ??
-             (progPercent < 0
-                 ? tr('installing')
-                 : tr('percentProgress', args: [progPercent.toString()])),
+         formatDownloadSize(receivedBytes, totalBytes) ?? '',
          'APP_DOWNLOADING',
          tr('downloadingXNotifChannel', args: [tr('app')]),
          tr('downloadNotifDescription'),
          Importance.low,
          onlyAlertOnce: true,
          progPercent: progPercent,
-         downloadCancelAppId: progPercent < 0 ? null : appId,
+         androidActions: appId != null
+             ? [
+                 AndroidNotificationAction(
+                   '$cancelDownloadActionPrefix$appId',
+                   tr('cancel'),
+                   showsUserInterface: false,
+                   cancelNotification: true,
+                 ),
+               ]
+             : null,
        );
 }
 
 class DownloadedNotification extends ObtainiumNotification {
   DownloadedNotification(String fileName, String downloadUrl)
     : super(
-        downloadUrl.hashCode,
+        downloadUrl.hashCode.abs(),
         tr('downloadedX', args: [fileName]),
         '',
         'FILE_DOWNLOADED',
@@ -214,15 +324,16 @@ class DownloadedNotification extends ObtainiumNotification {
       );
 }
 
-final completeInstallationNotification = ObtainiumNotification(
-  1,
-  tr('completeAppInstallation'),
-  tr('obtainiumMustBeOpenToInstallApps'),
-  'COMPLETE_INSTALL',
-  tr('completeAppInstallationNotifChannel'),
-  tr('completeAppInstallationNotifDescription'),
-  Importance.max,
-);
+ObtainiumNotification get completeInstallationNotification =>
+    ObtainiumNotification(
+      1,
+      tr('completeAppInstallation'),
+      tr('obtainiumMustBeOpenToInstallApps'),
+      'COMPLETE_INSTALL',
+      tr('completeAppInstallationNotifChannel'),
+      tr('completeAppInstallationNotifDescription'),
+      Importance.max,
+    );
 
 class CheckingUpdatesNotification extends ObtainiumNotification {
   CheckingUpdatesNotification(String appName)
@@ -243,6 +354,9 @@ class NotificationsProvider {
 
   bool isInitialized = false;
 
+  /// Invoked when the user taps a download notification's Cancel action.
+  static void Function(String appId)? onDownloadCancelRequested;
+
   Map<Importance, Priority> importanceToPriority = {
     Importance.defaultImportance: Priority.defaultPriority,
     Importance.high: Priority.high,
@@ -254,31 +368,45 @@ class NotificationsProvider {
   };
 
   Future<void> initialize() async {
+    if (isInitialized) return;
     isInitialized =
         await notifications.initialize(
           settings: const InitializationSettings(
             android: AndroidInitializationSettings('ic_notification'),
           ),
           onDidReceiveNotificationResponse: (NotificationResponse response) {
-            if (_handleDownloadCancelAction(response)) {
+            final cancelAppId = _cancelActionAppId(response.actionId);
+            if (cancelAppId != null) {
+              onDownloadCancelRequested?.call(cancelAppId);
               return;
             }
             _showNotificationPayload(response.payload);
           },
+          onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
         ) ??
         false;
   }
 
-  bool _handleDownloadCancelAction(NotificationResponse response) {
-    final actionId = response.actionId;
-    if (actionId == null || !actionId.startsWith(downloadCancelActionPrefix)) {
-      return false;
+  /// Called from the main isolate so that download-cancel requests forwarded by
+  /// [notificationTapBackground] are received and dispatched to
+  /// [onDownloadCancelRequested].
+  static void listenForDownloadCancelFromMain() {
+    final prevPort = IsolateNameServer.lookupPortByName(
+      _downloadCancelPortName,
+    );
+    if (prevPort != null) {
+      IsolateNameServer.removePortNameMapping(_downloadCancelPortName);
     }
-    final appId = actionId.substring(downloadCancelActionPrefix.length);
-    if (appId.isNotEmpty) {
-      _downloadCancelHandler?.call(appId);
-    }
-    return true;
+    final port = ReceivePort();
+    IsolateNameServer.registerPortWithName(
+      port.sendPort,
+      _downloadCancelPortName,
+    );
+    port.listen((message) {
+      if (message is String && message.isNotEmpty) {
+        onDownloadCancelRequested?.call(message);
+      }
+    });
   }
 
   Future<void> checkLaunchByNotif() async {
@@ -294,12 +422,14 @@ class NotificationsProvider {
 
   void _showNotificationPayload(String? payload, {bool doublePop = false}) {
     if (payload?.isNotEmpty == true) {
-      var title = (payload ?? '\n\n').split('\n').first;
-      var content = (payload ?? '\n\n').split('\n').sublist(1).join('\n');
+      final lines = payload!.split('\n');
+      final title = lines.first;
+      final content = lines.sublist(1).join('\n');
       globalNavigatorKey.currentState?.push(
         PageRouteBuilder(
           pageBuilder: (context, _, _) => AlertDialog(
             title: Text(title),
+            contentPadding: appDialogContentPadding,
             content: Text(content),
             actions: [
               TextButton(
@@ -337,7 +467,7 @@ class NotificationsProvider {
     int? progPercent,
     bool onlyAlertOnce = false,
     String? payload,
-    String? downloadCancelAppId,
+    List<AndroidNotificationAction>? androidActions,
   }) async {
     if (cancelExisting) {
       await cancel(id);
@@ -355,23 +485,15 @@ class NotificationsProvider {
           channelName,
           channelDescription: channelDescription,
           importance: importance,
-          priority: importanceToPriority[importance]!,
+          priority:
+              importanceToPriority[importance] ?? Priority.defaultPriority,
           groupKey: '$obtainiumId.$channelCode',
           progress: progPercent ?? 0,
           maxProgress: 100,
           showProgress: progPercent != null,
           onlyAlertOnce: onlyAlertOnce,
           indeterminate: progPercent != null && progPercent < 0,
-          actions: downloadCancelAppId != null
-              ? [
-                  AndroidNotificationAction(
-                    '$downloadCancelActionPrefix$downloadCancelAppId',
-                    tr('cancel'),
-                    showsUserInterface: false,
-                    cancelNotification: false,
-                  ),
-                ]
-              : null,
+          actions: androidActions,
         ),
       ),
       payload: payload,
@@ -393,6 +515,6 @@ class NotificationsProvider {
     onlyAlertOnce: notif.onlyAlertOnce,
     progPercent: notif.progPercent,
     payload: notif.payload,
-    downloadCancelAppId: notif.downloadCancelAppId,
+    androidActions: notif.androidActions,
   );
 }

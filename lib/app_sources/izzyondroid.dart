@@ -1,16 +1,16 @@
 import 'dart:convert';
 import 'dart:io' show HttpHeaders;
 
-import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart' show Response;
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
+import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
 
 class IzzyOnDroid extends AppSource {
-  late FDroid fd;
+  final FDroid fd = FDroid();
 
   static const String _officialRepoUrl = 'https://apt.izzysoft.de/fdroid/repo';
   static const String _rbtLogUrl =
@@ -21,22 +21,29 @@ class IzzyOnDroid extends AppSource {
       'https://apt.izzysoft.de/fdroid/index/apk/';
 
   IzzyOnDroid() {
+    name = 'IzzyOnDroid';
     hosts = ['izzysoft.de'];
-    fd = FDroid();
-    name = tr('izzyOnDroid');
     canSearch = true;
-    additionalSourceAppSpecificSettingFormItems =
-        fd.additionalSourceAppSpecificSettingFormItems;
     allowSubDomains = true;
   }
 
+  @override
+  List<List<GeneratedFormItem>>
+  get additionalSourceAppSpecificSettingFormItems =>
+      fd.additionalSourceAppSpecificSettingFormItems;
+
   static Map<String, dynamic>? _rbtLogByApkHash;
+  static DateTime? _rbtLogFetchedAt;
+  static const Duration _rbtLogCacheDuration = Duration(minutes: 1);
 
   Future<Map<String, dynamic>> _loadRbtLog(
     Map<String, dynamic> additionalSettings,
   ) async {
     final Map<String, dynamic>? cached = _rbtLogByApkHash;
-    if (cached != null) {
+    final DateTime? fetchedAt = _rbtLogFetchedAt;
+    if (cached != null &&
+        fetchedAt != null &&
+        DateTime.now().difference(fetchedAt) < _rbtLogCacheDuration) {
       return cached;
     }
     final Response response = await sourceRequest(
@@ -51,6 +58,7 @@ class IzzyOnDroid extends AppSource {
       return <String, dynamic>{};
     }
     _rbtLogByApkHash = decoded;
+    _rbtLogFetchedAt = DateTime.now();
     return decoded;
   }
 
@@ -182,6 +190,12 @@ class IzzyOnDroid extends AppSource {
     return null;
   }
 
+  // The fork keeps its own richer URL standardization instead of upstream's
+  // pair of `standardizeUrlWithRegex` calls: it additionally rewrites the
+  // legacy `apt.../fdroid/index/apk/<name>_<code>.apk` form into the canonical
+  // `/fdroid/repo/<file>.apk` and accepts direct `/fdroid/repo/*.apk` URLs.
+  // Upstream's helper only handles the `android.` and bare `index/apk` cases,
+  // so adopting it would drop that extra handling.
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
     final RegExp standardUrlRegExA = RegExp(
@@ -275,7 +289,7 @@ class IzzyOnDroid extends AppSource {
   }
 
   @override
-  App endOfGetAppChanges(App app) {
+  App postProcessApp(App app) {
     String? appId = isTempId(app) ? null : app.id;
     final Uri uri = Uri.parse(app.url);
     appId ??= uri.queryParameters['appId']?.trim();
@@ -308,9 +322,8 @@ class IzzyOnDroid extends AppSource {
       }
     }
     if (appId != null && appId.isNotEmpty) {
-      app.url = '$_izzyIndexApkBase$appId';
+      app = app.copyWith(url: '$_izzyIndexApkBase$appId', id: appId);
       app.additionalSettings['appIdOrName'] = appId;
-      app.id = appId;
     }
     return app;
   }

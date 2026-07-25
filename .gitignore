@@ -11,6 +11,7 @@
 .history
 .svn/
 .swiftpm/
+localdocs/
 migrate_working_dir/
 .vscode/*
 !.vscode/launch.json
@@ -55,3 +56,6 @@ app.*.map.json
 TODO.txt
 data
 node_modules/
+
+# FVM Version Cache
+.fvm/

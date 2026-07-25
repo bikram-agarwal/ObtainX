@@ -1,0 +1,6 @@
+# Default: normalize text files to LF in the repo
+* text=auto eol=lf
+*.bat text eol=crlf
+
+# Optional: common binaries
+*.{png,jpg,jpeg,gif,webp,ico,apk,jar} binary

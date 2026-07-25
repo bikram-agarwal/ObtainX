@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Directory, File, Platform;
+import 'dart:typed_data' show ByteData, Endian, Uint8List;
 
 import 'package:android_package_manager/android_package_manager.dart'
     show PackageInfo;
@@ -16,22 +19,26 @@ import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
-import 'package:obtainium/components/generated_form.dart';
-import 'package:obtainium/components/generated_form_modal.dart';
+import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/providers/apps_provider.dart';
-import 'package:obtainium/providers/installer_provider.dart' as installer;
+import 'package:obtainium/providers/external_install_bridge.dart';
 import 'package:obtainium/providers/logs_provider.dart';
-import 'package:obtainium/providers/native_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/theme.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
@@ -81,6 +88,8 @@ class _SettingsCategory {
 class SettingsPageState extends State<SettingsPage> {
   final GlobalKey<_SourceSpecificSectionState> _sourceSpecificKey =
       GlobalKey<_SourceSpecificSectionState>();
+  final GlobalKey<_IntegrationsSectionState> _integrationsKey =
+      GlobalKey<_IntegrationsSectionState>();
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
   final ValueNotifier<Map<String, bool>> _expandedSettingsSections =
@@ -98,6 +107,8 @@ class SettingsPageState extends State<SettingsPage> {
     sp.prefs,
     sp.useGradientBackground,
     sp.progressiveBlurEnabled,
+    sp.cardCornerScale,
+    sp.alwaysUsePhoneLayout,
   );
 
   static const List<String> _settingsSectionKeys = [
@@ -134,34 +145,43 @@ class SettingsPageState extends State<SettingsPage> {
 
   Future<bool> confirmDiscardUnsavedChanges() async {
     final sourceSpecificState = _sourceSpecificKey.currentState;
-    if (sourceSpecificState != null) {
-      if (sourceSpecificState.isGithubDirty ||
-          sourceSpecificState.isGitlabDirty) {
-        final bool? discard = await showDialog<bool>(
-          context: context,
-          builder: (BuildContext dialogContext) {
-            return AlertDialog(
-              title: Text(tr('discardUnsavedChangesQuestion')),
-              content: Text(tr('discardUnsavedPATChangesExplanation')),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: Text(tr('cancel')),
+    final integrationsState = _integrationsKey.currentState;
+    final bool hasUnsavedChanges =
+        (sourceSpecificState != null &&
+            (sourceSpecificState.isGithubDirty ||
+                sourceSpecificState.isGitlabDirty)) ||
+        (integrationsState?.isVirusTotalApiKeyDirty ?? false);
+    if (hasUnsavedChanges) {
+      final bool? discard = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(tr('discardUnsavedChangesQuestion')),
+            contentPadding: appDialogContentPadding,
+            content: Text(tr('discardUnsavedPATChangesExplanation')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(dialogContext).colorScheme.error,
                 ),
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: Text(tr('continue')),
-                ),
-              ],
-            );
-          },
-        );
-        if (discard == true) {
-          sourceSpecificState.discardChanges();
-          return true;
-        }
-        return false;
+                child: Text(tr('discard')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(tr('stayHere')),
+              ),
+            ],
+          );
+        },
+      );
+      if (discard == true) {
+        sourceSpecificState?.discardChanges();
+        integrationsState?.discardChanges();
+        return true;
       }
+      return false;
     }
     return true;
   }
@@ -188,7 +208,7 @@ class SettingsPageState extends State<SettingsPage> {
     context.select<SettingsProvider, int>(_scaffoldSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
-    SourceProvider sourceProvider = SourceProvider();
+    final SourceProvider sourceProvider = SourceProvider();
 
     // One-time initialization guard.
     if (sp.prefs == null) sp.initializeSettings();
@@ -235,11 +255,7 @@ class SettingsPageState extends State<SettingsPage> {
     // every frame). Cached layers just translate rigidly instead.
     Widget settingsCard(List<Widget> children) {
       return RepaintBoundary(
-        child: m3eExpressiveSettingsCard(
-          context: context,
-          colorScheme: cs,
-          items: children,
-        ),
+        child: M3eExpressiveSettingsCard(colorScheme: cs, items: children),
       );
     }
 
@@ -252,14 +268,26 @@ class SettingsPageState extends State<SettingsPage> {
           child: child,
           builder: (context, expandedState, child) {
             final bool expanded = _sectionExpanded(expandedState, key);
-            return ClipRect(
-              clipper: _SettingsSectionShadowClipper(expanded: expanded),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 360),
-                curve: Curves.easeInOutCubicEmphasized,
-                alignment: Alignment.topCenter,
-                heightFactor: expanded ? 1.0 : 0.0,
-                child: child,
+            return AnimatedPadding(
+              duration: const Duration(milliseconds: 360),
+              curve: Curves.easeInOutCubicEmphasized,
+              padding: EdgeInsets.only(
+                bottom: expanded ? SettingsProvider.collapsedHeaderGap : 0,
+              ),
+              child: ClipRect(
+                clipper: _SettingsSectionShadowClipper(expanded: expanded),
+                child: AnimatedAlign(
+                  duration: const Duration(milliseconds: 360),
+                  curve: Curves.easeInOutCubicEmphasized,
+                  alignment: Alignment.topCenter,
+                  heightFactor: expanded ? 1.0 : 0.0,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeInOutCubicEmphasized,
+                    opacity: expanded ? 1.0 : 0.0,
+                    child: child!,
+                  ),
+                ),
               ),
             );
           },
@@ -270,11 +298,7 @@ class SettingsPageState extends State<SettingsPage> {
     Widget sectionHeader(String title, IconData icon, String key) {
       const Duration headerTransitionDuration = Duration(milliseconds: 300);
       const Curve headerTransitionCurve = Curves.easeInOutCubicEmphasized;
-      final Color collapsedHeaderColor = Color.lerp(
-        cs.secondaryContainer,
-        cs.primaryContainer,
-        0.30,
-      )!;
+      final Color collapsedHeaderColor = m3eCollapsedGroupHeaderFill(cs);
       final Color collapsedHeaderContentColor = cs.onSecondaryContainer;
 
       // RepaintBoundary: see settingsCard above for why each section is its own
@@ -291,16 +315,26 @@ class SettingsPageState extends State<SettingsPage> {
                 ? BorderSide.none
                 : m3ePureBlackOutlineSide(cs, alpha: 0.16);
 
-            return AnimatedPadding(
-              duration: headerTransitionDuration,
-              curve: headerTransitionCurve,
-              padding: EdgeInsets.fromLTRB(0, expanded ? 20 : 16, 0, 8),
+            final double collapsedRadius =
+                SettingsProvider.cardCornerRadiusForScale(
+                  SettingsProvider.baseCollapsedHeaderRadius,
+                  context.select<SettingsProvider, double>(
+                    (s) => s.cardCornerScale,
+                  ),
+                );
+
+            return Padding(
+              padding: const EdgeInsets.only(
+                top: SettingsProvider.collapsedHeaderGap,
+              ),
               child: AnimatedContainer(
                 duration: headerTransitionDuration,
                 curve: headerTransitionCurve,
                 decoration: BoxDecoration(
                   color: expanded ? Colors.transparent : collapsedHeaderColor,
-                  borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+                  borderRadius: BorderRadius.circular(
+                    expanded ? 8 : collapsedRadius,
+                  ),
                   border: outlineSide == BorderSide.none
                       ? null
                       : Border.fromBorderSide(outlineSide),
@@ -309,83 +343,93 @@ class SettingsPageState extends State<SettingsPage> {
                   type: MaterialType.transparency,
                   child: InkWell(
                     onTap: () => setSectionExpanded(key, !expanded),
-                    borderRadius: BorderRadius.circular(expanded ? 8 : 28),
+                    borderRadius: BorderRadius.circular(
+                      expanded ? 8 : collapsedRadius,
+                    ),
                     splashFactory: NoSplash.splashFactory,
                     splashColor: Colors.transparent,
                     highlightColor: Colors.transparent,
                     hoverColor: Colors.transparent,
-                    child: AnimatedPadding(
-                      duration: headerTransitionDuration,
-                      curve: headerTransitionCurve,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: expanded ? 4 : 12,
-                        vertical: expanded ? 4 : 8,
-                      ),
-                      child: Row(
-                        children: [
-                          AnimatedContainer(
-                            duration: headerTransitionDuration,
-                            curve: headerTransitionCurve,
-                            width: expanded ? 20 : 30,
-                            height: expanded ? 20 : 30,
-                            decoration: BoxDecoration(
-                              color: expanded
-                                  ? Colors.transparent
-                                  : cs.primary.withValues(alpha: 0.16),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              icon,
-                              color: headerContentColor,
-                              size: expanded ? 16 : 17,
-                            ),
-                          ),
-                          SizedBox(width: expanded ? 8 : 10),
-                          Expanded(
-                            child: AnimatedDefaultTextStyle(
-                              duration: headerTransitionDuration,
-                              curve: headerTransitionCurve,
-                              style: TextStyle(
-                                fontWeight: expanded
-                                    ? FontWeight.w600
-                                    : FontWeight.w700,
-                                color: headerContentColor,
-                                fontSize: 13,
-                                letterSpacing: expanded ? 0 : 0.1,
-                                decoration: TextDecoration.none,
+                    child: SizedBox(
+                      height: SettingsProvider.collapsedHeaderHeight,
+                      child: AnimatedPadding(
+                        duration: headerTransitionDuration,
+                        curve: headerTransitionCurve,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: expanded ? 4 : 12,
+                          vertical: expanded ? 4 : 8,
+                        ),
+                        child: Center(
+                          child: Row(
+                            children: [
+                              AnimatedContainer(
+                                duration: headerTransitionDuration,
+                                curve: headerTransitionCurve,
+                                width: expanded ? 20 : 30,
+                                height: expanded ? 20 : 30,
+                                decoration: BoxDecoration(
+                                  color: expanded
+                                      ? Colors.transparent
+                                      : cs.primary.withValues(alpha: 0.16),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  icon,
+                                  color: headerContentColor,
+                                  size: expanded ? 16 : 17,
+                                ),
                               ),
-                              child: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              SizedBox(width: expanded ? 8 : 10),
+                              Expanded(
+                                child: AnimatedDefaultTextStyle(
+                                  duration: headerTransitionDuration,
+                                  curve: headerTransitionCurve,
+                                  style: TextStyle(
+                                    fontFamily: Theme.of(
+                                      context,
+                                    ).textTheme.bodyLarge?.fontFamily,
+                                    fontWeight: expanded
+                                        ? FontWeight.w600
+                                        : FontWeight.w700,
+                                    color: headerContentColor,
+                                    fontSize: 13,
+                                    letterSpacing: expanded ? 0 : 0.1,
+                                    decoration: TextDecoration.none,
+                                  ),
+                                  child: Text(
+                                    title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                          AnimatedContainer(
-                            duration: headerTransitionDuration,
-                            curve: headerTransitionCurve,
-                            width: expanded ? 20 : 32,
-                            height: expanded ? 20 : 32,
-                            decoration: BoxDecoration(
-                              color: expanded
-                                  ? Colors.transparent
-                                  : cs.surfaceContainerHighest,
-                              shape: BoxShape.circle,
-                            ),
-                            child: AnimatedRotation(
-                              turns: expanded ? 0.25 : 0,
-                              duration: headerTransitionDuration,
-                              curve: headerTransitionCurve,
-                              child: Icon(
-                                Icons.chevron_right_rounded,
-                                color: expanded
-                                    ? cs.primary
-                                    : cs.onSurfaceVariant,
-                                size: expanded ? 18 : 20,
+                              AnimatedContainer(
+                                duration: headerTransitionDuration,
+                                curve: headerTransitionCurve,
+                                width: expanded ? 20 : 32,
+                                height: expanded ? 20 : 32,
+                                decoration: BoxDecoration(
+                                  color: expanded
+                                      ? Colors.transparent
+                                      : cs.surfaceContainerHighest,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: AnimatedRotation(
+                                  turns: expanded ? 0.25 : 0,
+                                  duration: headerTransitionDuration,
+                                  curve: headerTransitionCurve,
+                                  child: Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: expanded
+                                        ? cs.primary
+                                        : cs.onSurfaceVariant,
+                                    size: expanded ? 18 : 20,
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -413,6 +457,9 @@ class SettingsPageState extends State<SettingsPage> {
                   child: Text(
                     tr('about'),
                     style: TextStyle(
+                      fontFamily: Theme.of(
+                        context,
+                      ).textTheme.bodyLarge?.fontFamily,
                       fontWeight: FontWeight.w600,
                       color: cs.primary,
                       fontSize: 13,
@@ -442,7 +489,8 @@ class SettingsPageState extends State<SettingsPage> {
     }
 
     final double screenWidth = MediaQuery.sizeOf(context).width;
-    final bool isLargeScreen = screenWidth >= kLargeScreenWidthBreakpoint;
+    final bool isLargeScreen =
+        screenWidth >= kLargeScreenWidthBreakpoint && !sp.alwaysUsePhoneLayout;
 
     final List<_SettingsCategory> categoriesList = [
       _SettingsCategory(
@@ -455,7 +503,7 @@ class SettingsPageState extends State<SettingsPage> {
         key: 'integrations',
         title: tr('integrations'),
         icon: Icons.extension_rounded,
-        widget: const _IntegrationsSection(),
+        widget: _IntegrationsSection(key: _integrationsKey),
       ),
       _SettingsCategory(
         key: 'warnings',
@@ -482,7 +530,7 @@ class SettingsPageState extends State<SettingsPage> {
         key: 'appearance',
         title: tr('appearance'),
         icon: Icons.tune_rounded,
-        widget: _AppearanceSection(androidInfo: _androidInfo),
+        widget: const _AppearanceSection(),
       ),
       _SettingsCategory(
         key: 'interaction',
@@ -512,25 +560,27 @@ class SettingsPageState extends State<SettingsPage> {
 
       final Color containerColor = selected
           ? cs.secondaryContainer
-          : cs.surfaceContainerHigh;
-      final Color contentColor = selected
-          ? cs.onSecondaryContainer
-          : cs.onSurface;
+          : m3eCollapsedGroupHeaderFill(cs);
+      final Color contentColor = cs.onSecondaryContainer;
 
-      final Color iconBoxColor = selected
-          ? cs.primary.withValues(alpha: 0.16)
-          : cs.primaryContainer.withValues(alpha: 0.48);
+      final Color iconBoxColor = cs.primary.withValues(alpha: 0.16);
 
-      final Color iconColor = selected ? cs.primary : cs.onSurfaceVariant;
+      final Color iconColor = cs.onSecondaryContainer;
 
       final Color chevronColor = cs.onSurfaceVariant;
 
+      final double categoryTileRadius = sp.cardCornerRadiusFor(
+        SettingsProvider.baseCollapsedHeaderRadius,
+      );
+
       return Padding(
-        padding: const EdgeInsets.only(bottom: 8.0),
+        padding: const EdgeInsets.only(
+          bottom: SettingsProvider.collapsedHeaderGap,
+        ),
         child: Container(
           decoration: BoxDecoration(
             color: containerColor,
-            borderRadius: BorderRadius.circular(28),
+            borderRadius: BorderRadius.circular(categoryTileRadius),
           ),
           child: Material(
             type: MaterialType.transparency,
@@ -542,42 +592,53 @@ class SettingsPageState extends State<SettingsPage> {
                   });
                 }
               },
-              borderRadius: BorderRadius.circular(28),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: iconBoxColor,
-                        shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(categoryTileRadius),
+              child: SizedBox(
+                height: SettingsProvider.collapsedHeaderHeight,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: iconBoxColor,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(icon, color: iconColor, size: 18),
                       ),
-                      child: Icon(icon, color: iconColor, size: 18),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w500,
-                          color: contentColor,
-                          fontSize: 14,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontFamily: Theme.of(
+                              context,
+                            ).textTheme.bodyLarge?.fontFamily,
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                            color: contentColor,
+                            fontSize: 14,
+                          ),
                         ),
                       ),
-                    ),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: chevronColor,
-                      size: 20,
-                    ),
-                  ],
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerHighest,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.chevron_right_rounded,
+                          color: chevronColor,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -607,7 +668,7 @@ class SettingsPageState extends State<SettingsPage> {
       return Theme(
         data: Theme.of(context).copyWith(
           listTileTheme: const ListTileThemeData(
-            contentPadding: EdgeInsets.only(left: 16, right: 8),
+            contentPadding: kM3eSettingsListTileContentPadding,
           ),
         ),
         child: Stack(
@@ -757,7 +818,7 @@ class SettingsPageState extends State<SettingsPage> {
     return Theme(
       data: Theme.of(context).copyWith(
         listTileTheme: const ListTileThemeData(
-          contentPadding: EdgeInsets.only(left: 16, right: 8),
+          contentPadding: kM3eSettingsListTileContentPadding,
         ),
       ),
       child: Scaffold(
@@ -836,7 +897,7 @@ class SettingsPageState extends State<SettingsPage> {
                               ),
                               collapsibleCard(
                                 'integrations',
-                                const _IntegrationsSection(),
+                                _IntegrationsSection(key: _integrationsKey),
                               ),
                               // ── Warnings ─────────────────────────────────
                               sectionHeader(
@@ -885,7 +946,7 @@ class SettingsPageState extends State<SettingsPage> {
                               ),
                               collapsibleCard(
                                 'appearance',
-                                _AppearanceSection(androidInfo: _androidInfo),
+                                const _AppearanceSection(),
                               ),
                               // ── Interaction ──────────────────────────────
                               sectionHeader(
@@ -952,14 +1013,11 @@ class _SettingsSectionShadowClipper extends CustomClipper<Rect> {
 
   @override
   Rect getClip(Size size) {
-    if (!expanded) {
-      return Offset.zero & size;
-    }
     return Rect.fromLTRB(
       -shadowPaintAllowance,
       -shadowPaintAllowance,
       size.width + shadowPaintAllowance,
-      size.height + shadowPaintAllowance,
+      size.height + (expanded ? shadowPaintAllowance : 0),
     );
   }
 
@@ -991,8 +1049,6 @@ class _UpdatesSection extends StatelessWidget {
     sp.onlyCheckInstalledOrTrackOnlyApps,
     sp.removeOnExternalUninstall,
     sp.parallelDownloads,
-    sp.installerMode,
-    sp.shizukuPretendToBeGooglePlay,
     sp.includePrereleasesByDefault,
   );
 
@@ -1002,11 +1058,22 @@ class _UpdatesSection extends StatelessWidget {
     context.select<SettingsProvider, int>(_updateSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
 
-    return FutureBuilder<AndroidDeviceInfo>(
-      future: androidInfo,
-      builder: (context, snapshot) {
-        return _buildSettingsCardContent(context, sp, cs, snapshot);
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        // First item in the Updates section, deliberately NOT inside the
+        // settings card: a manual trigger for the full background update
+        // worker (check → download → install-if-enabled → notify, across all
+        // eligible apps), as opposed to pull-to-refresh's foreground check of
+        // only the currently visible list.
+        const _RunBgUpdateCheckNowButton(),
+        FutureBuilder<AndroidDeviceInfo>(
+          future: androidInfo,
+          builder: (context, snapshot) {
+            return _buildSettingsCardContent(context, sp, cs, snapshot);
+          },
+        ),
+      ],
     );
   }
 
@@ -1111,92 +1178,83 @@ class _UpdatesSection extends StatelessWidget {
         value: sp.parallelDownloads,
         onChanged: (bool value) => sp.parallelDownloads = value,
       ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(tr('installerMode')),
-            const SizedBox(height: 4),
-            SizedBox(
-              width: double.infinity,
-              child: AppSegmentedButton<String>(
-                segments: [
-                  ButtonSegment<String>(
-                    value: 'stock',
-                    label: AppSegmentedButtonLabel(tr('installerModeStock')),
-                  ),
-                  ButtonSegment<String>(
-                    value: 'shizuku',
-                    label: AppSegmentedButtonLabel(tr('installerModeShizuku')),
-                  ),
-                  ButtonSegment<String>(
-                    value: 'legacy',
-                    label: AppSegmentedButtonLabel(
-                      tr('installerModeThirdParty'),
-                    ),
-                  ),
-                ],
-                selected: {sp.installerMode},
-                onSelectionChanged: (Set<String> selected) {
-                  final String mode = selected.first;
-                  if (mode == 'shizuku') {
-                    ShizukuApkInstaller().checkPermission().then((
-                      String? resCode,
-                    ) {
-                      if (!context.mounted) return;
-                      if (resCode!.startsWith('granted')) {
-                        sp.installerMode = 'shizuku';
-                      } else {
-                        switch (resCode) {
-                          case 'services_not_found':
-                            showError(
-                              ObtainiumError(tr('shizukuBinderNotFound')),
-                              context,
-                            );
-                          case 'old_shizuku':
-                            showError(
-                              ObtainiumError(tr('shizukuOld')),
-                              context,
-                            );
-                          case 'old_android_with_adb':
-                            showError(
-                              ObtainiumError(tr('shizukuOldAndroidWithADB')),
-                              context,
-                            );
-                          case 'denied':
-                            showError(ObtainiumError(tr('cancelled')), context);
-                        }
-                      }
-                    });
-                  } else {
-                    sp.installerMode = mode;
-                  }
-                },
-              ),
-            ),
-            if (sp.installerMode == 'shizuku')
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(tr('shizukuPretendToBeGooglePlay')),
-                value: sp.shizukuPretendToBeGooglePlay,
-                onChanged: (bool value) =>
-                    sp.shizukuPretendToBeGooglePlay = value,
-              ),
-            if (sp.installerMode == 'legacy')
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: _ThirdPartyInstallerSelector(settingsProvider: sp),
-              ),
-          ],
+    ]);
+    return M3eExpressiveSettingsCard(colorScheme: cs, items: rows);
+  }
+}
+
+/// Manual trigger for the background update check, shown as the first item in
+/// the Updates section (intentionally outside the settings card). Unlike
+/// pull-to-refresh — a foreground check of the currently visible list — this
+/// runs the actual background worker: check → download → install (when
+/// enabled) → notifications, across all eligible apps ([forceAll]).
+class _RunBgUpdateCheckNowButton extends StatefulWidget {
+  const _RunBgUpdateCheckNowButton();
+
+  @override
+  State<_RunBgUpdateCheckNowButton> createState() =>
+      _RunBgUpdateCheckNowButtonState();
+}
+
+class _RunBgUpdateCheckNowButtonState
+    extends State<_RunBgUpdateCheckNowButton> {
+  bool _isRunning = false;
+
+  Future<void> _trigger() async {
+    if (_isRunning) return;
+    setState(() => _isRunning = true);
+    // Read the provider before the async gap so we don't touch context after.
+    final LogsProvider logs = context.read<LogsProvider>();
+    await logs.add(
+      'Manual background update check triggered from settings',
+      level: LogLevel.info,
+    );
+    try {
+      final String taskId = 'manual_${DateTime.now().millisecondsSinceEpoch}';
+      await bgUpdateCheck(taskId, null, forceAll: true);
+      await logs.add(
+        'Manual background update check completed',
+        level: LogLevel.info,
+      );
+    } catch (e) {
+      unawaited(
+        logs.add(
+          'Manual background update check failed: $e',
+          level: LogLevel.error,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isRunning = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      // No horizontal inset: match the full width of the settings-card rows
+      // below (they stretch edge-to-edge in the same Column). Only a small
+      // bottom gap separates this action from the toggle group.
+      padding: const EdgeInsets.only(bottom: 8),
+      child: SizedBox(
+        width: double.infinity,
+        child: FilledButton.tonal(
+          onPressed: _isRunning ? null : _trigger,
+          // Match the row titles below (ListTile default = bodyLarge, ~16sp),
+          // which are larger than the button's default labelLarge (~14sp).
+          // Only textStyle is overridden; pill shape and tonal colors still
+          // come from the theme's filledButtonTheme.
+          style: FilledButton.styleFrom(
+            textStyle: Theme.of(context).textTheme.bodyLarge,
+          ),
+          child: _isRunning
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: ExpressiveLoadingIndicator(),
+                )
+              : Text(tr('runBgCheckNow')),
         ),
       ),
-    ]);
-    return m3eExpressiveSettingsCard(
-      context: context,
-      colorScheme: cs,
-      items: rows,
     );
   }
 }
@@ -1265,7 +1323,12 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
     final String label = _labelForVal(sliderVal);
     final isTV = context.read<SettingsProvider>().isTV;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -1304,18 +1367,13 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                       trackHeight: 16,
                       trackShape: const _GappedTrackShape(),
                       thumbShape: const _VerticalBarThumbShape(),
-                      tickMarkShape: const RoundSliderTickMarkShape(
-                        tickMarkRadius: 3,
-                      ),
                       activeTickMarkColor: Theme.of(
                         context,
                       ).colorScheme.onPrimary,
                       inactiveTickMarkColor: Theme.of(
                         context,
                       ).colorScheme.primary,
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 20,
-                      ),
+                      overlayShape: SliderComponentShape.noOverlay,
                     ),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
@@ -1414,12 +1472,16 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     final SettingsProvider sp = context.watch<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardTrailingInset,
+            12,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1445,18 +1507,21 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                     child: TextField(
                       controller: _githubPatController,
                       obscureText: true,
-                      decoration: InputDecoration(
-                        labelText: tr('githubPATLabel'),
-                        border: const OutlineInputBorder(),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.open_in_new_rounded),
-                          onPressed: () => launchUrlString(
-                            'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
-                            mode: LaunchMode.externalApplication,
+                      decoration:
+                          appPageOutlinedInputDecoration(
+                            context,
+                            labelText: tr('githubPATLabel'),
+                            isDense: true,
+                          ).copyWith(
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.open_in_new_rounded),
+                              onPressed: () => launchUrlString(
+                                'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+                                mode: LaunchMode.externalApplication,
+                              ),
+                              tooltip: tr('about'),
+                            ),
                           ),
-                          tooltip: tr('about'),
-                        ),
-                      ),
                       onChanged: (val) {
                         setState(() {});
                       },
@@ -1493,7 +1558,15 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                     ),
                                   ),
                                 )
-                              : (GitHub.hasValidatedPAT(enteredText, sp)
+                              // Show the validated shield only when the PAT is
+                              // BOTH validated AND actually saved (!isDirty).
+                              // Keying the shield on the stored fingerprint
+                              // alone hid the save button when a matching
+                              // fingerprint existed without saved creds (e.g.
+                              // validated via the add-app form), stranding the
+                              // field dirty with no way to persist it.
+                              : (GitHub.hasValidatedPAT(enteredText, sp) &&
+                                        !isDirty
                                     ? Tooltip(
                                         message: tr('githubPATValidated'),
                                         child: Icon(
@@ -1576,13 +1649,25 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _hubProxyController,
-                decoration: InputDecoration(
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardHorizontalInset,
+            12,
+          ),
+          child: TextField(
+            controller: _hubProxyController,
+            decoration:
+                appPageOutlinedInputDecoration(
+                  context,
                   labelText: tr('GHReqPrefix'),
                   hintText: 'gh-proxy.org',
-                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ).copyWith(
                   suffixIcon: IconButton(
                     icon: const Icon(Icons.open_in_new_rounded),
                     onPressed: () => launchUrlString(
@@ -1592,39 +1677,44 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                     tooltip: tr('about'),
                   ),
                 ),
-                onChanged: (val) {
-                  sp.setSettingString(GitHub.githubReqPrefixKey, val.trim());
-                },
-              ),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                title: Text(tr('GHReqPrefixUseToken')),
-                value:
-                    sp.getSettingBool(GitHub.githubReqPrefixUseTokenKey) ??
-                    false,
-                onChanged: (val) {
-                  sp.setSettingBool(GitHub.githubReqPrefixUseTokenKey, val);
-                },
-                contentPadding: EdgeInsets.zero,
-              ),
-              SwitchListTile(
-                title: Text(tr('repoRenamedCheck')),
-                value: sp.getSettingBool('checkRepoRename') ?? false,
-                onChanged: (val) {
-                  sp.setSettingBool('checkRepoRename', val);
-                },
-                contentPadding: EdgeInsets.zero,
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _gitlabPatController,
-                      obscureText: true,
-                      decoration: InputDecoration(
+            onChanged: (val) {
+              sp.setSettingString(GitHub.githubReqPrefixKey, val.trim());
+            },
+          ),
+        ),
+        SwitchListTile(
+          title: Text(tr('GHReqPrefixUseToken')),
+          value: sp.getSettingBool(GitHub.githubReqPrefixUseTokenKey) ?? false,
+          onChanged: (val) {
+            sp.setSettingBool(GitHub.githubReqPrefixUseTokenKey, val);
+          },
+        ),
+        SwitchListTile(
+          title: Text(tr('repoRenamedCheck')),
+          value: sp.getSettingBool('checkRepoRename') ?? false,
+          onChanged: (val) {
+            sp.setSettingBool('checkRepoRename', val);
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardTrailingInset,
+            12,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _gitlabPatController,
+                  obscureText: true,
+                  decoration:
+                      appPageOutlinedInputDecoration(
+                        context,
                         labelText: tr('gitlabPATLabel'),
-                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ).copyWith(
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.open_in_new_rounded),
                           onPressed: () => launchUrlString(
@@ -1634,124 +1724,115 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                           tooltip: tr('about'),
                         ),
                       ),
-                      onChanged: (val) {
-                        setState(() {});
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Builder(
-                    builder: (context) {
-                      final String enteredText = _gitlabPatController.text
-                          .trim();
-                      final String savedText =
-                          sp.getSettingString('gitlab-creds') ?? '';
-                      final bool isDirty = enteredText != savedText;
-                      final bool isValidated = GitLab.hasValidatedPAT(
-                        enteredText,
-                        sp,
-                      );
-                      final bool buttonIsEnabled =
-                          isDirty || (enteredText.isNotEmpty && !isValidated);
+                  onChanged: (val) {
+                    setState(() {});
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Builder(
+                builder: (context) {
+                  final String enteredText = _gitlabPatController.text.trim();
+                  final String savedText =
+                      sp.getSettingString('gitlab-creds') ?? '';
+                  final bool isDirty = enteredText != savedText;
+                  final bool isValidated = GitLab.hasValidatedPAT(
+                    enteredText,
+                    sp,
+                  );
+                  final bool buttonIsEnabled =
+                      isDirty || (enteredText.isNotEmpty && !isValidated);
 
-                      return SizedBox(
-                        width: 48,
-                        height: 56,
-                        child: Center(
-                          child: _gitlabChecking
-                              ? SizedBox(
+                  return SizedBox(
+                    width: 48,
+                    height: 56,
+                    child: Center(
+                      child: _gitlabChecking
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: ExpressiveLoadingIndicator(
+                                color: cs.primary,
+                                constraints: const BoxConstraints.tightFor(
                                   width: 20,
                                   height: 20,
-                                  child: ExpressiveLoadingIndicator(
-                                    color: cs.primary,
-                                    constraints: const BoxConstraints.tightFor(
-                                      width: 20,
-                                      height: 20,
+                                ),
+                              ),
+                            )
+                          // Shield only when validated AND saved (see the GitHub
+                          // field above for why fingerprint-alone is wrong).
+                          : (GitLab.hasValidatedPAT(enteredText, sp) && !isDirty
+                                ? Tooltip(
+                                    message: tr('gitlabPATValidated'),
+                                    child: Icon(
+                                      Icons.verified_user,
+                                      color: cs.primary,
                                     ),
-                                  ),
-                                )
-                              : (GitLab.hasValidatedPAT(enteredText, sp)
-                                    ? Tooltip(
-                                        message: tr('gitlabPATValidated'),
-                                        child: Icon(
-                                          Icons.verified_user,
-                                          color: cs.primary,
-                                        ),
-                                      )
-                                    : IconButton.filledTonal(
-                                        icon: const Icon(Icons.save_rounded),
-                                        onPressed: buttonIsEnabled
-                                            ? () async {
-                                                FocusManager
-                                                    .instance
-                                                    .primaryFocus
-                                                    ?.unfocus();
-                                                if (enteredText.isEmpty) {
-                                                  sp.setSettingString(
-                                                    'gitlab-creds',
-                                                    '',
-                                                  );
-                                                  GitLab.clearPATValidation(sp);
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(
-                                                        tr('dismiss'),
-                                                      ),
-                                                    ),
-                                                  );
-                                                  setState(() {});
-                                                  return;
-                                                }
-                                                setState(() {
-                                                  _gitlabChecking = true;
-                                                });
-                                                final String? error =
-                                                    await GitLab.validatePAT(
-                                                      enteredText,
-                                                    );
-                                                if (!context.mounted) return;
-                                                setState(() {
-                                                  _gitlabChecking = false;
-                                                });
-                                                if (error == null) {
-                                                  sp.setSettingString(
-                                                    'gitlab-creds',
-                                                    enteredText,
-                                                  );
-                                                  GitLab.storePATValidation(
-                                                    enteredText,
-                                                    sp,
-                                                  );
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(
-                                                        tr(
-                                                          'gitlabPATValidated',
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  );
-                                                } else {
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(error),
-                                                    ),
-                                                  );
-                                                }
-                                              }
-                                            : null,
-                                      )),
-                        ),
-                      );
-                    },
-                  ),
-                ],
+                                  )
+                                : IconButton.filledTonal(
+                                    icon: const Icon(Icons.save_rounded),
+                                    onPressed: buttonIsEnabled
+                                        ? () async {
+                                            FocusManager.instance.primaryFocus
+                                                ?.unfocus();
+                                            if (enteredText.isEmpty) {
+                                              sp.setSettingString(
+                                                'gitlab-creds',
+                                                '',
+                                              );
+                                              GitLab.clearPATValidation(sp);
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(tr('dismiss')),
+                                                ),
+                                              );
+                                              setState(() {});
+                                              return;
+                                            }
+                                            setState(() {
+                                              _gitlabChecking = true;
+                                            });
+                                            final String? error =
+                                                await GitLab.validatePAT(
+                                                  enteredText,
+                                                );
+                                            if (!context.mounted) return;
+                                            setState(() {
+                                              _gitlabChecking = false;
+                                            });
+                                            if (error == null) {
+                                              sp.setSettingString(
+                                                'gitlab-creds',
+                                                enteredText,
+                                              );
+                                              GitLab.storePATValidation(
+                                                enteredText,
+                                                sp,
+                                              );
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    tr('gitlabPATValidated'),
+                                                  ),
+                                                ),
+                                              );
+                                            } else {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(content: Text(error)),
+                                              );
+                                            }
+                                          }
+                                        : null,
+                                  )),
+                    ),
+                  );
+                },
               ),
             ],
           ),
@@ -1771,8 +1852,7 @@ class _ThemesSettingsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: buildThemesSettingsCardItems(context, androidInfoFuture),
     );
@@ -1781,19 +1861,16 @@ class _ThemesSettingsSection extends StatelessWidget {
 
 /// Appearance section — locale, UI scale slider, card-corner slider, toggles.
 class _AppearanceSection extends StatelessWidget {
-  const _AppearanceSection({required this.androidInfo});
-
-  final Future<AndroidDeviceInfo> androidInfo;
+  const _AppearanceSection();
 
   static int _appearanceSettingsHash(SettingsProvider sp) => Object.hash(
     sp.forcedLocale?.toLanguageTag(),
-    sp.useSystemFont,
     sp.appUiScale,
     sp.cardCornerScale,
     sp.showAppWebpage,
-    sp.disablePageTransitions,
-    sp.reversePageTransitions,
     sp.highlightTouchTargets,
+    sp.alwaysUsePhoneLayout,
+    sp.customFontPath,
   );
 
   @override
@@ -1802,52 +1879,30 @@ class _AppearanceSection extends StatelessWidget {
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardHorizontalInset,
+            4,
+          ),
           child: _LocaleMenu(sp: sp),
         ),
-        FutureBuilder(
-          builder: (ctx, val) {
-            return (val.data?.version.sdkInt ?? 0) >= 29
-                ? SwitchListTile(
-                    title: Text(tr('useSystemFont')),
-                    value: sp.useSystemFont,
-                    onChanged: (useSystemFont) {
-                      if (useSystemFont) {
-                        NativeFeatures.loadSystemFont().then((_) {
-                          sp.useSystemFont = true;
-                        });
-                      } else {
-                        sp.useSystemFont = false;
-                      }
-                    },
-                  )
-                : const SizedBox.shrink();
-          },
-          future: androidInfo,
-        ),
+        _CustomFontTile(sp: sp),
         const _UiScaleSlider(),
         const _CardCornerScaleSlider(),
+        SwitchListTile(
+          title: Text(tr('alwaysUsePhoneLayout')),
+          value: sp.alwaysUsePhoneLayout,
+          onChanged: (value) => sp.alwaysUsePhoneLayout = value,
+        ),
         SwitchListTile(
           title: Text(tr('showWebInAppView')),
           value: sp.showAppWebpage,
           onChanged: (value) => sp.showAppWebpage = value,
-        ),
-        SwitchListTile(
-          title: Text(tr('disablePageTransitions')),
-          value: sp.disablePageTransitions,
-          onChanged: (value) => sp.disablePageTransitions = value,
-        ),
-        SwitchListTile(
-          title: Text(tr('reversePageTransitions')),
-          value: sp.reversePageTransitions,
-          onChanged: sp.disablePageTransitions
-              ? null
-              : (value) => sp.reversePageTransitions = value,
         ),
         SwitchListTile(
           title: Text(tr('highlightTouchTargets')),
@@ -1855,6 +1910,200 @@ class _AppearanceSection extends StatelessWidget {
           onChanged: (value) => sp.highlightTouchTargets = value,
         ),
       ],
+    );
+  }
+}
+
+class _CustomFontTile extends StatelessWidget {
+  const _CustomFontTile({required this.sp});
+
+  final SettingsProvider sp;
+
+  String? _readFontName(Uint8List bytes) {
+    try {
+      final ByteData data = ByteData.view(bytes.buffer);
+      if (data.lengthInBytes < 12) return null;
+
+      final int numTables = data.getUint16(4, Endian.big);
+      if (data.lengthInBytes < 12 + (numTables * 16)) return null;
+
+      int? nameTableOffset;
+      for (int i = 0; i < numTables; i++) {
+        final int recordOffset = 12 + (i * 16);
+        final int tag1 = data.getUint8(recordOffset);
+        final int tag2 = data.getUint8(recordOffset + 1);
+        final int tag3 = data.getUint8(recordOffset + 2);
+        final int tag4 = data.getUint8(recordOffset + 3);
+        if (tag1 == 110 && tag2 == 97 && tag3 == 109 && tag4 == 101) {
+          // "name"
+          nameTableOffset = data.getUint32(recordOffset + 8, Endian.big);
+          break;
+        }
+      }
+
+      if (nameTableOffset == null || nameTableOffset >= data.lengthInBytes) {
+        return null;
+      }
+
+      final int count = data.getUint16(nameTableOffset + 2, Endian.big);
+      final int stringOffset = data.getUint16(nameTableOffset + 4, Endian.big);
+
+      final int stringStorageStart = nameTableOffset + stringOffset;
+      if (stringStorageStart >= data.lengthInBytes) return null;
+
+      String? fontFamilyName;
+      String? fullFontName;
+
+      for (int i = 0; i < count; i++) {
+        final int recordPos = nameTableOffset + 6 + (i * 12);
+        if (recordPos + 12 > data.lengthInBytes) break;
+
+        final int platformID = data.getUint16(recordPos, Endian.big);
+        final int nameID = data.getUint16(recordPos + 6, Endian.big);
+        final int length = data.getUint16(recordPos + 8, Endian.big);
+        final int offset = data.getUint16(recordPos + 10, Endian.big);
+
+        if (nameID == 4 || nameID == 1) {
+          final int start = stringStorageStart + offset;
+          if (start + length > data.lengthInBytes) continue;
+
+          final Uint8List nameBytes = bytes.sublist(start, start + length);
+          String nameStr = '';
+
+          if (platformID == 3 || platformID == 0) {
+            final buffer = StringBuffer();
+            for (int j = 0; j < nameBytes.length; j += 2) {
+              if (j + 1 < nameBytes.length) {
+                final int charCode = (nameBytes[j] << 8) | nameBytes[j + 1];
+                if (charCode != 0) {
+                  buffer.writeCharCode(charCode);
+                }
+              }
+            }
+            nameStr = buffer.toString().trim();
+          } else {
+            nameStr = utf8.decode(nameBytes, allowMalformed: true).trim();
+          }
+
+          if (nameStr.isNotEmpty) {
+            if (nameID == 4) {
+              fullFontName = nameStr;
+            } else {
+              fontFamilyName = nameStr;
+            }
+          }
+        }
+      }
+
+      return fullFontName ?? fontFamilyName;
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _pickFont(BuildContext context) async {
+    try {
+      final bool? proceed = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(tr('settingsCustomFontChoose')),
+            contentPadding: appDialogContentPadding,
+            content: Text(tr('settingsCustomFontChooseExplanation')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(tr('pick')),
+              ),
+            ],
+          );
+        },
+      );
+      if (proceed != true) return;
+
+      final FilePickerResult? result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['ttf', 'otf'],
+      );
+      if (result == null || result.files.single.path == null) return;
+      final String pickedPath = result.files.single.path!;
+
+      final Directory appDocDir = await getApplicationDocumentsDirectory();
+      final Directory fontsDir = Directory('${appDocDir.path}/fonts');
+      await fontsDir.create(recursive: true);
+      final String ext = pickedPath.split('.').last.toLowerCase();
+      final String targetPath = '${fontsDir.path}/custom_font.$ext';
+
+      final File sourceFile = File(pickedPath);
+      final Uint8List bytes = await sourceFile.readAsBytes();
+
+      // Read font name from metadata
+      final String? parsedName = _readFontName(bytes);
+      final String displayName =
+          parsedName ?? pickedPath.split(Platform.pathSeparator).last;
+
+      // Verify the font by temporarily loading it
+      final FontLoader fontLoader = FontLoader('TempCustomFontTest');
+      fontLoader.addFont(Future.value(bytes.buffer.asByteData()));
+      await fontLoader.load();
+
+      // Write font to destination
+      final File targetFile = File(targetPath);
+      await targetFile.writeAsBytes(bytes);
+
+      sp.customFontName = displayName;
+      sp.customFontPath = targetPath;
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(tr('settingsCustomFontSuccess')),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(tr('settingsCustomFontErrorInvalid')),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String? currentPath = sp.customFontPath;
+    final String subtitleText = currentPath != null
+        ? (sp.customFontName ?? currentPath.split(Platform.pathSeparator).last)
+        : tr('settingsCustomFontDefault');
+
+    return ListTile(
+      title: Text(tr('settingsCustomFontTitle')),
+      subtitle: Text(subtitleText),
+      leading: const Icon(Icons.font_download_outlined),
+      trailing: currentPath != null
+          ? IconButton.filledTonal(
+              icon: const Icon(Icons.close_rounded),
+              onPressed: () {
+                sp.customFontName = null;
+                sp.customFontPath = null;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(tr('settingsCustomFontResetSuccess')),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+            )
+          : null,
+      onTap: () => _pickFont(context),
     );
   }
 }
@@ -1906,9 +2155,9 @@ class _LocaleMenu extends StatelessWidget {
                   .key;
         sp.forcedLocale = selectedLocale;
         if (selectedLocale != null) {
-          context.setLocale(selectedLocale);
+          unawaited(context.setLocale(selectedLocale));
         } else {
-          sp.resetLocaleSafe(context);
+          unawaited(sp.resetLocaleSafe(context));
         }
       },
     );
@@ -1946,7 +2195,12 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
         context.select<SettingsProvider, double>((s) => s.appUiScale);
     final isTV = context.read<SettingsProvider>().isTV;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -1986,14 +2240,9 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                       trackHeight: 16,
                       trackShape: const _GappedTrackShape(),
                       thumbShape: const _VerticalBarThumbShape(),
-                      tickMarkShape: const RoundSliderTickMarkShape(
-                        tickMarkRadius: 3,
-                      ),
                       activeTickMarkColor: cs.onPrimary,
                       inactiveTickMarkColor: cs.primary,
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 20,
-                      ),
+                      overlayShape: SliderComponentShape.noOverlay,
                     ),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
@@ -2059,7 +2308,12 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
         context.select<SettingsProvider, double>((s) => s.cardCornerScale);
     final isTV = context.read<SettingsProvider>().isTV;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -2099,14 +2353,9 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                       trackHeight: 16,
                       trackShape: const _GappedTrackShape(),
                       thumbShape: const _VerticalBarThumbShape(),
-                      tickMarkShape: const RoundSliderTickMarkShape(
-                        tickMarkRadius: 3,
-                      ),
                       activeTickMarkColor: cs.onPrimary,
                       inactiveTickMarkColor: cs.primary,
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 20,
-                      ),
+                      overlayShape: SliderComponentShape.noOverlay,
                     ),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
@@ -2160,8 +2409,7 @@ class _WarningsSection extends StatelessWidget {
     context.select<SettingsProvider, int>(_warningsSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         SwitchListTile(
@@ -2232,8 +2480,7 @@ class _InteractionSection extends StatelessWidget {
       }).toList();
     }
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         SwitchListTile(
@@ -2242,7 +2489,12 @@ class _InteractionSection extends StatelessWidget {
           onChanged: (value) => sp.tactileFeedbackEnabled = value,
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardHorizontalInset,
+            12,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -2278,7 +2530,7 @@ class _InteractionSection extends StatelessWidget {
 }
 
 class _IntegrationsSection extends StatefulWidget {
-  const _IntegrationsSection();
+  const _IntegrationsSection({super.key});
 
   @override
   State<_IntegrationsSection> createState() => _IntegrationsSectionState();
@@ -2287,21 +2539,44 @@ class _IntegrationsSection extends StatefulWidget {
 class _IntegrationsSectionState extends State<_IntegrationsSection>
     with WidgetsBindingObserver {
   bool _appManagerInstalled = false;
-  bool _appVerifierInstalled = false;
   bool _letMeDowngradeInstalled = false;
   bool _loading = true;
+  late final TextEditingController _virusTotalApiKeyController;
+  bool _virusTotalChecking = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkInstalledApps();
+    _virusTotalApiKeyController = TextEditingController(
+      text:
+          context.read<SettingsProvider>().getSettingString(
+            virusTotalApiKeyKey,
+          ) ??
+          '',
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _virusTotalApiKeyController.dispose();
     super.dispose();
+  }
+
+  bool get isVirusTotalApiKeyDirty {
+    final String currentText = _virusTotalApiKeyController.text.trim();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String savedText = sp.getSettingString(virusTotalApiKeyKey) ?? '';
+    return currentText != savedText;
+  }
+
+  void discardChanges() {
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    _virusTotalApiKeyController.text =
+        sp.getSettingString(virusTotalApiKeyKey) ?? '';
+    setState(() {});
   }
 
   @override
@@ -2314,14 +2589,12 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
   Future<void> _checkInstalledApps() async {
     final results = await Future.wait([
       getInstalledInfo('io.github.muntashirakon.AppManager'),
-      getInstalledInfo('dev.soupslurpr.appverifier'),
       getInstalledInfo('com.berdik.letmedowngrade'),
     ]);
     if (mounted) {
       setState(() {
         _appManagerInstalled = results[0] != null;
-        _appVerifierInstalled = results[1] != null;
-        _letMeDowngradeInstalled = results[2] != null;
+        _letMeDowngradeInstalled = results[1] != null;
         _loading = false;
       });
     }
@@ -2330,7 +2603,10 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
   static int _integrationsSettingsHash(SettingsProvider sp) => Object.hash(
     sp.openAppInfoInAppManager,
     sp.beforeNewInstallsShareToAppVerifier,
+    sp.enableVirusTotalScanning,
     sp.enableLetMeDowngrade,
+    sp.installerMode,
+    sp.shizukuPretendToBeGooglePlay,
   );
 
   @override
@@ -2339,8 +2615,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     final SettingsProvider sp = context.read<SettingsProvider>();
     final ColorScheme cs = Theme.of(context).colorScheme;
 
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
         ListTile(
@@ -2354,6 +2629,11 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   : cs.onSurface.withValues(alpha: 0.38),
             ),
           ),
+          onTap: !_loading && !_appManagerInstalled
+              ? () => ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(tr('appManagerNotInstalledSnackbar'))),
+                )
+              : null,
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2391,40 +2671,20 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
           title: Text(
             tr('beforeNewInstallsShareToAppVerifier'),
             style: TextStyle(
-              color: _loading
-                  ? cs.onSurface.withValues(alpha: 0.38)
-                  : _appVerifierInstalled
-                  ? null
-                  : cs.onSurface.withValues(alpha: 0.38),
+              color: _loading ? cs.onSurface.withValues(alpha: 0.38) : null,
             ),
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                tooltip: tr('about'),
-                onPressed: () {
-                  launchUrlString(
-                    tr('aboutAppVerifierUrl'),
-                    mode: LaunchMode.externalApplication,
-                  );
-                },
-                style: IconButton.styleFrom(
-                  foregroundColor: cs.onSurfaceVariant,
-                  iconSize: 20,
-                  padding: const EdgeInsets.all(4),
-                  minimumSize: const Size(32, 32),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                ),
-                icon: const Icon(Icons.open_in_new_rounded),
+              HelpHintIcon(
+                message: tr('shareToAppVerifierTooltip'),
+                size: 20,
+                padding: EdgeInsets.zero,
               ),
               Switch(
-                value:
-                    !_loading &&
-                    _appVerifierInstalled &&
-                    sp.beforeNewInstallsShareToAppVerifier,
-                onChanged: !_loading && _appVerifierInstalled
+                value: !_loading && sp.beforeNewInstallsShareToAppVerifier,
+                onChanged: !_loading
                     ? (bool value) =>
                           sp.beforeNewInstallsShareToAppVerifier = value
                     : null,
@@ -2443,6 +2703,13 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   : cs.onSurface.withValues(alpha: 0.38),
             ),
           ),
+          onTap: !_loading && !_letMeDowngradeInstalled
+              ? () => ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(tr('letMeDowngradeNotInstalledSnackbar')),
+                  ),
+                )
+              : null,
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2476,6 +2743,260 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
             ],
           ),
         ),
+        Builder(
+          builder: (context) {
+            final String savedApiKey =
+                sp.getSettingString(virusTotalApiKeyKey) ?? '';
+            final bool hasValidatedKey =
+                savedApiKey.isNotEmpty && hasValidatedApiKey(savedApiKey, sp);
+            return ListTile(
+              title: Text(tr('enableVirusTotalScanning')),
+              onTap: !hasValidatedKey
+                  ? () => ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(tr('virusTotalNotValidatedSnackbar')),
+                      ),
+                    )
+                  : null,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  HelpHintIcon(
+                    message: tr('virusTotalScanningTooltip'),
+                    size: 20,
+                    padding: EdgeInsets.zero,
+                  ),
+                  Switch(
+                    value: hasValidatedKey && sp.enableVirusTotalScanning,
+                    onChanged: hasValidatedKey
+                        ? (bool value) => sp.enableVirusTotalScanning = value
+                        : null,
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            8,
+            kM3eSettingsCardTrailingInset,
+            12,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _virusTotalApiKeyController,
+                  obscureText: true,
+                  decoration:
+                      appPageOutlinedInputDecoration(
+                        context,
+                        labelText: tr('virusTotalApiKeyLabel'),
+                        isDense: true,
+                      ).copyWith(
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.open_in_new_rounded),
+                          onPressed: () => launchUrlString(
+                            'https://www.virustotal.com/gui/my-apikey',
+                            mode: LaunchMode.externalApplication,
+                          ),
+                          tooltip: tr('about'),
+                        ),
+                      ),
+                  onChanged: (val) {
+                    setState(() {});
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Builder(
+                builder: (context) {
+                  final String enteredText = _virusTotalApiKeyController.text
+                      .trim();
+                  final String savedText =
+                      sp.getSettingString(virusTotalApiKeyKey) ?? '';
+                  final bool isDirty = enteredText != savedText;
+                  final bool isValidated = hasValidatedApiKey(enteredText, sp);
+                  final bool buttonIsEnabled =
+                      isDirty || (enteredText.isNotEmpty && !isValidated);
+                  return SizedBox(
+                    width: 48,
+                    height: 56,
+                    child: Center(
+                      child: _virusTotalChecking
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: ExpressiveLoadingIndicator(
+                                color: cs.primary,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 20,
+                                  height: 20,
+                                ),
+                              ),
+                            )
+                          // Shield only when validated AND saved (see GitHub PAT).
+                          : (isValidated && !isDirty
+                                ? Tooltip(
+                                    message: tr('virusTotalKeyValidated'),
+                                    child: Icon(
+                                      Icons.verified_user,
+                                      color: cs.primary,
+                                    ),
+                                  )
+                                : IconButton.filledTonal(
+                                    icon: const Icon(Icons.save_rounded),
+                                    onPressed: buttonIsEnabled
+                                        ? () async {
+                                            FocusManager.instance.primaryFocus
+                                                ?.unfocus();
+                                            if (enteredText.isEmpty) {
+                                              sp.setSettingString(
+                                                virusTotalApiKeyKey,
+                                                '',
+                                              );
+                                              clearApiKeyValidation(sp);
+                                              sp.enableVirusTotalScanning =
+                                                  false;
+                                              setState(() {});
+                                              return;
+                                            }
+                                            setState(() {
+                                              _virusTotalChecking = true;
+                                            });
+                                            final String? error =
+                                                await VirusTotalScanner()
+                                                    .validateApiKey(
+                                                      enteredText,
+                                                    );
+                                            if (!context.mounted) return;
+                                            setState(() {
+                                              _virusTotalChecking = false;
+                                            });
+                                            if (error == null) {
+                                              sp.setSettingString(
+                                                virusTotalApiKeyKey,
+                                                enteredText,
+                                              );
+                                              storeApiKeyValidation(
+                                                enteredText,
+                                                sp,
+                                              );
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    tr(
+                                                      'virusTotalKeyValidated',
+                                                    ),
+                                                  ),
+                                                ),
+                                              );
+                                              setState(() {});
+                                            } else {
+                                              clearApiKeyValidation(sp);
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(content: Text(error)),
+                                              );
+                                            }
+                                          }
+                                        : null,
+                                  )),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            8,
+            kM3eSettingsCardHorizontalInset,
+            4,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(tr('installerMode')),
+              const SizedBox(height: 4),
+              SizedBox(
+                width: double.infinity,
+                child: AppSegmentedButton<String>(
+                  segments: [
+                    ButtonSegment<String>(
+                      value: 'system',
+                      label: AppSegmentedButtonLabel(tr('installerModeStock')),
+                    ),
+                    ButtonSegment<String>(
+                      value: 'shizuku',
+                      label: AppSegmentedButtonLabel(
+                        tr('installerModeShizuku'),
+                      ),
+                    ),
+                    ButtonSegment<String>(
+                      value: 'external',
+                      label: AppSegmentedButtonLabel(
+                        tr('installerModeThirdParty'),
+                      ),
+                    ),
+                  ],
+                  selected: {sp.installerMode},
+                  onSelectionChanged: (Set<String> selected) {
+                    final String mode = selected.first;
+                    if (mode == 'shizuku') {
+                      ShizukuApkInstaller().checkPermission().then((
+                        String? resCode,
+                      ) {
+                        if (!context.mounted) return;
+                        if (resCode!.startsWith('granted')) {
+                          sp.installerMode = 'shizuku';
+                        } else {
+                          switch (resCode) {
+                            case 'services_not_found':
+                              showError(
+                                ObtainiumError(tr('shizukuBinderNotFound')),
+                              );
+                            case 'old_shizuku':
+                              showError(ObtainiumError(tr('shizukuOld')));
+                            case 'old_android_with_adb':
+                              showError(
+                                ObtainiumError(tr('shizukuOldAndroidWithADB')),
+                              );
+                            case 'denied':
+                              showError(ObtainiumError(tr('cancelled')));
+                          }
+                        }
+                      });
+                    } else {
+                      sp.installerMode = mode;
+                    }
+                  },
+                ),
+              ),
+              if (sp.installerMode == 'shizuku')
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(tr('shizukuPretendToBeGooglePlay')),
+                  value: sp.shizukuPretendToBeGooglePlay,
+                  onChanged: (bool value) =>
+                      sp.shizukuPretendToBeGooglePlay = value,
+                ),
+              if (sp.installerMode == 'external')
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: _ExternalInstallerTile(),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -2488,8 +3009,7 @@ class _CategoriesSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
-    return m3eExpressiveSettingsCard(
-      context: context,
+    return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: const [
         Padding(
@@ -2515,7 +3035,8 @@ class AboutSectionContent extends StatelessWidget {
     final SettingsProvider sp = context.read<SettingsProvider>();
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double screenWidth = MediaQuery.sizeOf(context).width;
-    final bool isLargeScreen = screenWidth >= kLargeScreenWidthBreakpoint;
+    final bool isLargeScreen =
+        screenWidth >= kLargeScreenWidthBreakpoint && !sp.alwaysUsePhoneLayout;
 
     return Stack(
       children: [
@@ -2570,7 +3091,7 @@ class AboutSectionContent extends StatelessWidget {
                     borderRadius: 18,
                     semanticLabel: tr('aboutAuthorProfile'),
                     onTap: () => _openAboutUrl(_aboutAuthorUrl),
-                    onLongPress: () => _copyAboutUrl(context, _aboutAuthorUrl),
+                    onLongPress: () => _copyAboutUrl(_aboutAuthorUrl),
                   ),
                 ],
               ),
@@ -2590,7 +3111,7 @@ class AboutSectionContent extends StatelessWidget {
                   width: double.infinity,
                   child: FilledButton.icon(
                     onPressed: () => _openAboutUrl(sp.sourceUrl),
-                    onLongPress: () => _copyAboutUrl(context, sp.sourceUrl),
+                    onLongPress: () => _copyAboutUrl(sp.sourceUrl),
                     icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
                     label: Text(tr('aboutStarOnGithub')),
                   ),
@@ -2605,8 +3126,7 @@ class AboutSectionContent extends StatelessWidget {
                       child: FilledButton.tonalIcon(
                         style: _aboutSecondaryButtonStyle(colorScheme),
                         onPressed: () => _openAboutUrl(_aboutWikiUrl),
-                        onLongPress: () =>
-                            _copyAboutUrl(context, _aboutWikiUrl),
+                        onLongPress: () => _copyAboutUrl(_aboutWikiUrl),
                         icon: const Icon(Icons.open_in_new_rounded),
                         label: Text(tr('aboutOpenWiki')),
                       ),
@@ -2618,7 +3138,7 @@ class AboutSectionContent extends StatelessWidget {
                         onPressed: () =>
                             _shareAboutUrl(_aboutObtainXWebsiteUrl, 'ObtainX'),
                         onLongPress: () =>
-                            _copyAboutUrl(context, _aboutObtainXWebsiteUrl),
+                            _copyAboutUrl(_aboutObtainXWebsiteUrl),
                         icon: const Icon(Icons.share_rounded),
                         label: Text(tr('share')),
                       ),
@@ -2851,7 +3371,7 @@ class _AboutAppPromo extends StatelessWidget {
       child: InkWell(
         onTap: () =>
             appId != null ? _openPromoApp(appId!, url) : _openAboutUrl(url),
-        onLongPress: () => _copyAboutUrl(context, url),
+        onLongPress: () => _copyAboutUrl(url),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
@@ -2957,7 +3477,7 @@ class _AboutTextLink extends StatelessWidget {
   Widget build(BuildContext context) {
     return TextButton(
       onPressed: () => _openAboutUrl(url),
-      onLongPress: () => _copyAboutUrl(context, url),
+      onLongPress: () => _copyAboutUrl(url),
       style: TextButton.styleFrom(
         foregroundColor: colorScheme.primary,
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -3002,10 +3522,9 @@ Future<void> _openPromoApp(String appId, String webUrl) async {
   }
 }
 
-Future<void> _copyAboutUrl(BuildContext context, String url) async {
+Future<void> _copyAboutUrl(String url) async {
   await Clipboard.setData(ClipboardData(text: url));
-  if (!context.mounted) return;
-  showMessage(tr('aboutLinkCopied'), context);
+  showMessage(tr('aboutLinkCopied'));
 }
 
 Future<void> _shareAboutUrl(String url, String subject) async {
@@ -3062,7 +3581,7 @@ class _LogsDialogState extends State<LogsDialog> {
           if (!mounted) return;
           setState(() {
             final chronologicalLogs = logsList.reversed.toList();
-            String joinedLogs = chronologicalLogs
+            final String joinedLogs = chronologicalLogs
                 .map((logEntry) => logEntry.toString())
                 .join('\n\n');
             logString = joinedLogs.isNotEmpty ? joinedLogs : tr('noLogs');
@@ -3080,7 +3599,7 @@ class _LogsDialogState extends State<LogsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    var logsProvider = context.read<LogsProvider>();
+    final logsProvider = context.read<LogsProvider>();
 
     Future<String> getDiagnosticsText() async {
       final buffer = StringBuffer();
@@ -3188,6 +3707,32 @@ class _LogsDialogState extends State<LogsDialog> {
         }
       }
 
+      final githubPat = settingsProvider.getSettingString(
+        GitHub.githubCredsKey,
+      );
+      final hasGithubPat = githubPat != null && githubPat.isNotEmpty;
+      final githubPatValid =
+          hasGithubPat && GitHub.hasValidatedPAT(githubPat, settingsProvider);
+      buffer.writeln(
+        'GitHub PAT: ${hasGithubPat ? "Saved" : "Not Saved"}${hasGithubPat ? " (Validated: $githubPatValid)" : ""}',
+      );
+
+      final gitlabPat = settingsProvider.getSettingString('gitlab-creds');
+      final hasGitlabPat = gitlabPat != null && gitlabPat.isNotEmpty;
+      final gitlabPatValid =
+          hasGitlabPat && GitLab.hasValidatedPAT(gitlabPat, settingsProvider);
+      buffer.writeln(
+        'GitLab PAT: ${hasGitlabPat ? "Saved" : "Not Saved"}${hasGitlabPat ? " (Validated: $gitlabPatValid)" : ""}',
+      );
+
+      final vtApiKey = settingsProvider.getSettingString(virusTotalApiKeyKey);
+      final hasVtApiKey = vtApiKey != null && vtApiKey.isNotEmpty;
+      final vtApiKeyValid =
+          hasVtApiKey && hasValidatedApiKey(vtApiKey, settingsProvider);
+      buffer.writeln(
+        'VirusTotal API Key: ${hasVtApiKey ? "Saved" : "Not Saved"}${hasVtApiKey ? " (Validated: $vtApiKeyValid)" : ""}',
+      );
+
       buffer.writeln('===============================\n');
 
       return buffer.toString();
@@ -3195,6 +3740,7 @@ class _LogsDialogState extends State<LogsDialog> {
 
     return AlertDialog(
       title: Text(tr('appLogs')),
+      contentPadding: appDialogContentPadding,
       content: SizedBox(
         width: double.maxFinite,
         height: MediaQuery.of(context).size.height * 0.6,
@@ -3251,7 +3797,7 @@ class _LogsDialogState extends State<LogsDialog> {
                 children: [
                   TextButton(
                     onPressed: () async {
-                      var cont =
+                      final cont =
                           (await showDialog<Map<String, dynamic>?>(
                             context: context,
                             builder: (BuildContext modalContext) {
@@ -3260,16 +3806,22 @@ class _LogsDialogState extends State<LogsDialog> {
                                 items: const [],
                                 initValid: true,
                                 message: tr('removeFromObtainX'),
+                                primaryActionColour: Theme.of(
+                                  modalContext,
+                                ).colorScheme.error,
                               );
                             },
                           )) !=
                           null;
                       if (cont) {
-                        logsProvider.clear();
+                        unawaited(logsProvider.clear());
                         if (!context.mounted) return;
                         Navigator.of(context).pop();
                       }
                     },
+                    style: TextButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                    ),
                     child: Text(tr('remove')),
                   ),
                   TextButton(
@@ -3281,14 +3833,19 @@ class _LogsDialogState extends State<LogsDialog> {
                   TextButton(
                     onPressed: () async {
                       final diagnostics = await getDiagnosticsText();
-                      SharePlus.instance.share(
-                        ShareParams(
-                          text: '$diagnostics${logString ?? ''}',
-                          subject: tr('appLogs'),
+                      final logs = logString ?? '';
+                      const int maxLogChars = 100000;
+                      final String safeLogs = logs.length > maxLogChars
+                          ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
+                          : logs;
+                      unawaited(
+                        SharePlus.instance.share(
+                          ShareParams(
+                            text: '$diagnostics$safeLogs',
+                            subject: tr('appLogs'),
+                          ),
                         ),
                       );
-                      if (!context.mounted) return;
-                      Navigator.of(context).pop();
                     },
                     child: Text(tr('share')),
                   ),
@@ -3314,8 +3871,6 @@ class _LogsDialogState extends State<LogsDialog> {
                           subject: tr('appLogs'),
                         ),
                       );
-                      if (!context.mounted) return;
-                      Navigator.of(context).pop();
                     },
                     child: Text(tr('shareAsFile')),
                   ),
@@ -3358,7 +3913,13 @@ Map<String, MapEntry<int, bool>> _mergeCategoryEditorMaps(
       merged[entry.key] = entry.value;
     }
   }
-  return merged;
+  final List<MapEntry<String, MapEntry<int, bool>>> sortedEntries =
+      merged.entries.toList()..sort((a, b) {
+        final int cmp = a.key.toLowerCase().compareTo(b.key.toLowerCase());
+        if (cmp != 0) return cmp;
+        return a.key.compareTo(b.key);
+      });
+  return Map<String, MapEntry<int, bool>>.fromEntries(sortedEntries);
 }
 
 class CategoryEditorSelector extends StatefulWidget {
@@ -3415,7 +3976,7 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
             'categories',
             label: tr('categories'),
             emptyMessage: tr('noCategories'),
-            defaultValue: merged,
+            value: merged,
             alignment: widget.alignment,
             deleteConfirmationMessage: MapEntry(
               tr('deleteCategoriesQuestion'),
@@ -3451,171 +4012,320 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
   }
 }
 
-class _ThirdPartyInstallerSelector extends StatefulWidget {
-  final SettingsProvider settingsProvider;
-  const _ThirdPartyInstallerSelector({required this.settingsProvider});
+class _ExternalInstallerTile extends StatefulWidget {
+  const _ExternalInstallerTile();
 
   @override
-  State<_ThirdPartyInstallerSelector> createState() =>
-      _ThirdPartyInstallerSelectorState();
+  State<_ExternalInstallerTile> createState() => _ExternalInstallerTileState();
 }
 
-class _ThirdPartyInstallerSelectorState
-    extends State<_ThirdPartyInstallerSelector> {
-  List<installer.InstallerAppInfo>? _installerApps;
-  bool _loading = true;
+class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
+  Future<List<InstallerTarget>>? _targetsFuture;
 
   @override
   void initState() {
     super.initState();
-    _loadInstallers();
+    _targetsFuture = ExternalInstallerBridge.instance.listTargets();
   }
 
-  Future<void> _loadInstallers() async {
-    final apps = await installer.getApkInstallerApps();
-    if (mounted) {
-      setState(() {
-        _installerApps = apps;
-        _loading = false;
+  InstallerTarget? _current(
+    List<InstallerTarget> targets,
+    SettingsProvider settingsProvider,
+  ) {
+    final String? package = settingsProvider.externalInstallerPackage;
+    final String? activity = settingsProvider.externalInstallerComponent;
+    if (package == null || activity == null) return null;
+    for (final InstallerTarget target in targets) {
+      if (target.package == package && target.activity == activity) {
+        return target;
+      }
+    }
+    return null;
+  }
+
+  Widget _targetIcon(InstallerTarget? target, {double size = 40}) {
+    final Uint8List? icon = target?.icon;
+    if (icon == null || icon.isEmpty) {
+      return Icon(Icons.extension_outlined, size: size);
+    }
+    final int cacheSize = (size * MediaQuery.devicePixelRatioOf(context))
+        .round();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.memory(
+        icon,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        cacheWidth: cacheSize,
+        cacheHeight: cacheSize,
+        errorBuilder: (_, _, _) => Icon(Icons.extension_outlined, size: size),
+      ),
+    );
+  }
+
+  Future<void> _choose(
+    List<InstallerTarget> targets,
+    SettingsProvider settingsProvider,
+  ) async {
+    if (targets.isEmpty) return;
+    final Map<String, List<InstallerTarget>> grouped = {};
+    for (final InstallerTarget target in targets) {
+      grouped.putIfAbsent(target.package, () => []).add(target);
+    }
+    for (final MapEntry<String, List<InstallerTarget>> entry
+        in grouped.entries) {
+      final Set<String> seenActivities = {};
+      entry.value.removeWhere(
+        (InstallerTarget target) => !seenActivities.add(target.activity),
+      );
+      entry.value.sort((InstallerTarget first, InstallerTarget second) {
+        final String firstLabel =
+            (first.activityLabel ?? first.activity.split('.').last)
+                .toLowerCase();
+        final String secondLabel =
+            (second.activityLabel ?? second.activity.split('.').last)
+                .toLowerCase();
+        final bool firstIsInstaller = firstLabel.contains('install');
+        final bool secondIsInstaller = secondLabel.contains('install');
+        if (firstIsInstaller != secondIsInstaller) {
+          return firstIsInstaller ? -1 : 1;
+        }
+        final int labelComparison = firstLabel.compareTo(secondLabel);
+        if (labelComparison != 0) return labelComparison;
+        return first.activity.toLowerCase().compareTo(
+          second.activity.toLowerCase(),
+        );
       });
     }
+    grouped.removeWhere((_, List<InstallerTarget> targets) => targets.isEmpty);
+    final List<MapEntry<String, List<InstallerTarget>>> entries = grouped
+        .entries
+        .toList();
+    int expandedIndex = -1;
+    final InstallerTarget? picked = await showAppModalSheet<InstallerTarget>(
+      context: context,
+      builder: (BuildContext sheetContext) => StatefulBuilder(
+        builder: (BuildContext builderContext, StateSetter setSheetState) =>
+            AppSheetContent(
+              children: [
+                Text(
+                  tr('chooseExternalInstaller'),
+                  style: Theme.of(builderContext).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+                M3eExpressiveSettingsCard(
+                  items: [
+                    for (int index = 0; index < entries.length; index++)
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListTile(
+                            onTap: () {
+                              final entry = entries[index];
+                              if (entry.value.length == 1) {
+                                Navigator.of(
+                                  sheetContext,
+                                ).pop(entry.value.first);
+                              } else {
+                                setSheetState(() {
+                                  expandedIndex = expandedIndex == index
+                                      ? -1
+                                      : index;
+                                });
+                              }
+                            },
+                            leading: _targetIcon(
+                              entries[index].value.first,
+                              size: 36,
+                            ),
+                            title: Text(
+                              entries[index].value.first.label,
+                              style: Theme.of(
+                                builderContext,
+                              ).textTheme.titleSmall,
+                            ),
+                            subtitle: Text(
+                              entries[index].key,
+                              style: Theme.of(
+                                builderContext,
+                              ).textTheme.bodySmall,
+                            ),
+                            trailing: entries[index].value.length > 1
+                                ? AnimatedRotation(
+                                    turns: expandedIndex == index ? 0.5 : 0,
+                                    duration: ExpressiveMotion.short,
+                                    curve: ExpressiveMotion.emphasized,
+                                    child: const Icon(Icons.expand_more),
+                                  )
+                                : null,
+                          ),
+                          AnimatedSize(
+                            duration: ExpressiveMotion.medium,
+                            curve: ExpressiveMotion.emphasized,
+                            child: expandedIndex == index
+                                ? Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: entries[index].value
+                                        .map(
+                                          (InstallerTarget target) =>
+                                              _activityChoiceRow(
+                                                context: builderContext,
+                                                target: target,
+                                                siblings: entries[index].value,
+                                                onTap: () => Navigator.of(
+                                                  sheetContext,
+                                                ).pop(target),
+                                              ),
+                                        )
+                                        .toList(),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ],
+            ),
+      ),
+    );
+    if (picked == null) return;
+    settingsProvider.externalInstallerPackage = picked.package;
+    settingsProvider.externalInstallerComponent = picked.activity;
+    if (mounted) setState(() {});
   }
 
-  void _showInstallerPicker() {
-    if (_installerApps == null || _installerApps!.isEmpty) return;
+  String _shortActivityName(
+    InstallerTarget target,
+    List<InstallerTarget> siblings,
+  ) {
+    final String shortName = target.activity.split('.').last;
+    final bool hasDuplicate = siblings.any(
+      (InstallerTarget sibling) =>
+          sibling != target && sibling.activity.split('.').last == shortName,
+    );
+    return hasDuplicate ? target.activity : shortName;
+  }
 
-    final currentPkg = widget.settingsProvider.legacyInstallerPackage;
-    final currentAct = widget.settingsProvider.legacyInstallerActivity;
-    final currentValue = (currentPkg != null && currentAct != null)
-        ? '$currentPkg|$currentAct'
-        : null;
+  String _activityDisplayLabel(
+    InstallerTarget target,
+    List<InstallerTarget> siblings,
+  ) {
+    return target.activityLabel ?? _shortActivityName(target, siblings);
+  }
 
-    showAppModalSheet<void>(
-      context: context,
-      builder: (sheetContext) {
-        String? selectedValue = currentValue;
-        return StatefulBuilder(
-          builder: (builderContext, setSheetState) {
-            return RadioGroup<String>(
-              groupValue: selectedValue,
-              onChanged: (String? value) {
-                setSheetState(() => selectedValue = value);
-                if (value != null) {
-                  final selected = _installerApps!.firstWhere(
-                    (a) => '${a.packageName}|${a.activityName}' == value,
-                  );
-                  widget.settingsProvider.legacyInstallerPackage =
-                      selected.packageName;
-                  widget.settingsProvider.legacyInstallerActivity =
-                      selected.activityName;
-                }
-                Navigator.pop(sheetContext);
-              },
-              child: AppSheetContent(
-                padding: const EdgeInsets.only(bottom: 8),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: Text(
-                        tr('thirdPartyInstallerSelect'),
-                        style: Theme.of(builderContext).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-                  ..._installerApps!.map((app) {
-                    final radioValue = '${app.packageName}|${app.activityName}';
-                    return RadioListTile<String>(
-                      secondary: app.icon != null && app.icon!.isNotEmpty
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.memory(
-                                app.icon!,
-                                width: 40,
-                                height: 40,
-                                fit: BoxFit.contain,
-                                // Decode at the rendered size × DPR so a
-                                // 512×512 launcher icon doesn't sit at full
-                                // resolution in the raster cache for a 40-px row.
-                                cacheWidth:
-                                    (40 *
-                                            MediaQuery.devicePixelRatioOf(
-                                              context,
-                                            ))
-                                        .round(),
-                                cacheHeight:
-                                    (40 *
-                                            MediaQuery.devicePixelRatioOf(
-                                              context,
-                                            ))
-                                        .round(),
-                                errorBuilder: (_, _, _) =>
-                                    const Icon(Icons.android, size: 40),
-                              ),
-                            )
-                          : const Icon(Icons.android, size: 40),
-                      title: Text(app.label),
-                      subtitle: Text(
-                        app.packageName,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      value: radioValue,
-                    );
-                  }),
-                ],
-              ),
-            );
-          },
-        );
-      },
+  String? _activityDisambiguator(
+    InstallerTarget target,
+    List<InstallerTarget> siblings,
+  ) {
+    final String? activityLabel = target.activityLabel;
+    if (activityLabel == null) return null;
+    final String normalizedLabel = activityLabel.toLowerCase();
+    final int matchingLabelCount = siblings
+        .where(
+          (InstallerTarget sibling) =>
+              sibling.activityLabel?.toLowerCase() == normalizedLabel,
+        )
+        .length;
+    return matchingLabelCount > 1 ? _shortActivityName(target, siblings) : null;
+  }
+
+  Widget _activityChoiceRow({
+    required BuildContext context,
+    required InstallerTarget target,
+    required List<InstallerTarget> siblings,
+    required VoidCallback onTap,
+  }) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final String? disambiguator = _activityDisambiguator(target, siblings);
+    final double cornerRadius = SettingsProvider.cardCornerRadiusForScale(
+      14,
+      context.read<SettingsProvider>().cardCornerScale,
+    );
+    return Padding(
+      padding: const EdgeInsetsDirectional.fromSTEB(52, 3, 12, 3),
+      child: Material(
+        color: colorScheme.surfaceContainerHighest,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(cornerRadius),
+          side: BorderSide(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.55),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          onTap: onTap,
+          contentPadding: const EdgeInsetsDirectional.fromSTEB(14, 2, 8, 2),
+          minTileHeight: 48,
+          title: Text(
+            _activityDisplayLabel(target, siblings),
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          subtitle: disambiguator == null
+              ? null
+              : Text(
+                  disambiguator,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+          trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedPkg = widget.settingsProvider.legacyInstallerPackage;
-    final selectedApp = (_installerApps ?? [])
-        .where((app) => app.packageName == selectedPkg)
-        .firstOrNull;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (_loading)
-          const Center(child: ExpressiveLoadingIndicator())
-        else
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            leading: selectedApp?.icon != null && selectedApp!.icon!.isNotEmpty
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(
-                      selectedApp.icon!,
-                      width: 36,
-                      height: 36,
-                      fit: BoxFit.contain,
-                      cacheWidth: (36 * MediaQuery.devicePixelRatioOf(context))
-                          .round(),
-                      cacheHeight: (36 * MediaQuery.devicePixelRatioOf(context))
-                          .round(),
-                      errorBuilder: (_, _, _) =>
-                          const Icon(Icons.android, size: 36),
-                    ),
-                  )
-                : null,
-            title: Text(tr('thirdPartyInstallerSelect')),
-            subtitle: Text(
-              selectedApp?.label ??
-                  selectedPkg ??
-                  tr('thirdPartyInstallerNoneSelected'),
-            ),
-            trailing: const Icon(Icons.arrow_drop_down),
-            onTap: _showInstallerPicker,
-          ),
-      ],
+    final SettingsProvider settingsProvider = context.watch<SettingsProvider>();
+    return FutureBuilder<List<InstallerTarget>>(
+      future: _targetsFuture,
+      builder:
+          (
+            BuildContext context,
+            AsyncSnapshot<List<InstallerTarget>> snapshot,
+          ) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 8),
+                leading: SizedBox.square(
+                  dimension: 24,
+                  child: ExpressiveLoadingIndicator(),
+                ),
+              );
+            }
+            final List<InstallerTarget> targets =
+                snapshot.data ?? const <InstallerTarget>[];
+            final InstallerTarget? current = _current(
+              targets,
+              settingsProvider,
+            );
+            final List<InstallerTarget> currentPackageTargets = targets
+                .where(
+                  (InstallerTarget target) =>
+                      target.package == current?.package,
+                )
+                .toList();
+            final int intentCount = currentPackageTargets
+                .map((InstallerTarget target) => target.activity)
+                .toSet()
+                .length;
+            final String subtitle = current != null
+                ? intentCount > 1
+                      ? '${current.label} · '
+                            '${_activityDisplayLabel(current, currentPackageTargets)}'
+                      : current.label
+                : settingsProvider.externalInstallerPackage ??
+                      tr('externalInstallerUnset');
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+              leading: _targetIcon(current),
+              title: Text(tr('chooseExternalInstaller')),
+              subtitle: Text(subtitle),
+              trailing: const Icon(Icons.expand_more_rounded),
+              onTap: () => _choose(targets, settingsProvider),
+            );
+          },
     );
   }
 }

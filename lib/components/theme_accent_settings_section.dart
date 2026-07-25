@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
 
 const double _kAccentSwatchSize = 52;
@@ -55,6 +57,7 @@ class _ThemeAccentSwatchesItemState extends State<_ThemeAccentSwatchesItem> {
         builder: (BuildContext dialogContext) {
           return AlertDialog(
             title: Text(tr('settingsCustomSeedRemoveTitle')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('settingsCustomSeedRemoveMessage')),
             actions: [
               TextButton(
@@ -63,6 +66,9 @@ class _ThemeAccentSwatchesItemState extends State<_ThemeAccentSwatchesItem> {
               ),
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(dialogContext).colorScheme.error,
+                ),
                 child: Text(tr('remove')),
               ),
             ],
@@ -73,7 +79,12 @@ class _ThemeAccentSwatchesItemState extends State<_ThemeAccentSwatchesItem> {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -172,7 +183,7 @@ String _sliderSeedHexForSettings(
   return colorToCanonicalHex(seed ?? scheme.primary);
 }
 
-const double _kCustomHexChipWidth = 84;
+const double _kCustomHexChipWidth = 96;
 const Duration _kCustomHexDebounce = Duration(milliseconds: 450);
 
 class CustomColorSliderPanel extends StatefulWidget {
@@ -308,7 +319,9 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
     final SettingsProvider settings = context.watch<SettingsProvider>();
-    final double cardRadius = settings.cardCornerRadiusFor(28);
+    final double cardRadius = settings.cardCornerRadiusFor(
+      SettingsProvider.baseCardRadius,
+    );
 
     return Container(
       width: double.infinity,
@@ -383,9 +396,11 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
             );
 
     final BoxDecoration decoration = BoxDecoration(
-      color: scheme.surfaceContainerHigh,
+      color: Color.alphaBlend(
+        scheme.onSurface.withValues(alpha: 0.055),
+        scheme.surfaceContainerHigh,
+      ),
       borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: scheme.outlineVariant),
     );
 
     if (!_hexEditing) {
@@ -408,6 +423,8 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
       );
     }
 
+    final double lineHeight = (textStyle.fontSize ?? 14) * 1.25;
+
     return TapRegion(
       groupId: _hexTapRegionGroup,
       onTapOutside: (_) => _finishHexEditing(),
@@ -418,29 +435,35 @@ class _CustomColorSliderPanelState extends State<CustomColorSliderPanel> {
           decoration: decoration,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Center(
-              child: TextField(
-                controller: _hexController,
-                focusNode: _hexFocusNode,
-                inputFormatters: [
-                  _HexInputFormatter(onReject: _rejectHexInput),
-                ],
-                maxLines: 1,
-                autofocus: true,
-                autocorrect: false,
-                enableSuggestions: false,
-                textCapitalization: TextCapitalization.characters,
-                keyboardType: TextInputType.text,
-                textInputAction: TextInputAction.done,
-                textAlign: TextAlign.center,
-                style: textStyle,
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  counterText: '',
-                  isCollapsed: true,
+            child: Align(
+              alignment: Alignment.center,
+              child: SizedBox(
+                height: lineHeight,
+                child: TextField(
+                  controller: _hexController,
+                  focusNode: _hexFocusNode,
+                  inputFormatters: [
+                    _HexInputFormatter(onReject: _rejectHexInput),
+                  ],
+                  maxLines: 1,
+                  autofocus: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  textCapitalization: TextCapitalization.characters,
+                  keyboardType: TextInputType.text,
+                  textInputAction: TextInputAction.done,
+                  textAlign: TextAlign.center,
+                  textAlignVertical: TextAlignVertical.center,
+                  style: textStyle.copyWith(height: 1.0),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    counterText: '',
+                    isCollapsed: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  onChanged: (_) => _scheduleHexPreview(),
+                  onEditingComplete: _finishHexEditing,
                 ),
-                onChanged: (_) => _scheduleHexPreview(),
-                onEditingComplete: _finishHexEditing,
               ),
             ),
           ),
@@ -801,7 +824,12 @@ class _ThemeAccentPaletteItem extends StatelessWidget {
         settings.appAccentColorSource != AppAccentColorSource.materialYou;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        0,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -849,6 +877,7 @@ class _ThemeAccentPaletteItem extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 8),
           FutureBuilder<AndroidDeviceInfo>(
             future: androidInfoFuture,
             builder:
@@ -893,9 +922,15 @@ class _AccentSourceSwatch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final Color borderColor = selected
-        ? scheme.primary
-        : scheme.outline.withValues(alpha: 0.35);
+    final Color haloColor = selected
+        ? Color.alphaBlend(
+            scheme.primary.withValues(alpha: 0.58),
+            scheme.surfaceContainerHighest,
+          )
+        : Color.alphaBlend(
+            scheme.onSurface.withValues(alpha: 0.055),
+            scheme.surfaceContainerHighest,
+          );
     return Semantics(
       button: true,
       selected: selected,
@@ -908,10 +943,7 @@ class _AccentSourceSwatch extends StatelessWidget {
           child: Container(
             width: _kAccentSwatchSize,
             height: _kAccentSwatchSize,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: borderColor, width: selected ? 3 : 1),
-            ),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: haloColor),
             alignment: Alignment.center,
             child: _AccentCircleContent(source: source),
           ),
@@ -1011,9 +1043,15 @@ class _CustomHexSwatch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final Color borderColor = selected
-        ? scheme.primary
-        : scheme.outline.withValues(alpha: 0.35);
+    final Color haloColor = selected
+        ? Color.alphaBlend(
+            scheme.primary.withValues(alpha: 0.58),
+            scheme.surfaceContainerHighest,
+          )
+        : Color.alphaBlend(
+            scheme.onSurface.withValues(alpha: 0.055),
+            scheme.surfaceContainerHighest,
+          );
     final Color fill =
         colorFromNormalizedHex(normalizeCustomSeedHexOrNull(hex) ?? '') ??
         scheme.surfaceContainerHighest;
@@ -1030,10 +1068,7 @@ class _CustomHexSwatch extends StatelessWidget {
           child: Container(
             width: _kAccentSwatchSize,
             height: _kAccentSwatchSize,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: borderColor, width: selected ? 3 : 1),
-            ),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: haloColor),
             alignment: Alignment.center,
             child: ClipOval(
               child: Container(
@@ -1071,8 +1106,10 @@ class _AddCustomHexSwatch extends StatelessWidget {
             height: _kAccentSwatchSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: scheme.outline.withValues(alpha: 0.35)),
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.85),
+              color: Color.alphaBlend(
+                scheme.onSurface.withValues(alpha: 0.055),
+                scheme.surfaceContainerHighest,
+              ),
             ),
             alignment: Alignment.center,
             child: Icon(

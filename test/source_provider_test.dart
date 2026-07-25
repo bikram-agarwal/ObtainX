@@ -11,6 +11,7 @@ import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// Stub source that returns a controllable [APKDetails] from
 /// [getLatestAPKDetails] without doing any network or HTML work.
@@ -103,6 +104,45 @@ class _StubFDroid extends FDroid {
   }
 }
 
+class _StubFDroidVerification extends FDroid {
+  _StubFDroidVerification(this.verificationResponses);
+
+  final List<Response> verificationResponses;
+  int verificationRequestCount = 0;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (url ==
+        'https://f-droid.org/api/v1/packages/app.pwhs.universalinstaller') {
+      return Response(
+        jsonEncode({
+          'packageName': 'app.pwhs.universalinstaller',
+          'suggestedVersionCode': 31,
+          'packages': [
+            {'versionName': '1.9.11', 'versionCode': 31},
+          ],
+        }),
+        200,
+      );
+    }
+    if (url ==
+        'https://verification.f-droid.org/unsigned/app.pwhs.universalinstaller_31.apk.json') {
+      final int responseIndex =
+          verificationRequestCount < verificationResponses.length
+          ? verificationRequestCount
+          : verificationResponses.length - 1;
+      verificationRequestCount++;
+      return verificationResponses[responseIndex];
+    }
+    return Response('', 404);
+  }
+}
+
 class _StubIzzyOnDroid extends IzzyOnDroid {
   @override
   Future<Response> sourceRequest(
@@ -135,6 +175,22 @@ class _StubIzzyOnDroid extends IzzyOnDroid {
 ''', 200);
     }
     return Response('', 404);
+  }
+}
+
+class _StubFDroidRepo extends FDroidRepo {
+  _StubFDroidRepo(this.indexXml);
+
+  final String indexXml;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    return Response(indexXml, 200, request: Request('GET', Uri.parse(url)));
   }
 }
 
@@ -192,54 +248,54 @@ class _StubGitHub extends GitHub {
 
 App _buildCurrentApp({required String latestVersion, int? apkSizeBytes}) {
   return App(
-    'com.example.app',
-    'https://www.apkmirror.com/apk/example/example',
-    'Example',
-    'Example',
-    null, // installedVersion
-    latestVersion,
-    const <MapEntry<String, String>>[],
-    0,
-    {'trackOnly': true, 'appId': 'com.example.app'},
-    DateTime.now(),
-    false,
+    id: 'com.example.app',
+    url: 'https://www.apkmirror.com/apk/example/example',
+    author: 'Example',
+    name: 'Example',
+    installedVersion: null,
+    latestVersion: latestVersion,
+    apkUrls: const <MapEntry<String, String>>[],
+    preferredApkIndex: 0,
+    additionalSettings: {'trackOnly': true, 'appId': 'com.example.app'},
+    lastUpdateCheck: DateTime.now(),
+    pinned: false,
     apkSizeBytes: apkSizeBytes,
   );
 }
 
 App _buildCurrentNamedApp({required String name}) {
   return App(
-    'org.example.app',
-    'https://example.com/app',
-    'Example Author',
-    name,
-    null,
-    '1.0',
-    const <MapEntry<String, String>>[
+    id: 'org.example.app',
+    url: 'https://example.com/app',
+    author: 'Example Author',
+    name: name,
+    installedVersion: null,
+    latestVersion: '1.0',
+    apkUrls: const <MapEntry<String, String>>[
       MapEntry('example.apk', 'https://example.com/example.apk'),
     ],
-    0,
-    <String, dynamic>{},
-    DateTime.now(),
-    false,
+    preferredApkIndex: 0,
+    additionalSettings: <String, dynamic>{},
+    lastUpdateCheck: DateTime.now(),
+    pinned: false,
   );
 }
 
 App _buildCurrentTempIdNamedApp({required String name}) {
   return App(
-    '123456789',
-    'https://example.com/app',
-    'Example Author',
-    name,
-    null,
-    '1.0',
-    const <MapEntry<String, String>>[
+    id: '123456789',
+    url: 'https://example.com/app',
+    author: 'Example Author',
+    name: name,
+    installedVersion: null,
+    latestVersion: '1.0',
+    apkUrls: const <MapEntry<String, String>>[
       MapEntry('example.apk', 'https://example.com/example.apk'),
     ],
-    0,
-    <String, dynamic>{},
-    DateTime.now(),
-    false,
+    preferredApkIndex: 0,
+    additionalSettings: <String, dynamic>{},
+    lastUpdateCheck: DateTime.now(),
+    pinned: false,
   );
 }
 
@@ -251,6 +307,51 @@ Response _fdroidRepoResponse(String xml) {
       'GET',
       Uri.parse('https://apt.izzysoft.de/fdroid/repo/index.xml'),
     ),
+  );
+}
+
+Response _fdroidVerificationResponse({required bool verified}) {
+  return Response(
+    jsonEncode({
+      '1783233447.4899063': {
+        'local': {
+          'packageName': 'app.pwhs.universalinstaller',
+          'versionCode': 31,
+          'versionName': '1.9.11',
+        },
+        'remote': {
+          'packageName': 'app.pwhs.universalinstaller',
+          'versionCode': 31,
+          'versionName': '1.9.11',
+        },
+        'url': 'https://f-droid.org/repo/app.pwhs.universalinstaller_31.apk',
+        'verified': verified,
+      },
+    }),
+    200,
+  );
+}
+
+App _previousUniversalInstaller({required String reproducibleStatus}) {
+  return App(
+    id: 'app.pwhs.universalinstaller',
+    url: 'https://f-droid.org/packages/app.pwhs.universalinstaller',
+    author: 'Nguyen Quang Minh (NQM)',
+    name: 'Universal Installer',
+    latestVersion: '1.9.11',
+    apkUrls: const <MapEntry<String, String>>[
+      MapEntry(
+        'app.pwhs.universalinstaller_31.apk',
+        'https://f-droid.org/repo/app.pwhs.universalinstaller_31.apk',
+      ),
+    ],
+    preferredApkIndex: 0,
+    additionalSettings: const <String, dynamic>{
+      'trySelectingSuggestedVersionCode': true,
+    },
+    rawLatestVersionFromSource: '1.9.11',
+    latestReproducibleStatus: reproducibleStatus,
+    latestReproducibleVersionCode: 31,
   );
 }
 
@@ -297,10 +398,49 @@ class _FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // The F-Droid reproducible-build error path logs via LogsProvider, which
+  // opens a sqflite DB. Initialize the ffi factory so that best-effort write
+  // succeeds in the test VM instead of throwing (matches version_order_test).
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
   DeviceInfoPlatform.instance = _FakeAndroidDeviceInfoPlatform();
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  test(
+    'source resolution reuses templates but returns fresh mutable sources',
+    () {
+      final SourceProvider provider = SourceProvider();
+      const String url = 'https://github.com/example/app';
+
+      final AppSource firstSource = provider.getSource(url);
+      final AppSource secondSource = provider.getSource(url);
+      final AppSource firstTemplate = provider.getSourceTemplate(url);
+      final AppSource secondTemplate = provider.getSourceTemplate(url);
+
+      expect(firstSource, isA<GitHub>());
+      expect(secondSource, isA<GitHub>());
+      expect(identical(firstSource, secondSource), isFalse);
+      expect(identical(firstTemplate, secondTemplate), isTrue);
+    },
+  );
+
+  test('override resolution mutates only the fresh matched source', () {
+    final SourceProvider provider = SourceProvider();
+    final AppSource githubTemplate = provider.getSourceTemplate(
+      'https://github.com/example/app',
+    );
+    final AppSource overriddenSource = provider.getSource(
+      'https://git.example.com/example/app',
+      overrideSource: githubTemplate.sourceIdentifier,
+    );
+
+    expect(overriddenSource, isA<GitHub>());
+    expect(overriddenSource.hosts, <String>['git.example.com']);
+    expect(overriddenSource.hostChanged, isTrue);
+    expect(githubTemplate.hosts, contains('github.com'));
   });
 
   // ── Size cache key invalidation ─────────────────────────────────────
@@ -491,6 +631,71 @@ void main() {
     },
   );
 
+  test(
+    'F-Droid repo parser does not treat an empty binaries element as verified',
+    () async {
+      final details = await FDroidRepo.apkDetailsFromIndexXmlResponse(
+        _fdroidRepoResponse('''
+<fdroid><repo name="Example Repo"/><application id="org.example.app">
+  <name>Example App</name>
+  <marketvercode>3</marketvercode>
+  <package>
+    <version>3.0</version>
+    <versioncode>3</versioncode>
+    <apkname>org.example.app_3.apk</apkname>
+    <binaries>   </binaries>
+  </package>
+</application></fdroid>
+'''),
+        'org.example.app',
+        <String, dynamic>{},
+        'Example Repo',
+      );
+
+      expect(details.reproducibleStatus, reproducibleBuildStatusNoData);
+    },
+  );
+
+  test(
+    'F-Droid repo source uses shared parser for valid releases and metadata',
+    () async {
+      final details =
+          await _StubFDroidRepo('''
+<fdroid><repo name="Example Repo"/><application id="org.example.app">
+  <name>Example App</name>
+  <icon>example.png</icon>
+  <marketvercode>3</marketvercode>
+  <package>
+    <version>4.0</version>
+    <versioncode>4</versioncode>
+  </package>
+  <package>
+    <version>3.0</version>
+    <versioncode>3</versioncode>
+    <apkname>org.example.app_3.apk</apkname>
+    <size>12345</size>
+    <binaries>org.example.app_3.apk</binaries>
+  </package>
+</application></fdroid>
+''').getLatestAPKDetails('https://repo.example/fdroid/repo', <String, dynamic>{
+            'appIdOrName': 'org.example.app',
+          });
+
+      expect(details.version, '3.0');
+      expect(details.names.name, 'Example App');
+      expect(details.apkSizeBytes, 12345);
+      expect(
+        details.iconUrl,
+        'https://repo.example/fdroid/repo/icons/example.png',
+      );
+      expect(details.reproducibleStatus, reproducibleBuildStatusVerified);
+      expect(
+        details.apkUrls.single.value,
+        'https://repo.example/fdroid/repo/org.example.app_3.apk',
+      );
+    },
+  );
+
   test('IzzyOnDroid uses app page metadata as icon fallback', () async {
     final details = await _StubIzzyOnDroid().getLatestAPKDetails(
       'https://apt.izzysoft.de/fdroid/index/apk/org.example.app',
@@ -567,6 +772,153 @@ void main() {
     },
   );
 
+  test('App JSON preserves the reproducible verification version code', () {
+    final original = _previousUniversalInstaller(
+      reproducibleStatus: reproducibleBuildStatusVerified,
+    );
+
+    final restored = App.fromJson(original.toJson());
+
+    expect(restored.latestReproducibleStatus, reproducibleBuildStatusVerified);
+    expect(restored.latestReproducibleVersionCode, 31);
+  });
+
+  test(
+    'F-Droid maps a matching successful version report to verified',
+    () async {
+      final source = _StubFDroidVerification(<Response>[
+        _fdroidVerificationResponse(verified: true),
+      ]);
+
+      final status = await source.getReproducibleBuildStatus(
+        'app.pwhs.universalinstaller',
+        31,
+        <String, dynamic>{},
+      );
+
+      expect(status, reproducibleBuildStatusVerified);
+    },
+  );
+
+  test('F-Droid maps a matching failed version report to mismatched', () async {
+    final source = _StubFDroidVerification(<Response>[
+      _fdroidVerificationResponse(verified: false),
+    ]);
+
+    final status = await source.getReproducibleBuildStatus(
+      'app.pwhs.universalinstaller',
+      31,
+      <String, dynamic>{},
+    );
+
+    expect(status, reproducibleBuildStatusNotReproducible);
+  });
+
+  test('F-Droid maps a missing version report to no data', () async {
+    final source = _StubFDroidVerification(<Response>[Response('', 404)]);
+
+    final status = await source.getReproducibleBuildStatus(
+      'app.pwhs.universalinstaller',
+      31,
+      <String, dynamic>{},
+    );
+
+    expect(status, reproducibleBuildStatusNoData);
+  });
+
+  test('F-Droid maps an invalid version report to check error', () async {
+    final source = _StubFDroidVerification(<Response>[
+      Response('{"unexpected":true}', 200),
+    ]);
+
+    final status = await source.getReproducibleBuildStatus(
+      'app.pwhs.universalinstaller',
+      31,
+      <String, dynamic>{},
+    );
+
+    expect(status, reproducibleBuildStatusError);
+  });
+
+  test('F-Droid maps a verification server failure to check error', () async {
+    final source = _StubFDroidVerification(<Response>[Response('', 500)]);
+
+    final status = await source.getReproducibleBuildStatus(
+      'app.pwhs.universalinstaller',
+      31,
+      <String, dynamic>{},
+    );
+
+    expect(status, reproducibleBuildStatusError);
+  });
+
+  test(
+    'F-Droid rechecks no data and observes a delayed verified report',
+    () async {
+      final source = _StubFDroidVerification(<Response>[
+        Response('', 404),
+        _fdroidVerificationResponse(verified: true),
+      ]);
+      source.previouslyCheckedApp = _previousUniversalInstaller(
+        reproducibleStatus: reproducibleBuildStatusNoData,
+      );
+
+      final firstDetails = await source.getLatestAPKDetails(
+        'https://f-droid.org/packages/app.pwhs.universalinstaller',
+        <String, dynamic>{'trySelectingSuggestedVersionCode': true},
+      );
+      final secondDetails = await source.getLatestAPKDetails(
+        'https://f-droid.org/packages/app.pwhs.universalinstaller',
+        <String, dynamic>{'trySelectingSuggestedVersionCode': true},
+      );
+
+      expect(firstDetails.versionCode, 31);
+      expect(firstDetails.reproducibleStatus, reproducibleBuildStatusNoData);
+      expect(secondDetails.reproducibleStatus, reproducibleBuildStatusVerified);
+      expect(source.verificationRequestCount, 2);
+    },
+  );
+
+  test(
+    'F-Droid rechecks legacy verified state without a version code',
+    () async {
+      final source = _StubFDroidVerification(<Response>[
+        _fdroidVerificationResponse(verified: false),
+      ]);
+      source.previouslyCheckedApp = _previousUniversalInstaller(
+        reproducibleStatus: reproducibleBuildStatusVerified,
+      ).copyWith(latestReproducibleVersionCode: null);
+
+      final details = await source.getLatestAPKDetails(
+        'https://f-droid.org/packages/app.pwhs.universalinstaller',
+        <String, dynamic>{'trySelectingSuggestedVersionCode': true},
+      );
+
+      expect(
+        details.reproducibleStatus,
+        reproducibleBuildStatusNotReproducible,
+      );
+      expect(source.verificationRequestCount, 1);
+    },
+  );
+
+  test('F-Droid reuses an exact cached verified version report', () async {
+    final source = _StubFDroidVerification(<Response>[
+      _fdroidVerificationResponse(verified: true),
+    ]);
+    source.previouslyCheckedApp = _previousUniversalInstaller(
+      reproducibleStatus: reproducibleBuildStatusVerified,
+    );
+
+    final details = await source.getLatestAPKDetails(
+      'https://f-droid.org/packages/app.pwhs.universalinstaller',
+      <String, dynamic>{'trySelectingSuggestedVersionCode': true},
+    );
+
+    expect(details.reproducibleStatus, reproducibleBuildStatusVerified);
+    expect(source.verificationRequestCount, 0);
+  });
+
   test('F-Droid API parser falls back to package page title', () async {
     final details =
         await _StubFDroid(
@@ -640,19 +992,19 @@ void main() {
 
   test('package-id name override is ignored when source name is readable', () {
     final app = App(
-      'org.example.app',
-      'https://example.com/app',
-      'Example Author',
-      'Readable Name',
-      null,
-      '1.0',
-      const <MapEntry<String, String>>[
+      id: 'org.example.app',
+      url: 'https://example.com/app',
+      author: 'Example Author',
+      name: 'Readable Name',
+      installedVersion: null,
+      latestVersion: '1.0',
+      apkUrls: const <MapEntry<String, String>>[
         MapEntry('example.apk', 'https://example.com/example.apk'),
       ],
-      0,
-      <String, dynamic>{'appName': 'org.example.app'},
-      DateTime.now(),
-      false,
+      preferredApkIndex: 0,
+      additionalSettings: <String, dynamic>{'appName': 'org.example.app'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
     );
 
     expect(app.finalName, 'Readable Name');

@@ -11,11 +11,15 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.content.pm.ResolveInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.drawable.BitmapDrawable
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
+import android.graphics.fonts.SystemFonts
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -26,6 +30,9 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.system.Os
+import android.text.format.DateFormat
+import android.util.DisplayMetrics
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -34,9 +41,14 @@ import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
 private const val CHANNEL = "dev.imranr.obtainium/installer"
+private const val EXTERNAL_INSTALL_CHANNEL = "dev.imranr.obtainium/external_install"
 private const val DEVICE_APPS_CHANNEL = "dev.imranr.obtainium/device_apps"
 private const val POWER_CHANNEL = "dev.imranr.obtainium/power"
 private const val STORAGE_CHANNEL = "dev.imranr.obtainium/storage"
@@ -54,6 +66,7 @@ private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
 private const val INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS = 200L
+private const val MAX_SYSTEM_DISPLAY_SCALE = 1.2f
 private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
 /// Ignore focus regain if it arrived within this window of the FIRST focus loss (transition bounce).
 /// Only the first loss is recorded; subsequent oscillations during TPI teardown are ignored.
@@ -75,7 +88,24 @@ private const val FOCUS_REGAIN_SETTLE_MS = 500L
 /// complete the session after this fallback rather than waiting the full 120s timeout.
 private const val BROADCAST_CONFIRMED_INTERACTIVE_FALLBACK_MS = 5_000L
 
+private fun Context.withCappedDisplayScale(): Context {
+    val currentDensityDpi = resources.configuration.densityDpi
+    val maximumDensityDpi =
+        (DisplayMetrics.DENSITY_DEVICE_STABLE * MAX_SYSTEM_DISPLAY_SCALE).roundToInt()
+    if (currentDensityDpi <= maximumDensityDpi) return this
+
+    return createConfigurationContext(
+        Configuration().apply {
+            densityDpi = maximumDensityDpi
+        },
+    )
+}
+
 class MainActivity : FlutterActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(newBase.withCappedDisplayScale())
+    }
+
     companion object {
         private var notificationsMethodChannel: MethodChannel? = null
         private val downloadCancelLock = Any()
@@ -207,6 +237,13 @@ class MainActivity : FlutterActivity() {
     private var initialSharedTextConsumed = false
     private var pendingSharedText: String? = null
 
+    // Off-main-thread executor for the device-apps queries. Enumerating
+    // installed apps and rendering their icons is done here so the platform
+    // main thread stays responsive; results are posted back on the main looper
+    // (a MethodChannel.Result must be answered on the platform thread).
+    private val deviceAppsExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installNativeCrashHandler(this)
         super.onCreate(savedInstanceState)
@@ -281,7 +318,12 @@ class MainActivity : FlutterActivity() {
             val duplicateInstallerReply =
                 intent.action == SESSION_API_PACKAGE_INSTALLED_ACTION &&
                     ex.message == "Reply already submitted"
-            if (!duplicateInstallerReply) {
+            // #3018/#3015: super.onNewIntent can throw if the Flutter engine
+            // isn't attached yet. A shared-text intent is replayed via
+            // deliverPendingSharedText() once configureFlutterEngine runs, so
+            // swallow that case rather than crashing.
+            val shareIntentBeforeEngineReady = intent.action == Intent.ACTION_SEND
+            if (!duplicateInstallerReply && !shareIntentBeforeEngineReady) {
                 throw ex
             }
         }
@@ -295,13 +337,6 @@ class MainActivity : FlutterActivity() {
         installerChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         installerChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "queryApkInstallerActivities" -> {
-                    try {
-                        result.success(queryApkInstallerActivities())
-                    } catch (ex: Exception) {
-                        result.error("QUERY_ERROR", ex.message, null)
-                    }
-                }
                 "launchInstallIntent" -> {
                     try {
                         val pathArg = call.argument<String>("path")!!
@@ -321,6 +356,27 @@ class MainActivity : FlutterActivity() {
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            EXTERNAL_INSTALL_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "listInstallTargets" -> result.success(listInstallTargets())
+                "contentUriForFile" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrEmpty()) {
+                        result.error("BAD_ARGS", "Missing file path", null)
+                    } else {
+                        try {
+                            result.success(contentUriForFile(path))
+                        } catch (ex: Exception) {
+                            result.error("URI_FAILED", ex.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             DEVICE_APPS_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -331,6 +387,53 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     result.success(getApplicationLabels(packageNames))
+                }
+                "getInstalledAppsLight" -> {
+                    // Compact one-pass enumeration: only the fields the bulk-add
+                    // list needs, avoiding the heavy full-PackageInfo marshalling
+                    // (with ApplicationInfo per app) that stuttered the UI thread.
+                    deviceAppsExecutor.execute {
+                        val apps = try {
+                            getInstalledAppsLight()
+                        } catch (_: Exception) {
+                            emptyList<Map<String, Any?>>()
+                        }
+                        mainHandler.post { result.success(apps) }
+                    }
+                }
+                "getAppIcon" -> {
+                    val packageName = call.argument<String>("packageName")
+                    if (packageName == null) {
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    deviceAppsExecutor.execute {
+                        val bytes = getAppIconBytes(packageName)
+                        mainHandler.post { result.success(bytes) }
+                    }
+                }
+                "getSystemFontFiles" -> {
+                    // Every weight/style file of the device's default font
+                    // family, so the app can register the whole family (real
+                    // bold/medium) — not just the single regular file — and
+                    // still follow a user-picked OEM font.
+                    deviceAppsExecutor.execute {
+                        val files = try {
+                            getSystemFontFiles()
+                        } catch (_: Exception) {
+                            emptyList<String>()
+                        }
+                        mainHandler.post { result.success(files) }
+                    }
+                }
+                "getSigningCertificates" -> {
+                    val packageName = call.argument<String>("packageName")
+                    result.success(
+                        packageName?.let { getSigningCertificates(it) },
+                    )
+                }
+                "uses24HourFormat" -> {
+                    result.success(DateFormat.is24HourFormat(this))
                 }
                 else -> result.notImplemented()
             }
@@ -346,6 +449,10 @@ class MainActivity : FlutterActivity() {
                 "releaseDownloadKeepAwake" -> {
                     releaseDownloadKeepAwake()
                     result.success(null)
+                }
+                "isDeviceInteractive" -> {
+                    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    result.success(powerManager.isInteractive)
                 }
                 else -> result.notImplemented()
             }
@@ -470,7 +577,11 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun getSharedTextFromIntent(intent: Intent?): String? {
-        if (intent?.action != Intent.ACTION_SEND || intent?.type != "text/plain") {
+        // Accept any text/* share (matches the manifest's text/* SEND filter and
+        // upstream's broadened handling), not just text/plain.
+        if (intent?.action != Intent.ACTION_SEND ||
+            intent.type?.startsWith("text/") != true
+        ) {
             return null
         }
         return intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
@@ -759,6 +870,151 @@ class MainActivity : FlutterActivity() {
     }
 
     @Suppress("DEPRECATION")
+    /// One-pass compact enumeration of installed apps. Returns only the fields
+    /// the bulk-add flow needs (package name, label, system flag, source dir),
+    /// so the platform-channel reply is tiny — instead of marshalling a full
+    /// PackageInfo + ApplicationInfo per app across the channel and decoding it
+    /// on the Flutter UI isolate, which was the source of the bulk-scan hitch.
+    private fun getInstalledAppsLight(): List<Map<String, Any?>> {
+        val pm = packageManager
+        @Suppress("DEPRECATION")
+        val packages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(0))
+        } else {
+            pm.getInstalledPackages(0)
+        }
+        val out = ArrayList<Map<String, Any?>>(packages.size)
+        for (pkg in packages) {
+            val appInfo = pkg.applicationInfo ?: continue
+            val packageName = pkg.packageName ?: continue
+            val isSystem =
+                (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                    (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            val label = try {
+                pm.getApplicationLabel(appInfo).toString()
+            } catch (_: Exception) {
+                packageName
+            }
+            out.add(
+                mapOf(
+                    "packageName" to packageName,
+                    "label" to label,
+                    "isSystem" to isSystem,
+                    "sourceDir" to appInfo.sourceDir,
+                ),
+            )
+        }
+        return out
+    }
+
+    /// Renders an installed app's icon to PNG bytes. Drawing the drawable onto
+    /// a canvas composites adaptive icons (API 26+ foreground/background layers)
+    /// correctly into a full square bitmap; the Flutter side handles shaping and
+    /// downscales on decode. Capped to [maxIconPx] to keep the payload small.
+    private fun getAppIconBytes(packageName: String): ByteArray? {
+        return try {
+            val appInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getApplicationInfo(
+                    packageName,
+                    PackageManager.ApplicationInfoFlags.of(0),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getApplicationInfo(packageName, 0)
+            }
+            val drawable = packageManager.getApplicationIcon(appInfo)
+            val bitmap = drawableToBitmap(drawable)
+            ByteArrayOutputStream().use { stream ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                stream.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun drawableToBitmap(drawable: Drawable): Bitmap {
+        val maxIconPx = 192
+        val intrinsicW = drawable.intrinsicWidth
+        val intrinsicH = drawable.intrinsicHeight
+        var width = if (intrinsicW > 0) intrinsicW else maxIconPx
+        var height = if (intrinsicH > 0) intrinsicH else maxIconPx
+        val largest = maxOf(width, height)
+        if (largest > maxIconPx) {
+            val scale = maxIconPx.toFloat() / largest
+            width = (width * scale).roundToInt().coerceAtLeast(1)
+            height = (height * scale).roundToInt().coerceAtLeast(1)
+        }
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, width, height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
+    /// Returns the file paths of every weight/style in the device's default
+    /// font family. The regular file is found by matching Typeface.DEFAULT's
+    /// metrics (the same heuristic the old android_system_font plugin used, so
+    /// a user-selected OEM font is still honoured); its siblings are then
+    /// gathered by shared family stem. Registering all of them under one Flutter
+    /// family yields real bold/medium instead of the faux bold you get from a
+    /// single regular file. On a modern device where the default is one variable
+    /// font file, that single file is returned and Flutter derives weights from
+    /// its weight axis.
+    private fun getSystemFontFiles(): List<String> {
+        val fallback = "/system/fonts/Roboto-Regular.ttf"
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return listOf(fallback).filter { File(it).exists() }
+        }
+        val blacklist = "/system/fonts/DroidSansMono.ttf"
+        val defaultMetrics = Paint().apply {
+            typeface = Typeface.DEFAULT
+            textSize = 100f
+        }.fontMetrics
+
+        val fonts = SystemFonts.getAvailableFonts()
+        var baseFile: File? = null
+        for (font in fonts) {
+            val file = font.file ?: continue
+            if (file.absolutePath == blacklist) continue
+            val metrics = Paint().apply {
+                typeface = Typeface.createFromFile(file)
+                textSize = 100f
+            }.fontMetrics
+            if (metricsMatch(defaultMetrics, metrics)) {
+                baseFile = file
+                break
+            }
+        }
+        val base = baseFile ?: return listOf(fallback).filter { File(it).exists() }
+
+        val stem = fontFamilyStem(base.name)
+        val paths = LinkedHashSet<String>()
+        paths.add(base.absolutePath)
+        for (font in fonts) {
+            val file = font.file ?: continue
+            if (file.parent == base.parent && fontFamilyStem(file.name) == stem) {
+                paths.add(file.absolutePath)
+            }
+        }
+        return paths.toList()
+    }
+
+    private fun metricsMatch(m1: Paint.FontMetrics, m2: Paint.FontMetrics): Boolean {
+        val threshold = 0.0001f
+        return abs(m1.ascent - m2.ascent) < threshold &&
+            abs(m1.descent - m2.descent) < threshold &&
+            abs(m1.leading - m2.leading) < threshold &&
+            abs(m1.bottom - m2.bottom) < threshold &&
+            abs(m1.top - m2.top) < threshold
+    }
+
+    /// "Roboto-Regular.ttf" -> "Roboto"; "NotoSans-BoldItalic.otf" -> "NotoSans".
+    /// Groups the weight/style files of one family without mixing in condensed
+    /// or otherwise-named variants (e.g. "RobotoFlex").
+    private fun fontFamilyStem(fileName: String): String =
+        fileName.substringBeforeLast('.').substringBefore('-')
+
     private fun getApplicationLabels(packageNames: List<String>): Map<String, String> {
         val labelsByPackageName = mutableMapOf<String, String>()
         for (packageName in packageNames) {
@@ -780,68 +1036,96 @@ class MainActivity : FlutterActivity() {
         return labelsByPackageName
     }
 
-    private fun queryApkInstallerActivities(): List<Map<String, Any>> {
-        val results = mutableMapOf<String, Map<String, Any>>()
-
-        val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
-            setDataAndType(Uri.parse("content://dummy/test.apk"), APK_MIME)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        for (resolveInfo in packageManager.queryIntentActivities(installIntent, 0)) {
-            val key = "${resolveInfo.activityInfo.packageName}|${resolveInfo.activityInfo.name}"
-            if (!results.containsKey(key)) {
-                results[key] = resolveInfoToMap(resolveInfo)
+    @Suppress("DEPRECATION")
+    private fun getSigningCertificates(packageName: String): Map<String, Any>? {
+        val packageInfo = try {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                    packageManager.getPackageInfo(
+                        packageName,
+                        PackageManager.PackageInfoFlags.of(
+                            PackageManager.GET_SIGNING_CERTIFICATES.toLong(),
+                        ),
+                    )
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ->
+                    packageManager.getPackageInfo(
+                        packageName,
+                        PackageManager.GET_SIGNING_CERTIFICATES,
+                    )
+                else ->
+                    packageManager.getPackageInfo(
+                        packageName,
+                        PackageManager.GET_SIGNATURES,
+                    )
             }
+        } catch (_: PackageManager.NameNotFoundException) {
+            return null
         }
 
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(Uri.parse("content://dummy/test.apk"), APK_MIME)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        for (resolveInfo in packageManager.queryIntentActivities(viewIntent, 0)) {
-            val key = "${resolveInfo.activityInfo.packageName}|${resolveInfo.activityInfo.name}"
-            if (!results.containsKey(key)) {
-                results[key] = resolveInfoToMap(resolveInfo)
+        val hasMultipleSigners =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                packageInfo.signingInfo?.hasMultipleSigners() == true
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val signingInfo = packageInfo.signingInfo ?: return null
+            if (hasMultipleSigners) {
+                signingInfo.apkContentsSigners
+            } else {
+                signingInfo.signingCertificateHistory
             }
+        } else {
+            packageInfo.signatures
         }
 
-        return results.values.toList()
+        return mapOf(
+            "hasMultipleSigners" to hasMultipleSigners,
+            "signatures" to (signatures?.map { it.toByteArray() } ?: emptyList<ByteArray>()),
+        )
     }
 
-    private fun resolveInfoToMap(resolveInfo: ResolveInfo): Map<String, Any> {
-        val pkgName = resolveInfo.activityInfo.packageName
-        val activityName = resolveInfo.activityInfo.name
-        val label = resolveInfo.loadLabel(packageManager).toString()
-        val iconBytes = try {
-            val drawable = resolveInfo.loadIcon(packageManager)
-            val bitmap = if (drawable is BitmapDrawable && drawable.bitmap != null) {
-                drawable.bitmap
-            } else {
-                val bmp = Bitmap.createBitmap(
-                    drawable.intrinsicWidth.coerceAtLeast(1),
-                    drawable.intrinsicHeight.coerceAtLeast(1),
-                    Bitmap.Config.ARGB_8888
+    /**
+     * One entry per install-capable activity across all apps. Apps that expose
+     * several install-capable activities return all of them so the user can
+     * pick the specific intent they want.
+     */
+    private fun listInstallTargets(): List<Map<String, String>> {
+        val targets = ArrayList<Map<String, String>>()
+        val probe = Uri.parse("content://dev.imranr.obtainium.probe/sample.apk")
+        val actions = listOf(Intent.ACTION_VIEW, Intent.ACTION_INSTALL_PACKAGE)
+        for (action in actions) {
+            @Suppress("DEPRECATION")
+            val intent = Intent(action).setDataAndType(probe, APK_MIME)
+            for (resolved in packageManager.queryIntentActivities(intent, 0)) {
+                val info = resolved.activityInfo ?: continue
+                val pkg = info.packageName ?: continue
+                if (pkg == packageName) continue
+                val activity = info.name ?: continue
+                val activityLabel = runCatching {
+                    when {
+                        resolved.labelRes != 0 || resolved.nonLocalizedLabel != null ->
+                            resolved.loadLabel(packageManager)
+                        info.labelRes != 0 || info.nonLocalizedLabel != null ->
+                            info.loadLabel(packageManager)
+                        else -> null
+                    }?.toString()?.trim()?.ifEmpty { null }
+                }.getOrNull()
+                targets.add(
+                    buildMap {
+                        put("package", pkg)
+                        put("activity", activity)
+                        if (activityLabel != null) {
+                            put("activityLabel", activityLabel)
+                        }
+                    },
                 )
-                val canvas = Canvas(bmp)
-                drawable.setBounds(0, 0, canvas.width, canvas.height)
-                drawable.draw(canvas)
-                bmp
             }
-            val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-            stream.toByteArray()
-        } catch (_: Exception) {
-            ByteArray(0)
         }
-        val result = mutableMapOf<String, Any>(
-            "packageName" to pkgName,
-            "activityName" to activityName,
-            "label" to label,
-        )
-        if (iconBytes.isNotEmpty()) {
-            result["icon"] = iconBytes
-        }
-        return result
+        return targets
+    }
+
+    /** Exposes a downloaded file through the app's FileProvider as a content:// URI. */
+    private fun contentUriForFile(path: String): String {
+        val uri = FileProvider.getUriForFile(this, packageName, File(path))
+        return uri.toString()
     }
 
     @Suppress("DEPRECATION")
@@ -970,7 +1254,12 @@ class MainActivity : FlutterActivity() {
             addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         }
-        val sessionWatcher = InstallWatcher(methodResult, handler, receiver, releaseFiles)
+        val sessionWatcher = InstallWatcher(
+            methodResult,
+            handler,
+            receiver,
+            releaseFiles,
+        )
         installWatcher = sessionWatcher
         registerReceiver(receiver, filter)
 

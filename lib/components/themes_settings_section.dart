@@ -6,53 +6,17 @@ import 'package:obtainium/components/theme_accent_settings_section.dart'
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
+import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 
-enum _ThemeBrightnessSegment { system, light, dark, black }
-
-_ThemeBrightnessSegment _segmentForSettings(SettingsProvider settings) {
-  if (settings.useBlackTheme) return _ThemeBrightnessSegment.black;
-  switch (settings.theme) {
-    case ThemeSettings.system:
-      return _ThemeBrightnessSegment.system;
-    case ThemeSettings.light:
-      return _ThemeBrightnessSegment.light;
-    case ThemeSettings.dark:
-      return _ThemeBrightnessSegment.dark;
-  }
-}
-
-void _applyThemeSegment(
-  SettingsProvider settings,
-  _ThemeBrightnessSegment segment,
-) {
-  switch (segment) {
-    case _ThemeBrightnessSegment.black:
-      settings.setThemeAppearance(
-        theme: ThemeSettings.dark,
-        useBlackTheme: true,
-      );
-      break;
-    case _ThemeBrightnessSegment.system:
-      settings.setThemeAppearance(
-        theme: ThemeSettings.system,
-        useBlackTheme: false,
-      );
-      break;
-    case _ThemeBrightnessSegment.light:
-      settings.setThemeAppearance(
-        theme: ThemeSettings.light,
-        useBlackTheme: false,
-      );
-      break;
-    case _ThemeBrightnessSegment.dark:
-      settings.setThemeAppearance(
-        theme: ThemeSettings.dark,
-        useBlackTheme: false,
-      );
-      break;
-  }
+void _showBlackThemeSurfaceSettingDisabledSnackbar(BuildContext context) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(tr('settingsGradientDisabledInBlackTheme')),
+      duration: const Duration(seconds: 4),
+    ),
+  );
 }
 
 /// One M3E row each (for [settingsCard] item list).
@@ -60,11 +24,12 @@ List<Widget> buildThemesSettingsCardItems(
   BuildContext context,
   Future<AndroidDeviceInfo> androidInfoFuture,
 ) {
-  // Narrow watch: this section only reflects six theme-related toggles.
+  // Narrow watch: this section only reflects theme-related settings.
   // Without this, every settings notify rebuilt the whole themes card.
   context.select<SettingsProvider, int>(
     (s) => Object.hash(
       s.useBlackTheme,
+      s.blackThemeActive,
       s.theme,
       s.useGradientBackground,
       s.shadingIntensity,
@@ -77,62 +42,68 @@ List<Widget> buildThemesSettingsCardItems(
 
   return [
     Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
       child: SizedBox(
         width: double.infinity,
-        child: AppSegmentedButton<_ThemeBrightnessSegment>(
+        child: AppSegmentedButton<ThemeSettings>(
           segments: [
-            ButtonSegment<_ThemeBrightnessSegment>(
-              value: _ThemeBrightnessSegment.system,
+            ButtonSegment<ThemeSettings>(
+              value: ThemeSettings.system,
               label: AppSegmentedButtonLabel(
                 tr('followSystem'),
                 fontSize: 11.5,
               ),
               icon: const Icon(Icons.brightness_auto_outlined, size: 18),
             ),
-            ButtonSegment<_ThemeBrightnessSegment>(
-              value: _ThemeBrightnessSegment.light,
+            ButtonSegment<ThemeSettings>(
+              value: ThemeSettings.light,
               label: AppSegmentedButtonLabel(tr('light'), fontSize: 11.5),
               icon: const Icon(Icons.light_mode_outlined, size: 18),
             ),
-            ButtonSegment<_ThemeBrightnessSegment>(
-              value: _ThemeBrightnessSegment.dark,
+            ButtonSegment<ThemeSettings>(
+              value: ThemeSettings.dark,
               label: AppSegmentedButtonLabel(tr('dark'), fontSize: 11.5),
               icon: const Icon(Icons.dark_mode_outlined, size: 18),
             ),
-            ButtonSegment<_ThemeBrightnessSegment>(
-              value: _ThemeBrightnessSegment.black,
-              label: AppSegmentedButtonLabel(
-                tr('settingsThemeBlackShort'),
-                fontSize: 11.5,
-              ),
-              icon: const Icon(Icons.square_outlined, size: 18),
-            ),
           ],
-          selected: <_ThemeBrightnessSegment>{_segmentForSettings(settings)},
-          onSelectionChanged: (Set<_ThemeBrightnessSegment> selected) {
+          selected: <ThemeSettings>{settings.theme},
+          onSelectionChanged: (Set<ThemeSettings> selected) {
             if (selected.isEmpty) return;
-            _applyThemeSegment(settings, selected.first);
+            settings.theme = selected.first;
           },
-          style: SegmentedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          style: const ButtonStyle(
+            padding: WidgetStatePropertyAll(
+              EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            ),
             visualDensity: VisualDensity.standard,
             tapTargetSize: MaterialTapTargetSize.padded,
+            side: WidgetStatePropertyAll(BorderSide.none),
           ),
         ),
       ),
     ),
+    if (settings.theme != ThemeSettings.light)
+      SwitchListTile(
+        title: Text(tr('useBlackTheme')),
+        value: settings.useBlackTheme,
+        onChanged: (bool value) {
+          settings.useBlackTheme = value;
+        },
+      ),
     ...buildThemeAccentSettingsCardItems(androidInfoFuture),
     _ShadingIntensityTile(settings: settings),
     ListTile(
       title: Text(tr('settingsGradientBackground')),
       trailing: IgnorePointer(
-        ignoring: settings.useBlackTheme,
+        ignoring: settings.blackThemeActive,
         child: Switch(
-          value: settings.useBlackTheme
-              ? false
-              : settings.useGradientBackground,
-          onChanged: settings.useBlackTheme
+          value: settings.useGradientBackground,
+          onChanged: settings.blackThemeActive
               ? null
               : (bool value) {
                   settings.useGradientBackground = value;
@@ -140,19 +111,8 @@ List<Widget> buildThemesSettingsCardItems(
         ),
       ),
       onTap: () {
-        if (settings.useBlackTheme) {
-          const String snackbarMessageKey =
-              'settingsGradientDisabledInBlackTheme';
-          final String snackbarMessage =
-              trExists(snackbarMessageKey, context: context)
-              ? tr(snackbarMessageKey)
-              : 'Can not enable in black theme';
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(snackbarMessage),
-              duration: const Duration(seconds: 4),
-            ),
-          );
+        if (settings.blackThemeActive) {
+          _showBlackThemeSurfaceSettingDisabledSnackbar(context);
           return;
         }
         settings.useGradientBackground = !settings.useGradientBackground;
@@ -234,6 +194,11 @@ class _ShadingIntensityTile extends StatefulWidget {
 class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
   late final FocusNode _sliderFocusNode;
 
+  // Live drag value; committed to settings only on drag end so the (expensive)
+  // live re-shading doesn't run every frame and stutter — matches the other
+  // sliders (e.g. the bg-update-interval slider in settings.dart).
+  double? _dragValue;
+
   @override
   void initState() {
     super.initState();
@@ -249,85 +214,111 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
   @override
   Widget build(BuildContext context) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
-    final bool enabled = !widget.settings.useBlackTheme;
-    final Color titleColor = enabled
-        ? colorScheme.onSurface
-        : colorScheme.onSurface.withValues(alpha: 0.38);
-    final Color subtitleColor = enabled
-        ? colorScheme.onSurfaceVariant
-        : colorScheme.onSurfaceVariant.withValues(alpha: 0.38);
-    final double sliderValue = widget.settings.shadingIntensity;
+    final bool enabled = !widget.settings.blackThemeActive;
+    final double sliderValue = _dragValue ?? widget.settings.shadingIntensity;
     final isTV = context.read<SettingsProvider>().isTV;
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  tr('settingsShadingIntensity'),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyLarge?.copyWith(color: titleColor),
+    return InkWell(
+      onTap: enabled
+          ? null
+          : () {
+              _showBlackThemeSurfaceSettingDisabledSnackbar(context);
+            },
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          kM3eSettingsCardHorizontalInset,
+          10,
+          kM3eSettingsCardHorizontalInset,
+          12,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    tr('settingsShadingIntensity'),
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
                 ),
-              ),
-              Text(
-                _shadingIntensityLabel(sliderValue),
-                style: Theme.of(
-                  context,
-                ).textTheme.labelLarge?.copyWith(color: titleColor),
-              ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          Text(
-            tr('settingsShadingIntensitySubtitle'),
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: subtitleColor),
-          ),
-          const SizedBox(height: 10),
-          TVSliderWrapper(
-            value: sliderValue,
-            min: 0,
-            max: 2,
-            divisions: 20,
-            onChanged: enabled
-                ? (double value) {
-                    widget.settings.shadingIntensity = value;
-                  }
-                : (double value) {},
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 16,
-                trackShape: const _ShadingGappedTrackShape(),
-                thumbShape: const _ShadingVerticalBarThumbShape(),
-                tickMarkShape: const RoundSliderTickMarkShape(
-                  tickMarkRadius: 3,
+                Text(
+                  _shadingIntensityLabel(sliderValue),
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: colorScheme.onSurface,
+                  ),
                 ),
-                activeTickMarkColor: colorScheme.onPrimary,
-                inactiveTickMarkColor: colorScheme.primary,
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-              ),
-              child: Slider(
-                focusNode: isTV ? _sliderFocusNode : null,
-                value: sliderValue,
-                min: 0,
-                max: 2,
-                divisions: 20,
-                label: _shadingIntensityLabel(sliderValue),
-                onChanged: enabled
-                    ? (double value) {
-                        widget.settings.shadingIntensity = value;
-                      }
-                    : null,
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              tr('settingsShadingIntensitySubtitle'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 10),
+            TVSliderWrapper(
+              enabled: enabled,
+              value: sliderValue,
+              min: 0,
+              max: 2,
+              divisions: 20,
+              onChanged: (double value) {
+                setState(() => _dragValue = value);
+              },
+              onChangeEnd: (double value) {
+                widget.settings.shadingIntensity = value;
+                setState(() => _dragValue = null);
+              },
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 16,
+                  trackShape: const _ShadingGappedTrackShape(),
+                  thumbShape: const _ShadingVerticalBarThumbShape(),
+                  activeTickMarkColor: colorScheme.onPrimary,
+                  inactiveTickMarkColor: colorScheme.primary,
+                  disabledActiveTrackColor: colorScheme.onSurface.withValues(
+                    alpha: 0.38,
+                  ),
+                  disabledInactiveTrackColor: colorScheme.onSurface.withValues(
+                    alpha: 0.12,
+                  ),
+                  disabledThumbColor: colorScheme.onSurface.withValues(
+                    alpha: 0.38,
+                  ),
+                  disabledActiveTickMarkColor: colorScheme.onSurface.withValues(
+                    alpha: 0.38,
+                  ),
+                  disabledInactiveTickMarkColor: colorScheme.onSurface
+                      .withValues(alpha: 0.38),
+                  overlayShape: SliderComponentShape.noOverlay,
+                ),
+                child: Slider(
+                  focusNode: isTV ? _sliderFocusNode : null,
+                  value: sliderValue,
+                  min: 0,
+                  max: 2,
+                  divisions: 20,
+                  label: _shadingIntensityLabel(sliderValue),
+                  onChanged: enabled
+                      ? (double value) {
+                          setState(() => _dragValue = value);
+                        }
+                      : null,
+                  onChangeEnd: enabled
+                      ? (double value) {
+                          widget.settings.shadingIntensity = value;
+                          setState(() => _dragValue = null);
+                        }
+                      : null,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -385,8 +376,15 @@ class _ShadingVerticalBarThumbShape extends SliderComponentShape {
       alignedCenter = Offset(alignedX, center.dy);
     }
     final Canvas canvas = context.canvas;
+    final Color thumbColor =
+        ColorTween(
+          begin: sliderTheme.disabledThumbColor,
+          end: sliderTheme.thumbColor,
+        ).evaluate(enableAnimation) ??
+        sliderTheme.thumbColor ??
+        Colors.white;
     final Paint paint = Paint()
-      ..color = sliderTheme.thumbColor ?? Colors.white
+      ..color = thumbColor
       ..style = PaintingStyle.fill;
     final RRect thumb = RRect.fromRectAndRadius(
       Rect.fromCenter(center: alignedCenter, width: _width, height: _height),
@@ -400,10 +398,8 @@ class _ShadingGappedTrackShape extends SliderTrackShape
     with BaseSliderTrackShape {
   const _ShadingGappedTrackShape();
 
-  static const int _divisions = 20;
   static const double _gap = 4;
   static const double _radius = 8;
-  static const double _tickRadius = 2.75;
 
   @override
   void paint(
@@ -440,10 +436,22 @@ class _ShadingGappedTrackShape extends SliderTrackShape
           trackHeight / 2;
     }
 
-    final Paint activePaint = Paint()
-      ..color = sliderTheme.activeTrackColor ?? Colors.blue;
-    final Paint inactivePaint = Paint()
-      ..color = sliderTheme.inactiveTrackColor ?? Colors.grey;
+    final Color activeTrackColor =
+        ColorTween(
+          begin: sliderTheme.disabledActiveTrackColor,
+          end: sliderTheme.activeTrackColor,
+        ).evaluate(enableAnimation) ??
+        sliderTheme.activeTrackColor ??
+        Colors.blue;
+    final Color inactiveTrackColor =
+        ColorTween(
+          begin: sliderTheme.disabledInactiveTrackColor,
+          end: sliderTheme.inactiveTrackColor,
+        ).evaluate(enableAnimation) ??
+        sliderTheme.inactiveTrackColor ??
+        Colors.grey;
+    final Paint activePaint = Paint()..color = activeTrackColor;
+    final Paint inactivePaint = Paint()..color = inactiveTrackColor;
 
     canvas.drawRRect(
       RRect.fromRectAndCorners(
@@ -472,29 +480,5 @@ class _ShadingGappedTrackShape extends SliderTrackShape
       ),
       inactivePaint,
     );
-
-    final Paint tickPaint = Paint()..style = PaintingStyle.fill;
-    for (int tickIndex = 1; tickIndex < _divisions; tickIndex++) {
-      final double tickRatio = tickIndex / _divisions;
-      final double tickX =
-          trackRect.left +
-          tickRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-      final bool isActive = textDirection == TextDirection.rtl
-          ? tickX > thumbX
-          : tickX < thumbX;
-      tickPaint.color = isActive
-          ? sliderTheme.activeTickMarkColor ??
-                sliderTheme.activeTrackColor ??
-                Colors.white
-          : sliderTheme.inactiveTickMarkColor ??
-                sliderTheme.inactiveTrackColor ??
-                Colors.grey;
-      canvas.drawCircle(
-        Offset(tickX, trackRect.center.dy),
-        _tickRadius,
-        tickPaint,
-      );
-    }
   }
 }

@@ -5,15 +5,18 @@ double appDropdownMenuWidth(
   BuildContext context,
   Iterable<String> labels, {
   TextStyle? style,
-  double horizontalPadding = 64,
+  double horizontalPadding = 96,
   double minWidth = 120,
   double maxWidthInset = 48,
 }) {
+  final TextStyle? effectiveStyle =
+      style ?? Theme.of(context).textTheme.bodyLarge;
   double maxTextWidth = 0;
   for (final String label in labels) {
     final textPainter = TextPainter(
-      text: TextSpan(text: label, style: style),
-      textDirection: TextDirection.ltr,
+      text: TextSpan(text: label, style: effectiveStyle),
+      textDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
     )..layout();
     if (textPainter.width > maxTextWidth) {
       maxTextWidth = textPainter.width;
@@ -45,7 +48,7 @@ Widget appDropdownField<T>({
   );
   final InputDecoration fieldDecoration =
       decoration ??
-      appPageOutlinedInputDecoration(
+      appPageDropdownInputDecoration(
         context,
         labelText: labelText,
         borderRadius: borderRadius,

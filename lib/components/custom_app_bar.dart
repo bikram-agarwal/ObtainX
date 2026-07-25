@@ -29,7 +29,8 @@ class CustomAppBar extends StatefulWidget {
   final PreferredSizeWidget? bottom;
 
   /// When provided, replaces the expanding-title layout with a compact inline
-  /// row: [Title text]  [Expanded(searchWidget)]  [actions].
+  /// row. The title and search field use the same bounded slot, with the caller
+  /// showing one at a time, while [actions] remain fixed at the end.
   final Widget? searchWidget;
 
   /// Optional style override for the compact layout title.
@@ -152,36 +153,22 @@ class _CustomAppBarState extends State<CustomAppBar> {
           ),
           child: Row(
             children: [
-              // Wrapping the title in [AnimatedSize] gives the Row layout
-              // a smoothly-tweened width when the title's intrinsic width
-              // changes (e.g. when [titleStyle] flips between titleLarge
-              // and titleSmall as the search bar expands/collapses).
-              // Without it, every animation frame of the implicit
-              // text-style transition re-runs the Text widget's intrinsic
-              // width measurement, and the Row reflows discretely - that's
-              // what produced the stutter as the search bar reached the
-              // title and the title had to give up space.
-              //
-              // [AnimatedDefaultTextStyle]'s default curve is
-              // [Curves.linear], which makes the size shift feel
-              // mechanical. Switching to [Curves.fastEaseInToSlowEaseOut]
-              // matches the M3-emphasized motion curve we use elsewhere
-              // for page transitions.
               if (widget.title.isNotEmpty) ...[
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.fastEaseInToSlowEaseOut,
-                  alignment: AlignmentDirectional.centerStart,
+                Expanded(
                   child: AnimatedDefaultTextStyle(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.fastEaseInToSlowEaseOut,
                     style: resolvedCompactTitle,
-                    child: Text(widget.title),
+                    child: Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
-              ],
-              Expanded(child: widget.searchWidget!),
+              ] else
+                Expanded(child: widget.searchWidget!),
             ],
           ),
         ),
@@ -241,7 +228,7 @@ class _CustomAppBarState extends State<CustomAppBar> {
   }
 }
 
-class ScrollLinkedProgressiveBlur extends StatelessWidget {
+class ScrollLinkedProgressiveBlur extends StatefulWidget {
   final Color overlayColor;
   final double blurSigma;
 
@@ -252,10 +239,31 @@ class ScrollLinkedProgressiveBlur extends StatelessWidget {
   });
 
   @override
+  State<ScrollLinkedProgressiveBlur> createState() =>
+      _ScrollLinkedProgressiveBlurState();
+}
+
+class _ScrollLinkedProgressiveBlurState
+    extends State<ScrollLinkedProgressiveBlur> {
+  // Last quantized ramp value we built a subtree for, and that subtree.
+  double _lastT = -1;
+  Widget _cached = const SizedBox.shrink();
+
+  @override
+  void didUpdateWidget(ScrollLinkedProgressiveBlur oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A theme change (tint) or a blur-strength change invalidates the cache.
+    if (oldWidget.overlayColor != widget.overlayColor ||
+        oldWidget.blurSigma != widget.blurSigma) {
+      _lastT = -1;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scrollPosition = Scrollable.maybeOf(context)?.position;
     if (scrollPosition == null) {
-      return _buildBlurContent(1.0);
+      return _contentFor(1.0);
     }
 
     return AnimatedBuilder(
@@ -266,9 +274,25 @@ class ScrollLinkedProgressiveBlur extends StatelessWidget {
           // Fades in over 36 pixels of scroll
           opacity = (scrollPosition.pixels / 36.0).clamp(0.0, 1.0);
         }
-        return _buildBlurContent(opacity);
+        return _contentFor(opacity);
       },
     );
+  }
+
+  /// Returns the blur subtree for ramp value [t], reusing the cached instance
+  /// when [t] is unchanged. Past the 36px fade-in ramp `t` is pinned at 1.0, so
+  /// without this the [AnimatedBuilder] rebuilt an identical BackdropFilter +
+  /// ImageFilter + LinearGradient on the UI thread every single scroll frame.
+  /// Returning the *identical* widget instance lets Flutter skip the subtree
+  /// rebuild entirely. (The backdrop blur still re-rasterizes over the moving
+  /// content on the raster thread — that is inherent to a live blur.)
+  Widget _contentFor(double t) {
+    // Quantize to 1% so sub-pixel scroll deltas don't defeat the cache.
+    final double q = (t * 100).roundToDouble() / 100;
+    if (q == _lastT) return _cached;
+    _lastT = q;
+    _cached = _buildBlurContent(q);
+    return _cached;
   }
 
   Widget _buildBlurContent(double opacity) {
@@ -289,8 +313,8 @@ class ScrollLinkedProgressiveBlur extends StatelessWidget {
             children: [
               BackdropFilter(
                 filter: ImageFilter.blur(
-                  sigmaX: blurSigma * t,
-                  sigmaY: blurSigma * t,
+                  sigmaX: widget.blurSigma * t,
+                  sigmaY: widget.blurSigma * t,
                 ),
                 child: const SizedBox.expand(),
               ),
@@ -300,8 +324,10 @@ class ScrollLinkedProgressiveBlur extends StatelessWidget {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      overlayColor.withValues(alpha: overlayColor.a * t),
-                      overlayColor.withValues(alpha: 0),
+                      widget.overlayColor.withValues(
+                        alpha: widget.overlayColor.a * t,
+                      ),
+                      widget.overlayColor.withValues(alpha: 0),
                     ],
                   ),
                 ),

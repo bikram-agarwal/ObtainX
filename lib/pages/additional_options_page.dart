@@ -5,12 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
-import 'package:obtainium/components/generated_form.dart';
+import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/version_regex_assist_dialog.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
@@ -26,20 +27,20 @@ PageRouteBuilder<T> additionalOptionsPageRoute<T>(WidgetBuilder builder) =>
 /// Merges [formValues] into the app, applies version/release-date rules, saves.
 /// Returns whether version detection was newly enabled (for follow-up refresh).
 Future<bool> persistAdditionalOptionsForm({
-  required BuildContext context,
   required AppsProvider appsProvider,
+  required SettingsProvider settingsProvider,
   required String appId,
   required Map<String, dynamic> formValues,
 }) async {
   final AppInMemory? appInMem = appsProvider.apps[appId];
   if (appInMem == null) return false;
-  final App app = appInMem.app;
+  // App is immutable; work on a fresh copy and reassign via copyWith. The
+  // copied additionalSettings map is safe to mutate in place below.
+  App app = appInMem.app.copyWith();
   final AppSource source = SourceProvider().getSource(
     app.url,
     overrideSource: app.overrideSource,
   );
-  final SettingsProvider settingsProvider = context.read<SettingsProvider>();
-
   final Map<String, dynamic> originalSettings = Map<String, dynamic>.from(
     app.additionalSettings,
   );
@@ -51,7 +52,7 @@ Future<bool> persistAdditionalOptionsForm({
   } else {
     originalSettings['useVersionCodeAsOSVersion'] = false;
   }
-  app.additionalSettings = {...originalSettings, ...formValues};
+  app = app.copyWith(additionalSettings: {...originalSettings, ...formValues});
   syncVersionStringSourceSettings(app.additionalSettings);
   app.additionalSettings['useVersionCodeAsOSVersion'] =
       app.additionalSettings['versionDetection'] == 'versionCode';
@@ -68,9 +69,7 @@ Future<bool> persistAdditionalOptionsForm({
 
   if (source.enforceTrackOnly) {
     app.additionalSettings['trackOnly'] = true;
-    if (context.mounted) {
-      showMessage(tr('appsFromSourceAreTrackOnly'), context);
-    }
+    showMessage(tr('appsFromSourceAreTrackOnly'));
   }
 
   final bool versionDetectionPreviouslyActive =
@@ -103,11 +102,15 @@ Future<bool> persistAdditionalOptionsForm({
         app.installedVersion == app.latestVersion ||
         (app.installedVersion != null &&
             versionsEffectivelyEqual(app.installedVersion!, app.latestVersion));
-    app.latestVersion = app.releaseDate!.toUtc().toIso8601String();
-    if (isUpdated) app.installedVersion = app.latestVersion;
+    app = app.copyWith(
+      latestVersion: app.releaseDate!.toUtc().toIso8601String(),
+    );
+    if (isUpdated) app = app.copyWith(installedVersion: app.latestVersion);
   } else if (releaseDateVersionDisabled) {
-    app.installedVersion =
-        appInMem.installedInfo?.versionName ?? app.installedVersion;
+    app = app.copyWith(
+      installedVersion:
+          appInMem.installedInfo?.versionName ?? app.installedVersion,
+    );
   }
 
   if (versionDetectionEnabled) {
@@ -132,7 +135,7 @@ Future<bool> persistAdditionalOptionsForm({
             app.latestVersion,
           )?.key !=
           true) {
-        app.installedVersion = app.latestVersion;
+        app = app.copyWith(installedVersion: app.latestVersion);
       }
     }
   }
@@ -149,7 +152,7 @@ Future<bool> persistAdditionalOptionsForm({
     for (final String key in versionKeys) {
       if (originalSettings[key] != app.additionalSettings[key]) {
         versionSettingsChanged = true;
-        app.installedVersion = null;
+        app = app.copyWith(installedVersion: null);
         break;
       }
     }
@@ -202,6 +205,22 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     final Map<String, dynamic> appAdditionalSettings =
         Map<String, dynamic>.from(app.additionalSettings);
     syncVersionStringSourceSettings(appAdditionalSettings);
+    // Defensively normalize versionDetection to the string enum the dropdown
+    // expects. App.fromJson normally migrates legacy bool values, but it falls
+    // back to raw JSON if that migration throws — a bool here would crash the
+    // DropdownButton ("no item with value: false"). false→pseudo / true→auto
+    // preserves the app's actual behavior; anything unrecognized → auto.
+    final dynamic vd = appAdditionalSettings['versionDetection'];
+    if (vd == false) {
+      appAdditionalSettings['versionDetection'] = 'pseudo';
+    } else if (vd == true) {
+      appAdditionalSettings['versionDetection'] = 'auto';
+    } else if (vd != 'auto' &&
+        vd != 'standard' &&
+        vd != 'pseudo' &&
+        vd != 'versionCode') {
+      appAdditionalSettings['versionDetection'] = 'auto';
+    }
     if (appAdditionalSettings['versionDetection'] == 'versionCode' ||
         appAdditionalSettings['useVersionCodeAsOSVersion'] == true) {
       appAdditionalSettings['versionDetection'] = 'versionCode';
@@ -218,7 +237,18 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     for (final List<GeneratedFormItem> row in _items) {
       for (final GeneratedFormItem element in row) {
         if (appAdditionalSettings[element.key] != null) {
-          element.defaultValue = appAdditionalSettings[element.key];
+          final dynamic stored = appAdditionalSettings[element.key];
+          // For a dropdown, never assign a stored value that isn't one of the
+          // current options — DropdownButton asserts ("no item with value X")
+          // and crashes the page. This happens when the source's offered
+          // options change (e.g. versionStringSource after an overrideSource /
+          // URL edit, or a legacy value). Keep the item's default instead.
+          if (element is GeneratedFormDropdown &&
+              element.opts?.any((o) => o.key == stored.toString()) != true) {
+            // leave element.value at its constructor default
+          } else {
+            element.value = stored;
+          }
         }
         if (source is GitHub &&
             element is GeneratedFormDropdown &&
@@ -232,11 +262,11 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
               GitHub.buildVerificationAudit,
               GitHub.buildVerificationEnforce,
             ];
-            element.defaultValue = GitHub.buildVerificationOff;
+            element.value = GitHub.buildVerificationOff;
           } else if (appAdditionalSettings[GitHub.buildVerificationModeKey] ==
                   null &&
               appAdditionalSettings[GitHub.enforceAttestationsKey] == true) {
-            element.defaultValue = GitHub.buildVerificationEnforce;
+            element.value = GitHub.buildVerificationEnforce;
           }
         }
       }
@@ -289,18 +319,14 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
   ) async {
     if (!context.mounted) return;
     final Brightness brightness = Theme.of(context).brightness;
+    final AppsProvider apps = context.read<AppsProvider>();
+    final SettingsProvider settings = context.read<SettingsProvider>();
     final ColorScheme? scheme = await loadColorSchemeFromAppIcon(
       iconBytes: iconBytes,
       brightness: brightness,
     );
-    if (!context.mounted) return;
-    final AppsProvider apps =
-        // ignore: use_build_context_synchronously
-        Provider.of<AppsProvider>(context, listen: false);
+    if (!mounted) return;
     if (!identical(apps.apps[widget.appId]?.icon, iconBytes)) return;
-    final SettingsProvider settings =
-        // ignore: use_build_context_synchronously
-        Provider.of<SettingsProvider>(context, listen: false);
     if (!settings.matchAppPageToIconColors) return;
     if (scheme != null) {
       setState(() {
@@ -328,16 +354,19 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     });
     try {
       final AppsProvider appsProvider = context.read<AppsProvider>();
+      final SettingsProvider settingsProvider = context
+          .read<SettingsProvider>();
+      final NavigatorState navigator = Navigator.of(context);
       final bool versionDetectionEnabled = await persistAdditionalOptionsForm(
-        context: context,
         appsProvider: appsProvider,
+        settingsProvider: settingsProvider,
         appId: widget.appId,
         formValues: _values,
       );
-      if (!mounted) return;
-      Navigator.of(context).pop(versionDetectionEnabled);
+      if (!mounted || !navigator.mounted) return;
+      navigator.pop(versionDetectionEnabled);
     } catch (err) {
-      if (mounted) showError(err, context);
+      showError(err);
     } finally {
       if (mounted) {
         setState(() {
@@ -401,12 +430,16 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           data: dialogTheme,
           child: AlertDialog(
             title: Text(tr('appEditsUnsavedTitle')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('appEditsUnsavedBody')),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(
                   dialogContext,
                   _AdditionalOptionsUnsavedAction.discard,
+                ),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(dialogContext).colorScheme.error,
                 ),
                 child: Text(tr('discard')),
               ),
@@ -467,7 +500,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     context.select<SettingsProvider, int>(
       (SettingsProvider settings) => Object.hash(
         settings.matchAppPageToIconColors,
-        settings.useBlackTheme,
+        settings.blackThemeActive,
       ),
     );
     context.select<AppsProvider, int>((AppsProvider provider) {
@@ -538,13 +571,14 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         : darkenIconPageSchemeInDarkMode(
             appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
           );
-    final ColorScheme pageColorSchemeForPage = settingsProvider.useBlackTheme
+    final bool applyBlackPageTheme = settingsProvider.blackThemeActive;
+    final ColorScheme pageColorSchemeForPage = applyBlackPageTheme
         ? themedPageColorScheme.withPureBlackBackgrounds()
         : themedPageColorScheme;
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
 
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${settingsProvider.useBlackTheme ? "black" : "standard"}';
+        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(

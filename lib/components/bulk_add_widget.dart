@@ -5,29 +5,35 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
+import 'package:obtainium/components/app_bottom_sheet.dart';
+import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
+import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
+import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/gestures.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 
 const double _bulkBottomActionGap = 8.0;
 const double _bulkBottomActionHorizontalPadding = 16.0;
 const double _bulkBottomActionMinimumSafePadding = 16.0;
 const double _bulkBottomActionHeight = 56.0;
 const double _bulkBottomActionTopListGap = 16.0;
+const Duration _bulkIconLoadingSettleDelay = Duration(milliseconds: 300);
 
 /// Which app types to include in the bulk scan list.
 enum BulkAppFilter { userOnly, systemOnly, both }
@@ -111,7 +117,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   // Full unfiltered list fetched once per session; filter applied in memory.
   List<InstalledAppInfo> _allInstalledApps = [];
   List<InstalledAppInfo> _installedApps = [];
-  bool _loadingApps = false;
+  bool _loadingApps = true;
   final Set<String> _selectedPackages = {};
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
@@ -136,6 +142,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   // Icon cache: packageName -> Uint8List | false (failed). Absent key = not loaded yet.
   final Map<String, Object?> _iconCache = {};
   final Map<String, Future<void>> _iconLoadFutures = {};
+  final Completer<void> _iconLoadingGate = Completer<void>();
+  Future<void> _iconLoadSerial = Future<void>.value();
+  Timer? _iconLoadingSettleTimer;
 
   // --- Scanning step ---
   String _scanStatus = '';
@@ -170,6 +179,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   bool _scanCancelRequested = false;
   bool _addCancelRequested = false;
   bool _githubRateLimited = false;
+  // Whether a PAT was already applied when the rate limit was hit — drives which
+  // banner to show (don't tell the user to add a PAT they've already added).
+  bool _githubRateLimitedHadToken = false;
   late final TapGestureRecognizer _githubPatTapRecognizer;
 
   /// Live maps while a bulk scan runs; used to show partial results as soon as
@@ -181,6 +193,10 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   List<String> _bulkScanPackageNames = <String>[];
   bool _bulkScanResultsCommitted = false;
   Future<bool>? _navigationConfirmationFuture;
+  Animation<double>? _entranceAnimation;
+  AnimationStatusListener? _entranceAnimationStatusListener;
+  bool _waitingForEntranceTransition = false;
+  bool _initialInstalledAppsLoadScheduled = false;
 
   late AppsProvider _appsProvider;
   static const List<String> _storeIconPriority = [
@@ -203,6 +219,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   void initState() {
     super.initState();
     _githubPatTapRecognizer = TapGestureRecognizer();
+    if (!widget.standalone) {
+      _iconLoadingGate.complete();
+    }
   }
 
   @override
@@ -211,12 +230,70 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     _appsProvider = context.read<AppsProvider>();
     if (_firstBuild) {
       _firstBuild = false;
-      _proceedToAppList();
+      _loadInstalledAppsAfterEntranceTransition();
     }
+  }
+
+  void _loadInstalledAppsAfterEntranceTransition() {
+    final Animation<double>? entranceAnimation = widget.standalone
+        ? ModalRoute.of(context)?.animation
+        : null;
+    if (entranceAnimation == null ||
+        entranceAnimation.status == AnimationStatus.completed) {
+      _scheduleIconLoadingAfterEntranceTransition();
+      _scheduleInitialInstalledAppsLoad();
+      return;
+    }
+
+    _waitingForEntranceTransition = true;
+    _entranceAnimation = entranceAnimation;
+    _entranceAnimationStatusListener = (AnimationStatus status) {
+      if (status != AnimationStatus.completed) return;
+      _removeEntranceAnimationListener();
+      if (!mounted) return;
+      setState(() => _waitingForEntranceTransition = false);
+      _scheduleIconLoadingAfterEntranceTransition();
+      _scheduleInitialInstalledAppsLoad();
+    };
+    entranceAnimation.addStatusListener(_entranceAnimationStatusListener!);
+  }
+
+  void _scheduleInitialInstalledAppsLoad() {
+    if (_initialInstalledAppsLoadScheduled) return;
+    _initialInstalledAppsLoadScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_proceedToAppList());
+    });
+  }
+
+  void _scheduleIconLoadingAfterEntranceTransition() {
+    if (_iconLoadingGate.isCompleted || _iconLoadingSettleTimer != null) {
+      return;
+    }
+    _iconLoadingSettleTimer = Timer(_bulkIconLoadingSettleDelay, () {
+      _iconLoadingSettleTimer = null;
+      if (!_iconLoadingGate.isCompleted) {
+        _iconLoadingGate.complete();
+      }
+    });
+  }
+
+  void _removeEntranceAnimationListener() {
+    final AnimationStatusListener? listener = _entranceAnimationStatusListener;
+    if (listener != null) {
+      _entranceAnimation?.removeStatusListener(listener);
+    }
+    _entranceAnimation = null;
+    _entranceAnimationStatusListener = null;
   }
 
   @override
   void dispose() {
+    _removeEntranceAnimationListener();
+    _iconLoadingSettleTimer?.cancel();
+    if (!_iconLoadingGate.isCompleted) {
+      _iconLoadingGate.complete();
+    }
     _githubPatTapRecognizer.dispose();
     if (isScanning) {
       _abandonActiveScan();
@@ -232,6 +309,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget _buildAppTypeChipRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
@@ -276,6 +356,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget _buildStoreChipRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: _configurableBulkStores.map((store) {
@@ -310,6 +393,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   Widget _buildOptionsChipRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
@@ -650,7 +736,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       } catch (e) {
         if (!mounted) return;
         setState(() => _loadingApps = false);
-        showError(e, context);
+        showError(e);
         return;
       }
     }
@@ -681,18 +767,26 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   /// icon subtree rebuilds when data arrives (no whole-list setState storms).
   Future<void> _ensurePackageIconLoaded(String packageName) {
     if (_iconCache.containsKey(packageName)) return Future<void>.value();
-    return _iconLoadFutures.putIfAbsent(packageName, () async {
-      try {
-        final Uint8List? icon = await BulkImportService.getAppIcon(packageName);
+    return _iconLoadFutures.putIfAbsent(packageName, () {
+      final Future<void> queuedLoad = _iconLoadSerial.then((_) async {
+        await _iconLoadingGate.future;
         if (!mounted) return;
-        _iconCache.putIfAbsent(packageName, () => icon ?? false);
-      } catch (_) {
-        if (mounted) {
-          _iconCache.putIfAbsent(packageName, () => false);
+        try {
+          final Uint8List? icon = await BulkImportService.getAppIcon(
+            packageName,
+          );
+          if (!mounted) return;
+          _iconCache.putIfAbsent(packageName, () => icon ?? false);
+        } catch (_) {
+          if (mounted) {
+            _iconCache.putIfAbsent(packageName, () => false);
+          }
         }
-      } finally {
+      });
+      _iconLoadSerial = queuedLoad;
+      return queuedLoad.whenComplete(() {
         _iconLoadFutures.remove(packageName);
-      }
+      });
     });
   }
 
@@ -779,18 +873,23 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                         Expanded(
                           child: TextField(
                             controller: _searchController,
-                            decoration: InputDecoration(
-                              hintText: tr('search'),
-                              prefixIcon: const Icon(Icons.search, size: 18),
-                              isDense: true,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                            ),
+                            decoration:
+                                appPageOutlinedInputDecoration(
+                                  context,
+                                  labelText: null,
+                                  hintText: tr('search'),
+                                  isDense: true,
+                                  borderRadius: 30,
+                                ).copyWith(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.search,
+                                    size: 18,
+                                  ),
+                                ),
                             onChanged: (String value) {
                               _searchDebounceTimer?.cancel();
                               if (value.isEmpty) {
@@ -1016,7 +1115,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       await BulkScanCache.clearStores(_selectedStores);
       if (mounted) setState(() => _clearCacheBeforeScan = false);
     }
-    Map<String, Map<String, String>> persistedScanCache =
+    final Map<String, Map<String, String>> persistedScanCache =
         await BulkScanCache.load();
 
     _scanCancelRequested = false;
@@ -1025,6 +1124,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       _step = BulkStep.scanning;
       _scanStatus = '';
       _githubRateLimited = false;
+      _githubRateLimitedHadToken = false;
       _apkMirrorDone = 0;
       _apkMirrorTotal = 0;
       _apkPureDone = 0;
@@ -1282,10 +1382,11 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                     });
                   }
                 },
-                onRateLimit: () {
+                onRateLimit: (bool hadToken) {
                   if (mounted) {
                     setState(() {
                       _githubRateLimited = true;
+                      _githubRateLimitedHadToken = hadToken;
                     });
                   }
                 },
@@ -1354,6 +1455,32 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             _buildStoreCard('IzzyOnDroid', _izzyOnDroidDone, _izzyOnDroidTotal),
           if (_selectedStores.contains('GitHub'))
             _buildStoreCard('GitHub', _githubDone, _githubTotal),
+          // Pacing note beneath the GitHub card, hidden once GitHub finishes.
+          // ~2s/app with a PAT, ~6s without (see BulkImportService.checkGitHub).
+          if (_selectedStores.contains('GitHub') &&
+              !(_githubTotal > 0 && _githubDone >= _githubTotal))
+            Padding(
+              padding: const EdgeInsets.only(left: 8, right: 8, bottom: 12),
+              child: Text(
+                tr(
+                  'githubScanRatePace',
+                  args: <String>[
+                    (context.read<SettingsProvider>().getSettingString(
+                                  GitHub.githubCredsKey,
+                                ) ??
+                                '')
+                            .trim()
+                            .isNotEmpty
+                        ? '2'
+                        : '6',
+                  ],
+                ),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
           const SizedBox(height: 24),
           OutlinedButton.icon(
             onPressed: () {
@@ -1439,7 +1566,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                     // M3 Expressive wavy progress bar. Owns its own height
                     // and shape per the spec, so we drop the previous
                     // ClipRRect/minHeight wrapping.
-                    LinearProgressIndicatorM3E(
+                    LinearRipplingWavyProgressIndicator(
                       value: started ? progressValue : null,
                     ),
                   ],
@@ -1851,30 +1978,40 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                 horizontal: 8.0,
                 vertical: 4.0,
               ),
-              child: RichText(
-                textAlign: TextAlign.center,
-                text: TextSpan(
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: colorScheme.onSecondaryContainer,
-                  ),
-                  children: [
-                    TextSpan(text: tr('githubRateLimitWarningText')),
-                    TextSpan(
-                      text: tr('githubRateLimitWarningLink'),
-                      style: TextStyle(
-                        color: colorScheme.primary,
-                        decoration: TextDecoration.underline,
-                        fontWeight: FontWeight.bold,
+              // A PAT is already applied → don't tell the user to add one; just
+              // explain the limit was hit. Otherwise, offer the PAT link.
+              child: _githubRateLimitedHadToken
+                  ? Text(
+                      tr('githubRateLimitWithTokenText'),
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: colorScheme.onSecondaryContainer,
                       ),
-                      recognizer: TapGestureRecognizer()
-                        ..onTap = () {
-                          _showPatBottomSheet(context);
-                        },
+                    )
+                  : RichText(
+                      textAlign: TextAlign.center,
+                      text: TextSpan(
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: colorScheme.onSecondaryContainer,
+                        ),
+                        children: [
+                          TextSpan(text: tr('githubRateLimitWarningText')),
+                          TextSpan(
+                            text: tr('githubRateLimitWarningLink'),
+                            style: TextStyle(
+                              color: colorScheme.primary,
+                              decoration: TextDecoration.underline,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () {
+                                _showPatBottomSheet(context);
+                              },
+                          ),
+                          TextSpan(text: tr('githubRateLimitWarningTextEnd')),
+                        ],
+                      ),
                     ),
-                    TextSpan(text: tr('githubRateLimitWarningTextEnd')),
-                  ],
-                ),
-              ),
             ),
           ],
         ],
@@ -2249,9 +2386,11 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         final String errMsg = e is ObtainiumError
             ? e.toString()
             : tr('unexpectedError');
-        logsProvider.add(
-          'Bulk add failed for ${app.info.name} (${app.info.packageName}): $errMsg',
-          level: LogLevels.error,
+        unawaited(
+          logsProvider.add(
+            'Bulk add failed for ${app.info.name} (${app.info.packageName}): $errMsg',
+            level: LogLevel.error,
+          ),
         );
         if (mounted) {
           setState(() {
@@ -2318,6 +2457,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
         builder: (BuildContext context) {
           return AlertDialog(
             title: Text(tr('discardUnsavedChangesQuestion')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('bulkScanDiscardResultsBody')),
             actions: [
               TextButton(
@@ -2326,6 +2466,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
               ),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
                 child: Text(tr('continue')),
               ),
             ],
@@ -2348,6 +2491,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           builder: (BuildContext context) {
             return AlertDialog(
               title: Text(tr('bulkScanNavigationCancelTitle')),
+              contentPadding: appDialogContentPadding,
               content: Text(tr('bulkScanNavigationCancelBody')),
               actions: [
                 TextButton(
@@ -2356,6 +2500,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(true),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
                   child: Text(tr('cancelBulkScan')),
                 ),
               ],
@@ -2376,27 +2523,19 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
     final String currentPat =
         settingsProvider.getSettingString(GitHub.githubCredsKey) ?? '';
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28.0)),
-      ),
-      builder: (BuildContext sheetContext) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
-          ),
-          child: _GithubPatSheet(
+    unawaited(
+      showAppModalSheet<void>(
+        context: context,
+        builder: (BuildContext sheetContext) {
+          return _GithubPatSheet(
             initialPat: currentPat,
             settingsProvider: settingsProvider,
             onSearchAgain: () {
               _startScanning();
             },
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -2465,6 +2604,14 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
   @override
   Widget build(BuildContext context) {
     if (widget.standalone) {
+      final ColorScheme colorScheme = Theme.of(context).colorScheme;
+      final bool useGradientBackground = context.select<SettingsProvider, bool>(
+        (settingsProvider) => settingsProvider.useGradientBackground,
+      );
+      final double topContentInset = useGradientBackground
+          ? MediaQuery.paddingOf(context).top + kToolbarHeight
+          : 0;
+
       return PopScope(
         canPop: _step == BulkStep.selectApps,
         onPopInvokedWithResult: (didPop, _) async {
@@ -2483,8 +2630,15 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
           }
         },
         child: Scaffold(
+          extendBodyBehindAppBar: useGradientBackground,
+          backgroundColor: colorScheme.surface,
           appBar: AppBar(
             title: Text(_stepTitle()),
+            backgroundColor: useGradientBackground
+                ? Colors.transparent
+                : colorScheme.surface,
+            surfaceTintColor: Colors.transparent,
+            forceMaterialTransparency: useGradientBackground,
             automaticallyImplyLeading: _step != BulkStep.scanning,
             leading: _canGoBack()
                 ? IconButton(
@@ -2493,7 +2647,23 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   )
                 : null,
           ),
-          body: _buildStepContent(),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (useGradientBackground)
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: colorScheme.schemePageBackgroundGradient,
+                  ),
+                ),
+              Padding(
+                padding: EdgeInsets.only(top: topContentInset),
+                child: _waitingForEntranceTransition
+                    ? const SizedBox.expand()
+                    : _buildStepContent(),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -2615,138 +2785,109 @@ class _GithubPatSheetState extends State<_GithubPatSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24.0, 8.0, 24.0, 24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 32,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 16.0),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.outlineVariant,
-                    borderRadius: BorderRadius.circular(2.0),
-                  ),
-                ),
-              ),
-              Text(
-                tr('personalAccessTokenPAT'),
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: tr('githubPATLabel'),
-                  errorText: _validationError,
-                  border: const OutlineInputBorder(),
-                ),
-                obscureText: true,
-                enableSuggestions: false,
-                autocorrect: false,
-                onChanged: (val) => setState(() {
-                  _isSaved = false;
-                  _validationError = null;
-                }),
-              ),
-              if (_isValidating) ...[
-                const SizedBox(height: 16),
-                Center(
-                  child: ExpressiveLoadingIndicator(
-                    color: Theme.of(context).colorScheme.primary,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 32,
-                      height: 32,
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                alignment: WrapAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(_isSaved ? tr('close') : tr('cancel')),
-                  ),
-                  TextButton(
-                    onPressed:
-                        (_isValidating ||
-                            _controller.text.trim().isEmpty ||
-                            _isSaved)
-                        ? null
-                        : () async {
-                            setState(() {
-                              _isValidating = true;
-                              _validationError = null;
-                            });
-                            final String enteredText = _controller.text.trim();
-                            final String? error = await GitHub.validatePAT(
-                              enteredText,
-                            );
-                            if (!context.mounted) return;
-
-                            if (error == null) {
-                              widget.settingsProvider.setSettingString(
-                                GitHub.githubCredsKey,
-                                enteredText,
-                              );
-                              GitHub.storePATValidation(
-                                enteredText,
-                                widget.settingsProvider,
-                              );
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(tr('githubPATValidated')),
-                                  ),
-                                );
-                              }
-                              setState(() {
-                                _isValidating = false;
-                                _isSaved = true;
-                              });
-                            } else {
-                              GitHub.clearPATValidation(
-                                widget.settingsProvider,
-                              );
-                              setState(() {
-                                _isValidating = false;
-                                _validationError = error;
-                              });
-                            }
-                          },
-                    child: Text(_isSaved ? tr('saved') : tr('save')),
-                  ),
-                  TextButton(
-                    onPressed:
-                        !GitHub.hasValidatedPAT(
-                          widget.settingsProvider.getSettingString(
-                            GitHub.githubCredsKey,
-                          ),
-                          widget.settingsProvider,
-                        )
-                        ? null
-                        : () {
-                            Navigator.of(context).pop();
-                            widget.onSearchAgain();
-                          },
-                    child: Text(tr('searchAgain')),
-                  ),
-                ],
-              ),
-            ],
-          ),
+    return AppSheetContent(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+      children: [
+        Text(
+          tr('personalAccessTokenPAT'),
+          style: Theme.of(context).textTheme.headlineSmall,
         ),
-      ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _controller,
+          autofocus: true,
+          decoration: appPageOutlinedInputDecoration(
+            context,
+            labelText: tr('githubPATLabel'),
+          ).copyWith(errorText: _validationError),
+          obscureText: true,
+          enableSuggestions: false,
+          autocorrect: false,
+          onChanged: (val) => setState(() {
+            _isSaved = false;
+            _validationError = null;
+          }),
+        ),
+        if (_isValidating) ...[
+          const SizedBox(height: 16),
+          Center(
+            child: ExpressiveLoadingIndicator(
+              color: Theme.of(context).colorScheme.primary,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            ),
+          ),
+        ],
+        const SizedBox(height: 24),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(_isSaved ? tr('close') : tr('cancel')),
+            ),
+            TextButton(
+              onPressed:
+                  (_isValidating || _controller.text.trim().isEmpty || _isSaved)
+                  ? null
+                  : () async {
+                      setState(() {
+                        _isValidating = true;
+                        _validationError = null;
+                      });
+                      final String enteredText = _controller.text.trim();
+                      final String? error = await GitHub.validatePAT(
+                        enteredText,
+                      );
+                      if (!context.mounted) return;
+
+                      if (error == null) {
+                        widget.settingsProvider.setSettingString(
+                          GitHub.githubCredsKey,
+                          enteredText,
+                        );
+                        GitHub.storePATValidation(
+                          enteredText,
+                          widget.settingsProvider,
+                        );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(tr('githubPATValidated'))),
+                          );
+                        }
+                        setState(() {
+                          _isValidating = false;
+                          _isSaved = true;
+                        });
+                      } else {
+                        GitHub.clearPATValidation(widget.settingsProvider);
+                        setState(() {
+                          _isValidating = false;
+                          _validationError = error;
+                        });
+                      }
+                    },
+              child: Text(_isSaved ? tr('saved') : tr('save')),
+            ),
+            TextButton(
+              onPressed:
+                  !GitHub.hasValidatedPAT(
+                    widget.settingsProvider.getSettingString(
+                      GitHub.githubCredsKey,
+                    ),
+                    widget.settingsProvider,
+                  )
+                  ? null
+                  : () {
+                      Navigator.of(context).pop();
+                      widget.onSearchAgain();
+                    },
+              child: Text(tr('searchAgain')),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

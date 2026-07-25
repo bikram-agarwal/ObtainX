@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:easy_localization/easy_localization.dart';
+import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show listEquals;
@@ -15,13 +15,16 @@ import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
+import 'package:obtainium/components/app_smooth_surface.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
+import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/pages/settings.dart';
@@ -102,7 +105,7 @@ void _logApkMirrorSizeDebugFromAppPage(String message) {
     try {
       await LogsProvider(
         runDefaultClear: false,
-      ).add('OBTAINX-APK-SIZE-DEBUG AppPage: $message', level: LogLevels.debug);
+      ).add('OBTAINX-APK-SIZE-DEBUG AppPage: $message', level: LogLevel.debug);
     } catch (_) {}
   }());
 }
@@ -184,28 +187,35 @@ String? _resolveStoreUrl({
 /// Returns the Play Store URL if the app is present, or null if absent.
 /// Returns null also on network error — caller should not cache the result.
 Future<String?> _checkPlayStoreAvailability(String packageId) async {
-  try {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
-    final uri = Uri.parse(
-      'https://play.google.com/store/apps/details?id=$packageId&hl=en&gl=US',
-    );
-    final request = await client.headUrl(uri);
-    request.followRedirects = false;
-    request.headers.set(
-      HttpHeaders.userAgentHeader,
-      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
-    );
-    final response = await request.close().timeout(const Duration(seconds: 10));
-    await response.drain<void>();
-    client.close();
-    if (response.statusCode == 200) {
-      return 'https://play.google.com/store/apps/details?id=$packageId';
+  final candidates = BulkImportService.getPackageIdCandidates(packageId);
+  for (final candidate in candidates) {
+    try {
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 10);
+      final uri = Uri.parse(
+        'https://play.google.com/store/apps/details?id=$candidate&hl=en&gl=US',
+      );
+      final request = await client.headUrl(uri);
+      request.followRedirects = false;
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+      );
+      final response = await request.close().timeout(
+        const Duration(seconds: 10),
+      );
+      await response.drain<void>();
+      client.close();
+      if (response.statusCode == 200) {
+        return 'https://play.google.com/store/apps/details?id=$candidate';
+      }
+    } catch (_) {
+      if (candidate == packageId) {
+        return null; // network error on primary -> skip caching
+      }
     }
-    return null; // 302 = redirect to search (not found); 404 = also not found
-  } catch (_) {
-    return null; // network error — caller skips caching
   }
+  return null;
 }
 
 void _toastUrl(String url) {
@@ -269,6 +279,7 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
     model.latestIsReproducible,
     model.latestReproducibleStatus,
     model.latestAttestationStatus,
+    model.latestMalwareScanStatus,
     model.overrideSource,
     _apkUrlEntriesRebuildToken(model.apkUrls),
     _apkUrlEntriesRebuildToken(model.otherAssetUrls),
@@ -287,6 +298,7 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
 int appPageSettingsRebuildToken(SettingsProvider settings) {
   return Object.hash(
     settings.matchAppPageToIconColors,
+    settings.blackThemeActive,
     settings.showAppWebpage,
     settings.checkUpdateOnDetailPage,
     settings.highlightTouchTargets,
@@ -318,10 +330,14 @@ class _DownloadProgressAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (double? dpOrNull, int? totalBytes) = context
-        .select<AppsProvider, (double?, int?)>((p) {
+    final (double? dpOrNull, int? totalBytes, String? scanStatus) = context
+        .select<AppsProvider, (double?, int?, String?)>((p) {
           final a = p.apps[appId];
-          return (a?.downloadProgress, a?.downloadTotalBytes);
+          return (
+            a?.downloadProgress,
+            a?.downloadTotalBytes,
+            a?.app.latestMalwareScanStatus,
+          );
         });
     // Race guard: the download may have ended between the page rebuild that
     // mounted this widget and this build. The page will rebuild and remove us.
@@ -329,13 +345,28 @@ class _DownloadProgressAction extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final double dp = dpOrNull;
-    final bool isInstalling = dp < 0;
-    final String bytesLabel = !isInstalling && totalBytes != null
+    final bool isScanning = dp == -2;
+    final bool isInstalling = dp == -1;
+    final bool isFlaggedState = dp == -3;
+    final bool isBusy = isScanning || isInstalling;
+    final String bytesLabel = !isBusy && !isFlaggedState && totalBytes != null
         ? ' · ${formatBytesForDisplay((dp / 100 * totalBytes).round())} / ${formatBytesForDisplay(totalBytes)}'
         : '';
-    final String label = isInstalling
+    final String label = isScanning
+        ? '${tr('scanningWithVirusTotal')}…'
+        : isInstalling
         ? '${tr('installing')}…'
+        : isFlaggedState
+        ? (scanStatus == malwareScanStatusFlagged
+              ? tr('flaggedByVirusTotal')
+              : tr('virusTotalScanFailed'))
         : tr('downloadingX', args: ['${dp.round()}%$bytesLabel']);
+    final Color barColor = isFlaggedState
+        ? actionTheme.colorScheme.error
+        : actionTheme.colorScheme.primary;
+    final Color textColor = isFlaggedState
+        ? actionTheme.colorScheme.onError
+        : actionTheme.colorScheme.onSurface.withAlpha(200);
     final Widget progressBar = ClipRRect(
       borderRadius: BorderRadius.circular(expressiveRadius),
       child: SizedBox(
@@ -347,15 +378,15 @@ class _DownloadProgressAction extends StatelessWidget {
             Align(
               alignment: Alignment.centerLeft,
               child: FractionallySizedBox(
-                widthFactor: isInstalling ? 1.0 : dp / 100,
+                widthFactor: (isBusy || isFlaggedState) ? 1.0 : dp / 100,
                 child: Container(
-                  color: actionTheme.colorScheme.primary.withAlpha(
-                    isInstalling ? 55 : 220,
+                  color: barColor.withAlpha(
+                    isFlaggedState ? 220 : (isBusy ? 55 : 220),
                   ),
                 ),
               ),
             ),
-            if (isInstalling)
+            if (isBusy)
               LinearProgressIndicator(
                 backgroundColor: Colors.transparent,
                 color: actionTheme.colorScheme.primary.withAlpha(120),
@@ -364,7 +395,7 @@ class _DownloadProgressAction extends StatelessWidget {
               child: Text(
                 label,
                 style: actionTheme.textTheme.labelLarge?.copyWith(
-                  color: actionTheme.colorScheme.onSurface.withAlpha(200),
+                  color: textColor,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -378,7 +409,7 @@ class _DownloadProgressAction extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         progressBar,
-        if (!isInstalling)
+        if (!isBusy)
           Center(
             child: TextButton(
               onPressed: () =>
@@ -418,7 +449,7 @@ class AppPage extends StatefulWidget {
   State<AppPage> createState() => _AppPageState();
 }
 
-class _AppPageState extends State<AppPage> {
+class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   static const Duration _detailPageAutoCheckCooldown = Duration(minutes: 1);
   // 92 + the 8px gap after the label = a 100px value-column offset, matching
   // the details card's detailRow (label width 100, no gap) so the two cards'
@@ -464,6 +495,9 @@ class _AppPageState extends State<AppPage> {
 
   /// Resolves to this app's store-availability map from [BulkScanCache], or null.
   Future<Map<String, String>?>? _storeAvailabilityCacheFuture;
+  String? _signingCertificateLoadKey;
+  Future<SigningCertificateInfo?>? _signingCertificateInfoFuture;
+  bool? _uses24HourFormat;
 
   // Cache for the per-page ThemeData derived from the icon color scheme.
   // Recomputed only when the icon scheme key or parent brightness changes.
@@ -562,6 +596,25 @@ class _AppPageState extends State<AppPage> {
     });
   }
 
+  Future<void> _refreshUses24HourFormat() async {
+    final uses24HourFormat = await BulkImportService.uses24HourFormat();
+    if (!mounted ||
+        uses24HourFormat == null ||
+        uses24HourFormat == _uses24HourFormat) {
+      return;
+    }
+    setState(() {
+      _uses24HourFormat = uses24HourFormat;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshUses24HourFormat());
+    }
+  }
+
   @override
   void didUpdateWidget(covariant AppPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -583,6 +636,8 @@ class _AppPageState extends State<AppPage> {
       _lastWebViewSurfaceColorApplied = null;
       _scheduledOpenInEditMode = false;
       _clearEditIconStaging();
+      _signingCertificateLoadKey = null;
+      _signingCertificateInfoFuture = null;
       _storeAvailabilityCacheFuture = BulkScanCache.load().then(
         (cache) => cache[widget.appId],
       );
@@ -597,6 +652,7 @@ class _AppPageState extends State<AppPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelPendingDetailPageAutoCheck();
     _nameController.dispose();
     _authorController.dispose();
@@ -686,11 +742,15 @@ class _AppPageState extends State<AppPage> {
           data: dialogTheme,
           child: AlertDialog(
             title: Text(tr('appEditsUnsavedTitle')),
+            contentPadding: appDialogContentPadding,
             content: Text(tr('appEditsUnsavedBody')),
             actions: [
               TextButton(
                 onPressed: () =>
                     Navigator.pop(dialogContext, _UnsavedAction.discard),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(dialogContext).colorScheme.error,
+                ),
                 child: Text(tr('discard')),
               ),
               TextButton(
@@ -767,7 +827,7 @@ class _AppPageState extends State<AppPage> {
         children: [
           FloatingActionButton.small(
             heroTag: 'app_page_edit_cancel',
-            tooltip: tr('cancel'),
+            tooltip: widget.isEmbedded ? null : tr('cancel'),
             onPressed: updating
                 ? null
                 : () => _onCancelEditPressed(
@@ -780,7 +840,7 @@ class _AppPageState extends State<AppPage> {
           const SizedBox(height: 12),
           FloatingActionButton(
             heroTag: 'app_page_edit_save',
-            tooltip: tr('save'),
+            tooltip: widget.isEmbedded ? null : tr('save'),
             onPressed: appData.downloadProgress != null || updating
                 ? null
                 : () => _saveEdit(appData, appsProvider),
@@ -824,7 +884,7 @@ class _AppPageState extends State<AppPage> {
 
   Future<void> _saveEdit(AppInMemory appData, AppsProvider appsProvider) async {
     if (appData.downloadProgress != null || updating) return;
-    final updatedApp =
+    App updatedApp =
         appsProvider.apps[widget.appId]?.app.deepCopy() ??
         appData.app.deepCopy();
     final newName = _nameController.text.trim();
@@ -840,13 +900,12 @@ class _AppPageState extends State<AppPage> {
       updatedApp.additionalSettings['appAuthor'] = newAuthor;
     }
     final newUrl = _urlController.text.trim();
-    updatedApp.url = newUrl;
+    updatedApp = updatedApp.copyWith(url: newUrl);
     final newId = _packageController.text.trim();
     if (newId.isNotEmpty && newId != updatedApp.id) {
-      updatedApp.allowIdChange = true;
-      updatedApp.id = newId;
+      updatedApp = updatedApp.copyWith(allowIdChange: true, id: newId);
     }
-    updatedApp.categories = _editCategories;
+    updatedApp = updatedApp.copyWith(categories: _editCategories);
 
     final String notesText = _notesController.text.trim();
     if (notesText.isEmpty) {
@@ -865,7 +924,12 @@ class _AppPageState extends State<AppPage> {
         _editStagedIconBytes!,
       );
       if (iconErr != null) {
-        if (mounted) _showPageError(ObtainiumError(iconErr), context);
+        if (mounted) {
+          _showPageError(
+            ObtainiumError(iconErr),
+            title: tr('errorChangingIcon'),
+          );
+        }
         return;
       }
     }
@@ -894,7 +958,10 @@ class _AppPageState extends State<AppPage> {
       );
     } catch (e) {
       if (mounted) {
-        _showPageError(ObtainiumError(tr('noFilePickerAvailable')), context);
+        _showPageError(
+          ObtainiumError(tr('noFilePickerAvailable')),
+          title: tr('errorChangingIcon'),
+        );
       }
       return;
     }
@@ -905,7 +972,10 @@ class _AppPageState extends State<AppPage> {
     if (bytes == null) return;
     if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
       if (mounted) {
-        _showPageError(ObtainiumError(tr('changeAppIconInvalidPng')), context);
+        _showPageError(
+          ObtainiumError(tr('changeAppIconInvalidPng')),
+          title: tr('errorChangingIcon'),
+        );
       }
       return;
     }
@@ -963,21 +1033,18 @@ class _AppPageState extends State<AppPage> {
     );
   }
 
-  void _showPageError(dynamic error, BuildContext hostContext) {
-    if (!hostContext.mounted) return;
-    Provider.of<LogsProvider>(
-      hostContext,
-      listen: false,
-    ).add(error.toString(), level: LogLevels.error);
+  void _showPageError(dynamic error, {String? title}) {
+    unawaited(LogsProvider().add(error.toString(), level: LogLevel.error));
+    final BuildContext? appContext = globalNavigatorKey.currentContext;
+    if (appContext == null) return;
     Provider.of<AppsProvider>(
-      hostContext,
+      appContext,
       listen: false,
-    ).setAppPageError(widget.appId, error);
+    ).setAppPageError(widget.appId, error, title: title);
   }
 
-  void _showPageMessage(dynamic message, BuildContext hostContext) {
-    if (!hostContext.mounted) return;
-    showMessage(message, hostContext, theme: _cachedPageTheme);
+  void _showPageMessage(dynamic message) {
+    showMessage(message, theme: _cachedPageTheme);
   }
 
   Widget _buildPersistentPageError(
@@ -989,8 +1056,12 @@ class _AppPageState extends State<AppPage> {
     if ((title == null || title.isEmpty) && (error == null || error.isEmpty)) {
       return const SizedBox.shrink();
     }
+    // Only collapse to a single line when the title IS the message verbatim
+    // (the build-verification-blocked case passes the same string as both) -
+    // any real title/detail pair (a specific title plus its own message)
+    // should always show both, not just the title.
     final bool showErrorDetails =
-        title == null && error != null && error.isNotEmpty;
+        error != null && error.isNotEmpty && error != title;
 
     final BoxDecoration baseDecoration = appPageSectionCardDecoration(ctx);
     final ColorScheme colorScheme = pageTheme.colorScheme;
@@ -1036,10 +1107,10 @@ class _AppPageState extends State<AppPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    title ?? tr('errorCheckingUpdates'),
+                    title ?? tr('error'),
                     style: textTheme.labelLarge?.copyWith(
                       color: colorScheme.onSurface,
-                      fontWeight: title == null
+                      fontWeight: showErrorDetails
                           ? FontWeight.w700
                           : FontWeight.normal,
                     ),
@@ -1085,6 +1156,7 @@ class _AppPageState extends State<AppPage> {
     List<Widget> children, {
     Color? sectionBackgroundColor,
     Color? sectionTitleColor,
+    Widget? sectionHeaderTrailing,
     Widget? headerStripe,
     Widget? cardWatermark,
   }) {
@@ -1092,23 +1164,50 @@ class _AppPageState extends State<AppPage> {
     final BoxDecoration decoration = sectionBackgroundColor != null
         ? baseDecoration.copyWith(color: sectionBackgroundColor)
         : baseDecoration;
+    final BorderRadius cardBorderRadius =
+        decoration.borderRadius?.resolve(Directionality.of(ctx)) ??
+        BorderRadius.zero;
+    final BorderSide cardBorderSide = (decoration.border! as Border).top;
 
     final Widget bodyColumn = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        appPageCardSectionHeaderLabel(
-          ctx,
-          sectionTitle,
-          color: sectionTitleColor,
-        ),
+        if (sectionHeaderTrailing == null)
+          appPageCardSectionHeaderLabel(
+            ctx,
+            sectionTitle,
+            color: sectionTitleColor,
+          )
+        else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              appPageCardSectionHeaderLabel(
+                ctx,
+                sectionTitle,
+                color: sectionTitleColor,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: sectionHeaderTrailing,
+                  ),
+                ),
+              ),
+            ],
+          ),
         const SizedBox(height: 12),
         ...children,
       ],
     );
 
     final Widget body = Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
       child: cardWatermark != null
           ? Stack(
               clipBehavior: Clip.none,
@@ -1120,19 +1219,27 @@ class _AppPageState extends State<AppPage> {
           : bodyColumn,
     );
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: decoration,
-      clipBehavior: (headerStripe != null || cardWatermark != null)
-          ? Clip.antiAlias
-          : Clip.none,
-      child: headerStripe != null
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [headerStripe, body],
-            )
-          : body,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: AppSmoothRoundedSurface(
+        backgroundColor: decoration.color ?? Colors.transparent,
+        borderColor: cardBorderSide.color,
+        borderWidth: cardBorderSide.width,
+        borderRadius: cardBorderRadius.topLeft.x,
+        boxShadow: decoration.boxShadow ?? const [],
+        // Only these cards have a child that paints to the edge (the header
+        // stripe / corner watermark), so only they need the content clipped to
+        // the rounded corners; plain cards keep the smooth painted corner
+        // without a saveLayer.
+        clipContent: headerStripe != null || cardWatermark != null,
+        child: headerStripe != null
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [headerStripe, body],
+              )
+            : body,
+      ),
     );
   }
 
@@ -1256,8 +1363,8 @@ class _AppPageState extends State<AppPage> {
     if (app?.app.hasPendingRepoRename != true) {
       return const SizedBox.shrink();
     }
-    var appValue = app!;
-    var pendingUrl = appValue.app.pendingRepoRenameUrl!;
+    final appValue = app!;
+    final pendingUrl = appValue.app.pendingRepoRenameUrl!;
     final colorScheme = ColorScheme.of(context);
     final textTheme = TextTheme.of(context);
     return Column(
@@ -1433,7 +1540,7 @@ class _AppPageState extends State<AppPage> {
                           pendingUrl,
                         );
                         if (mounted) {
-                          onUpdate(appValue.app.id);
+                          unawaited(onUpdate(appValue.app.id));
                         }
                       },
                       child: Text(tr('updateUrl')),
@@ -1541,18 +1648,14 @@ class _AppPageState extends State<AppPage> {
   ) async {
     if (!context.mounted) return;
     final Brightness brightness = Theme.of(context).brightness;
+    final AppsProvider apps = context.read<AppsProvider>();
+    final SettingsProvider settings = context.read<SettingsProvider>();
     final ColorScheme? scheme = await loadColorSchemeFromAppIcon(
       iconBytes: iconBytes,
       brightness: brightness,
     );
-    if (!context.mounted) return;
-    final AppsProvider apps =
-        // ignore: use_build_context_synchronously
-        Provider.of<AppsProvider>(context, listen: false);
+    if (!mounted) return;
     if (!identical(apps.apps[widget.appId]?.icon, iconBytes)) return;
-    final SettingsProvider settings =
-        // ignore: use_build_context_synchronously
-        Provider.of<SettingsProvider>(context, listen: false);
     if (!settings.matchAppPageToIconColors) return;
     if (scheme != null) {
       setState(() {
@@ -1576,6 +1679,8 @@ class _AppPageState extends State<AppPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_refreshUses24HourFormat());
     _storeAvailabilityCacheFuture = BulkScanCache.load().then(
       (cache) => cache[widget.appId],
     );
@@ -1643,15 +1748,15 @@ class _AppPageState extends State<AppPage> {
               }
               _showPageError(
                 ObtainiumError(error.description, unexpected: true),
-                context,
+                title: tr('errorLoadingPage'),
               );
             }
           },
           onNavigationRequest: (NavigationRequest request) =>
-              !(request.url.startsWith("http://") ||
-                  request.url.startsWith("https://") ||
-                  request.url.startsWith("ftp://") ||
-                  request.url.startsWith("ftps://"))
+              !(request.url.startsWith('http://') ||
+                  request.url.startsWith('https://') ||
+                  request.url.startsWith('ftp://') ||
+                  request.url.startsWith('ftps://'))
               ? NavigationDecision.prevent
               : NavigationDecision.navigate,
         ),
@@ -1659,32 +1764,38 @@ class _AppPageState extends State<AppPage> {
   }
 
   /// After a pull-to-refresh, checks all 4 stores (APKMirror, F-Droid, APKPure,
-  /// Play Store) for this single app concurrently, skipping any store already
-  /// cached or already tracked from that source. Caches results and triggers a
+  /// Play Store) for this single app concurrently. Cached stores are skipped,
+  /// except that APKMirror is rechecked when its existing availability response
+  /// can also fill a missing app icon. Caches results and triggers a
   /// FutureBuilder rebuild so the Other Sources row updates in place.
   Future<void> _maybeCheckAndCacheAllStores(String appId) async {
-    if (appId.isEmpty) return;
+    if (appId.isEmpty || !mounted) return;
 
-    final trackedUrl = Provider.of<AppsProvider>(
-      context,
-      listen: false,
-    ).apps[appId]?.app.url;
+    final appsProvider = Provider.of<AppsProvider>(context, listen: false);
+    final AppInMemory? appBeforeStoreCheck = appsProvider.apps[appId];
+    final trackedUrl = appBeforeStoreCheck?.app.url;
+    final shouldResolveMissingIcon =
+        appBeforeStoreCheck != null &&
+        appBeforeStoreCheck.icon == null &&
+        appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true;
 
     final cache = await BulkScanCache.load();
     final storeData = cache[appId] ?? {};
+    final apkMirrorIconUrls = <String, String>{};
 
     final futures = <Future<MapEntry<String, String?>>>[];
 
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkmirror.com') &&
-        !storeData.containsKey('APKMirror')) {
+        ((storeData['APKMirror'] ?? '').isEmpty || shouldResolveMissingIcon)) {
       futures.add(
-        BulkImportService.checkApkMirror([
-          appId,
-        ]).then((result) => MapEntry('APKMirror', result[appId])),
+        BulkImportService.checkApkMirror(
+          [appId],
+          resolvedIconUrls: apkMirrorIconUrls,
+        ).then((result) => MapEntry('APKMirror', result[appId])),
       );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
-        !storeData.containsKey('F-Droid')) {
+        (storeData['F-Droid'] ?? '').isEmpty) {
       futures.add(
         BulkImportService.checkFDroid([
           appId,
@@ -1692,7 +1803,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
-        !storeData.containsKey('APKPure')) {
+        (storeData['APKPure'] ?? '').isEmpty) {
       futures.add(
         BulkImportService.checkApkPure([
           appId,
@@ -1700,7 +1811,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
-        !storeData.containsKey('PlayStore')) {
+        (storeData['PlayStore'] ?? '').isEmpty) {
       futures.add(
         _checkPlayStoreAvailability(
           appId,
@@ -1714,9 +1825,24 @@ class _AppPageState extends State<AppPage> {
 
     final entry = cache.putIfAbsent(appId, () => {});
     for (final result in results) {
-      entry[result.key] = result.value ?? '';
+      if (result.value != null || (entry[result.key] ?? '').isEmpty) {
+        entry[result.key] = result.value ?? '';
+      }
     }
     await BulkScanCache.save(cache);
+
+    final String? apkMirrorIconUrl = apkMirrorIconUrls[appId];
+    final AppInMemory? currentApp = appsProvider.apps[appId];
+    if (apkMirrorIconUrl != null &&
+        currentApp != null &&
+        currentApp.icon == null &&
+        currentApp.app.iconUrl?.isNotEmpty != true &&
+        currentApp.app.url == trackedUrl) {
+      await appsProvider.saveApps([
+        currentApp.app.copyWith(iconUrl: apkMirrorIconUrl),
+      ], updateInstalledInfo: false);
+      await appsProvider.updateAppIcon(appId);
+    }
 
     if (mounted && widget.appId == appId) {
       setState(() {
@@ -1741,6 +1867,7 @@ class _AppPageState extends State<AppPage> {
   /// change [App.latestVersion] and clears it when the version changes,
   /// so the cache key is effectively `(appId, latestVersion)`.
   Future<void> _maybeLazyResolveApkMirrorSize() async {
+    if (!mounted) return;
     if (_attemptedApkMirrorSizeResolution) return;
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
       context,
@@ -1772,7 +1899,7 @@ class _AppPageState extends State<AppPage> {
       // in either case we want to skip the stale write.
       if (freshApp.latestVersion != currentApp.latestVersion) return;
       if (freshApp.apkSizeBytes == resolvedSize) return;
-      final App updated = freshApp.deepCopy()..apkSizeBytes = resolvedSize;
+      final App updated = freshApp.copyWith(apkSizeBytes: resolvedSize);
       await appsProvider.saveApps(
         [updated],
         // No need to re-export to disk just because we filled in a size.
@@ -1817,7 +1944,7 @@ class _AppPageState extends State<AppPage> {
       // Independently check Play Store in the background so other store
       // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
       // without waiting for the Play Store network round-trip.
-      _maybeCheckAndCacheAllStores(id);
+      unawaited(_maybeCheckAndCacheAllStores(id));
       // The version may have just bumped, in which case [SourceProvider.getApp]
       // cleared the cached size and we need to walk APKMirror again. The
       // resolver is a no-op when the size is still present.
@@ -1826,20 +1953,20 @@ class _AppPageState extends State<AppPage> {
       if (resetVersion) {
         final app = appsProvider.apps[id]?.app;
         if (app != null) {
-          app.installedVersion = null;
-          appsProvider.saveApps([app]);
+          unawaited(
+            appsProvider.saveApps([app.copyWith(installedVersion: null)]),
+          );
         }
       }
     } catch (err) {
       if (!mounted || widget.appId != id) return;
-      if (err is RepositoryRenamedError && context.mounted) {
+      if (err is RepositoryRenamedError && mounted) {
         await appsProvider.updatePendingRepoRename(id, err.newUrl);
-      } else if (context.mounted) {
-        // ignore: use_build_context_synchronously
-        _showPageError(err, context);
+      } else if (mounted) {
+        _showPageError(err, title: tr('errorCheckingUpdates'));
       }
     } finally {
-      if (context.mounted &&
+      if (mounted &&
           widget.appId == id &&
           _updateCheckRunToken == updateCheckRunToken) {
         setState(() {
@@ -1859,7 +1986,8 @@ class _AppPageState extends State<AppPage> {
     });
   }
 
-  static const double _storeSourceIconSize = 40;
+  static const double _storeSourceIconSize = 32;
+  static const double _storeSourceButtonSize = 48;
 
   Widget _buildStoreSourceLaunchIcon({
     required BuildContext iconContext,
@@ -1887,42 +2015,15 @@ class _AppPageState extends State<AppPage> {
           Clipboard.setData(ClipboardData(text: url));
         },
         borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-          child: picture,
+        child: SizedBox.square(
+          dimension: _storeSourceButtonSize,
+          child: Center(
+            child: SizedBox.square(
+              dimension: _storeSourceIconSize,
+              child: Center(child: picture),
+            ),
+          ),
         ),
-      ),
-    );
-  }
-
-  Widget _detailRowTrackedSource(BuildContext ctx, String label, String url) {
-    final String? assetPath = storeSourceAssetPathForUrl(url);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              label,
-              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                fontSize: 12,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: _buildStoreSourceLaunchIcon(
-                iconContext: ctx,
-                url: url,
-                assetPath: assetPath,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1934,9 +2035,10 @@ class _AppPageState extends State<AppPage> {
       (AppsProvider provider) =>
           appPageAppsRebuildToken(provider, widget.appId),
     );
-    final String? persistentPageError = context.select<AppsProvider, String?>(
-      (AppsProvider provider) => provider.appPageErrors[widget.appId],
-    );
+    final ({String? title, String message})? persistentPageError = context
+        .select<AppsProvider, ({String? title, String message})?>(
+          (AppsProvider provider) => provider.appPageErrors[widget.appId],
+        );
 
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
       context,
@@ -1948,15 +2050,29 @@ class _AppPageState extends State<AppPage> {
     );
 
     final bool useIconPageColors = settingsProvider.matchAppPageToIconColors;
-    var showAppWebpageFinal =
+    final showAppWebpageFinal =
         (settingsProvider.showAppWebpage &&
             !widget.showOppositeOfPreferredView) ||
         (!settingsProvider.showAppWebpage &&
             widget.showOppositeOfPreferredView);
 
-    bool areDownloadsRunning = appsProvider.areDownloadsRunning();
+    final bool areDownloadsRunning = appsProvider.areDownloadsRunning();
 
-    AppInMemory? app = appsProvider.apps[widget.appId];
+    final AppInMemory? app = appsProvider.apps[widget.appId];
+    final List<String> loadedCertificateHashes =
+        app?.certificateHashes ?? const <String>[];
+    if (app?.installedInfo != null && loadedCertificateHashes.isEmpty) {
+      final String signingCertificateLoadKey =
+          '${app!.app.id}:${app.installedInfo?.lastUpdateTime ?? 0}';
+      if (_signingCertificateLoadKey != signingCertificateLoadKey) {
+        _signingCertificateLoadKey = signingCertificateLoadKey;
+        _signingCertificateInfoFuture =
+            BulkImportService.getSigningCertificates(app.app.id);
+      }
+    } else if (app?.installedInfo == null) {
+      _signingCertificateLoadKey = null;
+      _signingCertificateInfoFuture = null;
+    }
     if (!_requestedMissingIconLoad && app != null && app.icon == null) {
       _requestedMissingIconLoad = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2010,7 +2126,9 @@ class _AppPageState extends State<AppPage> {
           )
         : null;
     final String? effectivePersistentPageError =
-        buildVerificationPersistentPageError ?? persistentPageError;
+        buildVerificationPersistentPageError ?? persistentPageError?.message;
+    final String? effectivePersistentPageErrorTitle =
+        buildVerificationPersistentPageError ?? persistentPageError?.title;
 
     final Uint8List? iconBytes = app?.icon;
     final Brightness themeBrightness = Theme.of(context).brightness;
@@ -2056,14 +2174,16 @@ class _AppPageState extends State<AppPage> {
         : darkenIconPageSchemeInDarkMode(
             appPageSurfacesWithVisibleAccent(_iconDerivedColorScheme!),
           );
-    final ColorScheme pageColorSchemeForPage = settingsProvider.useBlackTheme
+    final bool applyBlackPageTheme = settingsProvider.blackThemeActive;
+    final ColorScheme pageColorSchemeForPage = applyBlackPageTheme
         ? themedPageColorScheme.withPureBlackBackgrounds()
         : themedPageColorScheme;
+    final ColorScheme sharedPageBackgroundColorScheme = pageColorSchemeForPage;
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
     // ThemeData.copyWith() is expensive — cache it and recompute only when the
-    // icon scheme or parent brightness actually changes.
+    // icon scheme, parent brightness, or active black state actually changes.
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${settingsProvider.useBlackTheme ? "black" : "standard"}';
+        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(
@@ -2102,9 +2222,9 @@ class _AppPageState extends State<AppPage> {
         );
       });
     }
-    var trackOnly = app?.app.additionalSettings['trackOnly'] == true;
+    final trackOnly = app?.app.additionalSettings['trackOnly'] == true;
 
-    bool isVersionDetectionStandard =
+    final bool isVersionDetectionStandard =
         app?.app.additionalSettings['versionDetection'] == 'auto' ||
         app?.app.additionalSettings['versionDetection'] == 'standard' ||
         app?.app.additionalSettings['versionDetection'] == 'versionCode' ||
@@ -2133,6 +2253,18 @@ class _AppPageState extends State<AppPage> {
       final hour = local.hour.toString().padLeft(2, '0');
       final minute = local.minute.toString().padLeft(2, '0');
       return '$year-$month-$day $hour:$minute';
+    }
+
+    String formatCheckedAtTimestamp(BuildContext ctx, DateTime dateTime) {
+      final local = dateTime.toLocal();
+      final materialLocalizations = MaterialLocalizations.of(ctx);
+      final date = formatDeviceOrderedNumericDate(ctx, local);
+      final time = materialLocalizations.formatTimeOfDay(
+        TimeOfDay.fromDateTime(local),
+        alwaysUse24HourFormat:
+            _uses24HourFormat ?? MediaQuery.alwaysUse24HourFormatOf(ctx),
+      );
+      return '$date $time';
     }
 
     Widget detailRow(
@@ -2177,18 +2309,14 @@ class _AppPageState extends State<AppPage> {
     }) {
       Widget versionChip(String text) {
         final ColorScheme scheme = Theme.of(ctx).colorScheme;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              scheme.primary.withValues(alpha: 0.08),
-              scheme.surfaceContainerHighest,
-            ),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.9),
-            ),
+        return AppSmoothRoundedSurface(
+          backgroundColor: Color.alphaBlend(
+            scheme.primary.withValues(alpha: 0.12),
+            scheme.surfaceContainerHighest,
           ),
+          borderColor: null,
+          borderRadius: 999,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           child: Text(
             text,
             style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
@@ -2410,14 +2538,14 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getInfoColumn(BuildContext pageThemeContext, {bool small = false}) {
+    Column getInfoColumn(BuildContext pageThemeContext, {bool small = false}) {
       final ThemeData pageTheme = Theme.of(pageThemeContext);
       final undeterminedTrackOnlyInstalled =
           trackOnly &&
           app?.app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] ==
               true &&
           app?.app.installedVersion == null;
-      bool installed = app?.app.installedVersion != null;
+      final bool installed = app?.app.installedVersion != null;
       final String? installedVerStr = app?.app.installedVersion;
       final String latestVerStr = app?.app.latestVersion ?? '';
       final effectivelyEqual =
@@ -2446,15 +2574,16 @@ class _AppPageState extends State<AppPage> {
           !versionOrderUnclearState &&
           versionCmp != 1 &&
           installedVersionIsNewerOrEqual(installedVerStr, latestVerStr);
-      var changeLogFn = app != null ? getChangeLogFn(context, app.app) : null;
+      final changeLogFn = app != null
+          ? getChangeLogFn(pageThemeContext, app.app)
+          : null;
 
-      final lastUpdateCheckLabel = tr(
-        'lastUpdateCheckX',
-        args: [tr('never')],
-      ).split(':').first.trim();
       final lastUpdateCheckValue = app?.app.lastUpdateCheck == null
           ? tr('never')
-          : formatDateTimeToMinute(app!.app.lastUpdateCheck!);
+          : formatCheckedAtTimestamp(
+              pageThemeContext,
+              app!.app.lastUpdateCheck!,
+            );
 
       Future<void> markTrackOnlyAsNotInstalledOnDevice() async {
         if (app == null) return;
@@ -2469,7 +2598,7 @@ class _AppPageState extends State<AppPage> {
           await appsProvider.saveApps([appToSave], updateInstalledInfo: false);
         } catch (err) {
           if (context.mounted) {
-            _showPageError(err, context);
+            _showPageError(err);
           }
         } finally {
           if (context.mounted) {
@@ -2487,6 +2616,7 @@ class _AppPageState extends State<AppPage> {
           hostContext: context,
           builder: (dialogContext) => AlertDialog(
             title: Text(tr('fixPackageId')),
+            contentPadding: appDialogContentPadding,
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -2499,7 +2629,8 @@ class _AppPageState extends State<AppPage> {
                   const SizedBox(height: 16),
                   TextField(
                     controller: packageIdController,
-                    decoration: InputDecoration(
+                    decoration: appPageOutlinedInputDecoration(
+                      dialogContext,
                       labelText: tr('package'),
                       isDense: true,
                     ),
@@ -2542,14 +2673,16 @@ class _AppPageState extends State<AppPage> {
           if (!context.mounted) return;
           await appsProvider.checkUpdate(submittedPackageId);
           if (!context.mounted) return;
-          Navigator.of(context).pushReplacement(
-            heroFriendlyAppPageRoute<void>(
-              (ctx) => AppPage(appId: submittedPackageId),
+          unawaited(
+            Navigator.of(context).pushReplacement(
+              heroFriendlyAppPageRoute<void>(
+                (ctx) => AppPage(appId: submittedPackageId),
+              ),
             ),
           );
         } catch (err) {
           if (context.mounted) {
-            _showPageError(err, context);
+            _showPageError(err);
           }
         } finally {
           if (context.mounted) {
@@ -2564,7 +2697,7 @@ class _AppPageState extends State<AppPage> {
       Widget? verdictStripe;
       Widget? verdictWatermark;
       final double verdictStripeTopRadius = settingsProvider
-          .cardCornerRadiusFor(28);
+          .cardCornerRadiusFor(SettingsProvider.baseCardRadius);
       if (!undeterminedTrackOnlyInstalled) {
         Color? stripeColor;
         Color? stripeTextColor;
@@ -2660,16 +2793,14 @@ class _AppPageState extends State<AppPage> {
         }
       }
 
-      // #4 — subtle "last checked" caption shown at the bottom of the version card.
-      final Widget lastCheckedCaption = Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Text(
-          '$lastUpdateCheckLabel: $lastUpdateCheckValue',
-          textAlign: TextAlign.right,
-          style: pageTheme.textTheme.labelSmall?.copyWith(
-            color: pageTheme.colorScheme.onSurfaceVariant.withAlpha(130),
-            fontSize: 11,
-          ),
+      final Widget lastCheckedHeader = Text(
+        tr('lastUpdateCheckX', args: [lastUpdateCheckValue]),
+        maxLines: 1,
+        softWrap: false,
+        textAlign: TextAlign.right,
+        style: pageTheme.textTheme.labelSmall?.copyWith(
+          color: pageTheme.colorScheme.onSurfaceVariant.withAlpha(130),
+          fontSize: 11,
         ),
       );
 
@@ -2709,14 +2840,12 @@ class _AppPageState extends State<AppPage> {
                   ? null
                   : () async {
                       try {
-                        await appsProvider.downloadAppAssets(
-                          [app.app.id],
-                          context,
-                          dialogTheme: pageTheme,
-                        );
+                        await appsProvider.downloadAppAssets([
+                          app.app.id,
+                        ], dialogTheme: pageTheme);
                       } catch (e) {
                         if (!context.mounted) return;
-                        _showPageError(e, context);
+                        _showPageError(e, title: tr('errorDownloadingAssets'));
                       }
                     },
             ),
@@ -2772,14 +2901,12 @@ class _AppPageState extends State<AppPage> {
                   ? null
                   : () async {
                       try {
-                        await appsProvider.downloadAppAssets(
-                          [app.app.id],
-                          context,
-                          dialogTheme: pageTheme,
-                        );
+                        await appsProvider.downloadAppAssets([
+                          app.app.id,
+                        ], dialogTheme: pageTheme);
                       } catch (e) {
                         if (!context.mounted) return;
-                        _showPageError(e, context);
+                        _showPageError(e, title: tr('errorDownloadingAssets'));
                       }
                     },
             ),
@@ -2813,9 +2940,10 @@ class _AppPageState extends State<AppPage> {
           reproducibleBuildEnforcementBlocksInstall(app.app, source);
       final bool reproducibleBuildHasDisplayStatus =
           reproducibleBuildVerified ||
-          reproducibleBuildNotReproducible ||
-          reproducibleBuildNoData ||
-          reproducibleBuildUnknown;
+          (reproducibleBuildBlocked &&
+              (reproducibleBuildNotReproducible ||
+                  reproducibleBuildNoData ||
+                  reproducibleBuildUnknown));
       final bool githubAttestationExpected =
           source is GitHub &&
           source.shouldVerifyAttestations(
@@ -2845,6 +2973,13 @@ class _AppPageState extends State<AppPage> {
           githubAttestationVerified ||
           githubAttestationUnsupported ||
           githubAttestationCantCheck;
+      final String? malwareScanStatus = app?.app.latestMalwareScanStatus;
+      final bool malwareScanFlagged =
+          malwareScanStatus == malwareScanStatusFlagged;
+      final bool malwareScanError = malwareScanStatus == malwareScanStatusError;
+      final bool malwareScanClean = malwareScanStatus == malwareScanStatusClean;
+      final bool malwareScanHasStatus =
+          malwareScanFlagged || malwareScanError || malwareScanClean;
       final bool reproducibleBuildUsesErrorColors =
           reproducibleBuildBlocked && reproducibleBuildNotReproducible;
       final Color reproducibleBuildProblemContainerColor =
@@ -2870,247 +3005,364 @@ class _AppPageState extends State<AppPage> {
           : reproducibleBuildUsesErrorColors
           ? Theme.of(pageThemeContext).colorScheme.onErrorContainer
           : Theme.of(pageThemeContext).colorScheme.onSurfaceVariant;
-      if (app != null &&
-          (reproducibleBuildHasDisplayStatus ||
-              githubAttestationHasStatus ||
-              githubAttestationBlocked)) {
-        versionCardChildren.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                SizedBox(
-                  width: _versionRowLabelWidth,
-                  child: Text(
-                    tr('security'),
-                    style: Theme.of(pageThemeContext).textTheme.bodySmall
-                        ?.copyWith(
-                          color: Theme.of(
-                            pageThemeContext,
-                          ).colorScheme.onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                    softWrap: false,
-                    overflow: TextOverflow.visible,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (reproducibleBuildVerified)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.green.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.green.withValues(alpha: 0.5),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.verified_outlined,
-                                size: 12,
-                                color: Colors.green,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                tr('reproducibleBuild'),
-                                style: Theme.of(pageThemeContext)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(
-                                      color: Colors.green,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      if (githubAttestationVerified)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.blue.withValues(alpha: 0.5),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.shield_outlined,
-                                size: 12,
-                                color: Colors.blue,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                tr('verifiedBuild'),
-                                style: Theme.of(pageThemeContext)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(
-                                      color: Colors.blue,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      if (reproducibleBuildNotReproducible ||
-                          reproducibleBuildNoData ||
-                          reproducibleBuildUnknown)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: reproducibleBuildProblemContainerColor,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: reproducibleBuildProblemBorderColor,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                reproducibleBuildUnknown
-                                    ? Icons.warning_amber_rounded
-                                    : reproducibleBuildNoData
-                                    ? Icons.shield_outlined
-                                    : Icons.gpp_bad_outlined,
-                                size: 12,
-                                color: reproducibleBuildProblemContentColor,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                tr(
-                                  reproducibleBuildUnknown
-                                      ? 'verificationCantCheck'
-                                      : reproducibleBuildNoData
-                                      ? 'verificationNoData'
-                                      : 'notReproducibleBuild',
-                                ),
-                                style: Theme.of(pageThemeContext)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(
-                                      color:
-                                          reproducibleBuildProblemContentColor,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      if (githubAttestationUnsupported ||
-                          githubAttestationCantCheck)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: githubAttestationCantCheck
-                                ? Colors.orange.withValues(alpha: 0.16)
-                                : githubAttestationUnsupported
-                                ? Theme.of(pageThemeContext)
-                                      .colorScheme
-                                      .surfaceContainerHighest
-                                      .withValues(alpha: 0.75)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: githubAttestationCantCheck
-                                  ? Colors.orange.withValues(alpha: 0.55)
-                                  : githubAttestationUnsupported
-                                  ? Theme.of(pageThemeContext)
-                                        .colorScheme
-                                        .outline
-                                        .withValues(alpha: 0.45)
-                                  : Colors.transparent,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                githubAttestationCantCheck
-                                    ? Icons.warning_amber_rounded
-                                    : Icons.shield_outlined,
-                                size: 12,
-                                color: githubAttestationCantCheck
-                                    ? Colors.orange.shade800
-                                    : githubAttestationUnsupported
-                                    ? Theme.of(
-                                        pageThemeContext,
-                                      ).colorScheme.onSurfaceVariant
-                                    : Theme.of(
-                                        pageThemeContext,
-                                      ).colorScheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                tr(
-                                  githubAttestationCantCheck
-                                      ? 'verificationCantCheck'
-                                      : 'unverifiedBuild',
-                                ),
-                                style: Theme.of(pageThemeContext)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(
-                                      color: githubAttestationCantCheck
-                                          ? Colors.orange.shade800
-                                          : githubAttestationUnsupported
-                                          ? Theme.of(
-                                              pageThemeContext,
-                                            ).colorScheme.onSurfaceVariant
-                                          : Theme.of(
-                                              pageThemeContext,
-                                            ).colorScheme.onSurfaceVariant,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+      Widget statusBadge({
+        required Color backgroundColor,
+        required Color? borderColor,
+        required Color contentColor,
+        required IconData icon,
+        required String label,
+        VoidCallback? onTap,
+        String? tooltip,
+      }) {
+        final Color resolvedBackgroundColor = borderColor == null
+            ? backgroundColor
+            : Color.alphaBlend(
+                borderColor.withValues(alpha: 0.10),
+                backgroundColor,
+              );
+        return AppSmoothRoundedSurface(
+          backgroundColor: resolvedBackgroundColor,
+          borderColor: null,
+          borderRadius: 8,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          onTap: onTap,
+          tooltip: tooltip,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 12, color: contentColor),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: Theme.of(pageThemeContext).textTheme.labelSmall
+                    ?.copyWith(
+                      color: contentColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ],
           ),
         );
       }
 
-      // #4 — last-checked caption at the bottom.
-      versionCardChildren.add(lastCheckedCaption);
+      final securityCardChildren = <Widget>[];
+      if (app != null &&
+          (reproducibleBuildHasDisplayStatus ||
+              githubAttestationHasStatus ||
+              githubAttestationBlocked ||
+              malwareScanHasStatus)) {
+        securityCardChildren.add(
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (reproducibleBuildVerified)
+                statusBadge(
+                  backgroundColor: Colors.green.withValues(alpha: 0.15),
+                  borderColor: Colors.green.withValues(alpha: 0.5),
+                  contentColor: Colors.green,
+                  icon: Icons.verified_outlined,
+                  label: tr('reproducibleBuild'),
+                ),
+              if (githubAttestationVerified)
+                statusBadge(
+                  backgroundColor: Colors.blue.withValues(alpha: 0.15),
+                  borderColor: Colors.blue.withValues(alpha: 0.5),
+                  contentColor: Colors.blue,
+                  icon: Icons.shield_outlined,
+                  label: tr('verifiedBuild'),
+                ),
+              if (reproducibleBuildBlocked &&
+                  (reproducibleBuildNotReproducible ||
+                      reproducibleBuildNoData ||
+                      reproducibleBuildUnknown))
+                statusBadge(
+                  backgroundColor: reproducibleBuildProblemContainerColor,
+                  borderColor: reproducibleBuildProblemBorderColor,
+                  contentColor: reproducibleBuildProblemContentColor,
+                  icon: reproducibleBuildUnknown
+                      ? Icons.warning_amber_rounded
+                      : reproducibleBuildNoData
+                      ? Icons.shield_outlined
+                      : Icons.gpp_bad_outlined,
+                  label: tr(
+                    reproducibleBuildUnknown
+                        ? 'verificationCantCheck'
+                        : reproducibleBuildNoData
+                        ? 'verificationNoData'
+                        : 'notReproducibleBuild',
+                  ),
+                ),
+              if (githubAttestationUnsupported || githubAttestationCantCheck)
+                statusBadge(
+                  backgroundColor: githubAttestationCantCheck
+                      ? Colors.orange.withValues(alpha: 0.16)
+                      : githubAttestationUnsupported
+                      ? Theme.of(pageThemeContext)
+                            .colorScheme
+                            .surfaceContainerHighest
+                            .withValues(alpha: 0.75)
+                      : Colors.transparent,
+                  borderColor: githubAttestationCantCheck
+                      ? Colors.orange.withValues(alpha: 0.55)
+                      : githubAttestationUnsupported
+                      ? Theme.of(
+                          pageThemeContext,
+                        ).colorScheme.outline.withValues(alpha: 0.45)
+                      : null,
+                  contentColor: githubAttestationCantCheck
+                      ? Colors.orange.shade800
+                      : Theme.of(pageThemeContext).colorScheme.onSurfaceVariant,
+                  icon: githubAttestationCantCheck
+                      ? Icons.warning_amber_rounded
+                      : Icons.shield_outlined,
+                  label: tr(
+                    githubAttestationCantCheck
+                        ? 'verificationCantCheck'
+                        : 'unverifiedBuild',
+                  ),
+                ),
+              if (malwareScanHasStatus)
+                statusBadge(
+                  backgroundColor: malwareScanFlagged
+                      ? Theme.of(
+                          pageThemeContext,
+                        ).colorScheme.errorContainer.withValues(alpha: 0.55)
+                      : malwareScanError
+                      ? Colors.orange.withValues(alpha: 0.16)
+                      : Colors.green.withValues(alpha: 0.15),
+                  borderColor: malwareScanFlagged
+                      ? Theme.of(
+                          pageThemeContext,
+                        ).colorScheme.error.withValues(alpha: 0.55)
+                      : malwareScanError
+                      ? Colors.orange.withValues(alpha: 0.55)
+                      : Colors.green.withValues(alpha: 0.5),
+                  contentColor: malwareScanFlagged
+                      ? Theme.of(pageThemeContext).colorScheme.onErrorContainer
+                      : malwareScanError
+                      ? Colors.orange.shade800
+                      : Colors.green,
+                  icon: malwareScanFlagged
+                      ? Icons.gpp_bad_outlined
+                      : malwareScanError
+                      ? Icons.warning_amber_rounded
+                      : Icons.verified_outlined,
+                  label: tr(
+                    malwareScanFlagged
+                        ? 'malwareScanFlaggedChip'
+                        : malwareScanError
+                        ? 'malwareScanErrorChip'
+                        : 'malwareScanCleanChip',
+                  ),
+                  onTap: app.app.latestMalwareScanReportUrl == null
+                      ? null
+                      : () => launchUrlString(
+                          app.app.latestMalwareScanReportUrl!,
+                          mode: LaunchMode.externalApplication,
+                        ),
+                  tooltip: app.app.latestMalwareScanDetail,
+                ),
+            ],
+          ),
+        );
+      }
+
+      Widget buildCertificateHashRow(
+        List<String> certificateHashes,
+        bool hasMultipleSigners,
+      ) {
+        Future<void> copyCertificateHash(String hash) async {
+          await Clipboard.setData(ClipboardData(text: hash));
+          if (!pageThemeContext.mounted) return;
+          ScaffoldMessenger.of(pageThemeContext).showSnackBar(
+            SnackBar(content: Text(tr('certificateHashCopiedToClipboard'))),
+          );
+        }
+
+        String truncateHashToWidth(
+          String hash,
+          TextStyle style,
+          double maxWidth,
+        ) {
+          if (!maxWidth.isFinite || maxWidth <= 0) return hash;
+
+          bool fits(String value) {
+            final painter = TextPainter(
+              text: TextSpan(text: value, style: style),
+              maxLines: 1,
+              textDirection: TextDirection.ltr,
+              textScaler: MediaQuery.textScalerOf(pageThemeContext),
+            )..layout();
+            return painter.width <= maxWidth;
+          }
+
+          if (fits(hash)) return hash;
+
+          const ellipsis = '....';
+          if (!fits(ellipsis)) return ellipsis;
+
+          var minimumVisibleCharacters = 0;
+          var maximumVisibleCharacters = hash.length;
+          var truncatedHash = ellipsis;
+          while (minimumVisibleCharacters <= maximumVisibleCharacters) {
+            final visibleCharacters =
+                (minimumVisibleCharacters + maximumVisibleCharacters) ~/ 2;
+            final leadingCharacters = (visibleCharacters + 1) ~/ 2;
+            final trailingCharacters = visibleCharacters ~/ 2;
+            final candidate =
+                '${hash.substring(0, leadingCharacters)}$ellipsis'
+                '${hash.substring(hash.length - trailingCharacters)}';
+            if (fits(candidate)) {
+              truncatedHash = candidate;
+              minimumVisibleCharacters = visibleCharacters + 1;
+            } else {
+              maximumVisibleCharacters = visibleCharacters - 1;
+            }
+          }
+          return truncatedHash;
+        }
+
+        final String certificateHashLabel =
+            '${plural('certificateHash', certificateHashes.length)}'
+            '${hasMultipleSigners ? ' (${tr('multipleSigners')})' : ''}';
+        final TextStyle hashStyle =
+            pageTheme.textTheme.bodySmall?.copyWith(
+              fontFamily: 'monospace',
+              fontSize: 12,
+            ) ??
+            const TextStyle(fontFamily: 'monospace', fontSize: 12);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 100,
+              child: Text(
+                certificateHashLabel,
+                style: pageTheme.textTheme.bodySmall?.copyWith(
+                  color: pageTheme.colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Column(
+                spacing: 4,
+                children: certificateHashes.map((hash) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onLongPress: () =>
+                              unawaited(copyCertificateHash(hash)),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              return Text(
+                                truncateHashToWidth(
+                                  hash,
+                                  hashStyle,
+                                  constraints.maxWidth,
+                                ),
+                                maxLines: 1,
+                                textDirection: TextDirection.ltr,
+                                style: hashStyle,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Tooltip(
+                        message: tr('copyToClipboard'),
+                        child: SizedBox.square(
+                          dimension: 18,
+                          child: InkResponse(
+                            onTap: () => unawaited(copyCertificateHash(hash)),
+                            radius: 10,
+                            child: const Icon(Icons.copy_rounded, size: 14),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        );
+      }
+
+      if (loadedCertificateHashes.isNotEmpty) {
+        if (securityCardChildren.isNotEmpty) {
+          securityCardChildren.add(const SizedBox(height: 16));
+        }
+        securityCardChildren.add(
+          buildCertificateHashRow(
+            loadedCertificateHashes,
+            app?.hasMultipleSigners == true,
+          ),
+        );
+      } else if (app?.installedInfo != null &&
+          _signingCertificateInfoFuture != null) {
+        if (securityCardChildren.isNotEmpty) {
+          securityCardChildren.add(const SizedBox(height: 16));
+        }
+        securityCardChildren.add(
+          FutureBuilder<SigningCertificateInfo?>(
+            future: _signingCertificateInfoFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return SizedBox(
+                  height: 64,
+                  child: Center(
+                    child: ExpressiveLoadingIndicator(
+                      color: pageTheme.colorScheme.primary,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 48,
+                        height: 48,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final SigningCertificateInfo? certificateInfo = snapshot.data;
+              final List<String> certificateHashes = certificateInfo == null
+                  ? const <String>[]
+                  : certificateHashesFromSignatures(certificateInfo.signatures);
+              if (certificateHashes.isEmpty) {
+                return detailRow(
+                  pageThemeContext,
+                  plural('certificateHash', 1),
+                  tr('none'),
+                );
+              }
+              return buildCertificateHashRow(
+                certificateHashes,
+                certificateInfo!.hasMultipleSigners,
+              );
+            },
+          ),
+        );
+      }
 
       final versionCard = _materialAppPageSectionCard(
         pageThemeContext,
         tr('version'),
         versionCardChildren,
+        sectionHeaderTrailing: lastCheckedHeader,
         headerStripe: verdictStripe,
         cardWatermark: verdictWatermark,
       );
+      final Widget? securityCard = securityCardChildren.isEmpty
+          ? null
+          : _materialAppPageSectionCard(
+              pageThemeContext,
+              tr('security'),
+              securityCardChildren,
+            );
 
       final bool trackOnlyUsesTemporaryPackageId =
           app?.app.additionalSettings['trackOnlyTemporaryPackageId'] == true;
@@ -3226,67 +3478,92 @@ class _AppPageState extends State<AppPage> {
               ),
             );
           }(),
-        if (app?.app.url != null && app!.app.url.isNotEmpty)
-          _detailRowTrackedSource(
-            pageThemeContext,
-            tr('trackedSource'),
-            app.app.url,
-          ),
-        if (alternateStoresPackageId != null &&
-            alternateStoresPackageId.isNotEmpty)
+        if (alternateStoresTrackedUrl != null &&
+            alternateStoresTrackedUrl.isNotEmpty)
           FutureBuilder<Map<String, String>?>(
-            future: _storeAvailabilityCacheFuture,
+            future:
+                alternateStoresPackageId == null ||
+                    alternateStoresPackageId.isEmpty
+                ? null
+                : _storeAvailabilityCacheFuture,
             builder: (context, snapshot) {
               final storeData = snapshot.data;
               final pid = alternateStoresPackageId;
               final trackedUrl = alternateStoresTrackedUrl;
-
-              // Play Store: only show when confirmed present in cache.
-              // Populated by _maybeCheckAndCachePlayStore on pull-to-refresh.
-              final playStoreUrl = _resolveStoreUrl(
-                storeData: storeData,
-                storeName: 'PlayStore',
-                fallbackUrl: null,
-                alreadyTracked: _trackedUrlIsFromHost(
-                  trackedUrl,
-                  'play.google.com',
-                ),
-              );
-
-              final fdroidUrl = _resolveStoreUrl(
-                storeData: storeData,
-                storeName: 'F-Droid',
-                fallbackUrl: 'https://f-droid.org/packages/$pid/',
-                alreadyTracked: _trackedUrlIsFromHost(
-                  trackedUrl,
-                  'f-droid.org',
-                ),
-              );
-
-              final apkpureUrl = _resolveStoreUrl(
-                storeData: storeData,
-                storeName: 'APKPure',
-                fallbackUrl:
-                    null, // search-by-package-ID is not useful; only show confirmed URL
-                alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkpure.'),
-              );
-
-              final apkmirrorUrl = _resolveStoreUrl(
-                storeData: storeData,
-                storeName: 'APKMirror',
-                fallbackUrl:
-                    'https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=${Uri.encodeComponent(pid)}',
-                alreadyTracked: _trackedUrlIsFromHost(
-                  trackedUrl,
-                  'apkmirror.com',
-                ),
-              );
-
-              if (playStoreUrl == null &&
-                  fdroidUrl == null &&
-                  apkpureUrl == null &&
-                  apkmirrorUrl == null) {
-                return const SizedBox.shrink();
+              final alternateSourceIcons = <Widget>[];
+              if (pid != null && pid.isNotEmpty) {
+                // Play Store: only show when confirmed present in cache.
+                // Populated by _maybeCheckAndCachePlayStore on pull-to-refresh.
+                final playStoreUrl = _resolveStoreUrl(
+                  storeData: storeData,
+                  storeName: 'PlayStore',
+                  fallbackUrl: null,
+                  alreadyTracked: _trackedUrlIsFromHost(
+                    trackedUrl,
+                    'play.google.com',
+                  ),
+                );
+                final fdroidUrl = _resolveStoreUrl(
+                  storeData: storeData,
+                  storeName: 'F-Droid',
+                  fallbackUrl: 'https://f-droid.org/packages/$pid/',
+                  alreadyTracked: _trackedUrlIsFromHost(
+                    trackedUrl,
+                    'f-droid.org',
+                  ),
+                );
+                final apkpureUrl = _resolveStoreUrl(
+                  storeData: storeData,
+                  storeName: 'APKPure',
+                  fallbackUrl: null,
+                  alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkpure.'),
+                );
+                final apkmirrorUrl = _resolveStoreUrl(
+                  storeData: storeData,
+                  storeName: 'APKMirror',
+                  fallbackUrl:
+                      'https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=${Uri.encodeComponent(pid)}',
+                  alreadyTracked: _trackedUrlIsFromHost(
+                    trackedUrl,
+                    'apkmirror.com',
+                  ),
+                );
+                if (playStoreUrl != null) {
+                  alternateSourceIcons.add(
+                    _buildStoreSourceLaunchIcon(
+                      iconContext: pageThemeContext,
+                      url: playStoreUrl,
+                      assetPath: StoreSourceIconPaths.playStore,
+                    ),
+                  );
+                }
+                if (fdroidUrl != null) {
+                  alternateSourceIcons.add(
+                    _buildStoreSourceLaunchIcon(
+                      iconContext: pageThemeContext,
+                      url: fdroidUrl,
+                      assetPath: StoreSourceIconPaths.fdroid,
+                    ),
+                  );
+                }
+                if (apkpureUrl != null) {
+                  alternateSourceIcons.add(
+                    _buildStoreSourceLaunchIcon(
+                      iconContext: pageThemeContext,
+                      url: apkpureUrl,
+                      assetPath: StoreSourceIconPaths.apkpure,
+                    ),
+                  );
+                }
+                if (apkmirrorUrl != null) {
+                  alternateSourceIcons.add(
+                    _buildStoreSourceLaunchIcon(
+                      iconContext: pageThemeContext,
+                      url: apkmirrorUrl,
+                      assetPath: StoreSourceIconPaths.apkmirror,
+                    ),
+                  );
+                }
               }
 
               return Padding(
@@ -3295,9 +3572,11 @@ class _AppPageState extends State<AppPage> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     SizedBox(
-                      width: 100,
+                      width:
+                          100 -
+                          (_storeSourceButtonSize - _storeSourceIconSize) / 2,
                       child: Text(
-                        tr('otherSources'),
+                        tr('sources'),
                         style: pageTheme.textTheme.bodySmall?.copyWith(
                           color: pageTheme.colorScheme.onSurfaceVariant,
                           fontSize: 12,
@@ -3305,36 +3584,27 @@ class _AppPageState extends State<AppPage> {
                       ),
                     ),
                     Expanded(
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          if (playStoreUrl != null)
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          spacing: 8,
+                          children: [
                             _buildStoreSourceLaunchIcon(
                               iconContext: pageThemeContext,
-                              url: playStoreUrl,
-                              assetPath: StoreSourceIconPaths.playStore,
+                              url: trackedUrl,
+                              assetPath: storeSourceAssetPathForUrl(trackedUrl),
                             ),
-                          if (fdroidUrl != null)
-                            _buildStoreSourceLaunchIcon(
-                              iconContext: pageThemeContext,
-                              url: fdroidUrl,
-                              assetPath: StoreSourceIconPaths.fdroid,
-                            ),
-                          if (apkpureUrl != null)
-                            _buildStoreSourceLaunchIcon(
-                              iconContext: pageThemeContext,
-                              url: apkpureUrl,
-                              assetPath: StoreSourceIconPaths.apkpure,
-                            ),
-                          if (apkmirrorUrl != null)
-                            _buildStoreSourceLaunchIcon(
-                              iconContext: pageThemeContext,
-                              url: apkmirrorUrl,
-                              assetPath: StoreSourceIconPaths.apkmirror,
-                            ),
-                        ],
+                            if (alternateSourceIcons.isNotEmpty)
+                              Container(
+                                width: 1,
+                                height: 24,
+                                color: pageTheme.colorScheme.outlineVariant
+                                    .withValues(alpha: 0.7),
+                              ),
+                            ...alternateSourceIcons,
+                          ],
+                        ),
                       ),
                     ),
                   ],
@@ -3373,6 +3643,11 @@ class _AppPageState extends State<AppPage> {
                                 colorArgb ?? Colors.grey.shade500.toARGB32(),
                               ),
                               state: CategoryActionChipState.plain,
+                              outerPadding: const EdgeInsetsDirectional.only(
+                                end: 8,
+                                top: 4,
+                                bottom: 4,
+                              ),
                             );
                           }),
                         ],
@@ -3395,6 +3670,7 @@ class _AppPageState extends State<AppPage> {
           const SizedBox(height: 12),
           ?trackOnlyInstalledErrorCard,
           versionCard,
+          ?securityCard,
           detailsCard,
           if (app?.app.additionalSettings['about'] is String &&
               app?.app.additionalSettings['about'].isNotEmpty)
@@ -3408,7 +3684,7 @@ class _AppPageState extends State<AppPage> {
     Widget buildDetailHeroContent(BuildContext themeContext) {
       const double heroScale = 1.2;
       const heroIconSize = 58.0;
-      final scaledIconSize = heroIconSize * heroScale;
+      const scaledIconSize = heroIconSize * heroScale;
       final titleStyle = Theme.of(themeContext).textTheme.titleLarge;
       final bylineStyle = Theme.of(themeContext).textTheme.bodySmall;
       final String listHeroTag = widget.appsListHeroFolderId != null
@@ -3425,7 +3701,7 @@ class _AppPageState extends State<AppPage> {
         onTap: _editMode
             ? null
             : (app?.installedInfo != null
-                  ? () => pm.openApp(widget.appId)
+                  ? () => packageManager.openApp(widget.appId)
                   : null),
         emptyPlaceholder: Container(
           height: scaledIconSize,
@@ -3520,7 +3796,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getFullInfoColumn(BuildContext themeContext, {bool small = false}) {
+    Column getFullInfoColumn(BuildContext themeContext, {bool small = false}) {
       final ThemeData dialogColumnTheme = Theme.of(themeContext);
       const heroIconSize = 48.0;
       final double dialogIconSize = small ? 70 : heroIconSize;
@@ -3707,7 +3983,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    showMarkUpdatedDialog() {
+    Future<dynamic> showMarkUpdatedDialog() {
       return _showPageDialog(
         hostContext: context,
         builder: (BuildContext ctx) {
@@ -3723,9 +3999,11 @@ class _AppPageState extends State<AppPage> {
               TextButton(
                 onPressed: () {
                   hapticSelection();
-                  final App? updatedApp = app?.app.deepCopy();
+                  App? updatedApp = app?.app.deepCopy();
                   if (updatedApp != null) {
-                    updatedApp.installedVersion = updatedApp.latestVersion;
+                    updatedApp = updatedApp.copyWith(
+                      installedVersion: updatedApp.latestVersion,
+                    );
                     updatedApp.additionalSettings.remove(
                       'skippedLatestVersion',
                     );
@@ -3745,7 +4023,7 @@ class _AppPageState extends State<AppPage> {
       );
     }
 
-    getBottomCenterActions(BuildContext themeContext) {
+    Widget getBottomCenterActions(BuildContext themeContext) {
       final ThemeData actionTheme = Theme.of(themeContext);
       const double expressiveRadius = 26;
       const EdgeInsets expressivePadding = EdgeInsets.symmetric(
@@ -3904,7 +4182,7 @@ class _AppPageState extends State<AppPage> {
         if (buildVerificationBlocked) {
           _showPageError(
             ObtainiumError(buildVerificationBlockedMessage!),
-            context,
+            title: tr('errorInstallingUpdate'),
           );
           return;
         }
@@ -3915,15 +4193,15 @@ class _AppPageState extends State<AppPage> {
           hapticHeavyImpact();
           final res = await appsProvider.downloadAndInstallLatestApps(
             app?.app.id != null ? [app!.app.id] : [],
-            context,
+            themeContext,
             dialogTheme: _cachedPageTheme,
           );
-          if (res.isNotEmpty && !trackOnly && context.mounted) {
-            _showPageMessage(successMessage, context);
+          if (res.isNotEmpty && !trackOnly && themeContext.mounted) {
+            _showPageMessage(successMessage);
           }
         } catch (e) {
-          if (context.mounted) {
-            _showPageError(e, context);
+          if (themeContext.mounted) {
+            _showPageError(e, title: tr('errorInstallingUpdate'));
           }
         }
       }
@@ -4115,6 +4393,8 @@ class _AppPageState extends State<AppPage> {
       final bool isLandscapeEmbedded =
           widget.isEmbedded &&
           MediaQuery.orientationOf(themeContext) == Orientation.landscape;
+      String? actionBarTooltip(String message) =>
+          widget.isEmbedded ? null : message;
       Widget actionBarContent = Padding(
         padding: isLandscapeEmbedded
             ? const EdgeInsets.fromLTRB(16, 6, 16, 6)
@@ -4134,7 +4414,7 @@ class _AppPageState extends State<AppPage> {
                         appsProvider.openAppSettings(app.app.id);
                       },
                       icon: const Icon(Icons.info_outline),
-                      tooltip: tr('appPageAppInfo'),
+                      tooltip: actionBarTooltip(tr('appPageAppInfo')),
                     ),
                   );
                 }
@@ -4145,7 +4425,7 @@ class _AppPageState extends State<AppPage> {
                       iconSize: 24,
                       onPressed: () => _startEdit(app, appsProvider),
                       icon: const Icon(Icons.edit_outlined),
-                      tooltip: tr('editAppInfo'),
+                      tooltip: actionBarTooltip(tr('editAppInfo')),
                     ),
                   );
                 }
@@ -4173,7 +4453,7 @@ class _AppPageState extends State<AppPage> {
                                 );
                               }
                             },
-                      tooltip: tr('appOptions'),
+                      tooltip: actionBarTooltip(tr('appOptions')),
                       icon: const Icon(Icons.tune),
                     ),
                   );
@@ -4214,7 +4494,7 @@ class _AppPageState extends State<AppPage> {
                         );
                       },
                       icon: const Icon(Icons.more_horiz),
-                      tooltip: tr('more'),
+                      tooltip: actionBarTooltip(tr('more')),
                     ),
                   );
                 }
@@ -4235,11 +4515,12 @@ class _AppPageState extends State<AppPage> {
                         onPressed: updating
                             ? null
                             : () {
-                                app.app.installedVersion = null;
-                                appsProvider.saveApps([app.app]);
+                                appsProvider.saveApps([
+                                  app.app.copyWith(installedVersion: null),
+                                ]);
                               },
                         icon: const Icon(Icons.restore_rounded),
-                        tooltip: tr('resetInstallStatus'),
+                        tooltip: actionBarTooltip(tr('resetInstallStatus')),
                       ),
                     );
                   }
@@ -4291,7 +4572,7 @@ class _AppPageState extends State<AppPage> {
                               Navigator.of(themeContext).pop();
                             }
                           },
-                    tooltip: tr('remove'),
+                    tooltip: actionBarTooltip(tr('remove')),
                     icon: const Icon(Icons.delete_outline),
                   ),
                 );
@@ -4318,7 +4599,7 @@ class _AppPageState extends State<AppPage> {
           child: actionBarContent,
         );
       }
-      if (gestureNavigationActive) {
+      if (gestureNavigationActive && !widget.isEmbedded) {
         actionBarContent = SafeArea(top: false, child: actionBarContent);
       }
       final Widget actionBarSurface = Container(
@@ -4354,6 +4635,9 @@ class _AppPageState extends State<AppPage> {
         ),
         child: actionBarContent,
       );
+      if (widget.isEmbedded) {
+        return actionBarSurface;
+      }
       if (gestureNavigationActive) {
         return actionBarSurface;
       }
@@ -4451,13 +4735,9 @@ class _AppPageState extends State<AppPage> {
                       ),
                     )
                   : null,
-              backgroundColor:
-                  settingsProvider.useGradientBackground && widget.isEmbedded
+              backgroundColor: settingsProvider.useGradientBackground
                   ? Colors.transparent
-                  : appPageDeeperSurfaceColor(
-                      pageColorSchemeForPage.surface,
-                      pageBrightness,
-                    ),
+                  : sharedPageBackgroundColorScheme.surface,
               floatingActionButton: _editModeFloatingActionButtons(
                 themedPageContext,
                 app,
@@ -4466,184 +4746,200 @@ class _AppPageState extends State<AppPage> {
               ),
               floatingActionButtonLocation:
                   FloatingActionButtonLocation.endFloat,
-              body: RefreshIndicator(
-                displacement: 20,
-                child: showAppWebpageFinal
-                    ? Stack(
-                        // StackFit.expand gives the (non-positioned) WebView the
-                        // full body size; without it the Stack defaults to
-                        // StackFit.loose and collapses onto the normally-empty
-                        // error overlay, starving the WebView of size so it
-                        // renders blank.
-                        fit: StackFit.expand,
-                        children: [
-                          // #3: WebView fills the whole body (behind the top
-                          // bar and bottom action bar) so it reaches the screen
-                          // edges instead of stopping above the action bar.
-                          getAppWebView(themedPageContext),
-                          // #1: loading indicator until the page finishes — the
-                          // WebView is blank for a few seconds otherwise.
-                          if (_webViewLoading)
-                            Center(
-                              child: ExpressiveLoadingIndicator(
-                                color: pageColorSchemeForPage.primary,
-                              ),
-                            ),
-                          // #4: error / verification banner pinned just below
-                          // the (translucent, body-overlapping) app bar at its
-                          // natural height. Positioned (not a non-positioned
-                          // child) so StackFit.expand can't stretch it to fill
-                          // the screen.
-                          Positioned(
-                            top:
-                                MediaQuery.paddingOf(themedPageContext).top +
-                                kToolbarHeight,
-                            left: 0,
-                            right: 0,
-                            child: _buildPersistentPageError(
-                              themedPageContext,
-                              pageThemeForPage,
-                              effectivePersistentPageError,
-                              title: buildVerificationPersistentPageError,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          if (settingsProvider.useGradientBackground &&
-                              widget.isEmbedded)
-                            Positioned.fill(
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: pageColorSchemeForPage
-                                      .schemePageBackgroundGradient,
-                                ),
-                              ),
-                            ),
-                          CustomScrollView(
-                            scrollCacheExtent: const ScrollCacheExtent.pixels(
-                              1600,
-                            ),
-                            controller: _appPageScrollController,
-                            physics: const AlwaysScrollableScrollPhysics(
-                              parent: ClampingScrollPhysics(),
-                            ),
-                            slivers: [
-                              SliverToBoxAdapter(
-                                child: SafeArea(
-                                  top: true,
-                                  bottom: false,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: 12),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.center,
-                                          children: [
-                                            if (!widget.isEmbedded)
-                                              IconButton(
-                                                icon: const Icon(
-                                                  Icons.arrow_back,
-                                                ),
-                                                color: pageThemeForPage
-                                                    .colorScheme
-                                                    .primary,
-                                                onPressed: updating
-                                                    ? null
-                                                    : () => Navigator.of(
-                                                        themedPageContext,
-                                                      ).maybePop(),
-                                                tooltip:
-                                                    MaterialLocalizations.of(
-                                                      themedPageContext,
-                                                    ).backButtonTooltip,
-                                              ),
-                                            if (widget.isEmbedded)
-                                              const SizedBox(width: 16),
-                                            Expanded(
-                                              child: buildDetailHeroContent(
-                                                themedPageContext,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        if (_editMode && app != null)
-                                          _buildEditMetadataSection(
-                                            themedPageContext,
-                                            app,
-                                            appsProvider,
-                                            settingsProvider,
-                                          )
-                                        else ...[
-                                          _buildPersistentPageError(
-                                            themedPageContext,
-                                            pageThemeForPage,
-                                            effectivePersistentPageError,
-                                            title:
-                                                buildVerificationPersistentPageError,
-                                          ),
-                                          getInfoColumn(
-                                            themedPageContext,
-                                            small: false,
-                                          ),
-                                        ],
-                                        Padding(
-                                          padding: const EdgeInsets.fromLTRB(
-                                            16,
-                                            0,
-                                            16,
-                                            16,
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Expanded(
-                                                child: getBottomCenterActions(
-                                                  themedPageContext,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (_editMode)
-                                          SizedBox(
-                                            height: _editModeBottomSpacerHeight,
-                                          )
-                                        else
-                                          SizedBox(
-                                            height: _bottomActionBarHeight > 0
-                                                ? _bottomActionBarHeight
-                                                : 80,
-                                          ),
-                                      ],
-                                    ),
+              body: Stack(
+                fit: StackFit.expand,
+                children: [
+                  RefreshIndicator(
+                    displacement: 20,
+                    child: showAppWebpageFinal
+                        ? Stack(
+                            // StackFit.expand gives the (non-positioned) WebView the
+                            // full body size; without it the Stack defaults to
+                            // StackFit.loose and collapses onto the normally-empty
+                            // error overlay, starving the WebView of size so it
+                            // renders blank.
+                            fit: StackFit.expand,
+                            children: [
+                              // #3: WebView fills the whole body (behind the top
+                              // bar and bottom action bar) so it reaches the screen
+                              // edges instead of stopping above the action bar.
+                              getAppWebView(themedPageContext),
+                              // #1: loading indicator until the page finishes — the
+                              // WebView is blank for a few seconds otherwise.
+                              if (_webViewLoading)
+                                Center(
+                                  child: ExpressiveLoadingIndicator(
+                                    color: pageColorSchemeForPage.primary,
                                   ),
+                                ),
+                              // #4: error / verification banner pinned just below
+                              // the (translucent, body-overlapping) app bar at its
+                              // natural height. Positioned (not a non-positioned
+                              // child) so StackFit.expand can't stretch it to fill
+                              // the screen.
+                              Positioned(
+                                top:
+                                    MediaQuery.paddingOf(
+                                      themedPageContext,
+                                    ).top +
+                                    kToolbarHeight,
+                                left: 0,
+                                right: 0,
+                                child: _buildPersistentPageError(
+                                  themedPageContext,
+                                  pageThemeForPage,
+                                  effectivePersistentPageError,
+                                  title: effectivePersistentPageErrorTitle,
                                 ),
                               ),
                             ],
+                          )
+                        : Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (settingsProvider.useGradientBackground)
+                                Positioned.fill(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: sharedPageBackgroundColorScheme
+                                          .schemePageBackgroundGradient,
+                                    ),
+                                  ),
+                                ),
+                              CustomScrollView(
+                                scrollCacheExtent:
+                                    const ScrollCacheExtent.pixels(1600),
+                                controller: _appPageScrollController,
+                                physics: const AlwaysScrollableScrollPhysics(
+                                  parent: ClampingScrollPhysics(),
+                                ),
+                                slivers: [
+                                  SliverToBoxAdapter(
+                                    child: SafeArea(
+                                      top: true,
+                                      bottom: false,
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(top: 12),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.center,
+                                              children: [
+                                                if (!widget.isEmbedded)
+                                                  IconButton(
+                                                    icon: const Icon(
+                                                      Icons.arrow_back,
+                                                    ),
+                                                    color: pageThemeForPage
+                                                        .colorScheme
+                                                        .primary,
+                                                    onPressed: updating
+                                                        ? null
+                                                        : () => Navigator.of(
+                                                            themedPageContext,
+                                                          ).maybePop(),
+                                                    tooltip:
+                                                        MaterialLocalizations.of(
+                                                          themedPageContext,
+                                                        ).backButtonTooltip,
+                                                  ),
+                                                if (widget.isEmbedded)
+                                                  const SizedBox(width: 16),
+                                                Expanded(
+                                                  child: buildDetailHeroContent(
+                                                    themedPageContext,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            if (_editMode && app != null)
+                                              _buildEditMetadataSection(
+                                                themedPageContext,
+                                                app,
+                                                appsProvider,
+                                                settingsProvider,
+                                              )
+                                            else ...[
+                                              _buildPersistentPageError(
+                                                themedPageContext,
+                                                pageThemeForPage,
+                                                effectivePersistentPageError,
+                                                title:
+                                                    effectivePersistentPageErrorTitle,
+                                              ),
+                                              getInfoColumn(
+                                                themedPageContext,
+                                                small: false,
+                                              ),
+                                            ],
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                    16,
+                                                    0,
+                                                    16,
+                                                    16,
+                                                  ),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child:
+                                                        getBottomCenterActions(
+                                                          themedPageContext,
+                                                        ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            if (_editMode)
+                                              SizedBox(
+                                                height:
+                                                    _editModeBottomSpacerHeight,
+                                              )
+                                            else
+                                              SizedBox(
+                                                height:
+                                                    _bottomActionBarHeight > 0
+                                                    ? _bottomActionBarHeight
+                                                    : 80,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
-                        ],
+                    onRefresh: () async {
+                      if (_editMode) return;
+                      if (app != null) {
+                        await _runCheckUpdate(app.app.id);
+                      }
+                    },
+                  ),
+                  if (widget.isEmbedded)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _ScrollLinkedAppPageFooter(
+                        key: ValueKey<bool>(_editMode),
+                        scrollController: _appPageScrollController,
+                        child: _MeasureSize(
+                          onChange: _handleBottomActionBarSizeChanged,
+                          child: getBottomActionBar(themedPageContext),
+                        ),
                       ),
-                onRefresh: () async {
-                  if (_editMode) return;
-                  if (app != null) {
-                    await _runCheckUpdate(app.app.id);
-                  }
-                },
+                    ),
+                ],
               ),
               bottomNavigationBar: widget.isEmbedded
-                  ? _ScrollLinkedAppPageFooter(
-                      key: ValueKey<bool>(_editMode),
-                      scrollController: _appPageScrollController,
-                      child: _MeasureSize(
-                        onChange: _handleBottomActionBarSizeChanged,
-                        child: getBottomActionBar(themedPageContext),
-                      ),
-                    )
+                  ? null
                   : _MeasureSize(
                       onChange: _handleBottomActionBarSizeChanged,
                       child: getBottomActionBar(themedPageContext),
