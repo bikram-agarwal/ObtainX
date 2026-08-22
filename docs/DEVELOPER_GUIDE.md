@@ -212,6 +212,13 @@ Override the contract methods you need:
 - `getSource(url)`: first tries host-regex matching against sources with `hosts`, then
   falls back to host-less sources via `sourceSpecificStandardizeURL` — **`HTML()` is
   always last** as the catch-all. Match errors are logged, never swallowed silently.
+- Matching is **synchronous and cached**, so a source that can only be identified by
+  asking the server cannot be resolved here. `lib/services/forgejo_detection.dart` is
+  the pattern for that case: it probes a candidate host's API where a URL first enters
+  the app (the Add App form and `getAppsByURLNaive`) and, on a match, selects the
+  source via the per-app `overrideSource` — which is persisted, exported, and editable
+  in the UI, so nothing new has to be stored or migrated. It runs **only** for URLs
+  that would otherwise fall through to `HTML()`.
 - `getApp(...)`: orchestrates `getLatestAPKDetails` → version extraction → APK filtering
   → arch filtering → builds the final `App`. This is where `versionExtractionRegEx`,
   `releaseDateAsVersion`, `apkFilterRegEx`, `autoApkFilterByArch`, app-id inference, and

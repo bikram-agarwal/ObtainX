@@ -10,6 +10,13 @@ class Codeberg extends AppSource {
   final GitHub _gh = GitHub(hostChanged: true);
   Codeberg() {
     name = 'Forgejo (Codeberg)';
+    // codeberg.org is the only Forgejo instance matched by host, and this
+    // list is deliberately not grown into a curated allowlist: any other
+    // instance is recognized at add time by ForgejoDetector (see
+    // lib/services/forgejo_detection.dart), which probes the host's API and
+    // then selects this source through `overrideSource`. Everything below
+    // reads the host off the app's own URL, so it works unchanged for any
+    // instance once the source has been selected.
     hosts = ['codeberg.org'];
     canSearch = true;
     // Same deal as GitHub: the repo is right there, so try to read the app id

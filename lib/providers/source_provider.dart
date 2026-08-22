@@ -45,6 +45,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/services/forgejo_detection.dart';
 import 'package:obtainium/version/version_detection_mode.dart';
 import 'package:obtainium/version/version_strings.dart';
 
@@ -1922,11 +1923,36 @@ class SourceProvider {
             if (alreadyAddedUrls.contains(url)) {
               throw ObtainiumError(tr('appAlreadyAdded'));
             }
-            final source = sourceOverride ?? getSource(url);
+            final AppSource source;
+            final bool sourceIsOverriden;
+            final String appUrl;
+            if (sourceOverride != null) {
+              source = sourceOverride;
+              sourceIsOverriden = true;
+              appUrl = url;
+            } else {
+              // A repository on a Forgejo instance other than codeberg.org
+              // matches no source by host, so it would be imported as a plain
+              // HTML page. Detect it here too, so a bulk import gets the same
+              // treatment as a manual add - see [ForgejoDetector].
+              final detection = await ForgejoDetector.detectIfUnmatched(url);
+              if (detection != null) {
+                appUrl = detection.canonicalUrl;
+                source = getSource(
+                  appUrl,
+                  overrideSource: detection.sourceIdentifier,
+                );
+                sourceIsOverriden = true;
+              } else {
+                appUrl = url;
+                source = getSource(appUrl);
+                sourceIsOverriden = false;
+              }
+            }
             return await getApp(
               source,
-              url,
-              sourceIsOverriden: sourceOverride != null,
+              appUrl,
+              sourceIsOverriden: sourceIsOverriden,
               getDefaultValuesFromFormItems(
                 source.combinedAppSpecificSettingFormItems,
               ),

@@ -5,6 +5,7 @@ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/bulk_add_widget.dart';
@@ -27,6 +28,7 @@ import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/forgejo_detection.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -173,6 +175,21 @@ class AddAppPageState extends State<AddAppPage> {
   bool _customAppIdEntered = false;
   Timer? _customAppIdDebounce;
   static const Duration _customAppIdDebounceDelay = Duration(milliseconds: 400);
+
+  /// Debounced auto-detection of Forgejo instances other than codeberg.org.
+  ///
+  /// Only codeberg.org matches the Forgejo source by host, so a repo URL on
+  /// any other instance lands on the [HTML] catch-all and is scraped as a web
+  /// page. [ForgejoDetector] asks the instance's API instead and, when it
+  /// answers like Forgejo, switches this form over to the Forgejo source -
+  /// the same thing the user can do by hand under "Override source".
+  /// Debounced because [changeUserInput] runs on every keystroke while the
+  /// check is a network round-trip.
+  Timer? _forgejoDetectDebounce;
+  static const Duration _forgejoDetectDebounceDelay = Duration(
+    milliseconds: 700,
+  );
+  String? _forgejoDetectLastProbedInput;
   List<String> pickedCategories = [];
   SourceProvider sourceProvider = SourceProvider();
   final GlobalKey _urlFieldKey = GlobalKey();
@@ -397,6 +414,7 @@ class AddAppPageState extends State<AddAppPage> {
   @override
   void dispose() {
     _customAppIdDebounce?.cancel();
+    _forgejoDetectDebounce?.cancel();
     _urlFieldController.dispose();
     _urlFieldFocusNode.dispose();
     _searchSomeSourcesController.dispose();
@@ -428,6 +446,47 @@ class AddAppPageState extends State<AddAppPage> {
   Set<String> _getSearchSelectedStores() {
     _searchSelectedStores ??= {};
     return _searchSelectedStores!;
+  }
+
+  /// Switches the form over to the Forgejo source when the entered URL turns
+  /// out to be a repository on a Forgejo instance ObtainX does not know by
+  /// host.
+  ///
+  /// Runs only while the URL is still headed for the [HTML] catch-all and the
+  /// user has not picked an override themselves, and re-checks both once the
+  /// probe returns - the field may have moved on while it was in flight.
+  void _scheduleForgejoDetection() {
+    _forgejoDetectDebounce?.cancel();
+    if (pickedSourceOverride != null || pickedSource is! HTML) return;
+    final String input = userInput.trim();
+    if (input.isEmpty || input == _forgejoDetectLastProbedInput) return;
+    _forgejoDetectDebounce = Timer(_forgejoDetectDebounceDelay, () async {
+      if (!mounted ||
+          pickedSourceOverride != null ||
+          pickedSource is! HTML ||
+          userInput.trim() != input) {
+        return;
+      }
+      _forgejoDetectLastProbedInput = input;
+      final ForgejoDetection? detection =
+          await ForgejoDetector.detectIfUnmatched(input);
+      if (!mounted ||
+          detection == null ||
+          pickedSourceOverride != null ||
+          userInput.trim() != input) {
+        return;
+      }
+      // Adopt the repo root: an overridden source keeps the URL's own path
+      // verbatim when building API calls, so anything past <owner>/<repo>
+      // (/releases, /src/branch/main, a .git suffix) has to go.
+      changeUserInput(
+        detection.canonicalUrl,
+        true,
+        false,
+        updateUrlInput: true,
+        overrideSource: detection.sourceIdentifier,
+      );
+    });
   }
 
   bool _isUrlInputValid(String value) {
@@ -506,10 +565,13 @@ class AddAppPageState extends State<AddAppPage> {
           inferAppIdIfOptional = true;
         }
       });
+      _scheduleForgejoDetection();
     }
   }
 
   void _resetUrlModeInput() {
+    _forgejoDetectDebounce?.cancel();
+    _forgejoDetectLastProbedInput = null;
     userInput = '';
     pickedSourceOverride = null;
     previousPickedSourceOverride = null;
@@ -1858,6 +1920,13 @@ class AddAppPageState extends State<AddAppPage> {
           children: [
             Expanded(
               child: GeneratedForm(
+                // GeneratedForm reads item values once, in initForm, and only
+                // re-reads them when its key changes - so without this the
+                // dropdown would keep showing "None" after Forgejo
+                // auto-detection sets the override for the user.
+                key: ValueKey<String>(
+                  'overrideSource:${pickedSourceOverride ?? ''}',
+                ),
                 outlinedInputFields: true,
                 items: [
                   [
