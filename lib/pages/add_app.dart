@@ -176,11 +176,12 @@ class AddAppPageState extends State<AddAppPage> {
   Timer? _customAppIdDebounce;
   static const Duration _customAppIdDebounceDelay = Duration(milliseconds: 400);
 
-  /// Debounced auto-detection of Forgejo instances other than codeberg.org.
+  /// Debounced auto-detection of Forgejo instances ObtainX has no host entry
+  /// for.
   ///
-  /// Only codeberg.org matches the Forgejo source by host, so a repo URL on
-  /// any other instance lands on the [HTML] catch-all and is scraped as a web
-  /// page. [ForgejoDetector] asks the instance's API instead and, when it
+  /// The Forgejo source matches only the handful of hosts it lists, so a repo
+  /// URL on any other instance lands on the [HTML] catch-all and is scraped as
+  /// a web page. [ForgejoDetector] asks the instance's API instead and, when it
   /// answers like Forgejo, switches this form over to the Forgejo source -
   /// the same thing the user can do by hand under "Override source".
   /// Debounced because [changeUserInput] runs on every keystroke while the

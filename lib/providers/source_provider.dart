@@ -1931,10 +1931,11 @@ class SourceProvider {
               sourceIsOverriden = true;
               appUrl = url;
             } else {
-              // A repository on a Forgejo instance other than codeberg.org
-              // matches no source by host, so it would be imported as a plain
-              // HTML page. Detect it here too, so a bulk import gets the same
-              // treatment as a manual add - see [ForgejoDetector].
+              // A repository on a Forgejo instance that is not in the
+              // Forgejo source's host list matches no source by host, so it
+              // would be imported as a plain HTML page. Detect it here too, so
+              // a bulk import gets the same treatment as a manual add - see
+              // [ForgejoDetector].
               final detection = await ForgejoDetector.detectIfUnmatched(url);
               if (detection != null) {
                 appUrl = detection.canonicalUrl;

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/forgejo_detection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -36,7 +37,7 @@ class _FakeForge {
 }
 
 _FakeForge _workingForge({
-  String host = 'codefloe.com',
+  String host = 'forgejo.example.org',
   String owner = 'SnappTechnology',
   String repo = 'NextCloudTalkNext',
 }) => _FakeForge(<String, http.Response>{
@@ -211,19 +212,19 @@ void main() {
     test('confirms a Forgejo repo with one probe per endpoint', () async {
       final _FakeForge forge = _workingForge();
       final ForgejoDetection? detection = await ForgejoDetector.detect(
-        'https://codefloe.com/SnappTechnology/NextCloudTalkNext/releases',
+        'https://forgejo.example.org/SnappTechnology/NextCloudTalkNext/releases',
         probe: forge.probe,
       );
       expect(detection, isNotNull);
       expect(
         detection!.canonicalUrl,
-        'https://codefloe.com/SnappTechnology/NextCloudTalkNext',
+        'https://forgejo.example.org/SnappTechnology/NextCloudTalkNext',
       );
-      expect(detection.authority, 'codefloe.com');
+      expect(detection.authority, 'forgejo.example.org');
       expect(detection.sourceIdentifier, Codeberg().sourceIdentifier);
       expect(forge.requested, <String>[
-        'https://codefloe.com/api/v1/version',
-        'https://codefloe.com/api/v1/repos/SnappTechnology/NextCloudTalkNext',
+        'https://forgejo.example.org/api/v1/version',
+        'https://forgejo.example.org/api/v1/repos/SnappTechnology/NextCloudTalkNext',
       ]);
     });
 
@@ -258,14 +259,14 @@ void main() {
 
     test('rejects a Forgejo host when the repo does not exist', () async {
       final _FakeForge forge = _FakeForge(<String, http.Response>{
-        'https://codefloe.com/api/v1/version': http.Response(
+        'https://forgejo.example.org/api/v1/version': http.Response(
           _forgejoVersionBody,
           200,
         ),
       });
       expect(
         await ForgejoDetector.detect(
-          'https://codefloe.com/owner/nope',
+          'https://forgejo.example.org/owner/nope',
           probe: forge.probe,
         ),
         isNull,
@@ -275,19 +276,19 @@ void main() {
 
     test('probes each host only once, positive or negative', () async {
       final _FakeForge forge = _workingForge();
-      forge.responses['https://codefloe.com/api/v1/repos/other/thing'] =
-          http.Response(_repoBody('codefloe.com', 'other', 'thing'), 200);
+      forge.responses['https://forgejo.example.org/api/v1/repos/other/thing'] =
+          http.Response(_repoBody('forgejo.example.org', 'other', 'thing'), 200);
 
       expect(
         await ForgejoDetector.detect(
-          'https://codefloe.com/SnappTechnology/NextCloudTalkNext',
+          'https://forgejo.example.org/SnappTechnology/NextCloudTalkNext',
           probe: forge.probe,
         ),
         isNotNull,
       );
       expect(
         await ForgejoDetector.detect(
-          'https://codefloe.com/other/thing',
+          'https://forgejo.example.org/other/thing',
           probe: forge.probe,
         ),
         isNotNull,
@@ -319,14 +320,14 @@ void main() {
         return url.endsWith('/api/v1/version')
             ? http.Response(_forgejoVersionBody, 200)
             : http.Response(
-                _repoBody('codefloe.com', 'owner', 'repo'),
+                _repoBody('forgejo.example.org', 'owner', 'repo'),
                 200,
               );
       }
 
       expect(
         await ForgejoDetector.detect(
-          'https://codefloe.com/owner/repo',
+          'https://forgejo.example.org/owner/repo',
           probe: flaky,
         ),
         isNull,
@@ -334,7 +335,7 @@ void main() {
       // The failure was not recorded as "not a forge", so a retry can succeed.
       expect(
         await ForgejoDetector.detect(
-          'https://codefloe.com/owner/repo',
+          'https://forgejo.example.org/owner/repo',
           probe: flaky,
         ),
         isNotNull,
@@ -359,6 +360,15 @@ void main() {
         ),
         isNull,
       );
+      // A seeded Forgejo host is matched synchronously, so it must never pay
+      // for a probe. This is the whole point of keeping entries in `hosts`.
+      expect(
+        await ForgejoDetector.detectIfUnmatched(
+          'https://codefloe.com/SnappTechnology/NextCloudTalkNext',
+          probe: forge.probe,
+        ),
+        isNull,
+      );
       expect(forge.requested, isEmpty);
     });
 
@@ -366,7 +376,7 @@ void main() {
       final _FakeForge forge = _workingForge();
       final ForgejoDetection? detection =
           await ForgejoDetector.detectIfUnmatched(
-            'https://codefloe.com/SnappTechnology/NextCloudTalkNext',
+            'https://forgejo.example.org/SnappTechnology/NextCloudTalkNext',
             probe: forge.probe,
           );
       expect(detection?.sourceIdentifier, Codeberg().sourceIdentifier);
@@ -375,10 +385,29 @@ void main() {
   });
 
   group('Codeberg on a non-codeberg host', () {
+    test('a seeded host resolves to the Forgejo source, no override', () {
+      expect(
+        SourceProvider().getSourceTemplate('https://codefloe.com/owner/repo'),
+        isA<Codeberg>(),
+      );
+    });
+
+    test('a seeded host gets native URL standardization', () {
+      // The override path cannot trim the URL (standardizeUrl skips
+      // source-specific standardization once the host has been overridden),
+      // which is why ForgejoDetector hands back a canonical URL instead. A
+      // host in `hosts` needs no such help.
+      const String url = 'https://codefloe.com/owner/repo/releases';
+      expect(
+        SourceProvider().getSource(url).standardizeUrl(url),
+        'https://codefloe.com/owner/repo',
+      );
+    });
+
     test('infers the app ID from the app URL host, never hosts[0]', () async {
       final _RecordingCodeberg source = _RecordingCodeberg();
-      // Mirrors what getSource does for a detected instance, so the test still
-      // holds if `hosts` is ever seeded with more than one entry.
+      // Pinned rather than relying on the shipped list: what matters is that
+      // the target host is not hosts[0], whatever `hosts` grows into.
       source.hosts = <String>['codeberg.org', 'codefloe.com'];
 
       await source.tryInferringAppId('https://codefloe.com/owner/repo');

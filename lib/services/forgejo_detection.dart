@@ -1,8 +1,8 @@
 // Generic Forgejo/Gitea instance detection.
 //
-// ObtainX resolves sources by hostname (see [SourceProvider.getSource]) and the
-// Forgejo adapter ([Codeberg]) declares exactly one host: codeberg.org. Every
-// other Forgejo instance therefore fell through to the [HTML] catch-all, so
+// ObtainX resolves sources by hostname (see [SourceProvider.getSource]), and
+// the Forgejo adapter ([Codeberg]) can only name hosts someone has added to it.
+// Every instance not on that list fell through to the [HTML] catch-all, so
 // ObtainX scraped the rendered release page instead of asking the instance's
 // JSON API - heavier, more fragile, and the direct cause of the rate limiting
 // CodeFloe's maintainers reported
