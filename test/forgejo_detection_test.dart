@@ -373,9 +373,55 @@ void main() {
       expect(forge.requested.length, 2);
     });
   });
+
+  group('Codeberg on a non-codeberg host', () {
+    test('infers the app ID from the app URL host, never hosts[0]', () async {
+      final _RecordingCodeberg source = _RecordingCodeberg();
+      // Mirrors what getSource does for a detected instance, so the test still
+      // holds if `hosts` is ever seeded with more than one entry.
+      source.hosts = <String>['codeberg.org', 'codefloe.com'];
+
+      await source.tryInferringAppId('https://codefloe.com/owner/repo');
+
+      expect(source.requested, isNotEmpty);
+      for (final String url in source.requested) {
+        expect(
+          url,
+          startsWith('https://codefloe.com/api/v1/repos/owner/repo/contents/'),
+          reason: url,
+        );
+      }
+    });
+
+    test('keeps the scheme and port of a self-hosted instance', () async {
+      final _RecordingCodeberg source = _RecordingCodeberg();
+      await source.tryInferringAppId('http://git.example.com:3000/o/r');
+      expect(
+        source.requested.first,
+        startsWith('http://git.example.com:3000/api/v1/repos/o/r/contents/'),
+      );
+    });
+  });
 }
 
 /// Stands in for a transport failure without depending on dart:io in a test.
 class SocketExceptionStub implements Exception {
   const SocketExceptionStub();
+}
+
+/// Records the URLs the source would fetch, and answers every one of them 404
+/// so app-ID inference walks its whole candidate list and gives up.
+class _RecordingCodeberg extends Codeberg {
+  final List<String> requested = <String>[];
+
+  @override
+  Future<http.Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    requested.add(url);
+    return http.Response('{}', 404);
+  }
 }

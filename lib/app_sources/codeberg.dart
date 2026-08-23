@@ -27,15 +27,24 @@ class Codeberg extends AppSource {
 
   /// Forgejo's contents endpoint is GitHub's, path for path and payload for
   /// payload (base64 `content`), so the shared decoder applies unchanged.
+  ///
+  /// The API host is derived from the app's own URL rather than from `hosts`,
+  /// matching [getLatestAPKDetails]. `hosts[0]` would happen to be right today
+  /// (an overridden source has its host list replaced with the single real
+  /// host by [SourceProvider.getSource]), but it silently becomes the wrong
+  /// instance the moment `hosts` holds more than one entry - inferring an app
+  /// ID for a repo on one instance from a same-named repo on another.
   @override
   Future<String?> tryInferringAppId(
     String standardUrl, {
     Map<String, dynamic> additionalSettings = const {},
   }) async {
-    final String repoPath = Uri.parse(standardUrl).path;
+    final Uri standardUri = Uri.parse(standardUrl);
     return inferAppIdFromGradleFiles((String path) async {
       final res = await sourceRequest(
-        'https://${hosts[0]}/api/v1/repos$repoPath/contents/$path',
+        standardUri
+            .replace(path: '/api/v1/repos${standardUri.path}/contents/$path')
+            .toString(),
         additionalSettings,
       );
       if (res.statusCode != 200) return null;
@@ -108,6 +117,12 @@ class Codeberg extends AppSource {
     }
   }
 
+  /// Unlike every other request this source makes, a search has no app URL to
+  /// take a host from, so it necessarily targets one instance: `hosts[0]`, the
+  /// canonical one. Should `hosts` ever hold more than one entry, this stays
+  /// deliberate rather than accidental - searching every known Forgejo instance
+  /// would mean a fan-out of one request per host per keystroke, and instances
+  /// have no shared index to search instead.
   @override
   Future<Map<String, List<String>>> search(
     String query, {
