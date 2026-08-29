@@ -4919,7 +4919,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           child: actionBarContent,
         );
       }
-      if (gestureNavigationActive && !widget.isEmbedded) {
+      if (gestureNavigationActive || widget.isEmbedded) {
         actionBarContent = SafeArea(top: false, child: actionBarContent);
       }
       final Widget actionBarSurface = Container(
