@@ -48,3 +48,16 @@ Future<bool> installApkViaThirdParty(
       });
   return result ?? false;
 }
+
+/// Hands a file to whatever the device resolves for it - its default
+/// installer, or a chooser if there's more than one candidate - the same as
+/// tapping the file in a file manager. No target package/activity, so the
+/// native side neither addresses a specific app nor waits for an install
+/// result: once the intent is launched, ObtainX takes no further part in
+/// whatever happens to the file.
+Future<void> viewInstallableFile(String filePath) async {
+  if (!Platform.isAndroid) return;
+  await _channel.invokeMethod<bool>('launchInstallIntent', <String, dynamic>{
+    'path': filePath,
+  });
+}

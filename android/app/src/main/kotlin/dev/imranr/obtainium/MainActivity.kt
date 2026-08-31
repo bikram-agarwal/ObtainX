@@ -66,6 +66,13 @@ private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
 private const val INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS = 200L
+/// How long to keep a cache-served release file around after handing it to an
+/// installer we're not tracking (no [expectedPkgName]). startActivity() returns
+/// as soon as the target activity is requested, well before it has actually
+/// opened and read the content:// URI - deleting the file synchronously after
+/// that call races the installer's own read and can turn it into a
+/// FileNotFoundException. This window is generous enough to outlast that read.
+private const val UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS = 60_000L
 private const val MAX_SYSTEM_DISPLAY_SCALE = 1.2f
 private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
 /// Ignore focus regain if it arrived within this window of the FIRST focus loss (transition bounce).
@@ -1233,11 +1240,19 @@ class MainActivity : FlutterActivity() {
         }
 
         if (expectedPkgName.isNullOrEmpty()) {
-            try {
+            val launched = try {
                 startActivity(intent)
+                true
             } catch (_: Exception) {
-                //
-            } finally {
+                false
+            }
+            if (launched) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    for (releaseFile in releaseFiles) {
+                        try { releaseFile.delete() } catch (_: Exception) { }
+                    }
+                }, UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS)
+            } else {
                 for (releaseFile in releaseFiles) {
                     try { releaseFile.delete() } catch (_: Exception) { }
                 }

@@ -1307,6 +1307,10 @@ class AppsProvider with ChangeNotifier {
       NativeFeatures.registerDownloadCancelHandler(cancelDownload);
       NotificationsProvider.onDownloadCancelRequested = cancelDownload;
       NotificationsProvider.listenForDownloadCancelFromMain();
+      // Let the download-complete notification's Install action hand the
+      // release asset it just downloaded off to the system installer.
+      NotificationsProvider.onInstallDownloadedFileRequested =
+          installDownloadedAssetFile;
       // Record third-party installs as soon as the system confirms them, instead
       // of only when the handoff session manages to report success (#222).
       listenForThirdPartyInstallResults();

@@ -1899,7 +1899,7 @@ extension AppsProviderInstall on AppsProvider {
   ) async {
     try {
       final String downloadPath = '${await getStorageRootPath()}/Download';
-      await downloadFile(
+      final File downloadedFile = await downloadFile(
         fileUrl.value,
         fileUrl.key,
         true,
@@ -1929,7 +1929,18 @@ extension AppsProviderInstall on AppsProvider {
       );
       unawaited(
         notificationsProvider.notify(
-          DownloadedNotification(fileUrl.key, fileUrl.value),
+          DownloadedNotification(
+            fileUrl.key,
+            fileUrl.value,
+            installFilePath:
+                AppSource.isApkOrContainerFile(
+                  downloadedFile.path,
+                  includeArchives: true,
+                  includeTarballs: true,
+                )
+                ? downloadedFile.path
+                : null,
+          ),
         ),
       );
       downloadedIds.add(fileUrl.key);
@@ -1942,6 +1953,25 @@ extension AppsProviderInstall on AppsProvider {
         notificationsProvider.cancel(DownloadNotification(fileUrl.key, 0).id),
       );
     }
+  }
+
+  /// Hands a file downloaded to the public Download folder off to the device's
+  /// default handler for it, driven by the Install action on the
+  /// download-complete notification. This is the same outcome as the user
+  /// tapping the file in a file manager: ObtainX plays no part in resolving,
+  /// extracting, verifying, or installing it, and takes no further part once
+  /// the handoff intent is launched.
+  Future<void> installDownloadedAssetFile(String filePath) async {
+    if (!File(filePath).existsSync()) {
+      unawaited(
+        LogsProvider().add(
+          'Install notification tapped for missing file: $filePath',
+          level: LogLevel.error,
+        ),
+      );
+      return;
+    }
+    await viewInstallableFile(filePath);
   }
 
   /// Verifies a downloaded GitHub artifact's SHA-256 against its build
