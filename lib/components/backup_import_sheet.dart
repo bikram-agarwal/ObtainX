@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
+import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -26,6 +27,7 @@ Future<BackupImportSelection?> showBackupImportPickerSheet({
   required bool hasSettings,
   required bool hasSecrets,
   required Map<String, AppInMemory> existingApps,
+  bool isRestore = false,
 }) {
   return showAppModalSheet<BackupImportSelection>(
     context: context,
@@ -35,6 +37,7 @@ Future<BackupImportSelection?> showBackupImportPickerSheet({
         hasSettings: hasSettings,
         hasSecrets: hasSecrets,
         existingApps: existingApps,
+        isRestore: isRestore,
       );
     },
   );
@@ -49,12 +52,17 @@ class BackupImportSheet extends StatefulWidget {
     required this.hasSettings,
     required this.hasSecrets,
     required this.existingApps,
+    this.isRestore = false,
   });
 
   final List<App> backupApps;
   final bool hasSettings;
   final bool hasSecrets;
   final Map<String, AppInMemory> existingApps;
+
+  /// Whether this picker is being shown for a "Restore" (wipe + replace) vs a
+  /// plain additive "Import" — only changes the action button's label.
+  final bool isRestore;
 
   @override
   State<BackupImportSheet> createState() => _BackupImportSheetState();
@@ -64,6 +72,10 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
   late Set<String> selectedAppIds;
   late bool importSettings;
   late Set<_BackupImportSectionId> expandedSectionIds;
+
+  // Guards the restore confirmation dialog shown on top of this sheet (see
+  // the footer FilledButton below) against double-taps while it's up.
+  bool _isConfirmingRestore = false;
 
   @override
   void initState() {
@@ -559,10 +571,38 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             ),
-            onPressed: totalSelected == 0
+            onPressed: totalSelected == 0 || _isConfirmingRestore
                 ? null
-                : () {
+                : () async {
                     hapticSelection();
+                    if (widget.isRestore) {
+                      // Shown as a dialog ON TOP of this still-open sheet
+                      // (not after popping it) so cancelling just dismisses
+                      // the dialog and leaves the selection intact, instead
+                      // of the sheet closing and a separate dialog popping
+                      // up after it - which read as the sheet crashing.
+                      setState(() => _isConfirmingRestore = true);
+                      final bool confirmed =
+                          (await showDialog<Map<String, dynamic>?>(
+                            context: context,
+                            builder: (BuildContext dialogContext) {
+                              return GeneratedFormModal(
+                                title: tr('restoreBackupConfirmTitle'),
+                                items: const [],
+                                initValid: true,
+                                message: tr('restoreBackupConfirmBody'),
+                                primaryActionColour: Theme.of(
+                                  dialogContext,
+                                ).colorScheme.error,
+                              );
+                            },
+                          )) !=
+                          null;
+                      if (!mounted) return;
+                      setState(() => _isConfirmingRestore = false);
+                      if (!confirmed) return;
+                    }
+                    if (!context.mounted) return;
                     Navigator.of(context).pop(
                       BackupImportSelection(
                         selectedAppIds: selectedAppIds,
@@ -570,7 +610,7 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                       ),
                     );
                   },
-            child: Text(tr('import')),
+            child: Text(tr(widget.isRestore ? 'obtainiumRestore' : 'import')),
           ),
         ],
       ),

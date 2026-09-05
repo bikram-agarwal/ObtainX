@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -37,6 +38,7 @@ import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
 
+export 'apps_provider_icon_backup.dart';
 export 'apps_provider_import_export.dart';
 export 'apps_provider_install.dart';
 export 'apps_provider_lifecycle.dart';
@@ -364,9 +366,7 @@ Future<DownloadResponseMetadata?> probeDownloadResponseMetadata(
 }) async {
   final Uri originalUri = Uri.parse(url);
   final Request request = Request('GET', originalUri);
-  if (headers != null) {
-    request.headers.addAll(headers);
-  }
+  request.headers.addAll(withDefaultObtainXUserAgent(headers));
   request.headers[HttpHeaders.rangeHeader] = 'bytes=0-0';
   final IOClient client = IOClient(createHttpClient(allowInsecure));
   try {
@@ -437,9 +437,7 @@ Future<String> checkPartialDownloadHash(
 }) async {
   final Uri originalUri = Uri.parse(url);
   final req = Request('GET', originalUri);
-  if (headers != null) {
-    req.headers.addAll(headers);
-  }
+  req.headers.addAll(withDefaultObtainXUserAgent(headers));
   req.headers[HttpHeaders.rangeHeader] = 'bytes=0-$bytesToGrab';
   final client = IOClient(createHttpClient(allowInsecure));
   try {
@@ -464,7 +462,7 @@ Future<String?> checkETagHeader(
   bool allowInsecure = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final reqHeaders = headers ?? {};
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
   final Uri originalUri = Uri.parse(url);
   final req = Request('GET', originalUri);
   req.headers.addAll(reqHeaders);
@@ -600,7 +598,7 @@ Future<File> _downloadFile(
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
-  final reqHeaders = headers ?? {};
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
   final headersClient = IOClient(createHttpClient(allowInsecure));
 
   final getReq = Request('GET', Uri.parse(url));
@@ -877,7 +875,7 @@ Future<int?> getDownloadSize(
   Map<String, String>? headers,
   bool allowInsecure = false,
 }) async {
-  final reqHeaders = headers ?? {};
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
   final client = IOClient(createHttpClient(allowInsecure));
   try {
     final getReq = Request('GET', Uri.parse(url));
@@ -1106,6 +1104,7 @@ class AppsProvider with ChangeNotifier {
   Directory? _apkDir;
   Directory? _iconsCacheDir;
   Directory? _userAppIconsDir;
+  Directory? _deducedAppIconsDir;
   Directory? cachedAppsDir;
 
   // Per-app-detail-page transient error banners, keyed by app ID. Populated by
@@ -1153,6 +1152,19 @@ class AppsProvider with ChangeNotifier {
       );
     }
     return _userAppIconsDir!;
+  }
+
+  /// Icons deduced for apps whose source publishes none: extracted from a
+  /// downloaded APK, or fetched from another store's listing. Lives under app
+  /// storage (not [iconsCacheDir]) because re-deriving one costs a download or
+  /// a network round-trip, so Android "clear cache" must not wipe it.
+  Directory get deducedAppIconsDir {
+    if (_deducedAppIconsDir == null) {
+      throw StateError(
+        'deducedAppIconsDir not initialized - wait for async init to complete',
+      );
+    }
+    return _deducedAppIconsDir!;
   }
 
   /// Count of installed apps with an actionable or attention-needed update.
@@ -1295,6 +1307,10 @@ class AppsProvider with ChangeNotifier {
       NativeFeatures.registerDownloadCancelHandler(cancelDownload);
       NotificationsProvider.onDownloadCancelRequested = cancelDownload;
       NotificationsProvider.listenForDownloadCancelFromMain();
+      // Let the download-complete notification's Install action hand the
+      // release asset it just downloaded off to the system installer.
+      NotificationsProvider.onInstallDownloadedFileRequested =
+          installDownloadedAssetFile;
       // Record third-party installs as soon as the system confirms them, instead
       // of only when the handoff session manages to report success (#222).
       listenForThirdPartyInstallResults();
@@ -1328,6 +1344,12 @@ class AppsProvider with ChangeNotifier {
       );
       if (!_userAppIconsDir!.existsSync()) {
         _userAppIconsDir!.createSync(recursive: true);
+      }
+      _deducedAppIconsDir = Directory(
+        '${(await getAppStorageDir()).path}/deduced_icons',
+      );
+      if (!_deducedAppIconsDir!.existsSync()) {
+        _deducedAppIconsDir!.createSync(recursive: true);
       }
       if (!isBg) {
         await loadApps();
@@ -1898,6 +1920,23 @@ class NativeFeatures {
       // Notification actions remain best-effort on older native runners.
     } on MissingPluginException {
       // Non-Android builds and older native runners do not expose this method.
+    }
+  }
+
+  /// Launcher icon of a downloaded, not-yet-installed APK, as PNG bytes.
+  ///
+  /// Rendered natively from the archive (adaptive icons composited, size-capped)
+  /// so an app from a source that publishes no icon still gets one.
+  static Future<Uint8List?> getApkArchiveIcon(String archiveFilePath) async {
+    try {
+      return await _deviceAppsChannel.invokeMethod<Uint8List>(
+        'getApkArchiveIcon',
+        {'archiveFilePath': archiveFilePath},
+      );
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
     }
   }
 

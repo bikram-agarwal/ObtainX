@@ -593,6 +593,8 @@ extension AppsProviderInstall on AppsProvider {
       }
       onProgress?.call(_remainingStepsProgress.toDouble(), null, null);
       PackageInfo? newInfo;
+      // The archive [newInfo] came from, kept so its icon can be salvaged too.
+      String? parsedArchivePath;
       final originalAssetName = app.apkUrls[app.preferredApkIndex].key
           .toLowerCase();
       final isAPK = downloadedFile.path.toLowerCase().endsWith('.apk');
@@ -604,6 +606,7 @@ extension AppsProviderInstall on AppsProvider {
           originalAssetName.endsWith('.tar.xz');
       Directory? apkDir;
       if (isAPK) {
+        parsedArchivePath = downloadedFile.path;
         newInfo = await packageManager.getPackageArchiveInfo(
           archiveFilePath: downloadedFile.path,
         );
@@ -656,6 +659,7 @@ extension AppsProviderInstall on AppsProvider {
               archiveFilePath: apks[i].path,
             );
             if (newInfo != null) {
+              parsedArchivePath = apks[i].path;
               break;
             }
           } catch (e) {
@@ -680,6 +684,16 @@ extension AppsProviderInstall on AppsProvider {
       );
       downloadedFile = renamedFile;
       final String resolvedAppId = resolvedApp.id;
+      // handleAPKIDChange renames a bare APK once the real package id is known.
+      if (isAPK) {
+        parsedArchivePath = downloadedFile.path;
+      }
+      // Deduced icons are only ever read for apps that aren't installed yet, so
+      // skip the extraction cost entirely on ordinary updates to installed apps.
+      if (parsedArchivePath != null &&
+          apps[resolvedAppId]?.installedInfo == null) {
+        await storeIconFromApkArchive(resolvedAppId, parsedArchivePath);
+      }
       // Delete older versions of the file if any (keyed to the resolved id,
       // since the id may have changed from a placeholder to the real package).
       for (var file in downloadedFile.parent.listSync()) {
@@ -1885,7 +1899,7 @@ extension AppsProviderInstall on AppsProvider {
   ) async {
     try {
       final String downloadPath = '${await getStorageRootPath()}/Download';
-      await downloadFile(
+      final File downloadedFile = await downloadFile(
         fileUrl.value,
         fileUrl.key,
         true,
@@ -1915,7 +1929,18 @@ extension AppsProviderInstall on AppsProvider {
       );
       unawaited(
         notificationsProvider.notify(
-          DownloadedNotification(fileUrl.key, fileUrl.value),
+          DownloadedNotification(
+            fileUrl.key,
+            fileUrl.value,
+            installFilePath:
+                AppSource.isApkOrContainerFile(
+                  downloadedFile.path,
+                  includeArchives: true,
+                  includeTarballs: true,
+                )
+                ? downloadedFile.path
+                : null,
+          ),
         ),
       );
       downloadedIds.add(fileUrl.key);
@@ -1928,6 +1953,25 @@ extension AppsProviderInstall on AppsProvider {
         notificationsProvider.cancel(DownloadNotification(fileUrl.key, 0).id),
       );
     }
+  }
+
+  /// Hands a file downloaded to the public Download folder off to the device's
+  /// default handler for it, driven by the Install action on the
+  /// download-complete notification. This is the same outcome as the user
+  /// tapping the file in a file manager: ObtainX plays no part in resolving,
+  /// extracting, verifying, or installing it, and takes no further part once
+  /// the handoff intent is launched.
+  Future<void> installDownloadedAssetFile(String filePath) async {
+    if (!File(filePath).existsSync()) {
+      unawaited(
+        LogsProvider().add(
+          'Install notification tapped for missing file: $filePath',
+          level: LogLevel.error,
+        ),
+      );
+      return;
+    }
+    await viewInstallableFile(filePath);
   }
 
   /// Verifies a downloaded GitHub artifact's SHA-256 against its build

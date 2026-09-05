@@ -384,7 +384,7 @@ class GitLab extends AppSource {
         Uri.parse('https://gitlab.com/api/v4/user'),
         headers: <String, String>{
           'Authorization': 'Bearer $token',
-          HttpHeaders.userAgentHeader: 'Obtainium',
+          HttpHeaders.userAgentHeader: 'ObtainX',
         },
       );
       if (response.statusCode == 200) {

@@ -611,10 +611,10 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   // settings help icons, IconButton tooltips on toolbars) to a consistent,
   // M3-themed look without any per-call-site changes.
   //
-  // Uses `inverseSurface` / `onInverseSurface` per the M3 spec for plain
-  // tooltips: a high-contrast block of colour against the surrounding app
-  // surface. Auto-flips with light/dark mode because [inverseSurface] is dark in
-  // light themes and light in dark themes.
+  // Same tinted-surface palette as the app's toasts/snackbars (see
+  // buildAppSnackBar / showAppToast in app_toast.dart) rather than the M3-spec
+  // high-contrast `inverseSurface` block, so tooltips read as theme-colored
+  // feedback consistent with the rest of the app's transient UI.
   //
   // Default [triggerMode] is manual so Flutter does not attach a global pointer
   // listener on every [Tooltip] (long-press mode). Rebuilding the tree during
@@ -622,14 +622,22 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   // tickers" framework errors. Call sites that need visible tooltips (e.g.
   // [HelpHintIcon]) set triggerMode explicitly.
   TooltipThemeData _tooltipThemeFor(ColorScheme scheme) {
+    final Color background = Color.lerp(
+      scheme.surfaceContainerHighest,
+      scheme.inverseSurface,
+      0.18,
+    )!;
     return TooltipThemeData(
       triggerMode: TooltipTriggerMode.manual,
-      decoration: BoxDecoration(
-        color: scheme.inverseSurface,
-        borderRadius: BorderRadius.circular(12),
+      decoration: ShapeDecoration(
+        color: background,
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
       ),
       textStyle: TextStyle(
-        color: scheme.onInverseSurface,
+        color: scheme.onSurface,
         fontSize: 13,
         fontWeight: FontWeight.w500,
         height: 1.4,

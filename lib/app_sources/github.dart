@@ -223,14 +223,25 @@ class GitHub extends AppSource {
       standardUrl,
       additionalSettings,
     );
-    return inferAppIdFromGradleFiles((String path) async {
-      final res = await sourceRequest(
-        '$apiUrl/contents/$path',
-        additionalSettings,
-      );
-      if (res.statusCode != 200) return null;
-      return decodeRepoContentsApiBody(res.body);
-    }, onError: (String message) => unawaited(LogsProvider().add(message)));
+    return inferAppIdFromGradleFiles(
+      (String path) async {
+        final res = await sourceRequest(
+          '$apiUrl/contents/$path',
+          additionalSettings,
+        );
+        if (res.statusCode != 200) return null;
+        return decodeRepoContentsApiBody(res.body);
+      },
+      listRepoFilePaths: () async {
+        final res = await sourceRequest(
+          '$apiUrl/git/trees/HEAD?recursive=1',
+          additionalSettings,
+        );
+        if (res.statusCode != 200) return null;
+        return repoFilePathsFromTreeApiBody(res.body);
+      },
+      onError: (String message) => unawaited(LogsProvider().add(message)),
+    );
   }
 
   @override
@@ -394,7 +405,7 @@ class GitHub extends AppSource {
         headers: <String, String>{
           HttpHeaders.authorizationHeader: 'Bearer $token',
           HttpHeaders.acceptHeader: 'application/vnd.github+json',
-          HttpHeaders.userAgentHeader: 'Obtainium',
+          HttpHeaders.userAgentHeader: 'ObtainX',
         },
       );
       if (response.statusCode == 200) {

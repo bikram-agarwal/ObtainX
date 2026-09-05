@@ -259,4 +259,36 @@ void main() {
     expect(sortColumn >= obtainiumSortColumnCount, isFalse);
     expect(split.settings.containsKey('collapsedGroups'), isFalse);
   });
+
+  test('no-secrets export drops tokens and their validation fingerprints', () {
+    final Set<String> keys = {
+      'theme',
+      'github-creds',
+      'githubValidatedPATFingerprint',
+      'gitlab-creds',
+      'gitlab-validated-pat-fingerprint',
+      'virustotal-api-key',
+      'virustotal-api-key-validated-fingerprint',
+      'updateInterval',
+    };
+    keys.removeWhere(isSecretSettingKey);
+    expect(keys, {'theme', 'updateInterval'});
+  });
+
+  test('import detects PAT fingerprints as secrets', () {
+    expect(
+      hasSecretsInSettingsMap(<String, dynamic>{
+        'githubValidatedPATFingerprint': 'abc',
+        'theme': 0,
+      }),
+      isTrue,
+    );
+    expect(
+      hasSecretsInSettingsMap(<String, dynamic>{
+        'gitlab-validated-pat-fingerprint': 'abc',
+      }),
+      isTrue,
+    );
+    expect(hasSecretsInSettingsMap(<String, dynamic>{'theme': 0}), isFalse);
+  });
 }

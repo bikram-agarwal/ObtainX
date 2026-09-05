@@ -13,6 +13,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
 
 /// Returns a trimmed, non-empty display String from an F-Droid metadata value.
 ///
@@ -642,11 +643,10 @@ class FDroid extends AppSource {
                 appName = htmlTitleName!;
               }
               final doc = await parseHtmlOffIsolate(pageRes.body);
-              iconUrl =
-                  doc
-                      .querySelector('meta[property="og:image"]')
-                      ?.attributes['content'] ??
-                  doc.querySelector('img.package-icon')?.attributes['src'];
+              iconUrl = iconUrlFromStoreListingDocument(
+                doc,
+                'https://$pageHost/packages/$pkgName/',
+              );
               final String? parsedName =
                   doc.querySelector('h1.package-name')?.text.trim() ??
                   doc.querySelector('h3.package-name')?.text.trim() ??

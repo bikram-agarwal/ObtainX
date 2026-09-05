@@ -2,6 +2,7 @@
 //
 // Contains a set of pre-defined ObtainiumNotification objects that should be used throughout the app.
 
+import 'dart:async';
 import 'dart:isolate';
 import 'dart:ui';
 
@@ -35,9 +36,23 @@ const int downloadNotificationBaseId = 100;
 /// between concurrently downloading apps as unlikely as a raw hashCode.
 const int downloadNotificationIdRange = 2000000000;
 
+/// ID space for download-complete notifications. Narrower than the progress
+/// range on purpose: flutter_local_notifications derives an action's
+/// PendingIntent request code as `id * 16`, and a request code that overflows a
+/// 32-bit int can alias another notification's action - which for the Install
+/// action below would mean installing the wrong file (PendingIntent equality
+/// ignores extras). base + range stays under 2^31 / 16.
+const int downloadedFileNotificationBaseId = 1000000;
+const int downloadedFileNotificationIdRange = 100000000;
+
 /// Prefix for the download-notification Cancel action id; the app ID is appended
 /// so the tap handler knows which download to stop.
 const String cancelDownloadActionPrefix = 'cancel_download::';
+
+/// Prefix for the download-complete notification's Install action id; the
+/// downloaded file's absolute path is appended so the tap handler knows what
+/// to hand off to the system installer.
+const String installDownloadedFileActionPrefix = 'install_file::';
 
 /// Name under which the main isolate registers a port to receive download-cancel
 /// requests forwarded from the notification-action background isolate.
@@ -51,6 +66,17 @@ String? _cancelActionAppId(String? actionId) {
   }
   final appId = actionId.substring(cancelDownloadActionPrefix.length);
   return appId.isEmpty ? null : appId;
+}
+
+/// The downloaded file path targeted by an install notification action, or
+/// null if [actionId] isn't an install action.
+String? _installActionFilePath(String? actionId) {
+  if (actionId == null ||
+      !actionId.startsWith(installDownloadedFileActionPrefix)) {
+    return null;
+  }
+  final filePath = actionId.substring(installDownloadedFileActionPrefix.length);
+  return filePath.isEmpty ? null : filePath;
 }
 
 /// Runs in a separate isolate when a notification action button is tapped (FLN
@@ -311,17 +337,43 @@ class DownloadNotification extends ObtainiumNotification {
        );
 }
 
+/// Fired when a release asset finishes downloading to the public Download
+/// folder. When the asset is an installable app file - a plain APK or any
+/// container (XAPK/APKS/APKM/zip/tarball) - [installFilePath] is set and the
+/// notification offers an Install action. That action is a plain handoff to
+/// whatever the device resolves for the file (its default installer, or a
+/// chooser) - the same as tapping the file in a file manager. ObtainX takes no
+/// part in whatever happens after the handoff.
 class DownloadedNotification extends ObtainiumNotification {
-  DownloadedNotification(String fileName, String downloadUrl)
-    : super(
-        downloadUrl.hashCode.abs(),
-        tr('downloadedX', args: [fileName]),
-        '',
-        'FILE_DOWNLOADED',
-        tr('downloadedXNotifChannel', args: [tr('app')]),
-        tr('downloadedX', args: [tr('app')]),
-        Importance.defaultImportance,
-      );
+  DownloadedNotification(
+    String fileName,
+    String downloadUrl, {
+    String? installFilePath,
+  }) : super(
+         downloadedFileNotificationBaseId +
+             (downloadUrl.hashCode.abs() % downloadedFileNotificationIdRange),
+         tr('downloadedX', args: [fileName]),
+         '',
+         'FILE_DOWNLOADED',
+         tr('downloadedXNotifChannel', args: [tr('app')]),
+         tr('downloadedX', args: [tr('app')]),
+         Importance.defaultImportance,
+         androidActions: installFilePath != null
+             ? [
+                 AndroidNotificationAction(
+                   '$installDownloadedFileActionPrefix$installFilePath',
+                   tr('install'),
+                   // The handoff needs an Activity to launch the install
+                   // intent from, so this brings the app forward rather than
+                   // handling it in the background isolate. ObtainX itself
+                   // never renders a screen for this - it forwards the tap to
+                   // the system installer intent and is done.
+                   showsUserInterface: true,
+                   cancelNotification: true,
+                 ),
+               ]
+             : null,
+       );
 }
 
 ObtainiumNotification get completeInstallationNotification =>
@@ -357,6 +409,16 @@ class NotificationsProvider {
   /// Invoked when the user taps a download notification's Cancel action.
   static void Function(String appId)? onDownloadCancelRequested;
 
+  /// Invoked when the user taps a download-complete notification's Install
+  /// action, with the downloaded file's path.
+  static Future<void> Function(String filePath)?
+  onInstallDownloadedFileRequested;
+
+  /// [checkLaunchByNotif] is called from a post-frame callback that runs on
+  /// every root rebuild, but the launch intent keeps reporting the same
+  /// notification response - so only act on it once per launch.
+  bool _launchNotifChecked = false;
+
   Map<Importance, Priority> importanceToPriority = {
     Importance.defaultImportance: Priority.defaultPriority,
     Importance.high: Priority.high,
@@ -378,6 +440,13 @@ class NotificationsProvider {
             final cancelAppId = _cancelActionAppId(response.actionId);
             if (cancelAppId != null) {
               onDownloadCancelRequested?.call(cancelAppId);
+              return;
+            }
+            final installFilePath = _installActionFilePath(response.actionId);
+            if (installFilePath != null) {
+              unawaited(
+                onInstallDownloadedFileRequested?.call(installFilePath),
+              );
               return;
             }
             _showNotificationPayload(response.payload);
@@ -410,14 +479,20 @@ class NotificationsProvider {
   }
 
   Future<void> checkLaunchByNotif() async {
+    if (_launchNotifChecked) return;
     final NotificationAppLaunchDetails? launchDetails = await notifications
         .getNotificationAppLaunchDetails();
-    if (launchDetails?.didNotificationLaunchApp ?? false) {
-      _showNotificationPayload(
-        launchDetails!.notificationResponse?.payload,
-        doublePop: true,
-      );
+    if (!(launchDetails?.didNotificationLaunchApp ?? false)) return;
+    _launchNotifChecked = true;
+    final NotificationResponse? response = launchDetails!.notificationResponse;
+    // An action tap on a cold start is only reported here - the plugin delivers
+    // it to onDidReceiveNotificationResponse just for a warm start.
+    final installFilePath = _installActionFilePath(response?.actionId);
+    if (installFilePath != null) {
+      unawaited(onInstallDownloadedFileRequested?.call(installFilePath));
+      return;
     }
+    _showNotificationPayload(response?.payload, doublePop: true);
   }
 
   void _showNotificationPayload(String? payload, {bool doublePop = false}) {

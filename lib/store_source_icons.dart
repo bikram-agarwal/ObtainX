@@ -116,6 +116,7 @@ class StoreSourceIconPaths {
   static const String github = 'assets/graphics/ic_github.svg';
   static const String gitlab = 'assets/graphics/ic_gitlab.svg';
   static const String codeberg = 'assets/graphics/ic_codeberg.svg';
+  static const String forgejo = 'assets/graphics/ic_forgejo.svg';
   static const String sourcehut = 'assets/graphics/ic_sourcehut.svg';
   static const String sourceforge = 'assets/graphics/ic_sourceforge.svg';
   static const String itchio = 'assets/graphics/ic_itchio.svg';
@@ -160,6 +161,9 @@ String? storeSourceAssetPathForHost(String host) {
   }
   if (normalized.contains('codeberg.org')) {
     return StoreSourceIconPaths.codeberg;
+  }
+  if (normalized.contains('codefloe.com')) {
+    return StoreSourceIconPaths.forgejo;
   }
   if (normalized.contains('izzysoft.de')) {
     return StoreSourceIconPaths.izzydroid;
@@ -237,6 +241,8 @@ String? storeSourceAssetPathForClassName(String className) {
       return StoreSourceIconPaths.gitlab;
     case 'Codeberg':
       return StoreSourceIconPaths.codeberg;
+    case 'Forgejo':
+      return StoreSourceIconPaths.forgejo;
     case 'FDroid':
       return StoreSourceIconPaths.fdroid;
     case 'APKMirror':

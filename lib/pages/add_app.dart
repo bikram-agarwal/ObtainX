@@ -60,6 +60,31 @@ InlineSpan _tooltipMessageWithBoldMarkdown(String message) {
   );
 }
 
+/// Autocomplete entries for the repo-URL field of a source's search prompt.
+///
+/// Only sources with no [AppSource.hosts] prompt (F-Droid third-party repos),
+/// and what they want is the repo itself. Tracked apps are stripped back to
+/// origin + path, so the several apps added from one repo collapse to the one
+/// URL worth suggesting instead of repeating it per `?appid=`.
+List<String> searchPromptAutoCompleteOptions({
+  required Iterable<String> trackedAppUrls,
+}) {
+  final List<String> options = [];
+  for (final String trackedAppUrl in trackedAppUrls) {
+    final Uri? trackedUri = Uri.tryParse(trackedAppUrl);
+    if (trackedUri == null ||
+        trackedUri.host.isEmpty ||
+        (trackedUri.scheme != 'https' && trackedUri.scheme != 'http')) {
+      continue;
+    }
+    final String option = '${trackedUri.origin}${trackedUri.path}';
+    if (!options.contains(option)) {
+      options.add(option);
+    }
+  }
+  return options;
+}
+
 enum _AddMode { launcher, byUrl, search }
 
 enum _AddAppLauncherDestination {
@@ -2043,29 +2068,24 @@ class AddAppPageState extends State<AddAppPage> {
                             [
                               GeneratedFormTextField(
                                 'url',
-                                label: e.hosts.isNotEmpty
-                                    ? tr('overrideSource')
-                                    : plural('url', 1).substring(2),
-                                autoCompleteOptions: [
-                                  ...(e.hosts.isNotEmpty ? [e.hosts[0]] : []),
-                                  ...appsProvider.apps.values
-                                      .where(
-                                        (a) =>
-                                            sourceProvider
-                                                .getSource(
-                                                  a.app.url,
-                                                  overrideSource:
-                                                      a.app.overrideSource,
-                                                )
-                                                .runtimeType ==
-                                            e.runtimeType,
-                                      )
-                                      .map((a) {
-                                        final uri = Uri.parse(a.app.url);
-                                        return '${uri.origin}${uri.path}';
-                                      }),
-                                ],
-                                value: e.hosts.isNotEmpty ? e.hosts[0] : '',
+                                label: plural('url', 1).substring(2),
+                                autoCompleteOptions:
+                                    searchPromptAutoCompleteOptions(
+                                      trackedAppUrls: appsProvider.apps.values
+                                          .where(
+                                            (a) =>
+                                                sourceProvider
+                                                    .getSource(
+                                                      a.app.url,
+                                                      overrideSource:
+                                                          a.app.overrideSource,
+                                                    )
+                                                    .runtimeType ==
+                                                e.runtimeType,
+                                          )
+                                          .map((a) => a.app.url),
+                                    ),
+                                value: '',
                                 required: true,
                               ),
                             ],

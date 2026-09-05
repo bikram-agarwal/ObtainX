@@ -43,6 +43,11 @@ void hapticMediumImpact() {
   if (_tactileFeedbackEnabled) HapticFeedback.mediumImpact();
 }
 
+/// User-picked SAF folders with a `warnIfInaccessible` toast, for the shared
+/// access-warning plumbing in [SettingsProvider._showStorageAccessWarning].
+/// The icons folder has no entry here - see [SettingsProvider.getIconsDir].
+enum SafFolderKind { export, apkSave }
+
 void hapticHeavyImpact() {
   if (_tactileFeedbackEnabled) HapticFeedback.heavyImpact();
 }
@@ -158,6 +163,21 @@ class SettingsProvider with ChangeNotifier {
     _tactileFeedbackEnabled = prefs?.getBool('tactileFeedbackEnabled') ?? true;
     _settingsInitialized = true;
     notifyListeners();
+  }
+
+  /// Wipes every persisted setting back to ObtainX's out-of-the-box defaults.
+  /// Used by backup "Restore" (as opposed to "Import"): a restore is meant to
+  /// be OOTB-ObtainX-plus-whatever-the-backup-contains, not the backup merged
+  /// on top of whatever settings happened to be in place before it.
+  ///
+  /// Re-runs [initializeSettings]'s one-time bootstrap (by clearing the
+  /// [_settingsInitialized] guard) rather than hand-clearing each in-memory
+  /// cache here, so this can't drift out of sync with what a real fresh
+  /// install does.
+  Future<void> resetToDefaults() async {
+    await prefs?.clear();
+    _settingsInitialized = false;
+    await initializeSettings();
   }
 
   void _removeUnusedUpstreamSettings() {
@@ -1422,10 +1442,14 @@ class SettingsProvider with ChangeNotifier {
       // Retry once so transient SAF failures do not hide a still-valid grant.
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await _canReadAndWriteSafTree(uri)) {
-        await prefs?.remove('exportDir');
-        notifyListeners();
+        // Deliberately not cleared here: only [pickExportDir]'s explicit
+        // `remove: true` (the user's own long-press reset) should erase this.
+        // A reinstall/new device always fails this check the first time (the
+        // OS grant never survives even though a restored backup just set this
+        // pref), and silently wiping it here would also lose it as the re-pick
+        // picker's starting location (see [pickExportDir]'s `initialUri`).
         if (warnIfInaccessible) {
-          _showStorageAccessWarning(isExportDir: true);
+          _showStorageAccessWarning(SafFolderKind.export);
         }
         return null;
       }
@@ -1493,10 +1517,14 @@ class SettingsProvider with ChangeNotifier {
     if (!await _canReadAndWriteSafTree(uri)) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await _canReadAndWriteSafTree(uri)) {
-        await prefs?.remove('apkSaveDir');
-        notifyListeners();
+        // Deliberately not cleared here: only [pickApkSaveDir]'s explicit
+        // `remove: true` (the user's own long-press reset) should erase this.
+        // A reinstall/new device always fails this check the first time (the
+        // OS grant never survives even though a restored backup just set this
+        // pref), and silently wiping it here would also lose it as the re-pick
+        // picker's starting location (see [pickApkSaveDir]'s `initialUri`).
         if (warnIfInaccessible) {
-          _showStorageAccessWarning(isExportDir: false);
+          _showStorageAccessWarning(SafFolderKind.apkSave);
         }
         return null;
       }
@@ -1548,6 +1576,78 @@ class SettingsProvider with ChangeNotifier {
     }
   }
 
+  /// Icon mirroring is always best-effort and silent (see
+  /// AppsProviderIconBackup), so unlike [getExportDir]/[getApkSaveDir] there is
+  /// no `warnIfInaccessible` toast here - a lost-access state is only ever
+  /// surfaced inline, in the Backup page's "App icons" card.
+  Future<Uri?> getIconsDir({bool requireAccess = true}) async {
+    final String? uriString = prefs?.getString('iconsDir');
+    if (uriString == null) {
+      return null;
+    }
+    final Uri uri = Uri.parse(uriString);
+    if (!requireAccess) {
+      return uri;
+    }
+
+    if (!await _canReadAndWriteSafTree(uri)) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!await _canReadAndWriteSafTree(uri)) {
+        // Deliberately kept (not cleared) on a failed check: a reinstall/new
+        // device always fails this the first time (the OS grant never
+        // survives, even though a restored backup just set this pref), and
+        // losing the old URI here would also lose it as the re-pick picker's
+        // starting location (see [pickIconsDir]'s `initialUri`).
+        return null;
+      }
+    }
+    return uri;
+  }
+
+  /// Lets the user pick a folder that app icons are mirrored into, so custom
+  /// and deduced icons survive a reinstall or a move to a new device. Cancelling
+  /// leaves the previous folder and persisted URI permission unchanged.
+  Future<void> pickIconsDir({bool remove = false}) async {
+    if (remove) {
+      final String? saved = prefs?.getString('iconsDir');
+      unawaited(prefs?.remove('iconsDir'));
+      notifyListeners();
+      if (saved != null && saved.isNotEmpty) {
+        try {
+          await saf.releasePersistableUriPermission(Uri.parse(saved));
+        } catch (_) {}
+      }
+      return;
+    }
+
+    final String? previousIconsDirString = prefs?.getString('iconsDir');
+    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
+      initialUri: previousIconsDirString == null
+          ? null
+          : Uri.parse(previousIconsDirString),
+    );
+
+    if (newUri == null) {
+      return;
+    }
+
+    final String newUriString = newUri.toString();
+    if (previousIconsDirString == newUriString) {
+      return;
+    }
+
+    unawaited(prefs?.setString('iconsDir', newUriString));
+    notifyListeners();
+
+    if (previousIconsDirString != null && previousIconsDirString.isNotEmpty) {
+      try {
+        await saf.releasePersistableUriPermission(
+          Uri.parse(previousIconsDirString),
+        );
+      } catch (_) {}
+    }
+  }
+
   Future<bool> _canReadAndWriteSafTree(Uri treeUri) async {
     try {
       if (await NativeFeatures.hasPersistedDocumentTreePermission(treeUri)) {
@@ -1580,29 +1680,30 @@ class SettingsProvider with ChangeNotifier {
     }
   }
 
-  void _showStorageAccessWarning({required bool isExportDir}) {
+  void _showStorageAccessWarning(SafFolderKind kind) {
     final DateTime now = DateTime.now();
-    final DateTime? lastWarningAt = isExportDir
-        ? _lastExportDirAccessWarningAt
-        : _lastApkSaveDirAccessWarningAt;
+    final DateTime? lastWarningAt = switch (kind) {
+      SafFolderKind.export => _lastExportDirAccessWarningAt,
+      SafFolderKind.apkSave => _lastApkSaveDirAccessWarningAt,
+    };
 
     if (lastWarningAt != null &&
         now.difference(lastWarningAt) < _storageAccessWarningCooldown) {
       return;
     }
 
-    if (isExportDir) {
-      _lastExportDirAccessWarningAt = now;
-    } else {
-      _lastApkSaveDirAccessWarningAt = now;
+    switch (kind) {
+      case SafFolderKind.export:
+        _lastExportDirAccessWarningAt = now;
+      case SafFolderKind.apkSave:
+        _lastApkSaveDirAccessWarningAt = now;
     }
 
     showAppToast(
-      tr(
-        isExportDir
-            ? 'exportFolderAccessUnavailable'
-            : 'apkSaveFolderAccessUnavailable',
-      ),
+      tr(switch (kind) {
+        SafFolderKind.export => 'exportFolderAccessUnavailable',
+        SafFolderKind.apkSave => 'apkSaveFolderAccessUnavailable',
+      }),
       type: ToastType.error,
       duration: const Duration(seconds: 5),
     );

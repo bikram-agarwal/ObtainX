@@ -790,11 +790,46 @@ class _GeneratedFormState extends State<GeneratedForm> {
     someValueChanged();
   }
 
+  /// Whether [values] as they stand satisfy the items' own rules.
+  ///
+  /// Used while the form is still initialising, when the fields have no
+  /// [FormFieldState] to ask - and when asking would paint "required" errors
+  /// all over a form nobody has typed in yet.
+  bool _initialValuesAreValid() {
+    for (final List<GeneratedFormItem> row in widget.items) {
+      for (final GeneratedFormItem item in row) {
+        // A section header holds no value, and a subform reports its own
+        // validity through its nested onValueChanges as forceInvalid.
+        if (item is GeneratedFormSectionHeader ||
+            item is GeneratedFormSubForm) {
+          continue;
+        }
+        dynamic value = values[item.key];
+        if (item is GeneratedFormTextField) {
+          value = (value ?? '').toString();
+          if (item.required && (value as String).trim().isEmpty) {
+            return false;
+          }
+        } else if (item is GeneratedFormSwitch) {
+          value = value == true;
+        }
+        for (final dynamic validator in item.additionalValidators) {
+          if (validator(value) != null) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
   // If any value changes, call this to update the parent with value and validity
   void someValueChanged({bool isBuilding = false, bool forceInvalid = false}) {
     final Map<String, dynamic> returnValues = values;
     var valid = true;
-    if (!isBuilding) {
+    if (isBuilding) {
+      valid = _initialValuesAreValid();
+    } else {
       valid = _formKey.currentState?.validate() ?? true;
       for (int r = 0; r < formInputs.length; r++) {
         for (int i = 0; i < formInputs[r].length; i++) {
@@ -942,8 +977,15 @@ class _GeneratedFormState extends State<GeneratedForm> {
               });
             },
             suggestionsCallback: (search) {
+              // An option identical to what's already typed is a no-op tap, so
+              // a prefilled field shouldn't open a list just to offer its own
+              // value back.
               return formItem.autoCompleteOptions
-                  ?.where((t) => t.toLowerCase().contains(search.toLowerCase()))
+                  ?.where(
+                    (option) =>
+                        option != search &&
+                        option.toLowerCase().contains(search.toLowerCase()),
+                  )
                   .toList();
             },
             hideOnEmpty: true,
@@ -1625,29 +1667,45 @@ class _GeneratedFormModalState extends State<GeneratedFormModal> {
       scrollable: true,
       title: Text(widget.title),
       contentPadding: appDialogContentPadding,
-      content: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (widget.message.isNotEmpty) Text(widget.message),
-          if (widget.message.isNotEmpty) const SizedBox(height: 16),
-          GeneratedForm(
-            tileMode: widget.tileMode,
-            items: widget.items,
-            onValueChanges: (nextValues, nextValid, isBuilding) {
-              if (isBuilding) {
-                values = nextValues;
-                valid = nextValid;
-              } else {
-                setState(() {
+      content: SizedBox(
+        width: appDialogContentWidth,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.message.isNotEmpty) Text(widget.message),
+            if (widget.message.isNotEmpty) const SizedBox(height: 16),
+            GeneratedForm(
+              tileMode: widget.tileMode,
+              items: widget.items,
+              onValueChanges: (nextValues, nextValid, isBuilding) {
+                if (isBuilding) {
                   values = nextValues;
+                  // Reported from the form's initState, so setState is not
+                  // allowed yet: repaint afterwards instead, or a dialog that
+                  // opens already filled in keeps the disabled confirm button
+                  // this frame drew until the user edits something.
+                  final bool validityChanged = valid != nextValid;
                   valid = nextValid;
-                });
-              }
-            },
-          ),
-          if (widget.additionalWidgets.isNotEmpty) ...widget.additionalWidgets,
-        ],
+                  if (validityChanged) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) {
+                        setState(() {});
+                      }
+                    });
+                  }
+                } else {
+                  setState(() {
+                    values = nextValues;
+                    valid = nextValid;
+                  });
+                }
+              },
+            ),
+            if (widget.additionalWidgets.isNotEmpty)
+              ...widget.additionalWidgets,
+          ],
+        ),
       ),
       actions: [
         TextButton(

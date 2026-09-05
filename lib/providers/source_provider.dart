@@ -43,6 +43,7 @@ import 'package:obtainium/app_sources/vivoappstore.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/version/version_detection_mode.dart';
@@ -1544,11 +1545,12 @@ class SourceProvider {
     () => APKMirror(),
     () => APKPure(),
     () => Aptoide(),
+    () => Codeberg(),
     () => CoolApk(),
     () => Farsroid(),
     () => FDroid(), // "F-Droid official"
     () => FDroidRepo(), // "F-Droid third-party repo"
-    () => Codeberg(), // "Forgejo (Codeberg)"
+    () => Forgejo(), // Forgejo instances other than Codeberg.org
     () => GitHub(),
     () => GitLab(),
     () => HuaweiAppGallery(), // "Huawei AppGallery"
@@ -2034,11 +2036,12 @@ class HttpService {
         additionalSettings['allowInsecure'] == true,
       );
       final request = await httpClient.openUrl(method, currentUrl);
-      if (requestHeaders != null) {
-        requestHeaders.forEach((key, value) {
-          request.headers.set(key, value);
-        });
-      }
+      withDefaultObtainXUserAgent(requestHeaders).forEach((
+        String headerName,
+        String headerValue,
+      ) {
+        request.headers.set(headerName, headerValue);
+      });
       request.cookies.addAll(cookies);
       request.followRedirects = false;
       if (postBody != null) {

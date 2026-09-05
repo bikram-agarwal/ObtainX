@@ -1028,7 +1028,7 @@ void main() {
       const <String, dynamic>{},
       'https://www.apkmirror.com/apk/signal-foundation/signal-private-messenger/',
     );
-    // Lowercase key on purpose: sourceRequest injects a default 'Obtainium' UA
+    // Lowercase key on purpose: sourceRequest injects a default ObtainX UA
     // unless a case-insensitive 'user-agent' is already present.
     final String? sentUserAgent = headers?.entries
         .firstWhere((e) => e.key.toLowerCase() == 'user-agent')

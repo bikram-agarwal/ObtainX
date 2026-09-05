@@ -475,10 +475,21 @@ class BulkImportService {
                     final appName = first is Map
                         ? (first['title'] as String? ?? '')
                         : '';
-                    result[pkg] = appName.isNotEmpty
-                        ? 'https://apkpure.net/${_slugify(appName)}/$candidate'
-                        : 'https://apkpure.net/$candidate';
-                    return;
+                    // APKPure's real URLs always need <name-slug>/<package> -
+                    // a stub catalog entry with no title (confirmed live:
+                    // that gives a 404) can't produce a working link, so
+                    // treat it as not found rather than hand back a URL
+                    // that's guaranteed to be dead.
+                    if (appName.isNotEmpty) {
+                      // .com, not .net: .net sits behind a Cloudflare bot
+                      // challenge (see store_icon_resolver.dart's
+                      // normalizeApkPureHost) that blocks both the icon
+                      // scrape and a user tapping this as an "Other Sources"
+                      // link.
+                      result[pkg] =
+                          'https://apkpure.com/${_slugify(appName)}/$candidate';
+                      return;
+                    }
                   }
                 }
               } catch (e) {

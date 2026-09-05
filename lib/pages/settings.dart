@@ -1447,6 +1447,12 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   late final TextEditingController _githubPatController;
   late final TextEditingController _hubProxyController;
   late final TextEditingController _gitlabPatController;
+  // Stored pref values as of the last sync, so [didChangeDependencies] can tell
+  // an external write (a backup import rewrites these keys with no user
+  // involvement) apart from the user's own unsaved typing.
+  String _storedGithubPat = '';
+  String _storedHubProxy = '';
+  String _storedGitlabPat = '';
   bool _githubChecking = false;
   bool _gitlabChecking = false;
 
@@ -1466,9 +1472,10 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
 
   void discardChanges() {
     final SettingsProvider sp = context.read<SettingsProvider>();
-    _githubPatController.text =
-        sp.getSettingString(GitHub.githubCredsKey) ?? '';
-    _gitlabPatController.text = sp.getSettingString('gitlab-creds') ?? '';
+    _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _githubPatController.text = _storedGithubPat;
+    _gitlabPatController.text = _storedGitlabPat;
     setState(() {});
   }
 
@@ -1476,15 +1483,52 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   void initState() {
     super.initState();
     final SettingsProvider sp = context.read<SettingsProvider>();
-    _githubPatController = TextEditingController(
-      text: sp.getSettingString(GitHub.githubCredsKey) ?? '',
-    );
-    _hubProxyController = TextEditingController(
-      text: sp.getSettingString(GitHub.githubReqPrefixKey) ?? '',
-    );
-    _gitlabPatController = TextEditingController(
-      text: sp.getSettingString('gitlab-creds') ?? '',
-    );
+    _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    _storedHubProxy = sp.getSettingString(GitHub.githubReqPrefixKey) ?? '';
+    _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _githubPatController = TextEditingController(text: _storedGithubPat);
+    _hubProxyController = TextEditingController(text: _storedHubProxy);
+    _gitlabPatController = TextEditingController(text: _storedGitlabPat);
+  }
+
+  // Home keeps every tab mounted, so this section - and the controllers seeded
+  // once in initState - survives an import run on the Import/Export tab.
+  // Nothing else re-reads the prefs, so the fields kept showing the pre-import
+  // text and the dirty getters above read that stale text as unsaved user
+  // input, raising the discard-changes dialog over an edit nobody made.
+  //
+  // Both guards matter: the stored-value comparison limits re-seeding to
+  // external writes so genuine unsaved typing isn't wiped by an unrelated
+  // settings notification, and the text comparison skips a write the field
+  // already reflects (the hub proxy saves on every keystroke, and assigning
+  // `text` would drop the cursor to the end mid-edit).
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String storedGithubPat =
+        sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    if (storedGithubPat != _storedGithubPat) {
+      _storedGithubPat = storedGithubPat;
+      if (_githubPatController.text != storedGithubPat) {
+        _githubPatController.text = storedGithubPat;
+      }
+    }
+    final String storedHubProxy =
+        sp.getSettingString(GitHub.githubReqPrefixKey) ?? '';
+    if (storedHubProxy != _storedHubProxy) {
+      _storedHubProxy = storedHubProxy;
+      if (_hubProxyController.text != storedHubProxy) {
+        _hubProxyController.text = storedHubProxy;
+      }
+    }
+    final String storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    if (storedGitlabPat != _storedGitlabPat) {
+      _storedGitlabPat = storedGitlabPat;
+      if (_gitlabPatController.text != storedGitlabPat) {
+        _gitlabPatController.text = storedGitlabPat;
+      }
+    }
   }
 
   @override
@@ -2585,6 +2629,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
   bool _letMeDowngradeInstalled = false;
   bool _loading = true;
   late final TextEditingController _virusTotalApiKeyController;
+  // Stored pref value as of the last sync - see [didChangeDependencies].
+  String _storedVirusTotalApiKey = '';
   bool _virusTotalChecking = false;
 
   @override
@@ -2592,13 +2638,35 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkInstalledApps();
+    _storedVirusTotalApiKey =
+        context.read<SettingsProvider>().getSettingString(
+          virusTotalApiKeyKey,
+        ) ??
+        '';
     _virusTotalApiKeyController = TextEditingController(
-      text:
-          context.read<SettingsProvider>().getSettingString(
-            virusTotalApiKeyKey,
-          ) ??
-          '',
+      text: _storedVirusTotalApiKey,
     );
+  }
+
+  // Re-seed the field when the stored key is rewritten from outside this page
+  // (a backup import), which the controller alone would never notice. See the
+  // matching override in _SourceSpecificSectionState for why each guard is
+  // needed; the API key and its fingerprint are part of
+  // [_integrationsSettingsHash] so an import actually reaches this callback.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String storedVirusTotalApiKey =
+        context.read<SettingsProvider>().getSettingString(
+          virusTotalApiKeyKey,
+        ) ??
+        '';
+    if (storedVirusTotalApiKey != _storedVirusTotalApiKey) {
+      _storedVirusTotalApiKey = storedVirusTotalApiKey;
+      if (_virusTotalApiKeyController.text != storedVirusTotalApiKey) {
+        _virusTotalApiKeyController.text = storedVirusTotalApiKey;
+      }
+    }
   }
 
   @override
@@ -2617,8 +2685,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
 
   void discardChanges() {
     final SettingsProvider sp = context.read<SettingsProvider>();
-    _virusTotalApiKeyController.text =
-        sp.getSettingString(virusTotalApiKeyKey) ?? '';
+    _storedVirusTotalApiKey = sp.getSettingString(virusTotalApiKeyKey) ?? '';
+    _virusTotalApiKeyController.text = _storedVirusTotalApiKey;
     setState(() {});
   }
 
@@ -2650,6 +2718,12 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     sp.enableLetMeDowngrade,
     sp.installerMode,
     sp.shizukuPretendToBeGooglePlay,
+    // The API key drives the field text and, with its validation fingerprint,
+    // the validated-shield state. An import can change either without the user
+    // touching this page, and without these two the section would never be
+    // notified of that - see [didChangeDependencies].
+    sp.getSettingString(virusTotalApiKeyKey),
+    sp.getSettingString(virusTotalValidatedApiKeyFingerprintKey),
   );
 
   @override

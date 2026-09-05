@@ -6,6 +6,8 @@ import 'package:easy_localization/easy_localization.dart';
 
 import 'package:obtainium/custom_errors.dart';
 
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -14,11 +16,16 @@ import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
 /// Secret settings excluded from the "settings without secrets" backup mode.
-/// Source credentials conventionally end in `-creds`; VirusTotal predates that
-/// convention, so its key and otherwise-useless validation fingerprint are
-/// listed explicitly.
+/// Source credentials conventionally end in `-creds`. Validation fingerprints
+/// are hashes of those tokens, so a "no secrets" backup must omit them too -
+/// otherwise the hash travels with the file and the token is still recoverable
+/// by anyone who later obtains it, and import would restore a shield with no
+/// matching PAT. VirusTotal predates the `-creds` convention, so its key and
+/// fingerprint are listed explicitly.
 bool isSecretSettingKey(String key) {
   return key.endsWith('-creds') ||
+      key == GitHub.validatedPATFingerprintKey ||
+      key == GitLab.validatedPATFingerprintKey ||
       key == virusTotalApiKeyKey ||
       key == virusTotalValidatedApiKeyFingerprintKey;
 }
@@ -225,10 +232,17 @@ extension AppsProviderImportExport on AppsProvider {
   }
 
   /// Imports apps (and optionally settings) from a JSON string, returning the parsed apps and a settings-present flag.
+  ///
+  /// [replaceExisting] is "restore" rather than "import": ObtainX's tracked
+  /// apps AND its settings are both reset to out-of-the-box defaults first, so
+  /// the result is OOTB-ObtainX-plus-whatever-the-backup-contains rather than
+  /// the backup merged on top of whatever was there before. It never touches
+  /// installed apps or their on-device data — only ObtainX's own state.
   Future<MapEntry<List<App>, bool>> import(
     String appsJSON, {
     Set<String>? selectedAppIds,
     bool importSettings = true,
+    bool replaceExisting = false,
   }) async {
     final backupContent = parseBackupContent(appsJSON);
     List<App> importedApps = backupContent.apps;
@@ -240,6 +254,13 @@ extension AppsProviderImportExport on AppsProvider {
           .toList();
     }
 
+    // Reset settings to OOTB before folder reconciliation reads
+    // settingsProvider.appFolders, so a restore starts from a clean slate
+    // instead of merging backup folders into whatever folders already existed.
+    if (replaceExisting) {
+      await settingsProvider.resetToDefaults();
+    }
+
     // Merge backed-up folders into existing ones (by name) and remap each app's
     // folder references to the resolved IDs before saving.
     importedApps = _reconcileImportedFolders(
@@ -248,6 +269,12 @@ extension AppsProviderImportExport on AppsProvider {
     );
 
     await waitForAppsToLoad();
+    if (replaceExisting) {
+      final existingAppIds = apps.keys.toList();
+      if (existingAppIds.isNotEmpty) {
+        await removeApps(existingAppIds);
+      }
+    }
     for (var i = 0; i < importedApps.length; i++) {
       final a = importedApps[i];
       final installedInfo = await getInstalledInfo(a.id);
@@ -457,6 +484,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'showVersionBadge',
   'saveDownloadedApkCopies',
   'apkSaveDir',
+  'iconsDir',
   'rightSwipeAction',
   'leftSwipeAction',
   'rightSwipeActionName',

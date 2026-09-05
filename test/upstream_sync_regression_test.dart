@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/installers/dhizuku_installer.dart';
@@ -463,14 +465,17 @@ void main() {
   });
 
   test('settings-without-secrets excludes all known credential keys', () {
-    expect(isSecretSettingKey('github-creds'), isTrue);
+    expect(isSecretSettingKey(GitHub.githubCredsKey), isTrue);
     expect(isSecretSettingKey('gitlab-creds'), isTrue);
+    expect(isSecretSettingKey(GitHub.validatedPATFingerprintKey), isTrue);
+    expect(isSecretSettingKey(GitLab.validatedPATFingerprintKey), isTrue);
     expect(isSecretSettingKey('virustotal-api-key'), isTrue);
     expect(
       isSecretSettingKey('virustotal-api-key-validated-fingerprint'),
       isTrue,
     );
     expect(isSecretSettingKey('updateInterval'), isFalse);
+    expect(isSecretSettingKey(GitHub.githubReqPrefixKey), isFalse);
   });
 
   test('always-use-phone-layout overrides every breakpoint', () {

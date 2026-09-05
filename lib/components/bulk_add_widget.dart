@@ -21,6 +21,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
@@ -456,7 +457,7 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     }
     return switch (storeKey) {
       'APKMirror' => 'www.apkmirror.com',
-      'APKPure' => 'apkpure.net',
+      'APKPure' => 'apkpure.com',
       'F-Droid' => 'f-droid.org',
       'IzzyOnDroid' => 'apt.izzysoft.de',
       'GitHub' => 'github.com',
@@ -1221,11 +1222,19 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
               _apkPureDone = 0;
             });
           }
-          final Map<String, String?> pureKnown = _persistedStoreColumn(
-            persistedScanCache,
-            _bulkScanPackageNames,
-            'APKPure',
-          );
+          final Map<String, String?> pureKnown =
+              _persistedStoreColumn(
+                persistedScanCache,
+                _bulkScanPackageNames,
+                'APKPure',
+              )..removeWhere(
+                // A malformed cached URL (past bug - see
+                // store_icon_resolver.dart's isWellFormedApkPureUrl) must not
+                // be trusted as "already known" - drop it so this pkg gets
+                // re-queried instead of carrying the broken value forward.
+                (String pkg, String? url) =>
+                    url != null && !isWellFormedApkPureUrl(url),
+              );
           final Map<String, String?> pureResults =
               await BulkImportService.checkApkPure(
                 _bulkScanPackageNames,

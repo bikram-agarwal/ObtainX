@@ -29,6 +29,13 @@ const List<String> gradleAppIdCandidatePaths = <String>[
   'src/app/build.gradle',
 ];
 
+/// The Android *library* plugin, in both the `id("com.android.library")` and
+/// version-catalog `alias(libs.plugins.android.library)` spellings - the
+/// `android.library` tail is what the two have in common.
+final RegExp _androidLibraryPlugin = RegExp(
+  r'(?<![A-Za-z0-9_])android\.library(?![A-Za-z0-9_])',
+);
+
 /// Matches a package id: at least two dot-separated identifier segments.
 final RegExp _packageIdPattern = RegExp(
   r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$',
@@ -148,8 +155,77 @@ String? appIdFromGradleFileContents(String contents) {
   }
   // No applicationId at all: under the Android Gradle Plugin the installed
   // package id then defaults to the namespace, so this is the answer rather
-  // than a guess.
-  return namespaces.length == 1 ? namespaces.first : null;
+  // than a guess - but only for an application module. A library module's
+  // namespace merely names its R class, and returning that would bind the app
+  // to a package nothing ever installs. Real example (NextCloudTalkNext on
+  // Codefloe, checked 2026-08-25): a `designsystem` module sitting beside the
+  // real app declares namespace com.nextcloud.talk.redux.designsystem.
+  if (namespaces.length != 1) {
+    return null;
+  }
+  for (final String line in trimmedLines) {
+    // `apply false` in a root build file declares a plugin for the subprojects
+    // to apply; it does not make the root itself a library.
+    if (_isComment(line) || line.contains('apply false')) continue;
+    if (_androidLibraryPlugin.hasMatch(line)) return null;
+  }
+  return namespaces.first;
+}
+
+/// The repo's Gradle build files, most-likely-to-be-the-application first.
+///
+/// A file whose own directory reads like an app module (`app`, `composeApp`,
+/// `androidApp`) comes first, then shallower paths, then alphabetically so the
+/// order is stable. Generated `build/` output and `buildSrc` convention
+/// plugins are dropped - neither ships an application id.
+List<String> gradleBuildFilePathsByLikelihood(Iterable<String> repoFilePaths) {
+  final List<String> buildFiles = repoFilePaths.where((String path) {
+    final List<String> segments = path.split('/');
+    if (segments.last != 'build.gradle' &&
+        segments.last != 'build.gradle.kts') {
+      return false;
+    }
+    return !segments
+        .sublist(0, segments.length - 1)
+        .any((String segment) => segment == 'build' || segment == 'buildSrc');
+  }).toList();
+  buildFiles.sort((String left, String right) {
+    final List<String> leftSegments = left.split('/');
+    final List<String> rightSegments = right.split('/');
+    final bool leftIsAppModule =
+        leftSegments.length > 1 &&
+        leftSegments[leftSegments.length - 2].toLowerCase().contains('app');
+    final bool rightIsAppModule =
+        rightSegments.length > 1 &&
+        rightSegments[rightSegments.length - 2].toLowerCase().contains('app');
+    if (leftIsAppModule != rightIsAppModule) {
+      return leftIsAppModule ? -1 : 1;
+    }
+    if (leftSegments.length != rightSegments.length) {
+      return leftSegments.length - rightSegments.length;
+    }
+    return left.compareTo(right);
+  });
+  return buildFiles;
+}
+
+/// Paths of every file in a GitHub-style `git/trees?recursive` payload.
+///
+/// Shared by GitHub and Forgejo, whose responses match field for field
+/// (verified against api.github.com and codefloe.com's Forgejo 16.0.3 on
+/// 2026-08-25). A `truncated` response is still usable - it is simply a
+/// partial list, and the walk that follows tolerates missing files.
+List<String>? repoFilePathsFromTreeApiBody(String responseBody) {
+  final dynamic body = jsonDecode(responseBody);
+  if (body is! Map) return null;
+  final dynamic tree = body['tree'];
+  if (tree is! List) return null;
+  return tree
+      .whereType<Map>()
+      .where((Map entry) => entry['type'] == 'blob')
+      .map((Map entry) => entry['path'])
+      .whereType<String>()
+      .toList();
 }
 
 /// Decodes the base64 `content` field of a GitHub-style "repo contents" API
@@ -169,20 +245,49 @@ String? decodeRepoContentsApiBody(String responseBody) {
 /// [fetchFileContents] returns the file's text, or null when it does not exist;
 /// throwing is also treated as "not found" so one unreachable path cannot abort
 /// the whole walk. Errors are reported through [onError] for logging only.
+///
+/// The candidate paths only cover an Android project laid out the conventional
+/// way. When none of them holds an id and the host can list the repo's files
+/// ([listRepoFilePaths]), the search widens to the build files actually in the
+/// repo - which is what finds an app that lives somewhere like
+/// `mobile_clients/Android/composeApp`. That listing costs an extra request,
+/// so it is only fetched once the cheap paths have all missed, and at most
+/// [maxDiscoveredFilesToRead] of the files it turns up are read.
 Future<String?> inferAppIdFromGradleFiles(
   Future<String?> Function(String path) fetchFileContents, {
   void Function(String message)? onError,
   List<String> candidatePaths = gradleAppIdCandidatePaths,
+  Future<List<String>?> Function()? listRepoFilePaths,
+  int maxDiscoveredFilesToRead = 5,
 }) async {
-  for (final String path in candidatePaths) {
-    try {
-      final String? contents = await fetchFileContents(path);
-      if (contents == null || contents.isEmpty) continue;
-      final String? appId = appIdFromGradleFileContents(contents);
-      if (appId != null) return appId;
-    } catch (err) {
-      onError?.call('Could not read $path while inferring app ID: $err');
+  Future<String?> firstAppIdAmong(Iterable<String> paths) async {
+    for (final String path in paths) {
+      try {
+        final String? contents = await fetchFileContents(path);
+        if (contents == null || contents.isEmpty) continue;
+        final String? appId = appIdFromGradleFileContents(contents);
+        if (appId != null) return appId;
+      } catch (err) {
+        onError?.call('Could not read $path while inferring app ID: $err');
+      }
     }
+    return null;
   }
-  return null;
+
+  final String? conventionalAppId = await firstAppIdAmong(candidatePaths);
+  if (conventionalAppId != null || listRepoFilePaths == null) {
+    return conventionalAppId;
+  }
+  try {
+    final List<String>? repoFilePaths = await listRepoFilePaths();
+    if (repoFilePaths == null) return null;
+    return await firstAppIdAmong(
+      gradleBuildFilePathsByLikelihood(repoFilePaths)
+          .where((String path) => !candidatePaths.contains(path))
+          .take(maxDiscoveredFilesToRead),
+    );
+  } catch (err) {
+    onError?.call('Could not list repo files while inferring app ID: $err');
+    return null;
+  }
 }

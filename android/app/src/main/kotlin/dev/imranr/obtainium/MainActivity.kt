@@ -66,6 +66,13 @@ private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
 private const val INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS = 200L
+/// How long to keep a cache-served release file around after handing it to an
+/// installer we're not tracking (no [expectedPkgName]). startActivity() returns
+/// as soon as the target activity is requested, well before it has actually
+/// opened and read the content:// URI - deleting the file synchronously after
+/// that call races the installer's own read and can turn it into a
+/// FileNotFoundException. This window is generous enough to outlast that read.
+private const val UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS = 60_000L
 private const val MAX_SYSTEM_DISPLAY_SCALE = 1.2f
 private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
 /// Ignore focus regain if it arrived within this window of the FIRST focus loss (transition bounce).
@@ -412,6 +419,17 @@ class MainActivity : FlutterActivity() {
                         mainHandler.post { result.success(bytes) }
                     }
                 }
+                "getApkArchiveIcon" -> {
+                    val archiveFilePath = call.argument<String>("archiveFilePath")
+                    if (archiveFilePath == null) {
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    deviceAppsExecutor.execute {
+                        val bytes = getApkArchiveIconBytes(archiveFilePath)
+                        mainHandler.post { result.success(bytes) }
+                    }
+                }
                 "getSystemFontFiles" -> {
                     // Every weight/style file of the device's default font
                     // family, so the app can register the whole family (real
@@ -602,6 +620,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // DocumentsUI resolves EXTRA_INITIAL_URI as a *document* URI, but a picked folder is persisted
+    // as a bare tree URI (content://.../tree/<id>), which is not one - the picker silently ignores
+    // it and opens wherever it was last left instead. That is most visible when re-picking a folder
+    // whose access was lost, where landing on the folder being restored is the whole point. Convert
+    // the tree URI to the document URI of its own root so the picker starts there. Resolution is
+    // done by DocumentsUI, not by us, so it still works after our own grant is gone.
+    private fun initialDocumentUriOf(uriString: String): Uri? {
+        return try {
+            val uri = Uri.parse(uriString)
+            if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(this, uri)) {
+                DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                uri
+            }
+        } catch (_: Exception) {
+            // A malformed persisted URI must not block the picker - just open it with no start location.
+            null
+        }
+    }
+
     private fun openPersistedDocumentTree(initialUri: String?, result: MethodChannel.Result) {
         if (openPersistedDocumentTreeResult != null) {
             result.error("PICKER_ACTIVE", "A document tree picker is already active.", null)
@@ -614,7 +652,9 @@ class MainActivity : FlutterActivity() {
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
             if (!initialUri.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(initialUri))
+                initialDocumentUriOf(initialUri)?.let {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, it)
+                }
             }
         }
 
@@ -941,6 +981,38 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /// Renders the launcher icon of an APK file that is not installed, so an app
+    /// whose source publishes no icon can still show one.
+    ///
+    /// getPackageArchiveInfo leaves sourceDir/publicSourceDir unset, and loadIcon
+    /// resolves the icon resource through those paths: without them the loader
+    /// has no archive to read from and falls back to the default icon. Pointing
+    /// both at the APK makes it read the resource out of the archive itself.
+    private fun getApkArchiveIconBytes(archiveFilePath: String): ByteArray? {
+        return try {
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageArchiveInfo(
+                    archiveFilePath,
+                    PackageManager.PackageInfoFlags.of(0),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageArchiveInfo(archiveFilePath, 0)
+            } ?: return null
+            val appInfo = packageInfo.applicationInfo ?: return null
+            appInfo.sourceDir = archiveFilePath
+            appInfo.publicSourceDir = archiveFilePath
+            val drawable = appInfo.loadIcon(packageManager)
+            val bitmap = drawableToBitmap(drawable)
+            ByteArrayOutputStream().use { stream ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                stream.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun drawableToBitmap(drawable: Drawable): Bitmap {
         val maxIconPx = 192
         val intrinsicW = drawable.intrinsicWidth
@@ -1190,11 +1262,19 @@ class MainActivity : FlutterActivity() {
         }
 
         if (expectedPkgName.isNullOrEmpty()) {
-            try {
+            val launched = try {
                 startActivity(intent)
+                true
             } catch (_: Exception) {
-                //
-            } finally {
+                false
+            }
+            if (launched) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    for (releaseFile in releaseFiles) {
+                        try { releaseFile.delete() } catch (_: Exception) { }
+                    }
+                }, UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS)
+            } else {
                 for (releaseFile in releaseFiles) {
                     try { releaseFile.delete() } catch (_: Exception) { }
                 }
