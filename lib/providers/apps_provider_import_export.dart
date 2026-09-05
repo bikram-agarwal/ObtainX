@@ -6,6 +6,8 @@ import 'package:easy_localization/easy_localization.dart';
 
 import 'package:obtainium/custom_errors.dart';
 
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -14,11 +16,16 @@ import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
 /// Secret settings excluded from the "settings without secrets" backup mode.
-/// Source credentials conventionally end in `-creds`; VirusTotal predates that
-/// convention, so its key and otherwise-useless validation fingerprint are
-/// listed explicitly.
+/// Source credentials conventionally end in `-creds`. Validation fingerprints
+/// are hashes of those tokens, so a "no secrets" backup must omit them too -
+/// otherwise the hash travels with the file and the token is still recoverable
+/// by anyone who later obtains it, and import would restore a shield with no
+/// matching PAT. VirusTotal predates the `-creds` convention, so its key and
+/// fingerprint are listed explicitly.
 bool isSecretSettingKey(String key) {
   return key.endsWith('-creds') ||
+      key == GitHub.validatedPATFingerprintKey ||
+      key == GitLab.validatedPATFingerprintKey ||
       key == virusTotalApiKeyKey ||
       key == virusTotalValidatedApiKeyFingerprintKey;
 }

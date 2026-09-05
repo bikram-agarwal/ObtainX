@@ -444,7 +444,9 @@ class NotificationsProvider {
             }
             final installFilePath = _installActionFilePath(response.actionId);
             if (installFilePath != null) {
-              unawaited(onInstallDownloadedFileRequested?.call(installFilePath));
+              unawaited(
+                onInstallDownloadedFileRequested?.call(installFilePath),
+              );
               return;
             }
             _showNotificationPayload(response.payload);

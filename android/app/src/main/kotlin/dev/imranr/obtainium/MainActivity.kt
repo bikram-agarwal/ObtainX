@@ -620,6 +620,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // DocumentsUI resolves EXTRA_INITIAL_URI as a *document* URI, but a picked folder is persisted
+    // as a bare tree URI (content://.../tree/<id>), which is not one - the picker silently ignores
+    // it and opens wherever it was last left instead. That is most visible when re-picking a folder
+    // whose access was lost, where landing on the folder being restored is the whole point. Convert
+    // the tree URI to the document URI of its own root so the picker starts there. Resolution is
+    // done by DocumentsUI, not by us, so it still works after our own grant is gone.
+    private fun initialDocumentUriOf(uriString: String): Uri? {
+        return try {
+            val uri = Uri.parse(uriString)
+            if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(this, uri)) {
+                DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                uri
+            }
+        } catch (_: Exception) {
+            // A malformed persisted URI must not block the picker - just open it with no start location.
+            null
+        }
+    }
+
     private fun openPersistedDocumentTree(initialUri: String?, result: MethodChannel.Result) {
         if (openPersistedDocumentTreeResult != null) {
             result.error("PICKER_ACTIVE", "A document tree picker is already active.", null)
@@ -632,7 +652,9 @@ class MainActivity : FlutterActivity() {
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
             if (!initialUri.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(initialUri))
+                initialDocumentUriOf(initialUri)?.let {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, it)
+                }
             }
         }
 
