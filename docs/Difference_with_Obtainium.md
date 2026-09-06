@@ -16,6 +16,7 @@
   - [Tablets, foldables, and landscape layout](#tablets-foldables-and-landscape-layout)
 - [ObtainX Exclusives](#obtainx-exclusives)
   - [Security features](#security-features)
+  - [Backup, import, restore](#backup-import-restore)
   - [Bulk import device apps](#bulk-import-device-apps)
   - [Folders](#folders)
   - [On-Demand Only](#on-demand-only)
@@ -138,6 +139,11 @@ ObtainX puts all sorting, grouping and view options in a sheet on the Apps tab i
     </tr>
     <tr>
         <td>Show app-type / tracked-store / categories badges</td>
+        <td>✗</td>
+        <td>✓</td>
+    </tr>
+    <tr>
+        <td>Hide app author/version</td>
         <td>✗</td>
         <td>✓</td>
     </tr>
@@ -278,7 +284,7 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
     <tr>
         <td>App icon for non-installed apps</td>
         <td>✗ Only installed apps (from the device)</td>
-        <td>✓ For stores that provide one — F-Droid (+repo), IzzyOnDroid, APKMirror, Tencent, Vivo, CoolApk</td>
+        <td>✓ From the tracked source, or from the downloaded APK, or from other store listing (APKMirror, F-Droid, APKPure, Play).</td>
     </tr>
     <tr>
         <td>Update size shown in advance</td>
@@ -293,7 +299,7 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
     <tr>
         <td>Changelog view</td>
         <td>• Centered, narrow panel squishes text vertically<br>• Completely obscures the center of the screen<br>• Doesn't show screenshots present in release notes<br>• Can't fetch changelog from APKMirror apps</td>
-        <td>• Full-width bottom sheet (wider, better readable text layout)<br>• Keeps background app context visible<br>• Shows screenshots present in release notes<br>• Fetches changelog from APKMirror apps too</td>
+        <td>• Full-width bottom sheet (wider, better readable text layout)<br>• Keeps background app context visible<br>• Shows screenshots present in release notes<br>• Fetches changelog from APKMirror and GitLab apps too<br>• Relative changelog images resolve on Forgejo instances, not only codeberg.org</td>
     </tr>
     <tr>
         <td>Update check configuration</td>
@@ -402,7 +408,7 @@ Obtainium's Add page is a single pushed screen: a URL field with an **Add** butt
             <strong>Obtainium</strong>
         </td>
         <td width="50%" align="center" valign="top">
-            <img src="../assets/screenshots/Compare_Add_App_2.webp" alt="ObtainX add app URL and options" width="300" /><br />
+            <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/07_add_apps.jpg" alt="ObtainX add app URL and options" width="300" /><br />
             <strong>ObtainX</strong>
         </td>
     </tr>
@@ -547,7 +553,7 @@ Both now support exact color pick and rename-with-propagation; ObtainX adds cont
             <strong>Obtainium</strong>
         </td>
         <td width="33%" align="center" valign="top">
-            <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/12_BulkEdit.jpg" alt="ObtainX bulk category editor — create, color, and assign in one place" width="260" /><br />
+            <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/10_BulkEdit.jpg" alt="ObtainX bulk category editor — create, color, and assign in one place" width="260" /><br />
             <strong>ObtainX</strong>
         </td>
     </tr>
@@ -680,9 +686,25 @@ ObtainX pioneered the large-screen layout (v2.9.0, June 2026); Obtainium added a
 Obtainium pulls each APK straight off the open internet — a GitHub asset, an F-Droid mirror, a third-party store, sometimes a plain HTML page — and its only integrity signal is the **signing-certificate hash**, which merely says the *signer* hasn't changed. It tells you nothing about whether the bytes match what the developer actually built, or whether the file is malicious. That leaves **you** as the last line of defense. ObtainX adds two independent layers, either of which can hard-block an install:
 
 - **Build verification — "is this the developer's real build?"** ObtainX confirms the exact file you downloaded against **reproducible-build** proof (F-Droid / IzzyOnDroid rebuild the app from public source and match it) or a **GitHub Release Attestation** (GitHub's signed record that the file came out of the developer's own CI — not swapped in by a hijacked account, CDN, or man-in-the-middle). Configurable per app as **Off / Audit-only / Enforce**, where Enforce blocks anything unverified. This is exactly the signal that catches a *trusted* app whose release pipeline was later compromised — Obtainium has neither check. *(See the [Build Verification Guide](build-verification-guide.md).)*
-- **VirusTotal scanning — "is this file known-bad?"** With your own API key, ObtainX scans every downloaded APK against VirusTotal's dozens of engines **before install**. Flagged or failed scans **fail safe**: a manual install stops and asks you (view report / cancel / install anyway), and a background update skips the app and notifies you instead of installing silently.
+- **VirusTotal scanning — "is this file known-bad?"** With your own API key, ObtainX scans every downloaded APK against VirusTotal's dozens of engines **before install**. Flagged or failed scans **fail safe**: a manual install stops and asks you (view report / retry / cancel / install anyway), and a background update skips the app and notifies you instead of installing silently. You can turn scanning off for some apps without disabling it globally.
 
 The two are complementary — a reproducible build proves authenticity, but an authentic build of a *malicious* app still passes, and that's what VirusTotal catches. ObtainX's own releases are reproducible and attested too, so the updater itself is verifiable by the same checks.
+
+---
+
+### Backup, import, restore
+
+Obtainium's export/import is all-or-nothing: you load a JSON file and it merges into whatever is already there, with no way to pick a subset, no automatic clean-slate restore. 
+
+ObtainX puts this on a dedicated **Backup** tab:
+
+- **Import** merges the backup into what you already have. You pick which apps (and whether settings, with or without secrets) to bring in. Matching app IDs are updated; new ones are added.
+- **Restore** resets ObtainX to out-of-the-box defaults first (tracked apps and settings), then applies only what you choose from the backup.
+- **More than apps and settings** - ObtainX can also back up downloaded APKs and app icons to folders you pick (custom icons you set, and icons it deduced from an APK or another store). After a reinstall or a new device, reconnect those folders to bring the files and icons back.
+
+<p align="center">
+<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/06_import_export.jpg" alt="ObtainX Backup tab" width="300" />
+</p>
 
 ---
 
@@ -699,7 +721,7 @@ ObtainX reads every app installed on your device, searches each of your chosen s
 <table>
     <tr>
         <td width="50%" align="center" valign="top">
-            <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/09_bulk_add.jpg" alt="Select apps from device" width="300" /><br />
+            <img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/08_bulk_add.jpg" alt="Select apps from device" width="300" /><br />
             <strong>Select</strong><br />Filter by app type, pick your stores, toggle Skip tracked / Skip privileged, search, select all or hand-pick.
         </td>
         <td width="50%" align="center" valign="top">
@@ -735,7 +757,7 @@ ObtainX adds **Folders**: persistent named views that pull apps off the main lis
 **Per-folder view settings** — Each folder (and the On-Demand Only page) remembers its own sort column, group-by mode, pinned state, and filter — completely independent from the main list and from each other.
 
 <p align="center">
-<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/10_folders.jpg" alt="Folders with rules" width="300" />
+<img src="../fastlane/metadata/android/en-US/images/phoneScreenshots/11_folders.jpg" alt="Folders with rules" width="300" />
 </p>
 
 ---
@@ -821,7 +843,7 @@ ObtainX surfaces **finer-grained states** rather than forcing every situation in
   
   InstallerX and similar tools can be granted elevated install permissions via root or ADB, allowing them to install APKs even with Advanced Protection active. They're purpose-built for exactly this — but Obtainium had no way to hand off to them.
   
-  **ObtainX solves both.** You pick your installer. ObtainX fetches the APK and passes it to whichever installer you've configured. You get the visibility and control of a proper installer tool, and Advanced Protection stays on.
+  **ObtainX solves both.** You pick your installer — stock, Shizuku, **Dhizuku** (its own mode, not bundled with Shizuku), or a third-party app. ObtainX fetches the APK and passes it to whichever installer you've configured. You get the visibility and control of a proper installer tool, and Advanced Protection stays on.
   
   A pull request with this feature was submitted to Obtainium — it wasn't merged. While waiting, there were other rough edges worth fixing. Then a few more. That compounding list of improvements is what became ObtainX. 
   
