@@ -587,6 +587,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   bool _attemptedApkMirrorSizeResolution = false;
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
+  bool _swappingTrackedSource = false;
+  App? _swapSecurityAppSnapshot;
+  AppSource? _swapSecuritySourceSnapshot;
+  List<String>? _swapSecurityCertificateHashesSnapshot;
+  bool? _swapSecurityHasMultipleSignersSnapshot;
   int _updateCheckRunToken = 0;
   double _bottomActionBarHeight = 0;
   double _editModeFloatingActionButtonsHeight = 0;
@@ -751,6 +756,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _attemptedApkMirrorSizeResolution = false;
       _lastWebViewSurfaceColorApplied = null;
       _scheduledOpenInEditMode = false;
+      _swappingTrackedSource = false;
+      _swapSecurityAppSnapshot = null;
+      _swapSecuritySourceSnapshot = null;
+      _swapSecurityCertificateHashesSnapshot = null;
+      _swapSecurityHasMultipleSignersSnapshot = null;
       _clearEditIconStaging();
       _signingCertificateLoadKey = null;
       _signingCertificateInfoFuture = null;
@@ -2214,42 +2224,174 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   static const double _storeSourceIconSize = 32;
   static const double _storeSourceButtonSize = 48;
 
+  Future<void> _showAlternateStoreSwapMenu({
+    required BuildContext menuContext,
+    required Offset globalPosition,
+    required String storeName,
+    required String url,
+  }) async {
+    final RelativeRect position = RelativeRect.fromLTRB(
+      globalPosition.dx,
+      globalPosition.dy,
+      globalPosition.dx + 1,
+      globalPosition.dy + 1,
+    );
+    final String? choice = await showMenu<String>(
+      context: menuContext,
+      position: position,
+      items: [
+        PopupMenuItem<String>(
+          value: 'swap',
+          child: Text(tr('swapToThisSource')),
+        ),
+        PopupMenuItem<String>(value: 'copy', child: Text(tr('copyUrl'))),
+      ],
+    );
+    if (!mounted) return;
+    switch (choice) {
+      case 'swap':
+        hapticSelection();
+        await _runSwapTrackedSource(storeName: storeName, candidateUrl: url);
+      case 'copy':
+        if (!menuContext.mounted) return;
+        _toastUrl(menuContext, url);
+        await Clipboard.setData(ClipboardData(text: url));
+      default:
+        break;
+    }
+  }
+
+  Future<void> _runSwapTrackedSource({
+    required String storeName,
+    required String candidateUrl,
+  }) async {
+    if (updating) return;
+    final String appId = widget.appId;
+    final AppsProvider appsProvider = Provider.of<AppsProvider>(
+      context,
+      listen: false,
+    );
+    try {
+      final AppInMemory? swapEntry = appsProvider.apps[appId];
+      setState(() {
+        updating = true;
+        _swappingTrackedSource = true;
+        _cachedSource = null;
+        _cachedSourceKey = null;
+        if (swapEntry != null) {
+          _swapSecurityAppSnapshot = swapEntry.app;
+          _swapSecuritySourceSnapshot = _sourceProvider.getSource(
+            swapEntry.app.url,
+            overrideSource: swapEntry.app.overrideSource,
+          );
+          _swapSecurityCertificateHashesSnapshot = List<String>.from(
+            swapEntry.certificateHashes,
+          );
+          _swapSecurityHasMultipleSignersSnapshot =
+              swapEntry.hasMultipleSigners;
+        }
+      });
+      await appsProvider.swapTrackedSource(
+        appId: appId,
+        storeName: storeName,
+        candidateUrl: candidateUrl,
+      );
+      appsProvider.clearAppPageError(appId);
+      if (!mounted || widget.appId != appId) return;
+      setState(() {
+        _requestedMissingIconLoad = false;
+        _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(appId);
+        _cachedSource = null;
+        _cachedSourceKey = null;
+      });
+      await appsProvider.updateAppIcon(appId);
+      unawaited(_maybeCheckAndCacheAllStores(appId));
+      _attemptedApkMirrorSizeResolution = false;
+      unawaited(_maybeLazyResolveApkMirrorSize());
+    } catch (error) {
+      if (!mounted || widget.appId != appId) return;
+      _showPageError(error, title: tr('errorSwappingTrackedSource'));
+    } finally {
+      if (mounted && widget.appId == appId) {
+        setState(() {
+          updating = false;
+          _swappingTrackedSource = false;
+          _swapSecurityAppSnapshot = null;
+          _swapSecuritySourceSnapshot = null;
+          _swapSecurityCertificateHashesSnapshot = null;
+          _swapSecurityHasMultipleSignersSnapshot = null;
+        });
+      }
+    }
+  }
+
   Widget _buildStoreSourceLaunchIcon({
     required BuildContext iconContext,
     required String url,
     String? assetPath,
+    String? swapStoreName,
   }) {
-    final ColorScheme colorScheme = Theme.of(iconContext).colorScheme;
-    final Widget picture = assetPath != null
-        ? StoreSourceIconImage(
-            assetPath: assetPath,
-            size: _storeSourceIconSize,
-            errorBuilder: (context, error, stackTrace) => Icon(
-              Icons.link,
-              size: _storeSourceIconSize * 0.75,
-              color: colorScheme.primary,
-            ),
-          )
-        : StoreSourceIconForUrl(url: url, size: _storeSourceIconSize);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => launchUrlString(url, mode: LaunchMode.externalApplication),
-        onLongPress: () {
-          _toastUrl(iconContext, url);
-          Clipboard.setData(ClipboardData(text: url));
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: SizedBox.square(
-          dimension: _storeSourceButtonSize,
-          child: Center(
+    final String? swappableStoreName =
+        swapStoreName != null &&
+            swappableAlternateStoreNames.contains(swapStoreName)
+        ? swapStoreName
+        : null;
+    return Builder(
+      builder: (BuildContext iconBuilderContext) {
+        final ColorScheme colorScheme = Theme.of(
+          iconBuilderContext,
+        ).colorScheme;
+        final Widget picture = assetPath != null
+            ? StoreSourceIconImage(
+                assetPath: assetPath,
+                size: _storeSourceIconSize,
+                errorBuilder: (context, error, stackTrace) => Icon(
+                  Icons.link,
+                  size: _storeSourceIconSize * 0.75,
+                  color: colorScheme.primary,
+                ),
+              )
+            : StoreSourceIconForUrl(url: url, size: _storeSourceIconSize);
+        final Widget iconButton = Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () =>
+                launchUrlString(url, mode: LaunchMode.externalApplication),
+            onLongPress: swappableStoreName != null
+                ? null
+                : () {
+                    _toastUrl(iconBuilderContext, url);
+                    Clipboard.setData(ClipboardData(text: url));
+                  },
+            borderRadius: BorderRadius.circular(12),
             child: SizedBox.square(
-              dimension: _storeSourceIconSize,
-              child: Center(child: picture),
+              dimension: _storeSourceButtonSize,
+              child: Center(
+                child: SizedBox.square(
+                  dimension: _storeSourceIconSize,
+                  child: Center(child: picture),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+        if (swappableStoreName == null) {
+          return iconButton;
+        }
+        return GestureDetector(
+          onLongPressStart: (LongPressStartDetails details) {
+            unawaited(
+              _showAlternateStoreSwapMenu(
+                menuContext: iconBuilderContext,
+                globalPosition: details.globalPosition,
+                storeName: swappableStoreName,
+                url: url,
+              ),
+            );
+          },
+          child: iconButton,
+        );
+      },
     );
   }
 
@@ -3624,12 +3766,34 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         }
       }
 
+      final bool freezeSecurityCardDuringSwap =
+          _swappingTrackedSource && _swapSecurityAppSnapshot != null;
+      final App? securityApp = freezeSecurityCardDuringSwap
+          ? _swapSecurityAppSnapshot
+          : app?.app;
+      final AppSource? securitySource = freezeSecurityCardDuringSwap
+          ? _swapSecuritySourceSnapshot
+          : source;
+      final List<String> securityCertificateHashes =
+          freezeSecurityCardDuringSwap &&
+              _swapSecurityCertificateHashesSnapshot != null
+          ? _swapSecurityCertificateHashesSnapshot!
+          : loadedCertificateHashes;
+      final bool securityHasMultipleSigners =
+          freezeSecurityCardDuringSwap &&
+              _swapSecurityHasMultipleSignersSnapshot != null
+          ? _swapSecurityHasMultipleSignersSnapshot!
+          : app?.hasMultipleSigners == true;
+
       final bool reproducibleBuildExpected =
-          source != null && reproducibleBuildVerificationApplies(source);
+          securitySource != null &&
+          reproducibleBuildVerificationApplies(securitySource);
       final String? reproducibleBuildStatus =
-          app?.app.latestReproducibleStatus ??
-          (app?.app.latestIsReproducible != null
-              ? reproducibleBuildStatusFromBool(app!.app.latestIsReproducible)
+          securityApp?.latestReproducibleStatus ??
+          (securityApp?.latestIsReproducible != null
+              ? reproducibleBuildStatusFromBool(
+                  securityApp!.latestIsReproducible,
+                )
               : null);
       final bool reproducibleBuildVerified =
           reproducibleBuildExpected &&
@@ -3645,28 +3809,31 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           (reproducibleBuildStatus == reproducibleBuildStatusError ||
               reproducibleBuildStatus == null);
       final bool reproducibleBuildBlocked =
-          app != null &&
-          source != null &&
-          reproducibleBuildEnforcementBlocksInstall(app.app, source);
+          securityApp != null &&
+          securitySource != null &&
+          reproducibleBuildEnforcementBlocksInstall(
+            securityApp,
+            securitySource,
+          );
       final bool reproducibleBuildHasDisplayStatus =
           reproducibleBuildVerified ||
-          (reproducibleBuildBlocked &&
-              (reproducibleBuildNotReproducible ||
-                  reproducibleBuildNoData ||
-                  reproducibleBuildUnknown));
+          reproducibleBuildNotReproducible ||
+          reproducibleBuildNoData ||
+          reproducibleBuildUnknown;
       final bool githubAttestationExpected =
-          source is GitHub &&
-          source.shouldVerifyAttestations(
-            app?.app.additionalSettings ?? <String, dynamic>{},
+          securitySource is GitHub &&
+          securitySource.shouldVerifyAttestations(
+            securityApp?.additionalSettings ?? <String, dynamic>{},
             settingsProvider,
           );
-      final String? githubAttestationStatus = app?.app.latestAttestationStatus;
+      final String? githubAttestationStatus =
+          securityApp?.latestAttestationStatus;
       final bool githubAttestationBlocked =
-          app != null &&
-          source != null &&
+          securityApp != null &&
+          securitySource != null &&
           githubAttestationEnforcementBlocksInstall(
-            app.app,
-            source,
+            securityApp,
+            securitySource,
             settingsProvider,
           );
       final bool githubAttestationVerified =
@@ -3683,7 +3850,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           githubAttestationVerified ||
           githubAttestationUnsupported ||
           githubAttestationCantCheck;
-      final String? malwareScanStatus = app?.app.latestMalwareScanStatus;
+      final String? malwareScanStatus = securityApp?.latestMalwareScanStatus;
       final bool malwareScanFlagged =
           malwareScanStatus == malwareScanStatusFlagged;
       final bool malwareScanError = malwareScanStatus == malwareScanStatusError;
@@ -3756,7 +3923,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       }
 
       final securityCardChildren = <Widget>[];
-      if (app != null &&
+      if (securityApp != null &&
           (reproducibleBuildHasDisplayStatus ||
               githubAttestationHasStatus ||
               githubAttestationBlocked ||
@@ -3783,10 +3950,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   icon: Icons.shield_outlined,
                   label: tr('verifiedBuild'),
                 ),
-              if (reproducibleBuildBlocked &&
-                  (reproducibleBuildNotReproducible ||
-                      reproducibleBuildNoData ||
-                      reproducibleBuildUnknown))
+              if (reproducibleBuildNotReproducible ||
+                  reproducibleBuildNoData ||
+                  reproducibleBuildUnknown)
                 statusBadge(
                   backgroundColor: reproducibleBuildProblemContainerColor,
                   borderColor: reproducibleBuildProblemBorderColor,
@@ -3866,13 +4032,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                         ? 'malwareScanErrorChip'
                         : 'malwareScanCleanChip',
                   ),
-                  onTap: app.app.latestMalwareScanReportUrl == null
+                  onTap: securityApp.latestMalwareScanReportUrl == null
                       ? null
                       : () => launchUrlString(
-                          app.app.latestMalwareScanReportUrl!,
+                          securityApp.latestMalwareScanReportUrl!,
                           mode: LaunchMode.externalApplication,
                         ),
-                  tooltip: app.app.latestMalwareScanDetail,
+                  tooltip: securityApp.latestMalwareScanDetail,
                 ),
             ],
           ),
@@ -4005,17 +4171,18 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         );
       }
 
-      if (loadedCertificateHashes.isNotEmpty) {
+      if (securityCertificateHashes.isNotEmpty) {
         if (securityCardChildren.isNotEmpty) {
           securityCardChildren.add(const SizedBox(height: 16));
         }
         securityCardChildren.add(
           buildCertificateHashRow(
-            loadedCertificateHashes,
-            app?.hasMultipleSigners == true,
+            securityCertificateHashes,
+            securityHasMultipleSigners,
           ),
         );
-      } else if (app?.installedInfo != null &&
+      } else if (!freezeSecurityCardDuringSwap &&
+          app?.installedInfo != null &&
           _signingCertificateInfoFuture != null) {
         if (securityCardChildren.isNotEmpty) {
           securityCardChildren.add(const SizedBox(height: 16));
@@ -4238,6 +4405,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                     'apkmirror.com',
                   ),
                 );
+                final githubUrl = _resolveStoreUrl(
+                  storeData: storeData,
+                  storeName: 'GitHub',
+                  fallbackUrl: null,
+                  alreadyTracked: _trackedUrlIsFromHost(
+                    trackedUrl,
+                    'github.com',
+                  ),
+                );
+                // Alternate icon order: Play Store, GitHub, F-Droid, APKPure,
+                // APKMirror (tracked source is always shown first, separately).
                 if (playStoreUrl != null) {
                   alternateSourceIcons.add(
                     _buildStoreSourceLaunchIcon(
@@ -4247,12 +4425,23 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                     ),
                   );
                 }
+                if (githubUrl != null) {
+                  alternateSourceIcons.add(
+                    _buildStoreSourceLaunchIcon(
+                      iconContext: pageThemeContext,
+                      url: githubUrl,
+                      assetPath: StoreSourceIconPaths.github,
+                      swapStoreName: 'GitHub',
+                    ),
+                  );
+                }
                 if (fdroidUrl != null) {
                   alternateSourceIcons.add(
                     _buildStoreSourceLaunchIcon(
                       iconContext: pageThemeContext,
                       url: fdroidUrl,
                       assetPath: StoreSourceIconPaths.fdroid,
+                      swapStoreName: 'F-Droid',
                     ),
                   );
                 }
@@ -4262,6 +4451,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       iconContext: pageThemeContext,
                       url: apkpureUrl,
                       assetPath: StoreSourceIconPaths.apkpure,
+                      swapStoreName: 'APKPure',
                     ),
                   );
                 }
@@ -4271,6 +4461,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       iconContext: pageThemeContext,
                       url: apkmirrorUrl,
                       assetPath: StoreSourceIconPaths.apkmirror,
+                      swapStoreName: 'APKMirror',
                     ),
                   );
                 }
@@ -5152,9 +5343,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                                 scrollCacheExtent:
                                     const ScrollCacheExtent.pixels(1600),
                                 controller: _appPageScrollController,
-                                physics: const AlwaysScrollableScrollPhysics(
-                                  parent: ClampingScrollPhysics(),
-                                ),
+                                physics: _swappingTrackedSource
+                                    ? const NeverScrollableScrollPhysics()
+                                    : const AlwaysScrollableScrollPhysics(
+                                        parent: ClampingScrollPhysics(),
+                                      ),
                                 slivers: [
                                   SliverToBoxAdapter(
                                     child: SafeArea(
@@ -5240,12 +5433,31 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                             ],
                           ),
                     onRefresh: () async {
-                      if (_editMode) return;
+                      if (_editMode || _swappingTrackedSource) return;
                       if (app != null) {
                         await _runCheckUpdate(app.app.id);
                       }
                     },
                   ),
+                  if (_swappingTrackedSource)
+                    Positioned.fill(
+                      child: AbsorbPointer(
+                        child: ColoredBox(
+                          color: pageColorSchemeForPage.surface.withValues(
+                            alpha: 0.72,
+                          ),
+                          child: Center(
+                            child: ExpressiveLoadingIndicator(
+                              color: pageColorSchemeForPage.primary,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 64,
+                                height: 64,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   if (widget.isEmbedded)
                     Positioned(
                       left: 0,

@@ -3,12 +3,17 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/services/bulk_import_service.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
 import 'package:obtainium/version/partial_download_version.dart';
 
 // ── Bounded update-check parallelism (device-tuned) ─────────────────────────
@@ -243,6 +248,234 @@ App? mergeFetchedUpdateWithLiveState({
   );
 }
 
+/// Alternate store names from [BulkScanCache] that may become the tracked source.
+/// Play Store is intentionally excluded.
+const Set<String> swappableAlternateStoreNames = {
+  'F-Droid',
+  'APKPure',
+  'APKMirror',
+  'GitHub',
+};
+
+bool isSwappableGitHubRepoUrl(String url) {
+  final Uri? parsed = Uri.tryParse(url.trim());
+  if (parsed == null) return false;
+  final String host = parsed.host.toLowerCase();
+  if (host != 'github.com' && !host.endsWith('.github.com')) {
+    return false;
+  }
+  final List<String> segments = parsed.pathSegments
+      .where((String segment) => segment.isNotEmpty)
+      .toList();
+  if (segments.length < 2) return false;
+  return segments[0].isNotEmpty && segments[1].isNotEmpty;
+}
+
+/// Persists a known GitHub repository URL as an alternate source without
+/// running GitHub code search.
+Future<void> preserveAlternateGitHubSourceInCache({
+  required String packageId,
+  required String githubUrl,
+}) async {
+  if (!isSwappableGitHubRepoUrl(githubUrl)) return;
+  final String standardizedUrl = GitHub().standardizeUrl(githubUrl);
+  await BulkScanCache.mergeStoreAndSave(
+    <String, Map<String, String>>{},
+    'GitHub',
+    <String, String?>{packageId: standardizedUrl},
+  );
+}
+
+bool isApkMirrorStoreSearchUrl(String url) {
+  final Uri? parsed = Uri.tryParse(url);
+  if (parsed == null) return false;
+  return parsed.host.toLowerCase().contains('apkmirror.com') &&
+      parsed.queryParameters['searchtype'] == 'apk';
+}
+
+/// Resolves a concrete listing URL for a store swap. Returns null when the app
+/// cannot be found on that store.
+Future<String?> resolveSwappableStoreListingUrl({
+  required String storeName,
+  required String packageId,
+  String? candidateUrl,
+}) async {
+  if (!swappableAlternateStoreNames.contains(storeName)) {
+    return null;
+  }
+  switch (storeName) {
+    case 'APKMirror':
+      if (candidateUrl != null &&
+          candidateUrl.isNotEmpty &&
+          !isApkMirrorStoreSearchUrl(candidateUrl)) {
+        return candidateUrl;
+      }
+      return (await BulkImportService.checkApkMirror([packageId]))[packageId];
+    case 'APKPure':
+      if (candidateUrl != null &&
+          candidateUrl.isNotEmpty &&
+          isWellFormedApkPureUrl(candidateUrl)) {
+        return candidateUrl;
+      }
+      return (await BulkImportService.checkApkPure([packageId]))[packageId];
+    case 'F-Droid':
+      if (candidateUrl != null && candidateUrl.isNotEmpty) {
+        return candidateUrl;
+      }
+      return (await BulkImportService.checkFDroid([packageId]))[packageId] ??
+          'https://f-droid.org/packages/$packageId/';
+    case 'GitHub':
+      if (candidateUrl != null &&
+          candidateUrl.isNotEmpty &&
+          isSwappableGitHubRepoUrl(candidateUrl)) {
+        return GitHub().standardizeUrl(candidateUrl);
+      }
+      final Map<String, String>? cachedStores = await BulkScanCache.loadForApp(
+        packageId,
+      );
+      final String? cachedGitHubUrl = cachedStores?['GitHub'];
+      if (cachedGitHubUrl != null &&
+          cachedGitHubUrl.isNotEmpty &&
+          isSwappableGitHubRepoUrl(cachedGitHubUrl)) {
+        return GitHub().standardizeUrl(cachedGitHubUrl);
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+App prepareAppForTrackedSourceSwap({
+  required App app,
+  required AppSource previousSource,
+  required AppSource destinationSource,
+  required String standardizedDestinationUrl,
+}) {
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    app.additionalSettings,
+  );
+  for (final String metadataKey in <String>[
+    sourceVersionCodesKey,
+    sourceBuildComparisonKey,
+    acknowledgedSourceReleaseKey,
+    'rawSelectedReleaseTitle',
+    partialDownloadFingerprintKey,
+    'skippedLatestVersion',
+    unreconciledVersionComparisonKey,
+  ]) {
+    settings.remove(metadataKey);
+  }
+  if (destinationSource.enforceTrackOnly) {
+    settings['trackOnly'] = true;
+  } else if (previousSource.enforceTrackOnly) {
+    settings.remove('trackOnly');
+  }
+  syncVersionStringSourceSettings(settings);
+  final List<MapEntry<String, String>> versionSourceOptions =
+      destinationSource.versionStringSourceOptions;
+  final String? selectedVersionSource = settings['versionStringSource']
+      ?.toString();
+  if (versionSourceOptions.length <= 1 ||
+      selectedVersionSource == null ||
+      !versionSourceOptions.any(
+        (MapEntry<String, String> option) =>
+            option.key == selectedVersionSource,
+      )) {
+    settings.remove('versionStringSource');
+    syncVersionStringSourceSettings(settings);
+  }
+  return app.copyWith(
+    url: standardizedDestinationUrl,
+    overrideSource: null,
+    pendingRepoRenameUrl: null,
+    iconUrl: null,
+    apkSizeBytes: null,
+    rawLatestVersionFromSource: null,
+    rawApkNamesFromSource: null,
+    rawReleaseTitlesFromSource: null,
+    latestIsReproducible: null,
+    latestReproducibleStatus: null,
+    latestReproducibleVersionCode: null,
+    latestAttestationStatus: null,
+    latestMalwareScanStatus: null,
+    latestMalwareScanDetail: null,
+    latestMalwareScanReportUrl: null,
+    additionalSettings: settings,
+  );
+}
+
+/// Merges a fetched release after a tracked-source swap. Unlike
+/// [mergeFetchedUpdateWithLiveState], the live row still points at the previous
+/// source until this merge commits the new URL and override.
+App? mergeTrackedSourceSwap({
+  required String originalUrl,
+  required String? originalOverrideSource,
+  required App? liveApp,
+  required App requestedApp,
+  required App fetchedApp,
+}) {
+  if (liveApp == null ||
+      liveApp.url != originalUrl ||
+      liveApp.overrideSource != originalOverrideSource) {
+    return null;
+  }
+  final int preferredApkIndex =
+      liveApp.preferredApkIndex < fetchedApp.apkUrls.length
+      ? liveApp.preferredApkIndex
+      : fetchedApp.preferredApkIndex;
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    requestedApp.additionalSettings,
+  )..remove(sourceVersionCodesKey);
+  if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
+    settings[sourceVersionCodesKey] =
+        fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  settings.remove(sourceBuildComparisonKey);
+  if (fetchedApp.additionalSettings[sourceBuildComparisonKey] != null) {
+    settings[sourceBuildComparisonKey] =
+        fetchedApp.additionalSettings[sourceBuildComparisonKey];
+  }
+  settings.remove('rawSelectedReleaseTitle');
+  if (fetchedApp.additionalSettings['rawSelectedReleaseTitle'] != null) {
+    settings['rawSelectedReleaseTitle'] =
+        fetchedApp.additionalSettings['rawSelectedReleaseTitle'];
+  }
+  settings.remove(partialDownloadFingerprintKey);
+  if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {
+    settings[partialDownloadFingerprintKey] =
+        fetchedApp.additionalSettings[partialDownloadFingerprintKey];
+  }
+  return normalizeSelectedSourceVersion(
+    liveApp.copyWith(
+      url: requestedApp.url,
+      overrideSource: requestedApp.overrideSource,
+      pendingRepoRenameUrl: null,
+      additionalSettings: settings,
+      author: fetchedApp.author,
+      name: fetchedApp.name,
+      latestVersion: fetchedApp.latestVersion,
+      apkUrls: fetchedApp.apkUrls,
+      otherAssetUrls: fetchedApp.otherAssetUrls,
+      preferredApkIndex: preferredApkIndex,
+      lastUpdateCheck: fetchedApp.lastUpdateCheck,
+      releaseDate: fetchedApp.releaseDate,
+      changeLog: fetchedApp.changeLog,
+      iconUrl: fetchedApp.iconUrl,
+      apkSizeBytes: fetchedApp.apkSizeBytes,
+      rawLatestVersionFromSource: fetchedApp.rawLatestVersionFromSource,
+      rawApkNamesFromSource: fetchedApp.rawApkNamesFromSource,
+      rawReleaseTitlesFromSource: fetchedApp.rawReleaseTitlesFromSource,
+      latestIsReproducible: fetchedApp.latestIsReproducible,
+      latestReproducibleStatus: fetchedApp.latestReproducibleStatus,
+      latestReproducibleVersionCode: fetchedApp.latestReproducibleVersionCode,
+      latestAttestationStatus: fetchedApp.latestAttestationStatus,
+      latestMalwareScanStatus: null,
+      latestMalwareScanDetail: null,
+      latestMalwareScanReportUrl: null,
+    ),
+  );
+}
+
 typedef _FetchedAppUpdate = ({App requestedApp, App fetchedApp});
 
 /// Update checking and pending-update bookkeeping for [AppsProvider].
@@ -370,6 +603,100 @@ extension AppsProviderUpdates on AppsProvider {
     return mergedApp.latestVersion != update.requestedApp.latestVersion
         ? mergedApp
         : null;
+  }
+
+  /// Moves [appId] to [storeName] using [candidateUrl] when known, refreshes
+  /// metadata from the destination source, and persists only after a successful
+  /// fetch. Returns null when the app is missing or a concurrent edit wins.
+  Future<App?> swapTrackedSource({
+    required String appId,
+    required String storeName,
+    String? candidateUrl,
+  }) {
+    return SourceRequestSession.run(
+      () => _swapTrackedSourceInSession(
+        appId: appId,
+        storeName: storeName,
+        candidateUrl: candidateUrl,
+      ),
+    );
+  }
+
+  Future<App?> _swapTrackedSourceInSession({
+    required String appId,
+    required String storeName,
+    String? candidateUrl,
+  }) async {
+    if (!swappableAlternateStoreNames.contains(storeName)) {
+      throw ObtainiumError(tr('swapTrackedSourceUnsupportedStore'));
+    }
+    final AppInMemory? entry = apps[appId];
+    if (entry == null) {
+      return null;
+    }
+    if (entry.downloadProgress != null) {
+      throw ObtainiumError(tr('unexpectedError'));
+    }
+    final App currentApp = entry.app;
+    final String originalUrl = currentApp.url;
+    final String? originalOverrideSource = currentApp.overrideSource;
+    final SourceProvider sourceProvider = SourceProvider();
+    final AppSource previousSource = sourceProvider.getSource(
+      currentApp.url,
+      overrideSource: currentApp.overrideSource,
+    );
+    if (previousSource.sourceIdentifier == 'GitHub' ||
+        isSwappableGitHubRepoUrl(originalUrl)) {
+      await preserveAlternateGitHubSourceInCache(
+        packageId: appId,
+        githubUrl: previousSource.standardizeUrl(originalUrl),
+      );
+    }
+    final String? resolvedUrl = await resolveSwappableStoreListingUrl(
+      storeName: storeName,
+      packageId: appId,
+      candidateUrl: candidateUrl,
+    );
+    if (resolvedUrl == null || resolvedUrl.isEmpty) {
+      throw NoAPKError()..url = candidateUrl ?? storeName;
+    }
+    final AppSource destinationSource = sourceProvider.getSource(resolvedUrl);
+    final String standardizedUrl = destinationSource.standardizeUrl(
+      resolvedUrl,
+    );
+    final App requestedApp = prepareAppForTrackedSourceSwap(
+      app: currentApp,
+      previousSource: previousSource,
+      destinationSource: destinationSource,
+      standardizedDestinationUrl: standardizedUrl,
+    );
+    App fetchedApp = await sourceProvider.getApp(
+      destinationSource,
+      standardizedUrl,
+      requestedApp.additionalSettings,
+      currentApp: requestedApp,
+    );
+    fetchedApp = await _fillDownloadSizeIfUpdatePending(
+      destinationSource,
+      requestedApp,
+      fetchedApp,
+    );
+    final App? mergedApp = mergeTrackedSourceSwap(
+      originalUrl: originalUrl,
+      originalOverrideSource: originalOverrideSource,
+      liveApp: apps[appId]?.app,
+      requestedApp: requestedApp,
+      fetchedApp: fetchedApp,
+    );
+    if (mergedApp == null) {
+      return null;
+    }
+    await saveApps([mergedApp]);
+    final AppInMemory? savedEntry = apps[appId];
+    if (savedEntry != null) {
+      savedEntry.sourceType = destinationSource.sourceIdentifier;
+    }
+    return mergedApp;
   }
 
   /// Returns app IDs sorted by last update check time, oldest first.

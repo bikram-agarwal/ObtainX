@@ -8,6 +8,7 @@ import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -149,4 +150,54 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  testWidgets('alternate F-Droid icon long-press offers swap menu', (
+    tester,
+  ) async {
+    final settings = SettingsProvider()..prefs = preferences;
+    Localization.load(
+      const Locale('en'),
+      translations: Translations(translations),
+    );
+    final provider = _Apps();
+    final model = _app('1.0.0', '1.0.0', trackOnly: false);
+    provider.apps[model.id] = AppInMemory(model, null, null, icon);
+    addTearDown(provider.dispose);
+    addTearDown(settings.dispose);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(480, 1600);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AppsProvider>.value(value: provider),
+          ChangeNotifierProvider<SettingsProvider>.value(value: settings),
+        ],
+        child: MaterialApp(home: AppPage(appId: model.id)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder fdroidIcon = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is StoreSourceIconImage &&
+          widget.assetPath == StoreSourceIconPaths.fdroid,
+    );
+    expect(fdroidIcon, findsOneWidget);
+    await tester.longPress(fdroidIcon);
+    await tester.pumpAndSettle();
+    expect(find.text(tr('swapToThisSource')), findsOneWidget);
+    expect(find.text(tr('copyUrl')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test('Play Store is not a swappable tracked source', () {
+    expect(swappableAlternateStoreNames.contains('PlayStore'), isFalse);
+  });
+
+  test('GitHub is a swappable alternate source', () {
+    expect(swappableAlternateStoreNames.contains('GitHub'), isTrue);
+  });
 }
