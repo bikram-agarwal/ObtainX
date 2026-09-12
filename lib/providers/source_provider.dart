@@ -280,6 +280,9 @@ class APKDetails {
 
   /// Source version code associated with the preferred APK, when available.
   final int? versionCode;
+
+  /// Version codes by asset name, retained through filtering and variant choice.
+  final Map<String, int> versionCodesByAsset;
   List<MapEntry<String, String>> apkUrls;
   final AppNames names;
   final DateTime? releaseDate;
@@ -303,6 +306,7 @@ class APKDetails {
     this.apkUrls,
     this.names, {
     this.versionCode,
+    this.versionCodesByAsset = const {},
     this.releaseDate,
     this.changeLog,
     this.allAssetUrls = const [],
@@ -1795,6 +1799,11 @@ class SourceProvider {
     // Capture raw snapshots before version extraction / release-date/title
     // replacement and APK filtering mutate them (used by the RegEx assist).
     final String rawLatestVersionFromSource = apk.version;
+    final codesByAsset = <String, int>{
+      if (apk.versionCode != null && apk.apkUrls.isNotEmpty)
+        apk.apkUrls.last.key: apk.versionCode!,
+      ...apk.versionCodesByAsset,
+    };
     final String? rawApkNamesFromSource = encodeRawAssistLines(
       apk.apkUrls.map((MapEntry<String, String> entry) => entry.key),
     );
@@ -1826,13 +1835,6 @@ class SourceProvider {
     // versionCode of 123 reads as "newer" than 1.2.4), so prefer the source's own
     // version code whenever it publishes one. Only the default version string is
     // overridden — an explicit versionStringSource choice still wins.
-    if (versionDetectionModeOf(additionalSettings) ==
-            VersionDetectionMode.versionCode &&
-        apk.versionCode != null &&
-        getVersionStringSource(additionalSettings) ==
-            versionStringSourceDefault) {
-      apk.version = apk.versionCode!.toString();
-    }
     apk.apkUrls = filterApks(
       apk.apkUrls,
       additionalSettings['apkFilterRegEx'],
@@ -1859,6 +1861,34 @@ class SourceProvider {
       );
     }
     final String sourceName = apk.names.name.trim();
+    final selectedCode = apk.apkUrls.isEmpty
+        ? null
+        : codesByAsset[apk.apkUrls[preferredApkIndex].key];
+    final usesCodeLabel =
+        versionCodeAsOsVersionFor(additionalSettings) &&
+        selectedCode != null &&
+        getVersionStringSource(additionalSettings) ==
+            versionStringSourceDefault;
+    if (usesCodeLabel) {
+      apk.version = selectedCode.toString();
+    }
+    additionalSettings.remove('sourceVersionCodes');
+    if (codesByAsset.isNotEmpty) {
+      additionalSettings['sourceVersionCodes'] = {
+        'sourceUrl': standardUrl,
+        'overrideSource': sourceIsOverriden
+            ? source.sourceIdentifier
+            : currentApp?.overrideSource,
+        'version': apk.version,
+        'usesCodeLabel': usesCodeLabel,
+        'assetUrls': {for (final asset in apk.apkUrls) asset.key: asset.value},
+        'codes': {
+          for (final asset in apk.apkUrls)
+            if (codesByAsset.containsKey(asset.key))
+              asset.key: codesByAsset[asset.key],
+        },
+      };
+    }
     // Replace the stored name with the source's readable name when the stored
     // name is missing, is exactly the app id, or merely looks like a package id
     // (e.g. 'org.example.app') while the source offers a real display name.

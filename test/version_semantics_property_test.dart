@@ -164,7 +164,7 @@ void main() {
   });
 
   test('effectively equal versions never present an update', () {
-    for (final String mode in <String>['auto', 'standard', 'pseudo']) {
+    for (final String mode in <String>['auto', 'standard']) {
       _forEachPair((String installed, String latest) {
         if (installed.isEmpty || latest.isEmpty) return;
         if (!versionsEffectivelyEqual(installed, latest)) return;
@@ -273,18 +273,16 @@ void main() {
     });
   });
 
-  test('a shared build hash implies effective equality, both ways', () {
+  test('effective equality is transitive and preserves ordering', () {
     _forEachPair((String a, String b) {
-      if (a.isEmpty || b.isEmpty || a == b) return;
-      final Set<String> shared = commitHashLikeTokensFromVersion(
-        a,
-      ).intersection(commitHashLikeTokensFromVersion(b));
-      if (shared.isEmpty) return;
-      expect(
-        versionsEffectivelyEqual(a, b),
-        true,
-        reason: 'shared hash $shared but not equal ($a, $b)',
-      );
+      if (!versionsEffectivelyEqual(a, b)) return;
+      for (final third in _versionCorpus) {
+        expect(
+          compareVersionsByNumericSegments(a, third),
+          compareVersionsByNumericSegments(b, third),
+          reason: 'equivalent ($a, $b) disagree against $third',
+        );
+      }
     });
   });
 
@@ -325,7 +323,7 @@ void main() {
     });
     expect(
       versionsEffectivelyEqual('1.5.3-DEV (75094D8)', 'debug-75094d8'),
-      true,
+      false,
     );
   });
 

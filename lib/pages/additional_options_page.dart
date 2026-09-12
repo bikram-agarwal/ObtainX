@@ -103,9 +103,7 @@ Future<bool> persistAdditionalOptionsForm({
 
   if (releaseDateVersionEnabled && app.releaseDate != null) {
     final bool isUpdated =
-        app.installedVersion == app.latestVersion ||
-        (app.installedVersion != null &&
-            versionsEffectivelyEqual(app.installedVersion!, app.latestVersion));
+        versionDecisionForApp(appInMem.app).relation == VersionRelation.same;
     app = app.copyWith(
       latestVersion: app.releaseDate!.toUtc().toIso8601String(),
     );
@@ -128,18 +126,9 @@ Future<bool> persistAdditionalOptionsForm({
       syncVersionStringSourceSettings(app.additionalSettings);
     }
   } else if (versionDetectionDisabled && app.installedVersion != null) {
-    final String? realInstalledVersion = app.usesVersionCodeAsOsVersion
-        ? appInMem.installedInfo?.versionCode.toString()
-        : appInMem.installedInfo?.versionName;
-    if (realInstalledVersion != null) {
-      if (reconcileVersionDifferences(
-            realInstalledVersion,
-            app.latestVersion,
-          )?.areEqual !=
-          true) {
-        app = app.copyWith(installedVersion: app.latestVersion);
-      }
-    }
+    // Explicitly entering Pseudo starts tracking the current source release.
+    // Device observations remain separate and are refreshed by saveApps.
+    app = app.copyWith(installedVersion: app.latestVersion);
   }
 
   bool versionSettingsChanged = versionDetectionEnabled;

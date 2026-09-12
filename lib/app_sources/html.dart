@@ -22,9 +22,7 @@ int compareAlphaNumeric(String a, String b) {
     final bool bIsNumber = _isDigit(bPart);
 
     if (aIsNumber && bIsNumber) {
-      final int aNumber = int.parse(aPart);
-      final int bNumber = int.parse(bPart);
-      final int cmp = aNumber.compareTo(bNumber);
+      final int cmp = compareDecimalIdentifiers(aPart, bPart);
       if (cmp != 0) {
         return cmp;
       }
@@ -40,6 +38,18 @@ int compareAlphaNumeric(String a, String b) {
   }
 
   return aParts.length.compareTo(bParts.length);
+}
+
+final _releaseFileExtension = RegExp(
+  r'\.(?:apk|xapk|apks|zip|tar(?:\.gz)?)$',
+  caseSensitive: false,
+);
+int compareReleaseNames(String first, String second) {
+  final decision = compareVersionStrings(
+    first.replaceFirst(_releaseFileExtension, ''),
+    second.replaceFirst(_releaseFileExtension, ''),
+  );
+  return decision.comparison ?? compareAlphaNumeric(first, second);
 }
 
 List<String> collectAllStringsFromJSONObject(dynamic obj) {
@@ -200,13 +210,19 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
     }).toList();
   }
   if (!skipSort) {
+    final names = {
+      for (final link in links)
+        link.key: additionalSettings['sortByLastLinkSegment'] == true
+            ? link.key.split('/').where((segment) => segment.isNotEmpty).last
+            : link.key,
+    };
+    final useVersionOrder = versionsHaveConsistentOrder(
+      names.values.map((name) => name.replaceFirst(_releaseFileExtension, '')),
+    );
     links.sort(
-      (a, b) => additionalSettings['sortByLastLinkSegment'] == true
-          ? compareAlphaNumeric(
-              a.key.split('/').where((e) => e.isNotEmpty).last,
-              b.key.split('/').where((e) => e.isNotEmpty).last,
-            )
-          : compareAlphaNumeric(a.key, b.key),
+      (first, second) => useVersionOrder
+          ? compareReleaseNames(names[first.key]!, names[second.key]!)
+          : compareAlphaNumeric(names[first.key]!, names[second.key]!),
     );
   }
   if (additionalSettings['reverseSort'] == true) {

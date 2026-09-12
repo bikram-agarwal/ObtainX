@@ -42,6 +42,33 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:markdown/markdown.dart' as md;
 
+enum AppVersionDisplayVerdict {
+  notInstalled,
+  sameVersion,
+  effectivelyEqual,
+  newerOnDevice,
+  uncertain,
+  updateAvailable,
+}
+
+/// Version meaning shown by the details stripe, independent of Skip or whether
+/// the user has enabled background installation.
+AppVersionDisplayVerdict appVersionVerdictForDisplay(App? app) {
+  if (app == null || app.installedVersion == null) {
+    return AppVersionDisplayVerdict.notInstalled;
+  }
+  final decision = versionDecisionForApp(app);
+  return switch (decision.relation) {
+    VersionRelation.unknown => AppVersionDisplayVerdict.uncertain,
+    VersionRelation.older => AppVersionDisplayVerdict.updateAvailable,
+    VersionRelation.newer => AppVersionDisplayVerdict.newerOnDevice,
+    VersionRelation.same =>
+      app.installedVersion == app.latestVersion
+          ? AppVersionDisplayVerdict.sameVersion
+          : AppVersionDisplayVerdict.effectivelyEqual,
+  };
+}
+
 @visibleForTesting
 bool isInstalledVersionPseudoForDisplay(AppInMemory appInMemory) {
   final App appModel = appInMemory.app;
@@ -58,8 +85,8 @@ bool isInstalledVersionPseudoForDisplay(AppInMemory appInMemory) {
         );
   }
 
-  // Auto is allowed to infer/fall back to pseudo when source and device
-  // versions cannot be reconciled. Explicit Standard and Version Code are not:
+  // Auto can still carry a source-version alias recorded by an installation or
+  // an older reconciliation. Explicit Standard and Version Code cannot:
   // those modes must never present themselves as pseudo regardless of any
   // mismatch in stored, source, or OS-reported versions.
   if (appModel.versionDetectionMode == VersionDetectionMode.standard ||
@@ -3218,34 +3245,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               true &&
           app?.app.installedVersion == null;
       final bool installed = app?.app.installedVersion != null;
-      final String? installedVerStr = app?.app.installedVersion;
       final String latestVerStr = app?.app.latestVersion ?? '';
-      final effectivelyEqual =
-          installed &&
-          installedVerStr != null &&
-          installedVerStr != latestVerStr &&
-          versionsEffectivelyEqual(installedVerStr, latestVerStr);
-      final bool versionOrderUnclearState =
-          installedVerStr != null &&
-          latestVerStr.isNotEmpty &&
-          versionOrderIsUnclear(installedVerStr, latestVerStr);
-      final int? versionCmp = installedVerStr != null && latestVerStr.isNotEmpty
-          ? compareVersionsByNumericSegments(installedVerStr, latestVerStr)
-          : null;
-      final bool newerOnDeviceState =
-          installed &&
-          installedVerStr != null &&
-          installedVerStr != latestVerStr &&
-          !effectivelyEqual &&
-          versionCmp == 1;
-      final bool sameVersionVerdict =
-          installed &&
-          installedVerStr != null &&
-          latestVerStr.isNotEmpty &&
-          !effectivelyEqual &&
-          !versionOrderUnclearState &&
-          versionCmp != 1 &&
-          installedVersionIsNewerOrEqual(installedVerStr, latestVerStr);
+      final versionVerdict = appVersionVerdictForDisplay(app?.app);
       final changeLogFn = app != null
           ? getChangeLogFn(pageThemeContext, app.app)
           : null;
@@ -3392,23 +3393,22 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         Color? stripeTextColor;
         String? stripeLabel;
         IconData? verdictIcon;
-        if (effectivelyEqual) {
+        if (versionVerdict == AppVersionDisplayVerdict.effectivelyEqual) {
           stripeColor = pageTheme.colorScheme.surfaceContainerHigh;
           stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
           stripeLabel = tr('effectivelyEqual');
           verdictIcon = Icons.balance;
-        } else if (installed && versionOrderUnclearState) {
+        } else if (versionVerdict == AppVersionDisplayVerdict.uncertain) {
           stripeColor = pageTheme.colorScheme.surfaceContainerHighest;
           stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
           stripeLabel = tr('versionOrderUnclear');
           verdictIcon = Icons.help_outline_rounded;
-        } else if (newerOnDeviceState) {
+        } else if (versionVerdict == AppVersionDisplayVerdict.newerOnDevice) {
           stripeColor = pageTheme.colorScheme.primaryContainer;
           stripeTextColor = pageTheme.colorScheme.onPrimaryContainer;
           stripeLabel = tr('newerOnDevice');
           verdictIcon = Icons.phone_android_rounded;
-        } else if (sameVersionVerdict ||
-            (installedVerStr != null && installedVerStr == latestVerStr)) {
+        } else if (versionVerdict == AppVersionDisplayVerdict.sameVersion) {
           stripeColor = pageTheme.brightness == Brightness.dark
               ? const Color(0xFF2E7D32).withAlpha(60)
               : const Color(0xFFC8E6C9);
@@ -3455,7 +3455,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (versionOrderUnclearState)
+                      if (versionVerdict == AppVersionDisplayVerdict.uncertain)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(
@@ -4820,13 +4820,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 }
                 if ((!isVersionDetectionStandard || trackOnly) &&
                     app?.app.installedVersion != null) {
-                  final String ins = app!.app.installedVersion!;
-                  final String lat = app.app.latestVersion;
+                  final decision = versionDecisionForApp(app!.app);
                   final bool showResetInstall =
-                      ins == lat ||
-                      versionsEffectivelyEqual(ins, lat) ||
-                      (installedVersionIsNewerOrEqual(ins, lat) &&
-                          !versionOrderIsUnclear(ins, lat));
+                      decision.relation == VersionRelation.same ||
+                      decision.relation == VersionRelation.newer;
                   if (showResetInstall) {
                     bottomBarActions.add(
                       IconButton(

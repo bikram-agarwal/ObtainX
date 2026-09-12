@@ -13,7 +13,6 @@ import 'package:http/http.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/logs_provider.dart';
-import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
@@ -69,14 +68,6 @@ class RemoveAppsWithModalResult {
 }
 
 extension AppsProviderLifecycle on AppsProvider {
-  bool _getNaiveStandardVersionDetection(App app) {
-    return app.settings.getBool('naiveStandardVersionDetection') ||
-        SourceProvider().naiveStandardVersionDetectionForUrl(
-          app.url,
-          overrideSource: app.overrideSource,
-        );
-  }
-
   String? _getRealInstalledVersion(App app, PackageInfo? installedInfo) {
     if (installedInfo == null) return null;
     // Must use the same rule as the app page's displayed version: reading only
@@ -110,384 +101,121 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   bool isVersionDetectionPossible(AppInMemory? app) {
-    if (app?.app == null) {
+    if (app == null ||
+        app.app.settings.getBool('trackOnly') ||
+        app.installedInfo == null) {
       return false;
     }
-    final source = SourceProvider().getSourceTemplate(
-      app!.app.url,
-      overrideSource: app.app.overrideSource,
+    final observed = app.app.copyWith(
+      installedVersion: _getRealInstalledVersion(app.app, app.installedInfo),
+      additionalSettings: {
+        ...app.app.additionalSettings,
+        'versionDetection': app.app.usesVersionCodeAsOsVersion
+            ? 'versionCode'
+            : 'standard',
+        observedPackageIdKey: app.installedInfo!.packageName,
+        observedVersionNameKey: app.installedInfo!.versionName,
+        observedVersionCodeKey: app.installedInfo!.versionCode,
+      },
     );
-    final naiveStandardVersionDetection = _getNaiveStandardVersionDetection(
-      app.app,
-    );
-    final String? realInstalledVersion = _getRealInstalledVersion(
-      app.app,
-      app.installedInfo,
-    );
-    final bool isHTMLWithNoVersionDetection =
-        (source is HTML &&
-        app.app.settings
-                .getStringOrNull('versionExtractionRegEx')
-                ?.isNotEmpty !=
-            true);
-    // A commit-sha-like token in either the real or latest version (or the
-    // explicit releaseCommitShaAsVersion setting) means detection IS possible —
-    // don't auto-disable just because such versions can't be standardized
-    // (parity with fork main).
-    final bool hasCommitSha =
-        (realInstalledVersion != null &&
-            commitHashLikeTokensFromVersion(realInstalledVersion).isNotEmpty) ||
-        commitHashLikeTokensFromVersion(app.app.latestVersion).isNotEmpty;
-    final bool releaseCommitShaAsVersion = app.app.settings.getBool(
-      'releaseCommitShaAsVersion',
-    );
-    final bool hasComparableNumericReleaseVersions =
-        realInstalledVersion != null &&
-        recognizedNumericReleaseVersionsAreComparable(
-          realInstalledVersion,
-          app.app.latestVersion,
-        );
-    return !app.app.settings.getBool('trackOnly') &&
-        !app.app.settings.getBool('releaseDateAsVersion') &&
-        !isHTMLWithNoVersionDetection &&
-        !source.versionDetectionDisallowed &&
-        realInstalledVersion != null &&
-        (reconcileVersionDifferences(
-                  realInstalledVersion,
-                  app.app.latestVersion,
-                ) !=
-                null ||
-            hasComparableNumericReleaseVersions ||
-            naiveStandardVersionDetection ||
-            hasCommitSha ||
-            releaseCommitShaAsVersion);
+    return versionDecisionForApp(observed).relation != VersionRelation.unknown;
   }
 
-  /// Reconciles reported vs. real installed/latest versions for [app].
-  /// Returns the modified app if any corrections were made, or null.
+  /// Refresh observations without replacing device versions with source labels.
   App? getCorrectedInstallStatusAppIfPossible(
     App app,
     PackageInfo? installedInfo,
   ) {
-    var modded = false;
+    final originalApp = app;
+    app = normalizeSelectedSourceVersion(app);
+    final resetToDevice = app.additionalSettings.containsKey(
+      installStatusResetKey,
+    );
+    final settings = Map<String, dynamic>.from(app.additionalSettings)
+      ..remove(unreconciledVersionComparisonKey)
+      ..remove(installStatusResetKey);
     final trackOnly = app.settings.getBool('trackOnly');
-    // Reset a stale "temporary package id" flag once a track-only app has a
-    // real (non-temp) package id (parity with fork main).
-    if (trackOnly &&
-        !isTempId(app) &&
-        app.additionalSettings['trackOnlyTemporaryPackageId'] == true) {
-      app = app.copyWith(
-        additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
-          ..['trackOnlyTemporaryPackageId'] = false,
-      );
-      modded = true;
+    if (trackOnly && !isTempId(app)) {
+      settings['trackOnlyTemporaryPackageId'] = false;
     }
-    // Record the device's last package-update time so the update-check logic
-    // can use release-date recency to resolve ambiguous version ordering
-    // (read in apps_provider_updates.dart). Written on every reconcile and
-    // removed when the app is not installed — parity with fork main.
-    if (installedInfo?.lastUpdateTime != null) {
-      if (app.additionalSettings['lastInstalledTime'] !=
-          installedInfo!.lastUpdateTime) {
-        app = app.copyWith(
-          additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
-            ..['lastInstalledTime'] = installedInfo.lastUpdateTime,
-        );
-        modded = true;
-      }
-    } else if (app.additionalSettings.containsKey('lastInstalledTime')) {
-      app = app.copyWith(
-        additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
-          ..remove('lastInstalledTime'),
-      );
-      modded = true;
-    }
-    final VersionDetectionMode versionDetection = app.versionDetectionMode;
-    final bool versionDetectionIsStandard = app.usesStandardVersionDetection;
-    final naiveStandardVersionDetection = _getNaiveStandardVersionDetection(
-      app,
-    );
-    final String? realInstalledVersion = _getRealInstalledVersion(
-      app,
-      installedInfo,
-    );
-    // Migrate the 2.9.7 reset sentinel. It deliberately kept installedVersion
-    // null until a reinstall, which could strand an installed app indefinitely.
-    if (app.additionalSettings.containsKey(installStatusResetKey)) {
-      app = resetInstallStatusToDeviceVersion(app, installedInfo);
-      modded = true;
-    }
-    // 1. Compare reported vs. real installed versions where one is null.
-    // A track-only app is exempt from "absent from the device means not
-    // installed" ONLY while its package id is a temporary placeholder: there
-    // getInstalledInfo can never match anything, so clearing would be wrong.
-    // Once the id is a real package name the device lookup is authoritative
-    // (the app holds QUERY_ALL_PACKAGES), and the else-branch below already
-    // trusts it in the opposite direction — it adopts the device's version the
-    // moment the package appears. Exempting every track-only app instead (fork
-    // main's rule) strands sources that are always track-only (APKMirror,
-    // RockMods) on "installed <old version>" forever once the user uninstalls:
-    // nothing else ever nulls the stored version, so neither a restart nor
-    // pull-to-refresh can clear it, and the app keeps counting as installed.
-    // An explicit user mark is the third exemption: the device lookup is still
-    // authoritative about the *package*, but a track-only app is frequently
-    // tracked without being installed through ObtainX (or under a package ID
-    // that matches nothing on the device), so the user's assertion outranks it.
-    // Without this, "mark as updated" and the track-only install action are
-    // inert — the mark is wiped by the very next reconcile (ObtainX#276).
-    final bool trackOnlyPackageIdIsUnverifiable =
-        trackOnly &&
-        (isTempId(app) ||
-            app.additionalSettings['trackOnlyTemporaryPackageId'] == true ||
-            app.additionalSettings[trackOnlyUserMarkedInstalledKey] == true);
-    if (installedInfo == null &&
-        app.installedVersion != null &&
-        !trackOnlyPackageIdIsUnverifiable) {
-      final newSettings = Map<String, dynamic>.from(app.additionalSettings);
-      if (trackOnly) {
-        // The install state is now *determined* (not installed), so don't let
-        // the app page resurface its "is your package id wrong?" error card.
-        newSettings['trackOnlyUndeterminedInstalledVersion'] = false;
-      }
-      app = app.copyWith(
-        installedVersion: null,
-        additionalSettings: newSettings,
-      );
-      modded = true;
-    } else if (realInstalledVersion != null && app.installedVersion == null) {
-      // With detection disabled (non-standard), the device manifest version
-      // isn't the source/release version, so mark installed = latest rather
-      // than the manifest version (parity with fork main).
-      final newSettings = Map<String, dynamic>.from(app.additionalSettings);
-      if (trackOnly) {
-        // A real installed version is now known for this track-only app.
-        newSettings['trackOnlyUndeterminedInstalledVersion'] = false;
-        // The device now answers the question the user's mark was standing in
-        // for, so stop exempting this app from the clearing rule above.
-        newSettings.remove(trackOnlyUserMarkedInstalledKey);
-      }
-      app = app.copyWith(
-        installedVersion: versionDetectionIsStandard
-            ? realInstalledVersion
-            : app.latestVersion,
-        additionalSettings: newSettings,
-      );
-      modded = true;
-    }
-    // 1b. With version detection disabled (non-standard), still reflect an
-    // external install/upgrade: if the device manifest version reconciles with
-    // the source latest or the previously stored installed version, adopt it;
-    // only unreconcilable pairs keep the source pseudo-version (parity with
-    // fork main).
-    if (realInstalledVersion != null &&
-        app.installedVersion != null &&
-        realInstalledVersion != app.installedVersion &&
-        !versionDetectionIsStandard) {
-      final correctedInstalledVersion =
-          reconciledInstalledVersionForDisabledVersionDetection(
-            realInstalledVersion,
-            app.installedVersion!,
-            app.latestVersion,
-          );
-      if (correctedInstalledVersion != null) {
-        app = app.copyWith(installedVersion: correctedInstalledVersion);
-        modded = true;
-      }
-    }
-    // 1c. Auto-heal a stored installedVersion whose format no longer matches
-    // the active version-code setting (versionCode int vs versionName) — parity
-    // with fork main.
-    if (realInstalledVersion != null &&
-        app.installedVersion != null &&
-        versionDetectionIsStandard) {
-      var formatMismatch = false;
-      final isStoredPureInteger = RegExp(
-        r'^\d+$',
-      ).hasMatch(app.installedVersion!);
-      final isRealPureInteger = RegExp(r'^\d+$').hasMatch(realInstalledVersion);
-      if (app.usesVersionCodeAsOsVersion) {
-        if (!isStoredPureInteger) {
-          formatMismatch = true;
+    var installed = app.installedVersion;
+    if (installedInfo == null) {
+      settings.remove(observedVersionNameKey);
+      settings.remove(observedVersionCodeKey);
+      settings.remove(observedPackageIdKey);
+      settings.remove('lastInstalledTime');
+      settings.remove(confirmedInstallReleaseKey);
+      final unverifiable =
+          trackOnly &&
+          (isTempId(app) ||
+              settings['trackOnlyTemporaryPackageId'] == true ||
+              app.additionalSettings[trackOnlyUserMarkedInstalledKey] == true);
+      if (!unverifiable) {
+        installed = null;
+        if (trackOnly) {
+          settings['trackOnlyUndeterminedInstalledVersion'] = false;
         }
+      }
+    } else {
+      settings[observedVersionNameKey] = installedInfo.versionName;
+      settings[observedVersionCodeKey] = installedInfo.versionCode;
+      settings[observedPackageIdKey] = installedInfo.packageName;
+      if (installedInfo.lastUpdateTime == null) {
+        settings.remove('lastInstalledTime');
       } else {
-        if (isStoredPureInteger &&
-            (!isRealPureInteger ||
-                realInstalledVersion != app.installedVersion)) {
-          formatMismatch = true;
+        settings['lastInstalledTime'] = installedInfo.lastUpdateTime;
+      }
+      final real = _getRealInstalledVersion(app, installedInfo);
+      if (resetToDevice ||
+          (app.usesStandardVersionDetection && !trackOnly) ||
+          app.usesVersionCodeAsOsVersion) {
+        installed = real;
+      } else if (installed == null) {
+        installed = app.usesStandardVersionDetection ? real : app.latestVersion;
+      } else if (real != null &&
+          compareVersionStrings(real, app.latestVersion).relation ==
+              VersionRelation.same) {
+        installed = app.latestVersion;
+      }
+      if (trackOnly) {
+        settings['trackOnlyUndeterminedInstalledVersion'] = false;
+        settings.remove(trackOnlyUserMarkedInstalledKey);
+      }
+      final receipt = InstallReleaseSnapshot.fromJson(
+        settings[confirmedInstallReleaseKey],
+      );
+      if (receipt == null ||
+          !receipt.belongsTo(app) ||
+          !receipt.matchesPackage(installedInfo)) {
+        settings.remove(confirmedInstallReleaseKey);
+      }
+      final pending = InstallReleaseSnapshot.fromJson(
+        settings[pendingInstallReleaseKey],
+      );
+      if (pending == null || !pending.belongsTo(app)) {
+        settings.remove(pendingInstallReleaseKey);
+      }
+      if (pending != null &&
+          pending.belongsTo(app) &&
+          pending.matchesPackage(installedInfo)) {
+        settings[confirmedInstallReleaseKey] = pending.toJson();
+        settings.remove(pendingInstallReleaseKey);
+        if ((!app.usesStandardVersionDetection || trackOnly) &&
+            !app.usesVersionCodeAsOsVersion) {
+          installed = pending.version;
         }
       }
-      if (formatMismatch) {
-        app = app.copyWith(installedVersion: realInstalledVersion);
-        modded = true;
-      }
     }
-    // 2. Reconcile differences between reported and real installed versions.
-    if (realInstalledVersion != null &&
-        app.installedVersion != null &&
-        realInstalledVersion != app.installedVersion &&
-        versionDetectionIsStandard) {
-      // App's reported version and real version don't match (and it uses standard version detection)
-      // If they share a standard format (and are still different under it), update the reported version accordingly
-      final correctedInstalledVersion = reconcileVersionDifferences(
-        realInstalledVersion,
-        app.installedVersion!,
-      );
-      if (correctedInstalledVersion?.areEqual == false) {
-        app = app.copyWith(
-          installedVersion: correctedInstalledVersion!.version,
-        );
-        modded = true;
-      } else if (naiveStandardVersionDetection) {
-        // Only sources whose version strings are known not to match the APK
-        // manifest may overwrite the stored version with the device's. Doing it
-        // unconditionally strands apps whose two version strings share no
-        // standard format: the stored value (which matched latestVersion) gets
-        // replaced by one that doesn't, and for track-only or explicitly
-        // 'standard' apps step 4 below can't clean it up.
-        app = app.copyWith(installedVersion: realInstalledVersion);
-        modded = true;
-      }
-    }
-    // 3. Reconcile reported installed and latest versions.
-    if (app.installedVersion != null &&
-        app.installedVersion != app.latestVersion &&
-        versionDetectionIsStandard) {
-      // App's reported installed and latest versions don't match (and it uses standard version detection)
-      // If they share a standard format, make sure the App's reported installed version uses that format
-      final correctedInstalledVersion = reconcileVersionDifferences(
-        app.installedVersion!,
-        app.latestVersion,
-      );
-      if (correctedInstalledVersion?.areEqual == true) {
-        app = app.copyWith(
-          installedVersion: correctedInstalledVersion!.version,
-        );
-        modded = true;
-      }
-    }
-    final bool realInstalledVersionMatchesLatest =
-        realInstalledVersion != null &&
-        versionsEffectivelyEqual(realInstalledVersion, app.latestVersion);
-    // 3b. The device says the source's latest release IS what's installed, but
-    // the stored version still disagrees and none of the steps above could
-    // relate the two strings, so nothing adopted the device's verdict (#222).
-    // Steps 1b/2/3 all require the pair to share a standard format, a digit
-    // shape, or a dotted-numeric parse, and all three fail when the APK
-    // manifest's versionName carries text the source version lacks
-    // ('2.19.1 (git 50a6b17)' vs tag 'v2.19.1') or when a 'v' prefix combines
-    // with a changed segment count ('v7.1' stored vs device '7.1.1'). Without
-    // this step a single unrecorded install is permanent: the app reports the
-    // old version and offers the same update forever, surviving restarts and
-    // pull-to-refresh. Equality here is the same test step 4 already trusts to
-    // decide that detection is working, so adopting latest cannot invent a
-    // version the device isn't running.
-    // Version-code mode is excluded: there the device value is a version code,
-    // which is not comparable with a source version string.
-    if (realInstalledVersionMatchesLatest &&
-        versionDetectionIsStandard &&
-        !app.usesVersionCodeAsOsVersion &&
-        app.installedVersion != null &&
-        app.installedVersion != app.latestVersion) {
-      app = app.copyWith(installedVersion: app.latestVersion);
-      modded = true;
-    }
-    // 4. Disable version detection if versions are not standardizable.
-    // Guards (parity with fork main): only auto-disable plain auto-detection
-    // (not versionCode mode or an already-non-standard mode), never for
-    // track-only, and NOT when the real device version is effectively equal to
-    // latest (e.g. same commit hash / sha-like) — those are reconcilable, not
-    // failures. The disabled value is the string enum 'pseudo', never bool false.
-    final bool canAutoDisable =
-        !app.usesVersionCodeAsOsVersion &&
-        versionDetection == VersionDetectionMode.auto;
-    if (canAutoDisable &&
-        !trackOnly &&
-        installedInfo != null &&
-        versionDetectionIsStandard &&
-        !realInstalledVersionMatchesLatest &&
-        !isVersionDetectionPossible(
-          AppInMemory(app, null, installedInfo, null),
-        )) {
-      app = app.copyWith(
-        additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
-          ..['versionDetection'] = VersionDetectionMode.pseudo.key,
-        installedVersion: app.latestVersion,
-      );
-      unawaited(logs.add('Could not reconcile version formats for: ${app.id}'));
-      modded = true;
-    }
-
-    final App normalizedApp = normalizeSkippedLatestVersion(app);
-    if (!identical(normalizedApp, app)) {
-      app = normalizedApp;
-      modded = true;
-    }
-
-    return modded ? app : null;
-  }
-
-  // Version reconciliation deliberately lives ONLY as the top-level
-  // [reconcileVersionDifferences] in apps_provider.dart. A same-named member here
-  // shadows it for every call inside this extension, which is how the two copies
-  // drifted (this one was missing the shape fallback) and how genuine updates
-  // ended up being discarded. Call the top-level function; don't re-add a member.
-
-  /// When version detection is disabled, decide whether an externally-observed
-  /// device version should replace the stored pseudo/installed version.
-  /// Returns the corrected installed version, or null to keep the current one
-  /// (parity with fork main).
-  String? reconciledInstalledVersionForDisabledVersionDetection(
-    String realInstalledVersion,
-    String reportedInstalledVersion,
-    String latestVersion,
-  ) {
-    final reconciledLatest = reconcileVersionDifferences(
-      realInstalledVersion,
-      latestVersion,
-    );
-    if (reconciledLatest?.areEqual == true) {
-      return reconciledLatest!.version;
-    }
-    final reconciledInstalled = reconcileVersionDifferences(
-      realInstalledVersion,
-      reportedInstalledVersion,
-    );
-    if (reconciledInstalled?.areEqual == true) {
-      return reconciledInstalled!.version;
-    }
-    // Detect external upgrade/downgrade only when the real device version
-    // strictly shares a standard format with the compared version — the guard
-    // prevents false positives where non-strict substring matching makes an
-    // incompatible pair appear reconcilable.
-    final realFormats = VersionService().findStandardFormatsForVersion(
-      realInstalledVersion,
-      true,
-    );
-    if (realFormats.isNotEmpty) {
-      if (reconciledLatest?.areEqual == false &&
-          realFormats
-              .intersection(
-                VersionService().findStandardFormatsForVersion(
-                  latestVersion,
-                  true,
-                ),
-              )
-              .isNotEmpty) {
-        return realInstalledVersion;
-      }
-      if (reconciledInstalled?.areEqual == false &&
-          realFormats
-              .intersection(
-                VersionService().findStandardFormatsForVersion(
-                  reportedInstalledVersion,
-                  true,
-                ),
-              )
-              .isNotEmpty) {
-        return realInstalledVersion;
-      }
-    }
-    return null;
+    var corrected =
+        installed == app.installedVersion &&
+            mapEquals(settings, app.additionalSettings)
+        ? app
+        : app.copyWith(
+            installedVersion: installed,
+            additionalSettings: settings,
+          );
+    corrected = normalizeSkippedLatestVersion(corrected);
+    return identical(corrected, originalApp) ? null : corrected;
   }
 
   Future<void> loadApps({String? singleId, bool silent = false}) async {
@@ -1310,7 +1038,9 @@ extension AppsProviderLifecycle on AppsProvider {
             if (attemptToCorrectInstallStatus) {
               app = getCorrectedInstallStatusAppIfPossible(app, info) ?? app;
             }
-            app = normalizeSkippedLatestVersion(app);
+            app = normalizeSkippedLatestVersion(
+              normalizeSelectedSourceVersion(app),
+            );
             final sourceIdentifier =
                 cached?.sourceType ??
                 sourceProvider

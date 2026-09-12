@@ -783,6 +783,15 @@ class FDroid extends AppSource {
         getApkUrlsFromUrls(uniqueApkUrls),
         AppNames(sourceName, appName),
         versionCode: selectedVersionCode,
+        versionCodesByAsset: {
+          for (final release in selectedReleases)
+            if (int.tryParse(release['versionCode']?.toString() ?? '') != null)
+              getApkUrlsFromUrls([
+                '${apkUrlPrefix}_${release['versionCode']}.apk',
+              ]).single.key: int.parse(
+                release['versionCode'].toString(),
+              ),
+        },
         iconUrl: iconUrl,
         rawReleaseTitleCandidates: rawVersionNameCandidates,
         apkSizeBytes: apkSizeBytes,

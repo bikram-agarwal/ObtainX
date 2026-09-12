@@ -223,7 +223,16 @@ String sanitizeApkSaveDisplayName(String raw) {
 
 /// Same label as the release asset (e.g. GitHub attachment filename) when
 /// possible, for the user-facing saved-APK copy.
-String storeFacingDownloadDisplayNameForApp(App app) {
+String storeFacingDownloadDisplayNameForApp(
+  App app, {
+  InstallReleaseSnapshot? release,
+}) {
+  if (release != null) {
+    app = app.copyWith(
+      apkUrls: [MapEntry(release.assetName, release.assetUrl)],
+      preferredApkIndex: 0,
+    );
+  }
   if (app.apkUrls.isEmpty) {
     return 'download.apk';
   }
@@ -287,24 +296,42 @@ extension AppsProviderInstall on AppsProvider {
 
   /// See [listenForThirdPartyInstallResults].
   Future<void> recordThirdPartyInstallBroadcast(String packageName) async {
-    final AppInMemory? entry = apps[packageName];
-    if (entry == null) return;
-    final App app = entry.app;
-    if (app.latestVersion.isEmpty ||
-        app.installedVersion == app.latestVersion) {
+    final installedInfo = await getInstalledInfo(packageName);
+    final entry = apps[packageName];
+    if (entry == null || installedInfo == null) return;
+    final pending =
+        InstallReleaseSnapshot.fromJson(
+          entry.app.additionalSettings[pendingInstallReleaseKey],
+        ) ??
+        InstallReleaseSnapshot.fromJson(
+          entry.app.additionalSettings[confirmedInstallReleaseKey],
+        );
+    entry.app = recordConfirmedInstall(entry.app, pending, installedInfo);
+    await saveApps([entry.app], attemptToCorrectInstallStatus: false);
+  }
+
+  Future<void> _recordPendingInstall(
+    String appId,
+    InstallReleaseSnapshot? release,
+  ) async {
+    final entry = apps[appId];
+    if (entry == null || release == null || !release.belongsTo(entry.app)) {
       return;
     }
-    entry.app = app.copyWith(installedVersion: app.latestVersion);
-    // Install-status correction is skipped on purpose: the manifest version of
-    // what was just installed can be unrelatable to the source's version string,
-    // and this broadcast is the authoritative signal about what landed.
+    entry.app = recordPendingInstall(entry.app, release);
     await saveApps([entry.app], attemptToCorrectInstallStatus: false);
-    unawaited(
-      logs.add(
-        'Recorded third-party install of $packageName as version '
-        '"${app.latestVersion}" (system broadcast)',
-      ),
-    );
+  }
+
+  Future<void> _clearPendingInstall(
+    String appId,
+    InstallReleaseSnapshot? release,
+  ) async {
+    final entry = apps[appId];
+    if (entry == null || release == null) return;
+    final corrected = discardPendingInstall(entry.app, release);
+    if (identical(corrected, entry.app)) return;
+    entry.app = corrected;
+    await saveApps([entry.app], attemptToCorrectInstallStatus: false);
   }
 
   /// Returns the [Installer] strategy for the current installer mode setting.
@@ -346,7 +373,7 @@ extension AppsProviderInstall on AppsProvider {
       final originalAppId = app.id;
       app = app.copyWith(id: actualPackageName, allowIdChange: false);
       downloadedFile = downloadedFile.renameSync(
-        '${downloadedFile.parent.path}/${app.id}-${downloadUrl.hashCode}.${downloadedFile.path.split('.').last}',
+        '${downloadedFile.parent.path}/${app.id}-${downloadReleaseCacheKey(InstallReleaseSnapshot.fromApp(app))}.${downloadedFile.path.split('.').last}',
       );
       if (apps[originalAppId] != null) {
         await removeApps([originalAppId]);
@@ -407,6 +434,7 @@ extension AppsProviderInstall on AppsProvider {
         app = app.copyWith(preferredApkIndex: app.apkUrls.length - 1);
       }
       if (app.preferredApkIndex < 0) app = app.copyWith(preferredApkIndex: 0);
+      final downloadRelease = InstallReleaseSnapshot.fromApp(app);
       if (apps[app.id] != null) apps[app.id]!.app = app;
       final AppSource source = SourceProvider().getSource(
         app.url,
@@ -469,7 +497,8 @@ extension AppsProviderInstall on AppsProvider {
         unawaited(notificationsProvider?.notify(notif));
       }
       int? prevProg;
-      var fileNameNoExt = '${app.id}-${downloadUrl.hashCode}';
+      var fileNameNoExt =
+          '${app.id}-${downloadReleaseCacheKey(downloadRelease)}';
       if (source.urlsAlwaysHaveExtension) {
         fileNameNoExt =
             '$fileNameNoExt.${app.apkUrls[app.preferredApkIndex].key.split('.').last}';
@@ -704,7 +733,11 @@ extension AppsProviderInstall on AppsProvider {
         }
       }
       if (isAPK) {
-        return DownloadedApk(resolvedAppId, downloadedFile);
+        return DownloadedApk(
+          resolvedAppId,
+          downloadedFile,
+          release: downloadRelease.withPackage(newInfo),
+        );
       } else {
         DownloadedDirType dirType;
         if (isXAPK) {
@@ -714,7 +747,13 @@ extension AppsProviderInstall on AppsProvider {
         } else {
           dirType = DownloadedDirType.zip;
         }
-        return DownloadedDir(resolvedAppId, downloadedFile, apkDir!, dirType);
+        return DownloadedDir(
+          resolvedAppId,
+          downloadedFile,
+          apkDir!,
+          dirType,
+          release: downloadRelease.withPackage(newInfo),
+        );
       }
     } finally {
       clearDownloadCancellation(app.id);
@@ -861,24 +900,44 @@ extension AppsProviderInstall on AppsProvider {
       if (installer.wantsContainerHandoff) {
         // Hand off the original bundle file (XAPK/ZIP/tarball) to the
         // third-party installer rather than the extracted split APKs.
+        InstallReleaseSnapshot? release;
         try {
+          final candidates = _preferMatchingApk(
+            apkFiles,
+            dir.appId,
+          ).cast<File>().toList();
+          if (candidates.isEmpty) throw NoAPKError();
+          final packageInfo = await packageManager.getPackageArchiveInfo(
+            archiveFilePath: candidates.first.path,
+          );
+          if (packageInfo == null) throw NoAPKError();
+          release = dir.release?.withPackage(packageInfo);
+          await _recordPendingInstall(dir.appId, release);
           final result = await installer.installApk(
             [dir.file.path],
             appId: dir.appId,
             installOptions: installOptions,
           );
+          if (result.isError || result.isCancelled) {
+            await _clearPendingInstall(dir.appId, release);
+          }
           if (result.isError) {
             throw InstallError(result.errorCode ?? -1);
           }
           if (result.isSuccess) {
             somethingInstalled = true;
-            apps[dir.appId]!.app = apps[dir.appId]!.app.copyWith(
-              installedVersion: apps[dir.appId]!.app.latestVersion,
+            apps[dir.appId]!.app = recordConfirmedInstall(
+              apps[dir.appId]!.app,
+              release,
+              packageInfo,
             );
-            await saveApps([apps[dir.appId]!.app]);
+            await saveApps([
+              apps[dir.appId]!.app,
+            ], attemptToCorrectInstallStatus: false);
           }
           unawaited(_disposeDownloadedBundle(dir, somethingInstalled));
         } catch (e) {
+          await _clearPendingInstall(dir.appId, release);
           unawaited(
             logs.add(
               'Could not install container from ${dir.type}: ${e.toString()}',
@@ -900,13 +959,13 @@ extension AppsProviderInstall on AppsProvider {
 
       try {
         final wasInstalled = await installApk(
-          DownloadedApk(dir.appId, apkFiles[0]),
+          DownloadedApk(dir.appId, apkFiles[0], release: dir.release),
           firstInstallNotificationsProvider,
           needsBGWorkaround: needsBGWorkaround,
           installOptions: installOptions,
           additionalAPKs: apkFiles
               .sublist(1)
-              .map((a) => DownloadedApk(dir.appId, a))
+              .map((a) => DownloadedApk(dir.appId, a, release: dir.release))
               .toList(),
           // Container already verified/scanned above.
           skipMalwareScan: true,
@@ -1038,28 +1097,32 @@ extension AppsProviderInstall on AppsProvider {
       }
       throw DowngradeError(oldVersionCode!, newVersionCode!);
     }
-    if (needsBGWorkaround) {
-      // Background process workaround (#896): the `await installApk` below
-      // will never return in BG, so pre-update the installed version.
-      // TODO(#896): Remove this when platform install API supports BG completion.
-      apps[file.appId]!.app = apps[file.appId]!.app.copyWith(
-        installedVersion: apps[file.appId]!.app.latestVersion,
-      );
-      await saveApps([
-        apps[file.appId]!.app,
-      ], attemptToCorrectInstallStatus: false);
-    }
+    // Persist intent before handoff. A broadcast or later device observation can
+    // confirm it even if this background isolate never resumes after install.
+    final installedRelease = file.release?.withPackage(newInfo);
+    await _recordPendingInstall(file.appId, installedRelease);
     final allAPKs = [file.file.path];
     allAPKs.addAll(additionalAPKs.map((a) => a.file.path));
-    final InstallResult result = await getInstaller().installApk(
-      allAPKs,
-      appId: file.appId,
-      installOptions: installOptions,
-    );
+    final InstallResult result;
+    try {
+      result = await getInstaller().installApk(
+        allAPKs,
+        appId: file.appId,
+        installOptions: installOptions,
+      );
+    } catch (_) {
+      await _clearPendingInstall(file.appId, installedRelease);
+      rethrow;
+    }
     final bool installed = result.isSuccess;
+    if (result.isError || result.isCancelled) {
+      await _clearPendingInstall(file.appId, installedRelease);
+    }
     if (installed) {
-      apps[file.appId]!.app = apps[file.appId]!.app.copyWith(
-        installedVersion: apps[file.appId]!.app.latestVersion,
+      apps[file.appId]!.app = recordConfirmedInstall(
+        apps[file.appId]!.app,
+        installedRelease,
+        newInfo,
       );
     }
     // Dispose the downloaded APK for EVERY outcome (parity with main's
@@ -1074,6 +1137,7 @@ extension AppsProviderInstall on AppsProvider {
         primaryFile: file.file,
         installReportedOk: installed,
         apkSaveTreeUri: apkSaveTreeUri,
+        release: file.release,
       );
     } else {
       final App? appRef = apps[file.appId]?.app;
@@ -1100,11 +1164,15 @@ extension AppsProviderInstall on AppsProvider {
       // loadApps(silent: true), which rebuilds every entry from the (still stale)
       // JSON on disk — that can land inside the file/SAF work above and drop the
       // version this install just recorded (#222).
-      entryToSave.app = entryToSave.app.copyWith(
-        installedVersion: entryToSave.app.latestVersion,
+      entryToSave.app = recordConfirmedInstall(
+        entryToSave.app,
+        installedRelease,
+        newInfo,
       );
     }
-    await saveApps([apps[file.appId]!.app]);
+    await saveApps([
+      apps[file.appId]!.app,
+    ], attemptToCorrectInstallStatus: !installed);
     return installed;
   }
 
@@ -2278,7 +2346,10 @@ extension AppsProviderInstall on AppsProvider {
           bundleCopiedOk = await _chunkedCopyApkToSafTree(
             dir.file,
             resolvedApkSaveUri,
-            storeFacingDownloadDisplayNameForApp(appForSave),
+            storeFacingDownloadDisplayNameForApp(
+              appForSave,
+              release: dir.release,
+            ),
           );
         } catch (exception, stackTrace) {
           unawaited(
@@ -2332,6 +2403,7 @@ extension AppsProviderInstall on AppsProvider {
     required File primaryFile,
     required bool installReportedOk,
     required Uri apkSaveTreeUri,
+    InstallReleaseSnapshot? release,
   }) async {
     try {
       final App? appRef = apps[appId]?.app;
@@ -2343,7 +2415,7 @@ extension AppsProviderInstall on AppsProvider {
           copiedOk = await _chunkedCopyApkToSafTree(
             primaryFile,
             apkSaveTreeUri,
-            storeFacingDownloadDisplayNameForApp(appRef),
+            storeFacingDownloadDisplayNameForApp(appRef, release: release),
           );
         } catch (exception, stackTrace) {
           unawaited(

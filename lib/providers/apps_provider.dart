@@ -40,6 +40,8 @@ import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/version/app_version.dart';
+export 'package:obtainium/version/app_version.dart';
 
 export 'apps_provider_icon_backup.dart';
 export 'apps_provider_import_export.dart';
@@ -83,9 +85,11 @@ final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
 final packageInfoFlagsLight = PackageInfoFlags({});
 
 App resetInstallStatusToDeviceVersion(App app, PackageInfo? installedInfo) {
-  final Map<String, dynamic> additionalSettings = Map<String, dynamic>.from(
-    app.additionalSettings,
-  )..remove(installStatusResetKey);
+  final Map<String, dynamic> additionalSettings =
+      Map<String, dynamic>.from(app.additionalSettings)
+        ..remove(installStatusResetKey)
+        ..remove(pendingInstallReleaseKey)
+        ..remove(confirmedInstallReleaseKey);
   final String? installedVersion = app.usesVersionCodeAsOsVersion
       ? installedInfo?.versionCode?.toString()
       : installedInfo?.versionName;
@@ -193,7 +197,8 @@ class AppInMemory {
 class DownloadedApk {
   String appId;
   File file;
-  DownloadedApk(this.appId, this.file);
+  final InstallReleaseSnapshot? release;
+  DownloadedApk(this.appId, this.file, {this.release});
 }
 
 enum DownloadedDirType { xapk, zip, tarball }
@@ -203,7 +208,14 @@ class DownloadedDir {
   File file;
   Directory extracted;
   DownloadedDirType type;
-  DownloadedDir(this.appId, this.file, this.extracted, this.type);
+  final InstallReleaseSnapshot? release;
+  DownloadedDir(
+    this.appId,
+    this.file,
+    this.extracted,
+    this.type, {
+    this.release,
+  });
 }
 
 /// Removes all matching elements and appends the last match to the end.

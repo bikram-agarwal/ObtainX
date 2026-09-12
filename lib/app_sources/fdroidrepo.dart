@@ -330,6 +330,18 @@ class FDroidRepo extends AppSource {
       versionCode: int.tryParse(
         selectedReleases[0].querySelector('versioncode')?.innerHtml ?? '',
       ),
+      versionCodesByAsset: {
+        for (final release in selectedReleases)
+          if (int.tryParse(
+                release.querySelector('versioncode')?.innerHtml ?? '',
+              ) !=
+              null)
+            getApkUrlsFromUrls([
+              '$repoBase/${release.querySelector('apkname')!.innerHtml}',
+            ]).single.key: int.parse(
+              release.querySelector('versioncode')!.innerHtml,
+            ),
+      },
       releaseDate: releaseDate,
       changeLog: changeLog,
       iconUrl: iconUrl,

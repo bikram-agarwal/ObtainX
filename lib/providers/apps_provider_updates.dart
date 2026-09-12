@@ -25,176 +25,86 @@ const int _modestRamThresholdMb = 6144;
 // App-level update verdicts. The pure string primitives they build on (equality,
 // ordering, reconciliation) live in lib/version/version_strings.dart.
 
-/// True when the app compares against the device's version *code* but the
-/// source's latest version is not a version code — e.g. a stored installed
-/// version of `123` against a latest of `1.2.4`.
-///
-/// The two values live in different namespaces, so digit-wise ordering is
-/// meaningless: `123 > 1` reads as "installed is newer" and silently hides every
-/// future update, and [VersionDetectionMode.versionCode] is excluded from
-/// install-status auto-disable, so nothing heals it. Report such a pair as
-/// unorderable — the user gets the "version order unclear" affordance and can fix
-/// the mode, instead of an app that is quietly never updated again.
-bool versionCodeModeCannotCompare(App app) {
-  if (!app.usesVersionCodeAsOsVersion) return false;
-  final String? installed = app.installedVersion;
-  if (installed == null || installed.isEmpty || app.latestVersion.isEmpty) {
-    return false;
-  }
-  // Installed is the device's version code (a bare integer); the comparison is
-  // only sound when the source's version is a bare integer too.
-  if (!isBareIntegerVersion(installed)) return false;
-  return !isBareIntegerVersion(app.latestVersion);
+// Kept for reading older records; new decisions are derived from observations.
+const unreconciledVersionComparisonKey = 'unreconciledVersionComparison';
+
+bool appHasUnreconciledVersionComparison(App app) {
+  return app.installedVersion != null &&
+      app.latestVersion.isNotEmpty &&
+      app.versionDetectionMode == VersionDetectionMode.auto &&
+      !app.usesVersionCodeAsOsVersion &&
+      !app.settings.getBool('trackOnly') &&
+      versionDecisionForApp(app).relation == VersionRelation.unknown;
 }
 
-/// User skipped the current [App.latestVersion]; nagging and update badges are
-/// suppressed.
+bool versionCodeModeCannotCompare(App app) {
+  return versionDecisionForApp(app).reason == 'codeNameMismatch';
+}
+
 bool isSkipActiveForCurrentLatest(App app) {
-  final dynamic skipped = app.additionalSettings['skippedLatestVersion'];
-  if (skipped is! String || skipped.isEmpty) return false;
-  return skipped == app.latestVersion;
+  final skipped = app.additionalSettings['skippedLatestVersion'];
+  return skipped is String &&
+      skipped.isNotEmpty &&
+      skipped == app.latestVersion;
 }
 
 bool appIsUpToDateForFiltering(App app) {
-  final installed = app.installedVersion;
-  final latest = app.latestVersion;
-  if (installed == null) return false;
-  return isSkipActiveForCurrentLatest(app) ||
-      installed == latest ||
-      versionsEffectivelyEqual(installed, latest) ||
-      (installedVersionIsNewerOrEqual(installed, latest) &&
-          !versionOrderIsUnclear(installed, latest) &&
-          // A version code compared against a version string is not "newer".
-          !versionCodeModeCannotCompare(app));
+  if (app.installedVersion == null) return false;
+  if (isSkipActiveForCurrentLatest(app)) return true;
+  final decision = versionDecisionForApp(app);
+  return decision.relation == VersionRelation.same ||
+      decision.relation == VersionRelation.newer;
 }
 
-/// Removes a saved skip once it is stale or the installed app is already at
-/// or ahead of the skipped release.
 App normalizeSkippedLatestVersion(App app) {
-  final dynamic skipped = app.additionalSettings['skippedLatestVersion'];
+  final skipped = app.additionalSettings['skippedLatestVersion'];
   if (skipped is! String || skipped.isEmpty) return app;
-
-  var shouldRemove = skipped != app.latestVersion;
-  final String? installed = app.installedVersion;
-  if (!shouldRemove && installed != null && installed.isNotEmpty) {
-    // Same threshold as appIsUpToDateForFiltering: this used to demand a
-    // strictly newer installed version while filtering accepted newer-or-equal.
-    shouldRemove =
-        installedVersionIsNewerOrEqual(installed, app.latestVersion) &&
-        !versionOrderIsUnclear(installed, app.latestVersion);
+  final decision = versionDecisionForApp(app);
+  if (skipped == app.latestVersion &&
+      (app.installedVersion == null ||
+          (decision.relation != VersionRelation.same &&
+              decision.relation != VersionRelation.newer))) {
+    return app;
   }
-  if (!shouldRemove) return app;
-
   return app.copyWith(
     additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
       ..remove('skippedLatestVersion'),
   );
 }
 
-/// Installed app should show update affordances and count in update lists
-/// (unless skipped).
 bool appHasActionableUpdate(App app) {
-  final String? installed = app.installedVersion;
-  final String latest = app.latestVersion;
-  if (installed == null || latest.isEmpty) return false;
-  if (isSkipActiveForCurrentLatest(app)) return false;
-  if (installed == latest) return false;
-  if (versionsEffectivelyEqual(installed, latest)) return false;
-  // Unorderable: surfaced by versionOrderUncertainUpdate instead, so it is never
-  // swept into "update all" or a background install.
-  if (versionCodeModeCannotCompare(app)) return false;
-
-  if (versionOrderIsUnclear(installed, latest)) {
-    final dynamic lastInstalledTimeRaw =
-        app.additionalSettings['lastInstalledTime'];
-    if (lastInstalledTimeRaw is int && app.releaseDate != null) {
-      final DateTime installedTime = DateTime.fromMillisecondsSinceEpoch(
-        lastInstalledTimeRaw,
-      );
-      return app.releaseDate!.isAfter(installedTime);
-    }
-    // Pseudo-mode apps can't reliably compare versions; any difference is a
-    // potential update regardless of ordering ambiguity.
-    return !app.usesStandardVersionDetection;
-  }
-
-  // A numeric tie (cmp == 0) cannot reach here: that is exactly what
-  // versionOrderIsUnclear reports, and that branch returned above.
-  return compareVersionsByNumericSegments(installed, latest) != 1;
-}
-
-/// Installed app where installed vs latest differs but ordering is ambiguous
-/// (user must decide). Mutually exclusive with [appHasActionableUpdate] for
-/// normal version strings.
-bool versionOrderUncertainUpdate(App app) {
-  final String? installed = app.installedVersion;
-  final String latest = app.latestVersion;
-  if (installed == null || latest.isEmpty) return false;
-  if (isSkipActiveForCurrentLatest(app)) return false;
-  if (installed == latest) return false;
-  if (versionsEffectivelyEqual(installed, latest)) return false;
-
-  // Pseudo-mode apps cannot reliably order version strings; any version difference
-  // is an update rather than "version order unclear" (parity with appHasActionableUpdate).
-  if (!app.usesStandardVersionDetection) {
+  if (app.installedVersion == null ||
+      app.latestVersion.isEmpty ||
+      isSkipActiveForCurrentLatest(app)) {
     return false;
   }
-  // A stored version code against a source version string genuinely cannot be
-  // ordered — this is the case, not a guess about which is newer.
-  if (versionCodeModeCannotCompare(app)) return true;
-
-  if (versionOrderIsUnclear(installed, latest)) {
-    final dynamic lastInstalledTimeRaw =
-        app.additionalSettings['lastInstalledTime'];
-    if (lastInstalledTimeRaw is int && app.releaseDate != null) {
-      final DateTime installedTime = DateTime.fromMillisecondsSinceEpoch(
-        lastInstalledTimeRaw,
-      );
-      // Suppress the uncertain indicator only when timestamps confirm the
-      // release IS newer than the last install (appHasActionableUpdate already
-      // covers that case). Otherwise the order is still ambiguous.
-      return !app.releaseDate!.isAfter(installedTime);
-    }
-    return true;
-  }
-  return false;
+  return versionDecisionForApp(app).relation == VersionRelation.older;
 }
 
-/// Whether a freshly-checked [app] should be surfaced to the user as an update.
-///
-/// [AppsProviderUpdates.checkUpdates] reports every app whose *source version
-/// string* changed, which is a different question from the one the app list
-/// answers. A source that reformats its version (`1.2.3` → `1.2.3-2`), re-tags an
-/// already installed build, or publishes an older release all change the string
-/// without putting the device behind. Background notifications and background
-/// installs must agree with what the list UI shows, so they go through this
-/// predicate instead of comparing version strings.
-///
-/// [includeVersionOrderUncertain] mirrors [AppsProviderUpdates.findExistingUpdates]:
-/// notifications want ambiguous ordering surfaced so the user can decide,
-/// background install must never treat "can't tell" as "behind".
+bool versionOrderUncertainUpdate(App app) {
+  if (app.installedVersion == null ||
+      app.latestVersion.isEmpty ||
+      isSkipActiveForCurrentLatest(app)) {
+    return false;
+  }
+  return versionDecisionForApp(app).relation == VersionRelation.unknown;
+}
+
 bool appUpdateIsUserVisible(
   App app, {
   bool includeVersionOrderUncertain = false,
 }) {
   if (isSkipActiveForCurrentLatest(app)) return false;
-  if (app.installedVersion == null) {
-    // Never-installed apps are always installable, as in findExistingUpdates.
-    return app.latestVersion.isNotEmpty;
-  }
+  if (app.installedVersion == null) return app.latestVersion.isNotEmpty;
   return appHasActionableUpdate(app) ||
       (includeVersionOrderUncertain && versionOrderUncertainUpdate(app));
 }
 
-/// True if we should not show "update available" because installed is newer than
-/// or equal to latest by version math.
 bool installedVersionIsNewerOrEqual(String? installed, String latest) {
-  if (installed == null || installed.isEmpty || latest.isEmpty) return false;
-  if (installed == latest || versionsEffectivelyEqual(installed, latest)) {
-    return true;
-  }
-  final cmp = compareVersionsByNumericSegments(installed, latest);
-  return cmp == null ? false : cmp >= 0;
+  if (installed == null) return false;
+  final decision = compareVersionStrings(installed, latest);
+  return decision.relation == VersionRelation.same ||
+      decision.relation == VersionRelation.newer;
 }
 
 /// Track-only open URL: RSS release page when [App.changeLog] is http(s), else
@@ -272,35 +182,44 @@ App? mergeFetchedUpdateWithLiveState({
       : fetchedApp.preferredApkIndex;
   final bool malwareScanStillMatchesRelease =
       liveApp.latestVersion == fetchedApp.latestVersion;
-  return liveApp.copyWith(
-    author: fetchedApp.author,
-    name: fetchedApp.name,
-    latestVersion: fetchedApp.latestVersion,
-    apkUrls: fetchedApp.apkUrls,
-    otherAssetUrls: fetchedApp.otherAssetUrls,
-    preferredApkIndex: preferredApkIndex,
-    lastUpdateCheck: fetchedApp.lastUpdateCheck,
-    releaseDate: fetchedApp.releaseDate,
-    changeLog: fetchedApp.changeLog,
-    pendingRepoRenameUrl: fetchedApp.pendingRepoRenameUrl,
-    iconUrl: fetchedApp.iconUrl,
-    apkSizeBytes: fetchedApp.apkSizeBytes,
-    rawLatestVersionFromSource: fetchedApp.rawLatestVersionFromSource,
-    rawApkNamesFromSource: fetchedApp.rawApkNamesFromSource,
-    rawReleaseTitlesFromSource: fetchedApp.rawReleaseTitlesFromSource,
-    latestIsReproducible: fetchedApp.latestIsReproducible,
-    latestReproducibleStatus: fetchedApp.latestReproducibleStatus,
-    latestReproducibleVersionCode: fetchedApp.latestReproducibleVersionCode,
-    latestAttestationStatus: fetchedApp.latestAttestationStatus,
-    latestMalwareScanStatus: malwareScanStillMatchesRelease
-        ? liveApp.latestMalwareScanStatus
-        : null,
-    latestMalwareScanDetail: malwareScanStillMatchesRelease
-        ? liveApp.latestMalwareScanDetail
-        : null,
-    latestMalwareScanReportUrl: malwareScanStillMatchesRelease
-        ? liveApp.latestMalwareScanReportUrl
-        : null,
+  final settings = Map<String, dynamic>.from(liveApp.additionalSettings)
+    ..remove(sourceVersionCodesKey);
+  if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
+    settings[sourceVersionCodesKey] =
+        fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  return normalizeSelectedSourceVersion(
+    liveApp.copyWith(
+      additionalSettings: settings,
+      author: fetchedApp.author,
+      name: fetchedApp.name,
+      latestVersion: fetchedApp.latestVersion,
+      apkUrls: fetchedApp.apkUrls,
+      otherAssetUrls: fetchedApp.otherAssetUrls,
+      preferredApkIndex: preferredApkIndex,
+      lastUpdateCheck: fetchedApp.lastUpdateCheck,
+      releaseDate: fetchedApp.releaseDate,
+      changeLog: fetchedApp.changeLog,
+      pendingRepoRenameUrl: fetchedApp.pendingRepoRenameUrl,
+      iconUrl: fetchedApp.iconUrl,
+      apkSizeBytes: fetchedApp.apkSizeBytes,
+      rawLatestVersionFromSource: fetchedApp.rawLatestVersionFromSource,
+      rawApkNamesFromSource: fetchedApp.rawApkNamesFromSource,
+      rawReleaseTitlesFromSource: fetchedApp.rawReleaseTitlesFromSource,
+      latestIsReproducible: fetchedApp.latestIsReproducible,
+      latestReproducibleStatus: fetchedApp.latestReproducibleStatus,
+      latestReproducibleVersionCode: fetchedApp.latestReproducibleVersionCode,
+      latestAttestationStatus: fetchedApp.latestAttestationStatus,
+      latestMalwareScanStatus: malwareScanStillMatchesRelease
+          ? liveApp.latestMalwareScanStatus
+          : null,
+      latestMalwareScanDetail: malwareScanStillMatchesRelease
+          ? liveApp.latestMalwareScanDetail
+          : null,
+      latestMalwareScanReportUrl: malwareScanStillMatchesRelease
+          ? liveApp.latestMalwareScanReportUrl
+          : null,
+    ),
   );
 }
 

@@ -1,177 +1,339 @@
+import 'package:android_package_manager/android_package_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:obtainium/version/version_strings.dart';
+import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/source_provider.dart';
 
-// `reconciledInstalledVersionFromLatest` and
-// `reconciledInstalledVersionForDisabledVersionDetection` used to be top-level
-// helpers in apps_provider.dart. They were inlined into
-// AppsProvider.getCorrectedInstallStatusAppIfPossible (which drives App objects
-// and is covered by version_order_test.dart) and removed from the public
-// surface. They are reconstructed here verbatim from their original
-// implementation so these focused unit tests keep exercising the still-public
-// production reconciliation primitives (`reconcileVersionDifferences` and
-// `versionsEffectivelyEqual`) that do the actual work.
-String? reconciledInstalledVersionFromLatest(
-  String installedVersion,
-  String latestVersion,
-) {
-  if (installedVersion == latestVersion ||
-      versionsEffectivelyEqual(installedVersion, latestVersion)) {
-    return latestVersion;
+// Replace the platform boundary only, calling the production extensions.
+class _Provider implements AppsProvider {
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
   }
-  final reconciled = reconcileVersionDifferences(
-    installedVersion,
-    latestVersion,
-  );
-  if (reconciled == null) {
-    return null;
-  }
-  return reconciled.areEqual ? reconciled.version : installedVersion;
 }
 
-String? reconciledInstalledVersionForDisabledVersionDetection(
-  String realInstalledVersion,
-  String reportedInstalledVersion,
-  String latestVersion,
-) {
-  return reconciledInstalledVersionFromLatest(
-        realInstalledVersion,
-        latestVersion,
-      ) ??
-      (reconcileVersionDifferences(
-                realInstalledVersion,
-                reportedInstalledVersion,
-              )?.areEqual ==
-              false
-          ? realInstalledVersion
-          : null);
+PackageInfo _package(String version, {int code = 106}) {
+  return _InstalledPackage(version, code);
+}
+
+class _InstalledPackage extends PackageInfo {
+  _InstalledPackage(String version, int code)
+    : super(
+        installLocation: AndroidInstallLocation.unspecified,
+        packageName: 'org.example.app',
+        versionName: version,
+        versionCode: code,
+      );
+}
+
+App _app({
+  String? installed = 'old alias',
+  String latest = '107',
+  String mode = 'auto',
+}) {
+  return App(
+    id: 'org.example.app',
+    url: 'https://github.com/example/app',
+    author: 'Example',
+    name: 'Example',
+    installedVersion: installed,
+    latestVersion: latest,
+    preferredApkIndex: 0,
+    apkUrls: const [MapEntry('app.apk', 'https://example.com/latest.apk')],
+    additionalSettings: {'versionDetection': mode},
+  );
 }
 
 void main() {
-  test('installed version reconciliation keeps source latest when equal', () {
-    expect(reconciledInstalledVersionFromLatest('1.1.0', '1.1.0'), '1.1.0');
+  TestWidgetsFlutterBinding.ensureInitialized();
+  final provider = _Provider();
+  for (final mode in ['auto', 'standard']) {
+    for (final (device, latest, relation) in [
+      ('1.1.0', 'v1.1.0', VersionRelation.same),
+      ('1.2.0', '1.1.0', VersionRelation.newer),
+      ('1.0.0', '1.1.0', VersionRelation.older),
+      (
+        '2026.04.27.917519149.2-release',
+        '2026.03.12.885261117.2-release',
+        VersionRelation.newer,
+      ),
+      ('1.0.915254043.release', '1.0.896819557.release', VersionRelation.newer),
+      ('9.18.50', '107', VersionRelation.unknown),
+      ('2.19.1 (git 67d1c5a)', 'v2.19.1', VersionRelation.unknown),
+    ]) {
+      test(
+        '$mode preserves $device against $latest through save and reload',
+        () {
+          final original = _app(latest: latest, mode: mode);
+          final info = _package(device);
+          final corrected = provider.getCorrectedInstallStatusAppIfPossible(
+            original,
+            info,
+          )!;
+          expect(corrected.installedVersion, device);
+          expect(corrected.additionalSettings[observedVersionNameKey], device);
+          expect(corrected.additionalSettings[observedVersionCodeKey], 106);
+          expect(versionDecisionForApp(corrected).relation, relation);
+          final restored = App.fromJson(corrected.toJson());
+          expect(restored.installedVersion, device);
+          expect(versionDecisionForApp(restored).relation, relation);
+          expect(
+            provider.getCorrectedInstallStatusAppIfPossible(restored, info),
+            isNull,
+          );
+          expect(original.installedVersion, 'old alias');
+        },
+      );
+    }
+  }
+  test('Pseudo preserves source baseline while device observations change', () {
+    var app = _app(installed: '106', mode: 'pseudo');
+    for (final device in ['9.18.50', '9.19.0', '9.17.0']) {
+      app =
+          provider.getCorrectedInstallStatusAppIfPossible(
+            app,
+            _package(device),
+          ) ??
+          app;
+      expect(app.installedVersion, '106');
+      expect(app.additionalSettings[observedVersionNameKey], device);
+      expect(appHasActionableUpdate(app), isTrue);
+    }
   });
-
-  test(
-    'installed version reconciliation keeps source latest when equivalent',
-    () {
-      expect(reconciledInstalledVersionFromLatest('1.1.0', 'v1.1.0'), 'v1.1.0');
-    },
-  );
-
-  test('installed version reconciliation accepts higher installed version', () {
-    expect(reconciledInstalledVersionFromLatest('1.2.0', '1.1.0'), '1.2.0');
-  });
-
-  test('installed version reconciliation accepts lower installed version', () {
-    expect(reconciledInstalledVersionFromLatest('1.0.0', '1.1.0'), '1.0.0');
-  });
-
-  test(
-    'installed version reconciliation accepts long google release versions',
-    () {
-      const installed = '2026.04.27.917519149.2-release';
-      const latest = '2026.04.27.917519149.2-release';
-      const previousInstalled = '2026.03.12.885261117.2-release';
-
-      expect(reconciledInstalledVersionFromLatest(installed, latest), latest);
-      final reconciled = reconcileVersionDifferences(
-        installed,
-        previousInstalled,
+  for (final mode in ['auto', 'standard', 'pseudo', 'versionCode']) {
+    test('install keeps captured release across refresh in $mode', () {
+      final downloaded = _app(latest: '107', mode: mode);
+      final info = _package('9.18.50');
+      final receipt = InstallReleaseSnapshot.fromApp(
+        downloaded,
+      ).withPackage(info);
+      final saved = recordConfirmedInstall(
+        downloaded.copyWith(latestVersion: '108'),
+        receipt,
+        info,
       );
-      expect(reconciled?.areEqual, false);
-      expect(reconciled?.version, installed);
-    },
-  );
-
-  test(
-    'installed version reconciliation accepts dotted release suffix versions',
-    () {
-      const installed = '1.0.915254043.release';
-      const previousInstalled = '1.0.896819557.release';
-
-      final reconciled = reconcileVersionDifferences(
-        installed,
-        previousInstalled,
-      );
-      expect(reconciled?.areEqual, false);
-      expect(reconciled?.version, installed);
-    },
-  );
-
-  test('installed version reconciliation ignores unreconcilable version', () {
-    expect(reconciledInstalledVersionFromLatest('9.18.50', '107'), isNull);
-  });
-
-  test(
-    'disabled version detection accepts installed version when stored version reconciles',
-    () {
+      expect(saved.latestVersion, '108');
       expect(
-        reconciledInstalledVersionForDisabledVersionDetection(
-          '1.2.0',
-          '1.1.0',
-          'release-2026-05-27',
-        ),
-        '1.2.0',
+        saved.installedVersion,
+        mode == 'pseudo'
+            ? '107'
+            : mode == 'versionCode'
+            ? '106'
+            : '9.18.50',
       );
-    },
-  );
-
-  test(
-    'disabled version detection accepts installed version when latest version reconciles',
-    () {
+      expect(saved.additionalSettings[observedVersionNameKey], '9.18.50');
       expect(
-        reconciledInstalledVersionForDisabledVersionDetection(
-          '1.2.0',
-          'release-2026-04-01',
-          '1.3.0',
-        ),
-        '1.2.0',
+        InstallReleaseSnapshot.fromJson(
+          saved.additionalSettings[confirmedInstallReleaseKey],
+        )!.version,
+        '107',
       );
-    },
-  );
-
-  test(
-    'disabled version detection reflects external upgrade even when latest is incompatible',
-    () {
-      // real upgraded from 1.1.0 → 1.2.0 externally; source uses a different format
+      expect(appHasActionableUpdate(saved), isTrue);
+      final restored = App.fromJson(saved.toJson());
+      expect(appHasActionableUpdate(restored), isTrue);
       expect(
-        reconciledInstalledVersionForDisabledVersionDetection(
-          '1.2.0',
-          '1.1.0',
-          'build-abc123',
-        ),
-        '1.2.0',
-      );
-    },
-  );
-
-  test(
-    'disabled version detection does not hide update when pseudo stored equals real',
-    () {
-      // pseudo stored == real (2.0), but source bumped to 2.1; reconciledInstalled
-      // returns 2.0 (equal check), so installedVersion stays 2.0 and update stays visible
-      expect(
-        reconciledInstalledVersionForDisabledVersionDetection(
-          '2.0',
-          '2.0',
-          '2.1',
-        ),
-        '2.0',
-      );
-    },
-  );
-
-  test(
-    'disabled version detection ignores installed version when no version reconciles',
-    () {
-      expect(
-        reconciledInstalledVersionForDisabledVersionDetection(
-          '9.18.50',
-          '106',
-          '107',
-        ),
+        provider.getCorrectedInstallStatusAppIfPossible(restored, info),
         isNull,
       );
+    });
+  }
+  test(
+    'confirmed receipt outranks misleading raw names without overwriting them',
+    () {
+      final app = _app(latest: '99.0');
+      final info = _package('9.18.50');
+      final receipt = InstallReleaseSnapshot.fromApp(app).withPackage(info);
+      final installed = recordConfirmedInstall(app, receipt, info);
+      expect(installed.installedVersion, '9.18.50');
+      expect(
+        versionDecisionForApp(installed).reason,
+        'confirmedInstalledRelease',
+      );
+      expect(appIsUpToDateForFiltering(installed), isTrue);
+      expect(
+        appHasActionableUpdate(installed.copyWith(latestVersion: '100.0')),
+        isTrue,
+      );
     },
   );
+  test('pending install survives restart and is confirmed only by its APK', () {
+    final app = _app(installed: '9.17.0');
+    final info = _package('9.18.50');
+    final receipt = InstallReleaseSnapshot.fromApp(app).withPackage(info);
+    final pending = recordPendingInstall(app, receipt);
+    expect(pending.installedVersion, '9.17.0');
+    expect(pending.additionalSettings[confirmedInstallReleaseKey], isNull);
+    final restored = App.fromJson(
+      pending.toJson(),
+    ).copyWith(latestVersion: '108');
+    final oldDevice = provider.getCorrectedInstallStatusAppIfPossible(
+      restored,
+      _package('9.17.0', code: 105),
+    )!;
+    expect(oldDevice.additionalSettings[confirmedInstallReleaseKey], isNull);
+    final confirmed = provider.getCorrectedInstallStatusAppIfPossible(
+      oldDevice,
+      info,
+    )!;
+    expect(confirmed.additionalSettings[pendingInstallReleaseKey], isNull);
+    expect(
+      InstallReleaseSnapshot.fromJson(
+        confirmed.additionalSettings[confirmedInstallReleaseKey],
+      )!.version,
+      '107',
+    );
+    expect(confirmed.installedVersion, '9.18.50');
+    expect(appHasActionableUpdate(confirmed), isTrue);
+  });
+  test(
+    'cancellation removes only its own attempt and cannot confirm later',
+    () {
+      final app = _app();
+      final info = _package('9.18.50');
+      final first = InstallReleaseSnapshot.fromApp(app).withPackage(info);
+      final second = InstallReleaseSnapshot.fromApp(
+        app.copyWith(latestVersion: '108'),
+      ).withPackage(info);
+      final pending = recordPendingInstall(app, second);
+      expect(discardPendingInstall(pending, first), same(pending));
+      final cancelled = discardPendingInstall(pending, second);
+      final observed = provider.getCorrectedInstallStatusAppIfPossible(
+        cancelled,
+        info,
+      )!;
+      expect(observed.additionalSettings[confirmedInstallReleaseKey], isNull);
+      expect(versionOrderUncertainUpdate(observed), isTrue);
+    },
+  );
+  test(
+    'receipt is invalidated by source, extraction, package, or asset changes',
+    () {
+      final app = _app();
+      final info = _package('9.18.50');
+      final receipt = InstallReleaseSnapshot.fromApp(app).withPackage(info);
+      final installed = recordConfirmedInstall(app, receipt, info);
+      for (final changed in [
+        installed.copyWith(url: 'https://github.com/different/app'),
+        installed.copyWith(overrideSource: 'HTML'),
+        installed.copyWith(
+          additionalSettings: {
+            ...installed.additionalSettings,
+            'versionExtractionRegEx': 'changed',
+          },
+        ),
+        installed.copyWith(
+          apkUrls: const [
+            MapEntry('other.apk', 'https://example.com/other.apk'),
+          ],
+        ),
+        installed.copyWith(installedVersion: 'external label'),
+      ]) {
+        expect(
+          versionDecisionForApp(changed).relation,
+          VersionRelation.unknown,
+        );
+      }
+      final external = provider.getCorrectedInstallStatusAppIfPossible(
+        installed,
+        _package('9.20.0', code: 108),
+      )!;
+      expect(external.additionalSettings[confirmedInstallReleaseKey], isNull);
+      expect(external.installedVersion, '9.20.0');
+      final switched = recordConfirmedInstall(
+        app.copyWith(url: 'https://github.com/different/app'),
+        receipt,
+        info,
+      );
+      expect(switched.additionalSettings[confirmedInstallReleaseKey], isNull);
+      expect(switched.installedVersion, '9.18.50');
+    },
+  );
+  test(
+    'refresh merge preserves live observations and confirmed installation',
+    () {
+      final requested = _app();
+      final info = _package('9.18.50');
+      final live = recordConfirmedInstall(
+        requested,
+        InstallReleaseSnapshot.fromApp(requested).withPackage(info),
+        info,
+      );
+      final merged = mergeFetchedUpdateWithLiveState(
+        requestedApp: requested,
+        liveApp: live,
+        fetchedApp: requested.copyWith(latestVersion: '108'),
+      )!;
+      expect(merged.installedVersion, '9.18.50');
+      expect(
+        merged.additionalSettings[confirmedInstallReleaseKey],
+        live.additionalSettings[confirmedInstallReleaseKey],
+      );
+      expect(merged.latestVersion, '108');
+      expect(appHasActionableUpdate(merged), isTrue);
+    },
+  );
+  test('mutable URL has a different cache identity for each release', () {
+    final first = InstallReleaseSnapshot.fromApp(_app());
+    final second = InstallReleaseSnapshot.fromApp(_app(latest: '108'));
+    expect(
+      downloadReleaseCacheKey(first),
+      isNot(downloadReleaseCacheKey(second)),
+    );
+    expect(
+      downloadReleaseCacheKey(first),
+      downloadReleaseCacheKey(InstallReleaseSnapshot.fromJson(first.toJson())!),
+    );
+  });
+  test('malformed receipts are ignored without preventing app load', () {
+    final snapshot = InstallReleaseSnapshot.fromApp(_app()).toJson();
+    for (final value in [
+      null,
+      [],
+      {},
+      {...snapshot, 'overrideSource': 4},
+      {...snapshot, 'versionName': []},
+    ]) {
+      expect(InstallReleaseSnapshot.fromJson(value), isNull);
+    }
+  });
+  test('Pseudo cannot make incompatible device versions detectable', () {
+    final app = _app(mode: 'pseudo');
+    expect(
+      provider.isVersionDetectionPossible(
+        AppInMemory(app, null, _package('9.18.50'), null),
+      ),
+      isFalse,
+    );
+    expect(
+      provider.isVersionDetectionPossible(
+        AppInMemory(
+          app.copyWith(latestVersion: '9.19.0'),
+          null,
+          _package('9.18.50'),
+          null,
+        ),
+      ),
+      isTrue,
+    );
+  });
+  test('a late result does not erase a different pending release', () {
+    final app = _app();
+    final oldInfo = _package('9.18.50');
+    final first = InstallReleaseSnapshot.fromApp(app).withPackage(oldInfo);
+    final newer = app.copyWith(latestVersion: '108');
+    final second = InstallReleaseSnapshot.fromApp(
+      newer,
+    ).withPackage(_package('9.19.0', code: 107));
+    final late = recordConfirmedInstall(
+      recordPendingInstall(newer, second),
+      first,
+      oldInfo,
+    );
+    expect(
+      InstallReleaseSnapshot.fromJson(
+        late.additionalSettings[pendingInstallReleaseKey],
+      )!.version,
+      '108',
+    );
+    expect(appHasActionableUpdate(late), true);
+  });
 }

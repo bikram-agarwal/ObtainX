@@ -79,6 +79,7 @@ class _StubSource extends AppSource {
     ],
     this.version = '2.0',
     this.versionCode,
+    this.versionCodesByAsset = const {},
   }) {
     hosts = <String>['example.com'];
     name = 'Example';
@@ -87,6 +88,7 @@ class _StubSource extends AppSource {
   final List<MapEntry<String, String>> apkUrls;
   final String version;
   final int? versionCode;
+  final Map<String, int> versionCodesByAsset;
 
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
@@ -103,6 +105,7 @@ class _StubSource extends AppSource {
       apkUrls,
       AppNames('Example Author', 'Readable Name'),
       versionCode: versionCode,
+      versionCodesByAsset: versionCodesByAsset,
     );
   }
 
@@ -1468,6 +1471,95 @@ void main() {
           });
 
       expect(app.latestVersion, '4.8.3');
+    },
+  );
+
+  test(
+    'source codes follow the filtered and selected APK through reload',
+    () async {
+      final source = _StubSource(
+        version: '4.8.3',
+        apkUrls: const [
+          MapEntry('arm.apk', 'https://example.com/arm.apk'),
+          MapEntry('x86.apk', 'https://example.com/x86.apk'),
+        ],
+        versionCodesByAsset: {'arm.apk': 48301, 'x86.apk': 48302},
+      );
+      final app = await SourceProvider()
+          .getApp(source, 'https://example.com/app', {
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'autoApkFilterByArch': false,
+          });
+      expect(app.latestVersion, '48302');
+      expect(selectedSourceVersionCode(app), 48302);
+      final selected = normalizeSelectedSourceVersion(
+        app.copyWith(preferredApkIndex: 0, installedVersion: '48301'),
+      );
+      expect(selected.latestVersion, '48301');
+      expect(selectedSourceVersionCode(selected), 48301);
+      expect(appIsUpToDateForFiltering(selected), true);
+      final restored = App.fromJson(selected.toJson());
+      expect(selectedSourceVersionCode(restored), 48301);
+      expect(normalizeSelectedSourceVersion(restored), same(restored));
+      final filtered = await SourceProvider()
+          .getApp(source, 'https://example.com/app', {
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'autoApkFilterByArch': false,
+            'apkFilterRegEx': 'arm',
+          });
+      expect(filtered.latestVersion, '48301');
+      expect(filtered.apkUrls.single.key, 'arm.apk');
+      expect(selectedSourceVersionCode(filtered), 48301);
+      expect(
+        selectedSourceVersionCode(filtered.copyWith(latestVersion: '48303')),
+        isNull,
+      );
+      expect(
+        selectedSourceVersionCode(
+          filtered.copyWith(url: 'https://different.com/app'),
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'device code and selected source code outrank display-name differences',
+    () async {
+      final source = _StubSource(version: '4.8.3', versionCode: 48300);
+      final app = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        {'appId': 'org.example.app', 'versionDetection': 'auto'},
+      );
+      final installed = app.copyWith(
+        installedVersion: 'store-specific name',
+        additionalSettings: {
+          ...app.additionalSettings,
+          observedPackageIdKey: app.id,
+          observedVersionNameKey: 'store-specific name',
+          observedVersionCodeKey: 48300,
+        },
+      );
+      expect(versionDecisionForApp(installed).reason, 'selectedApkCode');
+      expect(appIsUpToDateForFiltering(installed), true);
+      expect(
+        appHasActionableUpdate(
+          installed.copyWith(
+            additionalSettings: {
+              ...installed.additionalSettings,
+              observedVersionCodeKey: 48200,
+            },
+          ),
+        ),
+        true,
+      );
+      final stale = installed.copyWith(
+        installedVersion: 'different device observation',
+      );
+      expect(versionDecisionForApp(stale).relation, VersionRelation.unknown);
     },
   );
 

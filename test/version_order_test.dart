@@ -269,15 +269,12 @@ void main() {
     },
   );
 
-  test(
-    'real hex in version string still participates in versionsEffectivelyEqual',
-    () {
-      expect(
-        versionsEffectivelyEqual('1.5.3-DEV (75094D8)', 'debug-75094d8'),
-        true,
-      );
-    },
-  );
+  test('a shared hash alone cannot equate different version schemes', () {
+    expect(
+      versionsEffectivelyEqual('1.5.3-DEV (75094D8)', 'debug-75094d8'),
+      false,
+    );
+  });
 
   test(
     'dot releases like 153.0 and 153.0.2 are recognized as distinct versions',
@@ -627,7 +624,7 @@ void main() {
   });
 
   test(
-    'unreconciled source tag version is preserved as installed pseudo version',
+    'unreconciled Auto source tag preserves the device version as uncertain',
     () {
       final appsProvider = AppsProvider(isBg: true);
       final app = App(
@@ -654,9 +651,10 @@ void main() {
       );
 
       expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, '106');
+      expect(correctedApp!.installedVersion, '9.18.50');
       expect(correctedApp.latestVersion, '106');
-      expect(correctedApp.additionalSettings['versionDetection'], 'pseudo');
+      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+      expect(versionOrderUncertainUpdate(correctedApp), isTrue);
     },
   );
 
@@ -687,7 +685,11 @@ void main() {
         ),
       );
 
-      expect(correctedApp, isNull);
+      expect(correctedApp!.installedVersion, '106');
+      expect(
+        correctedApp.additionalSettings[observedVersionNameKey],
+        '9.18.50',
+      );
       expect(app.installedVersion, '106');
       expect(app.latestVersion, '107');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
@@ -862,7 +864,11 @@ void main() {
         ),
       );
 
-      expect(correctedApp, isNull);
+      expect(correctedApp!.installedVersion, '9.18.50');
+      expect(
+        correctedApp.additionalSettings[observedVersionNameKey],
+        '9.18.50',
+      );
       expect(app.installedVersion, '9.18.50');
       expect(app.latestVersion, '107');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
@@ -897,7 +903,8 @@ void main() {
         ),
       );
 
-      expect(correctedApp, isNull);
+      expect(correctedApp!.installedVersion, '26.06.01-de-vanced');
+      expect(correctedApp.additionalSettings[observedVersionNameKey], '4.15.0');
       expect(app.installedVersion, '26.06.01-de-vanced');
       expect(app.latestVersion, '26.06.01-de-vanced');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
@@ -1310,9 +1317,10 @@ This app description should not be included.
       );
 
       expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, 'v2.19.1');
+      expect(correctedApp!.installedVersion, '2.19.1 (git 50a6b17)');
       expect(appHasActionableUpdate(correctedApp), false);
-      // The device version reconciles with latest, so detection stays on.
+      expect(versionOrderUncertainUpdate(correctedApp), true);
+      // An unverified hash decoration does not rewrite the observed version.
       expect(correctedApp.additionalSettings['versionDetection'], 'auto');
     });
 
@@ -1330,7 +1338,7 @@ This app description should not be included.
       );
 
       expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, 'v7.1.1');
+      expect(correctedApp!.installedVersion, '7.1.1');
       expect(appHasActionableUpdate(correctedApp), false);
     });
 
@@ -1418,7 +1426,10 @@ This app description should not be included.
         deviceVersionName: '2.19.0 (git a77e849)',
       );
 
-      expect(correctedApp?.installedVersion ?? app.installedVersion, 'v2.19.0');
+      expect(
+        correctedApp?.installedVersion ?? app.installedVersion,
+        '2.19.0 (git a77e849)',
+      );
       expect(appHasActionableUpdate(correctedApp ?? app), true);
     });
 
@@ -1596,9 +1607,9 @@ This app description should not be included.
       ),
     );
 
-    expect(correctedApp, isNull);
-    expect(app.additionalSettings['versionDetection'], 'auto');
-    expect(app.installedVersion, 'debug-75094d8');
+    expect(correctedApp!.installedVersion, '1.5.3-DEV (75094D8)');
+    expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+    expect(versionOrderUncertainUpdate(correctedApp), isTrue);
   });
 
   test(
@@ -1631,9 +1642,9 @@ This app description should not be included.
         ),
       );
 
-      expect(correctedApp, isNull);
-      expect(app.additionalSettings['versionDetection'], 'auto');
-      expect(app.installedVersion, '75094d8');
+      expect(correctedApp!.installedVersion, '1.5.3-DEV (75094D8)');
+      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+      expect(versionOrderUncertainUpdate(correctedApp), isTrue);
     },
   );
 
@@ -1642,15 +1653,15 @@ This app description should not be included.
     () {
       expect(
         reconcileVersionDifferences('26.06', '26.06.9df4c85')?.areEqual,
-        false,
+        isNull,
       );
       expect(
         reconcileVersionDifferences('26.06', '26.06-9df4c85')?.areEqual,
-        true,
+        isNull,
       );
       expect(
         reconcileVersionDifferences('2.19.1', '2.19.1 (git 50a6b17)')?.areEqual,
-        true,
+        isNull,
       );
 
       final appsProvider = AppsProvider(isBg: true);
@@ -1720,9 +1731,9 @@ This app description should not be included.
   );
 
   test(
-    'unclear version order is resolved using lastInstalledTime and releaseDate',
+    'publication and installation dates do not resolve unclear version order',
     () {
-      // Scenario 1: releaseDate is after lastInstalledTime (update available)
+      // Scenario 1: a later publication still cannot establish version order.
       final appUpdate = App(
         id: 'app.example',
         url: 'https://github.com/example/example',
@@ -1742,8 +1753,8 @@ This app description should not be included.
         releaseDate: DateTime.utc(2026, 6, 2),
       );
 
-      expect(appHasActionableUpdate(appUpdate), true);
-      expect(versionOrderUncertainUpdate(appUpdate), false);
+      expect(appHasActionableUpdate(appUpdate), false);
+      expect(versionOrderUncertainUpdate(appUpdate), true);
 
       // Scenario 2: releaseDate is before lastInstalledTime (no update)
       final appNoUpdate = App(
@@ -1885,9 +1896,7 @@ This app description should not be included.
     // getCorrectedInstallStatusAppIfPossible is applied on every load and save, so
     // it has to settle: if pass N keeps producing a different app, the JSON is
     // rewritten forever and the recorded install state depends on how many times
-    // the app list happened to refresh. (It is not idempotent after one pass —
-    // flipping to pseudo in step 4 legitimately lets step 1b adopt the device
-    // version on the next pass — so the property is convergence, not idempotence.)
+    // the app list happened to refresh. Unreconciled Auto pairs must settle too.
     final appsProvider = AppsProvider(isBg: true);
     addTearDown(appsProvider.dispose);
 

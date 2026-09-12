@@ -713,103 +713,65 @@ class GitHub extends AppSource {
       return firstDate.compareTo(secondDate);
     }
 
-    // Precompute dates and (for smartname/name sorts) per-release format
-    // sets once. Memoization in findStandardFormatsForVersion already handles
-    // the per-version cache; we still precompute here so the sort comparator
-    // only performs O(1) lookups instead of O(n) per comparison.
-    final isDateOnly = sortMethod == 'date';
     final Map<dynamic, DateTime?> dates = {};
-    final Map<dynamic, Set<String>> formats = {};
-    if (!isDateOnly) {
-      for (final release in releases) {
-        if (release == null) continue;
-        final name = (release['tag_name'] ?? release['name'])?.toString() ?? '';
-        formats[release] = findStandardFormatsForVersion(name, false);
-      }
+    DateTime? releaseDate(dynamic release) {
+      return dates.putIfAbsent(
+        release,
+        () => _getReleaseDateFromRelease(
+          release,
+          useLatestAssetDateAsReleaseDate,
+        ),
+      );
     }
 
+    // Natural-name/date ordering only selects a source release when its labels
+    // are incomparable. It never supplies evidence for a device update.
+    final useVersionOrder =
+        sortMethod != 'date' &&
+        sortMethod != 'name' &&
+        versionsHaveConsistentOrder(
+          releases
+              .where((release) => release != null)
+              .map(
+                (release) =>
+                    (release['tag_name'] ?? release['name'])?.toString() ?? '',
+              ),
+        );
     releases.sort((firstRelease, secondRelease) {
       if (firstRelease == null && secondRelease == null) return 0;
       if (firstRelease == null) return -1;
       if (secondRelease == null) return 1;
-
-      if (isDateOnly) {
-        final firstDate = dates.putIfAbsent(
-          firstRelease,
-          () => _getReleaseDateFromRelease(
-            firstRelease,
-            useLatestAssetDateAsReleaseDate,
-          ),
+      if (sortMethod == 'date' ||
+          (!useVersionOrder && sortMethod == 'smartname-datefallback')) {
+        return compareReleaseDates(
+          releaseDate(firstRelease),
+          releaseDate(secondRelease),
         );
-        final secondDate = dates.putIfAbsent(
-          secondRelease,
-          () => _getReleaseDateFromRelease(
-            secondRelease,
-            useLatestAssetDateAsReleaseDate,
-          ),
-        );
-        return compareReleaseDates(firstDate, secondDate);
       }
-
       final firstName =
           (firstRelease['tag_name'] ?? firstRelease['name'])?.toString() ?? '';
       final secondName =
           (secondRelease['tag_name'] ?? secondRelease['name'])?.toString() ??
           '';
-      final standardFormats = formats[firstRelease]!.intersection(
-        formats[secondRelease]!,
-      );
-
-      if (sortMethod == 'smartname-datefallback' && standardFormats.isEmpty) {
-        final firstDate = _getReleaseDateFromRelease(
-          firstRelease,
-          useLatestAssetDateAsReleaseDate,
-        );
-        final secondDate = _getReleaseDateFromRelease(
-          secondRelease,
-          useLatestAssetDateAsReleaseDate,
-        );
-        return compareReleaseDates(firstDate, secondDate);
-      }
-
-      if (sortMethod != 'name' && standardFormats.isNotEmpty) {
-        final sortedFormats = standardFormats.toList()
-          ..sort(
-            (firstPattern, secondPattern) =>
-                secondPattern.length.compareTo(firstPattern.length),
+      if (useVersionOrder) {
+        final ordered = compareVersionStrings(firstName, secondName).comparison;
+        if (ordered != null && ordered != 0) return ordered;
+        if (ordered == 0 || sortMethod == 'smartname-datefallback') {
+          return compareReleaseDates(
+            releaseDate(firstRelease),
+            releaseDate(secondRelease),
           );
-        final standardFormatPattern = RegExp(
-          sortedFormats.first,
-          caseSensitive: false,
-        );
-        final firstMatch = standardFormatPattern.firstMatch(firstName);
-        final secondMatch = standardFormatPattern.firstMatch(secondName);
-        if (firstMatch != null && secondMatch != null) {
-          final versionComparison = compareAlphaNumeric(
-            firstName.substring(firstMatch.start, firstMatch.end).toLowerCase(),
-            secondName
-                .substring(secondMatch.start, secondMatch.end)
-                .toLowerCase(),
-          );
-          if (versionComparison != 0) return versionComparison;
         }
       }
-
       final nameComparison = compareAlphaNumeric(
         firstName.toLowerCase(),
         secondName.toLowerCase(),
       );
       if (nameComparison != 0) return nameComparison;
-
-      final firstDate = _getReleaseDateFromRelease(
-        firstRelease,
-        useLatestAssetDateAsReleaseDate,
+      return compareReleaseDates(
+        releaseDate(firstRelease),
+        releaseDate(secondRelease),
       );
-      final secondDate = _getReleaseDateFromRelease(
-        secondRelease,
-        useLatestAssetDateAsReleaseDate,
-      );
-      return compareReleaseDates(firstDate, secondDate);
     });
   }
 
