@@ -108,7 +108,7 @@
     "restoredX": "已還原 {}",
     "restoreBackupConfirmTitle": "重設 ObtainX 並還原備份？",
     "restoreBackupConfirmBody": "此操作會將 ObtainX 重設為預設狀態——移除目前追蹤的所有應用程式並重設設定——然後還原您剛從備份中選擇的內容。此操作無法復原。裝置上已安裝的應用程式及其資料不會受到影響。",
-    "restoreBackupHelpTitle": "匯入與還原",
+    "restoreBackupHelpTitle": "匯入與還原的差異",
     "restoreBackupHelpBody": "匯入會將備份與您既有的資料合併：ID 相符的應用程式會以備份中的資訊更新，其餘應用程式會被新增，您帶入的任何設定都會疊加在目前的設定之上。還原會先將 ObtainX 重設為預設狀態——應用程式與設定皆然——然後僅套用您從備份中選擇的內容，做到真正乾淨的全新還原。",
     "importSettingsTitle": "ObtainX 設定",
     "withSecrets": "包含機密資料",
