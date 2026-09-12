@@ -2453,4 +2453,84 @@ This app description should not be included.
       false,
     );
   });
+
+  // An explicit user mark outranks the device lookup: a track-only app is often
+  // tracked without ever being installed through ObtainX, so absence is not an
+  // uninstall signal once the user has said otherwise. Without this exemption
+  // the mark is wiped by the next reconcile and cannot be restored (#276).
+  test('track-only app marked installed by the user keeps its version '
+      'when absent from the device', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'com.example.trackedapp',
+      url: 'https://www.apkmirror.com/apk/vendor/tracked-app',
+      author: 'vendor',
+      name: 'Tracked App',
+      installedVersion: '1.2.4',
+      latestVersion: '1.2.4',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {
+        'trackOnly': true,
+        'trackOnlyTemporaryPackageId': false,
+        'trackOnlyUndeterminedInstalledVersion': false,
+        trackOnlyUserMarkedInstalledKey: true,
+        'versionDetection': 'auto',
+      },
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      null,
+    );
+
+    expect(correctedApp?.installedVersion ?? app.installedVersion, '1.2.4');
+  });
+
+  // The mark only stands in for an unanswerable device lookup. Once the package
+  // is really there, the device wins again and the mark is retired — otherwise
+  // a marked app would be exempt from uninstall detection forever.
+  test('track-only app marked installed by the user drops the mark '
+      'once the package appears on the device', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'com.example.trackedapp',
+      url: 'https://www.apkmirror.com/apk/vendor/tracked-app',
+      author: 'vendor',
+      name: 'Tracked App',
+      installedVersion: null,
+      latestVersion: '1.2.4',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {
+        'trackOnly': true,
+        'trackOnlyTemporaryPackageId': false,
+        'trackOnlyUndeterminedInstalledVersion': false,
+        trackOnlyUserMarkedInstalledKey: true,
+        'versionDetection': 'auto',
+      },
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'com.example.trackedapp',
+        versionName: '1.2.3',
+        versionCode: 123,
+      ),
+    );
+
+    expect(correctedApp, isNotNull);
+    expect(correctedApp!.installedVersion, '1.2.3');
+    expect(
+      correctedApp.additionalSettings.containsKey(
+        trackOnlyUserMarkedInstalledKey,
+      ),
+      false,
+    );
+  });
 }

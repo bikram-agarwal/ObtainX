@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
+import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -400,6 +401,10 @@ extension AppsProviderUpdates on AppsProvider {
   }
 
   Future<App?> fetchUpdate(String appId) async {
+    return SourceRequestSession.run(() => _fetchUpdateInSession(appId));
+  }
+
+  Future<App?> _fetchUpdateInSession(String appId) async {
     final _FetchedAppUpdate? update = await _fetchUpdateSnapshot(appId);
     if (update == null) return null;
     return mergeFetchedUpdateWithLiveState(
@@ -410,6 +415,10 @@ extension AppsProviderUpdates on AppsProvider {
   }
 
   Future<App?> checkUpdate(String appId) async {
+    return SourceRequestSession.run(() => _checkUpdateInSession(appId));
+  }
+
+  Future<App?> _checkUpdateInSession(String appId) async {
     final _FetchedAppUpdate? update = await _fetchUpdateSnapshot(appId);
     if (update == null) return null;
     final App? mergedApp = mergeFetchedUpdateWithLiveState(
@@ -474,6 +483,22 @@ extension AppsProviderUpdates on AppsProvider {
   /// this to the user (notifications) or act on it (background install) must
   /// filter with [appUpdateIsUserVisible] so they agree with the app list.
   Future<List<App>> checkUpdates({
+    bool throwErrorsForRetry = false,
+    List<String>? specificIds,
+    bool forceAll = false,
+    SettingsProvider? sp,
+  }) {
+    return SourceRequestSession.run(
+      () => _checkUpdatesInSession(
+        throwErrorsForRetry: throwErrorsForRetry,
+        specificIds: specificIds,
+        forceAll: forceAll,
+        sp: sp,
+      ),
+    );
+  }
+
+  Future<List<App>> _checkUpdatesInSession({
     bool throwErrorsForRetry = false,
     List<String>? specificIds,
     bool forceAll = false,
@@ -645,6 +670,7 @@ extension AppsProviderUpdates on AppsProvider {
       rethrow;
     } finally {
       updateCheckCompleter = null;
+      finishPendingAutoExport();
       refreshProgress = null;
     }
   }

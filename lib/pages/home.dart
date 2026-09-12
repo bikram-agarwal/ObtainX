@@ -656,10 +656,13 @@ class HomePageState extends State<HomePage> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(30),
         child: BackdropFilter(
+          enabled: blurBottomNav,
           filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
             decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+              color: scheme.surfaceContainerHighest.withValues(
+                alpha: blurBottomNav ? 0.55 : 1.0,
+              ),
               borderRadius: BorderRadius.circular(30),
             ),
             child: pillContent,

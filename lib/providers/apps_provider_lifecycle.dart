@@ -229,10 +229,17 @@ extension AppsProviderLifecycle on AppsProvider {
     // RockMods) on "installed <old version>" forever once the user uninstalls:
     // nothing else ever nulls the stored version, so neither a restart nor
     // pull-to-refresh can clear it, and the app keeps counting as installed.
+    // An explicit user mark is the third exemption: the device lookup is still
+    // authoritative about the *package*, but a track-only app is frequently
+    // tracked without being installed through ObtainX (or under a package ID
+    // that matches nothing on the device), so the user's assertion outranks it.
+    // Without this, "mark as updated" and the track-only install action are
+    // inert — the mark is wiped by the very next reconcile (ObtainX#276).
     final bool trackOnlyPackageIdIsUnverifiable =
         trackOnly &&
         (isTempId(app) ||
-            app.additionalSettings['trackOnlyTemporaryPackageId'] == true);
+            app.additionalSettings['trackOnlyTemporaryPackageId'] == true ||
+            app.additionalSettings[trackOnlyUserMarkedInstalledKey] == true);
     if (installedInfo == null &&
         app.installedVersion != null &&
         !trackOnlyPackageIdIsUnverifiable) {
@@ -255,6 +262,9 @@ extension AppsProviderLifecycle on AppsProvider {
       if (trackOnly) {
         // A real installed version is now known for this track-only app.
         newSettings['trackOnlyUndeterminedInstalledVersion'] = false;
+        // The device now answers the question the user's mark was standing in
+        // for, so stop exempting this app from the clearing rule above.
+        newSettings.remove(trackOnlyUserMarkedInstalledKey);
       }
       app = app.copyWith(
         installedVersion: versionDetectionIsStandard
@@ -1576,8 +1586,17 @@ extension AppsProviderLifecycle on AppsProvider {
     if (uninstall) {
       // Uninstall-only: clear the recorded installed version so the row updates
       // immediately (the real uninstall is reconciled on the next load too).
+      // An uninstall through ObtainX also retires any user mark — it is a newer,
+      // more explicit statement than the mark it replaces.
       final List<App> cleared = appsToAffect
-          .map((a) => a.copyWith(installedVersion: null))
+          .map(
+            (a) => a.copyWith(
+              installedVersion: null,
+              additionalSettings: Map<String, dynamic>.from(
+                a.additionalSettings,
+              )..remove(trackOnlyUserMarkedInstalledKey),
+            ),
+          )
           .toList();
       await saveApps(cleared, attemptToCorrectInstallStatus: false);
       return const RemoveAppsWithModalResult._(confirmed: true);

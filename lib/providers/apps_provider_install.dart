@@ -5,8 +5,6 @@ import 'dart:typed_data';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_intent_plus/flag.dart';
 import 'package:android_package_manager/android_package_manager.dart';
-import 'package:archive/archive.dart' as archive;
-import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
@@ -32,6 +30,7 @@ import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/artifact_file_work.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -808,43 +807,7 @@ extension AppsProviderInstall on AppsProvider {
     String filePath,
     String destinationPath,
   ) async {
-    final File tarballFile = File(filePath);
-    final bytes = await tarballFile.readAsBytes();
-    List<int> decompressed;
-
-    if (bytes.length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
-      decompressed = const archive.GZipDecoder().decodeBytes(bytes);
-    } else if (bytes.length >= 3 &&
-        bytes[0] == 0x42 &&
-        bytes[1] == 0x5a &&
-        bytes[2] == 0x68) {
-      decompressed = archive.BZip2Decoder().decodeBytes(bytes);
-    } else if (bytes.length >= 6 &&
-        bytes[0] == 0xfd &&
-        bytes[1] == 0x37 &&
-        bytes[2] == 0x7a &&
-        bytes[3] == 0x58 &&
-        bytes[4] == 0x5a &&
-        bytes[5] == 0x00) {
-      decompressed = archive.XZDecoder().decodeBytes(bytes);
-    } else {
-      decompressed = bytes;
-    }
-
-    final tarArchive = archive.TarDecoder().decodeBytes(decompressed);
-    final destDir = Directory(destinationPath);
-    if (!destDir.existsSync()) {
-      destDir.createSync(recursive: true);
-    }
-    for (final file in tarArchive.files) {
-      if (file.isFile) {
-        final content = file.content;
-        final outPath = '${destDir.path}/${file.name}';
-        final outFile = File(outPath);
-        outFile.createSync(recursive: true);
-        outFile.writeAsBytesSync(content);
-      }
-    }
+    await extractTarballOffIsolate(filePath, destinationPath);
   }
 
   Future<bool> installApkDir(
@@ -1405,13 +1368,26 @@ extension AppsProviderInstall on AppsProvider {
       dialogTheme: dialogTheme,
     );
 
-    // Mark all specified track-only apps as latest
+    // Mark all specified track-only apps as latest. Recorded as an explicit user
+    // mark and saved without install-status correction: the user asked for this,
+    // and correction would otherwise wipe the version right back out within this
+    // same save for any track-only app whose package is absent from the device.
     await saveApps(
       trackOnlyAppsToUpdate.map((e) {
         var a = apps[e]!.app;
-        a = a.copyWith(installedVersion: a.latestVersion);
+        a = a.copyWith(
+          installedVersion: a.latestVersion,
+          additionalSettings: Map<String, dynamic>.from(a.additionalSettings)
+            ..[trackOnlyUserMarkedInstalledKey] = true
+            ..['trackOnlyUndeterminedInstalledVersion'] = false
+            // Retire the legacy 2.9.7 reset sentinel, as the mass-mark action
+            // does: its migration restores the device version (null here) and
+            // would undo this mark on the next reconcile.
+            ..remove(installStatusResetKey),
+        );
         return a;
       }).toList(),
+      attemptToCorrectInstallStatus: false,
     );
 
     final MultiAppMultiError errors = MultiAppMultiError();
@@ -1992,7 +1968,11 @@ extension AppsProviderInstall on AppsProvider {
   /// Verifies a downloaded GitHub artifact's SHA-256 against its build
   /// attestation. Returns a [githubAttestationStatus*] value, or null when the
   /// app's source is not GitHub.
-  Future<String?> verifyGitHubAttestation(App app, File file) async {
+  Future<String?> verifyGitHubAttestation(
+    App app,
+    File file, {
+    Future<String> Function()? calculateDigest,
+  }) async {
     final AppSource source = SourceProvider().getSource(
       app.url,
       overrideSource: app.overrideSource,
@@ -2002,8 +1982,8 @@ extension AppsProviderInstall on AppsProvider {
     }
     try {
       final String standardizedUrl = source.standardizeUrl(app.url);
-      final hash = await sha256.bind(file.openRead()).first;
-      final String sha256Digest = hash.toString();
+      final String sha256Digest =
+          await (calculateDigest?.call() ?? sha256FileOffIsolate(file.path));
       return await source.getAttestationStatusForSha256Digest(
         standardizedUrl,
         sha256Digest,
@@ -2046,12 +2026,17 @@ extension AppsProviderInstall on AppsProvider {
   /// longer mutates [app]; the caller applies the returned detail/reportUrl via
   /// copyWith.
   Future<({String? status, String? detail, String? reportUrl})>
-  scanApkWithVirusTotal(App app, File file) async {
+  scanApkWithVirusTotal(
+    App app,
+    File file, {
+    Future<String> Function()? calculateDigest,
+  }) async {
     if (!willScanApkWithVirusTotal(app)) {
       return (status: null, detail: null, reportUrl: null);
     }
     if (kDebugMode && debugForceFlaggedMalwareScan) {
-      final hash = await sha256.bind(file.openRead()).first;
+      final hash =
+          await (calculateDigest?.call() ?? sha256FileOffIsolate(file.path));
       return (
         status: malwareScanStatusFlagged,
         detail:
@@ -2064,7 +2049,8 @@ extension AppsProviderInstall on AppsProvider {
       virusTotalApiKeyKey,
     )!;
     try {
-      final hash = await sha256.bind(file.openRead()).first;
+      final hash =
+          await (calculateDigest?.call() ?? sha256FileOffIsolate(file.path));
       final result = await VirusTotalScanner().scan(
         file,
         hash.toString(),
@@ -2094,13 +2080,18 @@ extension AppsProviderInstall on AppsProvider {
   _scanApkWithVirusTotalShowingProgress(
     String appId,
     App app,
-    File primaryFile,
-  ) async {
+    File primaryFile, {
+    Future<String> Function()? calculateDigest,
+  }) async {
     if (willScanApkWithVirusTotal(app)) {
       apps[appId]?.downloadProgress = _scanningProgressSentinel;
       notify();
     }
-    return scanApkWithVirusTotal(app, primaryFile);
+    return scanApkWithVirusTotal(
+      app,
+      primaryFile,
+      calculateDigest: calculateDigest,
+    );
   }
 
   /// Acts on a [scanApkWithVirusTotal] result: `clean` never interrupts;
@@ -2398,6 +2389,13 @@ extension AppsProviderInstall on AppsProvider {
     final AppInMemory? appInMemory = apps[appId];
     if (appInMemory == null) return true;
     App app = appInMemory.app;
+    // Both checks verify the same artifact. Keep this cache local to this
+    // verification attempt; a user-requested retry computes a fresh digest.
+    Future<String>? pendingDigest;
+    Future<String> calculateDigest() {
+      return pendingDigest ??= sha256FileOffIsolate(primaryFile.path);
+    }
+
     final AppSource source = SourceProvider().getSource(
       app.url,
       overrideSource: app.overrideSource,
@@ -2418,6 +2416,7 @@ extension AppsProviderInstall on AppsProvider {
       final String? attestationStatus = await verifyGitHubAttestation(
         app,
         primaryFile,
+        calculateDigest: calculateDigest,
       );
       app = app.copyWith(latestAttestationStatus: attestationStatus);
       if (apps[appId] != null) {
@@ -2447,6 +2446,7 @@ extension AppsProviderInstall on AppsProvider {
       appId,
       app,
       primaryFile,
+      calculateDigest: calculateDigest,
     );
     while (scan.status != null) {
       app = app.copyWith(

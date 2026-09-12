@@ -9,6 +9,9 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:android_package_manager/android_package_manager.dart';
+// Uses the pinned plugin's wire format for queries dispatched on our worker.
+// ignore: implementation_imports
+import 'package:android_package_manager/src/entities/impl/package_info.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
@@ -64,6 +67,16 @@ const int _bgClientExceptionRetryWaitSeconds = 15 * 60;
 /// Reconciliation removes it and restores the actual device version so affected
 /// apps are not pinned to "not installed" until their next reinstall.
 const String installStatusResetKey = 'installStatusResetAtInstallTime';
+
+/// Set when the user explicitly marks a track-only app as installed.
+///
+/// Track-only apps are often watched without being installed through ObtainX at
+/// all (or under a package ID that never matches anything on the device), so
+/// absence from the device is not evidence of an uninstall once the user has
+/// asserted otherwise. Reconciliation treats this like a temporary package ID
+/// and leaves the recorded version alone; it is cleared when the package turns
+/// up on the device or the app is uninstalled through ObtainX.
+const String trackOnlyUserMarkedInstalledKey = 'trackOnlyUserMarkedInstalled';
 
 final packageManager = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
@@ -947,10 +960,22 @@ String? formatDownloadSize(int? receivedBytes, int? totalBytes) {
 }
 
 Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
-  return await packageManager.getInstalledPackages(
-        flags: light ? packageInfoFlagsLight : packageInfoFlags,
-      ) ??
-      [];
+  try {
+    final packages = await NativeFeatures._deviceAppsChannel.invokeListMethod(
+      'getInstalledPackageInfos',
+      {'includeSigningCertificates': !light},
+    );
+    return packages
+            ?.map((entry) => PackageInfoImpl(Map<String, dynamic>.from(entry)))
+            .toList() ??
+        [];
+  } on MissingPluginException {
+    // Headless engines do not have MainActivity's channel.
+    return await packageManager.getInstalledPackages(
+          flags: light ? packageInfoFlagsLight : packageInfoFlags,
+        ) ??
+        [];
+  }
 }
 
 Future<PackageInfo?> getInstalledInfo(
@@ -967,15 +992,30 @@ Future<PackageInfo?> getInstalledInfo(
       namesToTry.insert(0, '$obtainiumId.debug');
     }
     try {
-      final List<PackageInfo> installedPackages = await getAllInstalledInfo(
-        light: light,
-      );
       for (final String name in namesToTry) {
-        for (final PackageInfo info in installedPackages) {
-          if (info.packageName == name) {
-            return info;
+        PackageInfo? info;
+        try {
+          final data = await NativeFeatures._deviceAppsChannel.invokeMapMethod(
+            'getInstalledPackageInfo',
+            {'packageName': name, 'includeSigningCertificates': !light},
+          );
+          if (data != null) {
+            info = PackageInfoImpl(Map<String, dynamic>.from(data));
           }
+        } on MissingPluginException {
+          // Preserve the headless-engine fallback: this pinned plugin's
+          // getPackageInfo does not catch native NameNotFoundException.
+          // MainActivity's worker handles absence safely and uses targeted
+          // queries; without it, enumerate once for all candidate names.
+          final installed = await getAllInstalledInfo(light: light);
+          for (final candidate in namesToTry) {
+            for (final package in installed) {
+              if (package.packageName == candidate) return package;
+            }
+          }
+          return null;
         }
+        if (info != null) return info;
       }
     } catch (e) {
       if (printErr) {
@@ -1077,6 +1117,8 @@ class AppsProvider with ChangeNotifier {
 
   // Coalesces bursts of saveApps()/removeApps() into a single auto-export.
   Timer? _autoExportDebounce;
+  DateTime? _autoExportFirstPendingAt;
+  bool _autoExportRunning = false;
 
   // Set in dispose() to guard against deferred callbacks running post-disposal.
   bool _disposed = false;
@@ -1258,17 +1300,37 @@ class AppsProvider with ChangeNotifier {
   /// save/remove operations that happen in bursts into a single export.
   /// No-op (cheaply returns) if auto-export is disabled inside [export].
   void scheduleAutoExport() {
+    if (_disposed || !settingsProvider.autoExportOnChanges) return;
+    final now = DateTime.now();
+    _autoExportFirstPendingAt ??= now;
     _autoExportDebounce?.cancel();
-    _autoExportDebounce = Timer(const Duration(seconds: 2), () {
-      if (!_disposed) {
-        export(isAuto: true).catchError((e) {
-          unawaited(
-            logs.add('Auto-export failed: $e', level: LogLevel.warning),
-          );
-          return null;
-        });
+    // Save batches arrive every three seconds during a refresh. Wait until the
+    // operation finishes, but still checkpoint at least every thirty seconds.
+    final remaining =
+        const Duration(seconds: 30) -
+        now.difference(_autoExportFirstPendingAt!);
+    final delay = updateCheckCompleter == null
+        ? const Duration(seconds: 2)
+        : (remaining.isNegative ? Duration.zero : remaining);
+    _autoExportDebounce = Timer(delay, () async {
+      if (_disposed || _autoExportRunning) return;
+      _autoExportFirstPendingAt = null;
+      _autoExportRunning = true;
+      try {
+        await export(isAuto: true);
+      } catch (error) {
+        unawaited(
+          logs.add('Auto-export failed: $error', level: LogLevel.warning),
+        );
+      } finally {
+        _autoExportRunning = false;
+        if (_autoExportFirstPendingAt != null) scheduleAutoExport();
       }
     });
+  }
+
+  void finishPendingAutoExport() {
+    if (_autoExportFirstPendingAt != null) scheduleAutoExport();
   }
 
   AppsProvider({

@@ -523,7 +523,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   // value columns line up vertically.
   static const double _versionRowLabelWidth = 92;
 
-  late final WebViewController _webViewController;
+  WebViewController? _webViewController;
   bool _webViewUrlLoaded = false;
   // True while the in-app webpage is loading, to drive the loading indicator.
   bool _webViewLoading = false;
@@ -705,9 +705,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _clearEditIconStaging();
       _signingCertificateLoadKey = null;
       _signingCertificateInfoFuture = null;
-      _storeAvailabilityCacheFuture = BulkScanCache.load().then(
-        (cache) => cache[widget.appId],
-      );
+      _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(widget.appId);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         unawaited(_maybeLazyResolveApkMirrorSize());
@@ -1825,9 +1823,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_refreshUses24HourFormat());
-    _storeAvailabilityCacheFuture = BulkScanCache.load().then(
-      (cache) => cache[widget.appId],
-    );
+    _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(widget.appId);
     // Defer to post-frame so the first paint isn't competing with our
     // SourceProvider lookup. The actual HTTP walk inside is fully async.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1857,7 +1853,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         );
       });
     });
-    _webViewController = WebViewController()
+  }
+
+  WebViewController _ensureWebViewController() {
+    return _webViewController ??= WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -1879,7 +1878,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             // content (e.g. a sign-in button) stays tappable while the rest
             // still scrolls behind the bar, visible through its translucency.
             if (_webViewTopInset > 0) {
-              _webViewController.runJavaScript(
+              _webViewController?.runJavaScript(
                 'if(document.body){document.body.style.paddingTop='
                 '"${_webViewTopInset.toStringAsFixed(0)}px";}',
               );
@@ -1933,8 +1932,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true &&
         !appsProvider.hasDeducedAppIcon(appId);
 
-    final cache = await BulkScanCache.load();
-    final storeData = cache[appId] ?? {};
+    final storeData = await BulkScanCache.loadForApp(appId) ?? {};
     final apkMirrorIconUrls = <String, String>{};
 
     final futures = <Future<MapEntry<String, String?>>>[];
@@ -1975,9 +1973,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    final entry = cache.putIfAbsent(appId, () => {});
+    final entry = Map<String, String>.from(storeData);
     if (futures.isNotEmpty) {
       final results = await Future.wait(futures);
+      final changedStores = <String, String>{};
       for (final result in results) {
         final String existing = entry[result.key] ?? '';
         // A malformed cached APKPure entry is never usable - a fresh "not
@@ -1989,9 +1988,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             : existing.isNotEmpty;
         if (result.value != null || !existingIsUsable) {
           entry[result.key] = result.value ?? '';
+          changedStores[result.key] = result.value ?? '';
         }
       }
-      await BulkScanCache.save(cache);
+      if (changedStores.isNotEmpty) {
+        await BulkScanCache.save({appId: changedStores});
+      }
     } else if (!shouldResolveMissingIcon) {
       return;
     }
@@ -2020,7 +2022,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
 
     if (mounted && widget.appId == appId) {
       setState(() {
-        _storeAvailabilityCacheFuture = Future.value(cache[appId]);
+        _storeAvailabilityCacheFuture = Future.value(entry);
       });
     }
   }
@@ -2111,9 +2113,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       // while this page was already open in the navigation stack.
       setState(() {
         _requestedMissingIconLoad = false;
-        _storeAvailabilityCacheFuture = BulkScanCache.load().then(
-          (cache) => cache[id],
-        );
+        _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(id);
       });
       // Independently check Play Store in the background so other store
       // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
@@ -2151,11 +2151,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   }
 
   void _applyWebViewSurfaceColorIfNeeded(Color background) {
+    final controller = _webViewController;
+    if (controller == null) return;
     if (_lastWebViewSurfaceColorApplied == background) return;
     _lastWebViewSurfaceColorApplied = background;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        _webViewController.setBackgroundColor(background);
+        controller.setBackgroundColor(background);
       }
     });
   }
@@ -2408,6 +2410,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         app?.app.usesStandardVersionDetection ?? true;
 
     if (showAppWebpageFinal) {
+      _ensureWebViewController();
       _webViewTopInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
     }
     if (showAppWebpageFinal && app != null && !_webViewUrlLoaded) {
@@ -2416,7 +2419,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       final String webUrl = app.app.url;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          _webViewController.loadRequest(Uri.parse(webUrl));
+          _webViewController?.loadRequest(Uri.parse(webUrl));
         }
       });
     }
@@ -4687,7 +4690,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _applyWebViewSurfaceColorIfNeeded(webViewSurface);
       return WebViewWidget(
         key: ObjectKey(_webViewController),
-        controller: _webViewController,
+        controller: _ensureWebViewController(),
       );
     }
 

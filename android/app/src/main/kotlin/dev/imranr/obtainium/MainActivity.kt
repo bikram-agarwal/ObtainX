@@ -36,6 +36,7 @@ import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import lab.neruno.android_package_manager.toMap
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintWriter
@@ -394,6 +395,31 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     result.success(getApplicationLabels(packageNames))
+                }
+                "getInstalledPackageInfo", "getInstalledPackageInfos" -> {
+                    val requestedPackage = call.argument<String>("packageName")
+                    val includeSigning = call.argument<Boolean>("includeSigningCertificates") == true
+                    val singlePackage = call.method == "getInstalledPackageInfo"
+                    deviceAppsExecutor.execute {
+                        try {
+                            val flags = if (includeSigning) PackageManager.GET_SIGNING_CERTIFICATES else 0
+                            @Suppress("DEPRECATION")
+                            val value = if (singlePackage) {
+                                requestedPackage?.let { packageName ->
+                                    try {
+                                        packageManager.getPackageInfo(packageName, flags).toMap()
+                                    } catch (_: PackageManager.NameNotFoundException) {
+                                        null
+                                    }
+                                }
+                            } else {
+                                packageManager.getInstalledPackages(flags).map { it.toMap() }
+                            }
+                            mainHandler.post { result.success(value) }
+                        } catch (exception: Exception) {
+                            mainHandler.post { result.error("PACKAGE_QUERY_FAILED", exception.message, null) }
+                        }
+                    }
                 }
                 "getInstalledAppsLight" -> {
                     // Compact one-pass enumeration: only the fields the bulk-add

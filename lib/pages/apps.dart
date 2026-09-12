@@ -2,7 +2,6 @@ import 'dart:async' show Timer, unawaited;
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:animations/animations.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
@@ -27,6 +26,7 @@ import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
+import 'package:obtainium/components/app_details_container.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/bulk_category_editor.dart';
 import 'package:obtainium/components/bulk_update_sheet.dart';
@@ -2961,6 +2961,8 @@ class AppsPageState extends State<AppsPage> {
   // unimpeded scrolling during the immediate post-refresh window. Cancelled
   // on dispose and reset on each refresh.
   Timer? _deferredStoreScanTimer;
+  int _storeScanGeneration = 0;
+  bool _storeScanRunning = false;
   static const Duration _deferredStoreScanDelay = Duration(seconds: 3);
 
   late final ScrollController scrollController;
@@ -3062,18 +3064,21 @@ class AppsPageState extends State<AppsPage> {
     _lastNotifiedMassObtainAvailable = massObtainAvailable;
     _lastNotifiedSelectionActive = selectionActive;
 
-    final ValueNotifier<int>? tick = widget.homeFabChromeTick;
-    if (tick != null) {
-      tick.value = tick.value + 1;
+    if (widget.homeFabChromeTick == null && widget.onStateChanged == null) {
+      return;
     }
-
-    final VoidCallback? notifyHome = widget.onStateChanged;
-    if (notifyHome == null) return;
     if (_homeFabBadgeSyncScheduled) return;
     _homeFabBadgeSyncScheduled = true;
+    // This method also runs during build. Both notifications can rebuild
+    // widgets outside this subtree, so deliver them together after the frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _homeFabBadgeSyncScheduled = false;
-      if (mounted) notifyHome();
+      if (!mounted) return;
+      final ValueNotifier<int>? tick = widget.homeFabChromeTick;
+      if (tick != null) {
+        tick.value = tick.value + 1;
+      }
+      widget.onStateChanged?.call();
     });
   }
 
@@ -3085,7 +3090,7 @@ class AppsPageState extends State<AppsPage> {
   // ── Hero keep-alive ───────────────────────────────────────────────────────
   // Removed: previously held the appId of the row whose AppPage was open so
   // the row would stay mounted (via [_SwipeableListItem.keepAlive]) for the
-  // back-pop Hero flight. With the [OpenContainer] (Container Transform)
+  // back-pop Hero flight. With the [AppDetailsContainer] transform
   // migration in [getSingleAppHorizTile], the morph manages the source-row
   // lifecycle for the duration of the open animation, so manual keep-alive
   // is no longer required.
@@ -3227,6 +3232,7 @@ class AppsPageState extends State<AppsPage> {
   @override
   void dispose() {
     _deferredStoreScanTimer?.cancel();
+    _storeScanGeneration++;
     scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -3521,6 +3527,10 @@ class AppsPageState extends State<AppsPage> {
     // run later, on provider notifications, and read the field.
     final bool pageVisible = TickerMode.valuesOf(context).enabled;
     _coveredByOpaqueRoute = !pageVisible;
+    if (!pageVisible) {
+      _deferredStoreScanTimer?.cancel();
+      _storeScanGeneration++;
+    }
 
     // select() prevents rebuilds for notifications that don't affect list data
     // (download-progress ticks, icon-load completions). The returned token is
@@ -3569,46 +3579,68 @@ class AppsPageState extends State<AppsPage> {
       kM3eInnerRadius,
     );
     Future<void> backgroundScanStoreAvailability() async {
-      late final List<String> idsForStoreHintScan;
-      if (widget.onDemandOnlyList) {
-        idsForStoreHintScan = appsProvider.apps.values
-            .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
-            .map((a) => a.app.id)
-            .toList();
-      } else if (widget.folderId != null) {
-        final String folderId = widget.folderId!;
-        idsForStoreHintScan = appsProvider.apps.values
-            .where((a) => folderIdsForApp(a.app).contains(folderId))
-            .map((a) => a.app.id)
-            .toList();
-      } else {
-        idsForStoreHintScan = appsProvider.apps.values
-            .where((a) => a.app.additionalSettings['onDemandOnly'] != true)
-            .map((a) => a.app.id)
-            .toList();
+      if (_storeScanRunning) return;
+      final generation = _storeScanGeneration;
+      bool shouldAbort() {
+        return !mounted ||
+            _coveredByOpaqueRoute ||
+            generation != _storeScanGeneration ||
+            !appsProvider.isForeground ||
+            appsProvider.refreshProgress != null;
       }
-      if (idsForStoreHintScan.isEmpty) return;
-      final cache = await BulkScanCache.load();
-      final needsApkMirror = idsForStoreHintScan
-          .where((id) => !(cache[id]?.containsKey('APKMirror') ?? false))
-          .toList();
-      final needsFDroid = idsForStoreHintScan
-          .where((id) => !(cache[id]?.containsKey('F-Droid') ?? false))
-          .toList();
-      if (needsApkMirror.isEmpty && needsFDroid.isEmpty) return;
-      await Future.wait([
-        if (needsApkMirror.isNotEmpty)
-          BulkImportService.checkApkMirror(
-            needsApkMirror,
-          ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r)),
-        if (needsFDroid.isNotEmpty)
-          BulkImportService.checkFDroid(
-            needsFDroid,
-          ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
-      ]);
+
+      if (shouldAbort()) return;
+      _storeScanRunning = true;
+      try {
+        late final List<String> idsForStoreHintScan;
+        if (widget.onDemandOnlyList) {
+          idsForStoreHintScan = appsProvider.apps.values
+              .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
+              .map((a) => a.app.id)
+              .toList();
+        } else if (widget.folderId != null) {
+          final String folderId = widget.folderId!;
+          idsForStoreHintScan = appsProvider.apps.values
+              .where((a) => folderIdsForApp(a.app).contains(folderId))
+              .map((a) => a.app.id)
+              .toList();
+        } else {
+          idsForStoreHintScan = appsProvider.apps.values
+              .where((a) => a.app.additionalSettings['onDemandOnly'] != true)
+              .map((a) => a.app.id)
+              .toList();
+        }
+        if (idsForStoreHintScan.isEmpty) return;
+        final cache = await BulkScanCache.load();
+        final needsApkMirror = idsForStoreHintScan
+            .where((id) => !(cache[id]?.containsKey('APKMirror') ?? false))
+            .toList();
+        final needsFDroid = idsForStoreHintScan
+            .where((id) => !(cache[id]?.containsKey('F-Droid') ?? false))
+            .toList();
+        if (needsApkMirror.isEmpty && needsFDroid.isEmpty) return;
+        await Future.wait([
+          if (needsApkMirror.isNotEmpty)
+            BulkImportService.checkApkMirror(
+              needsApkMirror,
+              shouldAbort: shouldAbort,
+            ).then(
+              (r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r),
+            ),
+          if (needsFDroid.isNotEmpty)
+            BulkImportService.checkFDroid(
+              needsFDroid,
+              shouldAbort: shouldAbort,
+            ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
+        ]);
+      } finally {
+        _storeScanRunning = false;
+      }
     }
 
     Future<List<App>> refresh() {
+      _storeScanGeneration++;
+      _deferredStoreScanTimer?.cancel();
       hapticLightImpact();
       setState(() {
         refreshingSince = DateTime.now();
@@ -3657,7 +3689,11 @@ class AppsPageState extends State<AppsPage> {
             _deferredStoreScanTimer?.cancel();
             _deferredStoreScanTimer = Timer(_deferredStoreScanDelay, () {
               _deferredStoreScanTimer = null;
-              if (!mounted) return;
+              if (!mounted ||
+                  _coveredByOpaqueRoute ||
+                  !appsProvider.isForeground) {
+                return;
+              }
               unawaited(backgroundScanStoreAvailability());
             });
           });
@@ -4758,21 +4794,14 @@ class AppsPageState extends State<AppsPage> {
                 ),
               ),
             )
-          : OpenContainer(
+          : AppDetailsContainer(
               key: ValueKey('open-$appId'),
-              closedColor: Colors.transparent,
-              openColor: Theme.of(context).scaffoldBackgroundColor,
-              closedElevation: 0,
-              openElevation: 0,
-              transitionType: ContainerTransitionType.fadeThrough,
-              transitionDuration: const Duration(milliseconds: 320),
               closedShape: itemRadius != null
                   ? RoundedRectangleBorder(borderRadius: itemRadius)
                   : const RoundedRectangleBorder(),
               // We drive the open trigger from [_AppListItem.onTap] ourselves
               // so selection-mode taps stay routed to [toggleAppSelected].
-              tappable: false,
-              openBuilder: (BuildContext _, VoidCallback _) =>
+              openBuilder: (BuildContext _) =>
                   AppPage(appId: appId, appsListHeroFolderId: widget.folderId),
               closedBuilder: (BuildContext _, VoidCallback openContainer) =>
                   buildRowWith(openContainer),
@@ -5147,14 +5176,31 @@ class AppsPageState extends State<AppsPage> {
                     appsToMark.map((appToUpdate) {
                       final bool hasLegacyReset = appToUpdate.additionalSettings
                           .containsKey(installStatusResetKey);
+                      // Track-only apps may be marked out of "Not installed",
+                      // not just bumped to latest: their package is often absent
+                      // from the device by design, which is exactly the state
+                      // reconciliation leaves them in, and requiring an existing
+                      // installedVersion here made the action inert for them
+                      // (ObtainX#276).
+                      final bool isTrackOnly =
+                          appToUpdate.additionalSettings['trackOnly'] == true;
                       App appToMark = appToUpdate;
                       if ((appToUpdate.installedVersion != null ||
-                              hasLegacyReset) &&
+                              hasLegacyReset ||
+                              isTrackOnly) &&
                           !appsProvider.isVersionDetectionPossible(
                             appsProvider.apps[appToUpdate.id],
                           )) {
                         appToMark = appToUpdate.copyWith(
                           installedVersion: appToUpdate.latestVersion,
+                          additionalSettings: isTrackOnly
+                              ? (Map<String, dynamic>.from(
+                                    appToUpdate.additionalSettings,
+                                  )
+                                  ..[trackOnlyUserMarkedInstalledKey] = true
+                                  ..['trackOnlyUndeterminedInstalledVersion'] =
+                                      false)
+                              : appToUpdate.additionalSettings,
                         );
                       }
                       if (hasLegacyReset) {

@@ -44,6 +44,7 @@ import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
+import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/version/version_detection_mode.dart';
@@ -923,21 +924,45 @@ abstract class AppSource {
       additionalSettingsPlusSourceConfig,
       url,
     );
-    final streamedResponseUrlWithResponseAndClient =
-        await sourceRequestStreamResponse(
-          method,
-          url,
-          requestHeaders,
-          additionalSettingsPlusSourceConfig,
-          followRedirects: followRedirects,
-          postBody: postBody,
-        );
-    return await httpClientResponseStreamToFinalResponse(
-      streamedResponseUrlWithResponseAndClient.value.key,
-      method,
-      streamedResponseUrlWithResponseAndClient.key.toString(),
-      streamedResponseUrlWithResponseAndClient.value.value,
-    );
+    final session = SourceRequestSession.current;
+    final allowInsecure =
+        additionalSettingsPlusSourceConfig['allowInsecure'] == true;
+    Future<http.Response> loadResponse() async {
+      final service = HttpService();
+      final streamed = await service.sourceRequestStreamResponse(
+        method,
+        url,
+        requestHeaders,
+        additionalSettingsPlusSourceConfig,
+        followRedirects: followRedirects,
+        postBody: postBody,
+        sharedClient: session?.clientFor(allowInsecure),
+      );
+      return service.httpClientResponseStreamToFinalResponse(
+        streamed.value.key,
+        method,
+        streamed.key.toString(),
+        streamed.value.value,
+        closeClient: session == null,
+      );
+    }
+
+    if (session != null &&
+        method == 'GET' &&
+        Uri.parse(url).path.endsWith('/index.xml')) {
+      // Key after URL/header customization so credentials, TLS policy and
+      // redirects cannot accidentally share a response across configurations.
+      final headerNames = requestHeaders?.keys.toList() ?? <String>[];
+      headerNames.sort();
+      final key = jsonEncode([
+        url,
+        allowInsecure,
+        followRedirects,
+        for (final name in headerNames) [name, requestHeaders![name]],
+      ]);
+      return session.repositoryResponse(key, loadResponse);
+    }
+    return loadResponse();
   }
 
   void runOnAddAppInputChange(String inputUrl) {}
@@ -2026,60 +2051,64 @@ class HttpService {
     Map<String, dynamic> additionalSettings, {
     bool followRedirects = true,
     Object? postBody,
+    HttpClient? sharedClient,
   }) async {
     var currentUrl = Uri.parse(url);
     var redirectCount = 0;
     List<Cookie> cookies = [];
-    HttpClient? httpClient;
-    while (redirectCount < maxRedirects) {
-      httpClient = createHttpClient(
-        additionalSettings['allowInsecure'] == true,
-      );
-      final request = await httpClient.openUrl(method, currentUrl);
-      withDefaultObtainXUserAgent(requestHeaders).forEach((
-        String headerName,
-        String headerValue,
-      ) {
-        request.headers.set(headerName, headerValue);
-      });
-      request.cookies.addAll(cookies);
-      request.followRedirects = false;
-      if (postBody != null) {
-        request.headers.contentType = ContentType.json;
-        request.write(jsonEncode(postBody));
-      }
-      final response = await request.close();
-
-      if (followRedirects &&
-          (response.statusCode >= 300 && response.statusCode <= 399)) {
-        final location = response.headers.value(HttpHeaders.locationHeader);
-        if (location != null) {
-          currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
-          redirectCount++;
-          cookies = response.cookies;
-          httpClient.close();
-          httpClient = null;
-          continue;
+    final httpClient =
+        sharedClient ??
+        createHttpClient(additionalSettings['allowInsecure'] == true);
+    try {
+      while (redirectCount < maxRedirects) {
+        final request = await httpClient.openUrl(method, currentUrl);
+        withDefaultObtainXUserAgent(requestHeaders).forEach((
+          String headerName,
+          String headerValue,
+        ) {
+          request.headers.set(headerName, headerValue);
+        });
+        request.cookies.addAll(cookies);
+        request.followRedirects = false;
+        if (postBody != null) {
+          request.headers.contentType = ContentType.json;
+          request.write(jsonEncode(postBody));
         }
-      }
+        final response = await request.close();
 
-      return MapEntry(currentUrl, MapEntry(httpClient, response));
+        if (followRedirects &&
+            (response.statusCode >= 300 && response.statusCode <= 399)) {
+          final location = response.headers.value(HttpHeaders.locationHeader);
+          if (location != null) {
+            currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
+            redirectCount++;
+            cookies = response.cookies;
+            await response.drain<void>();
+            continue;
+          }
+        }
+
+        return MapEntry(currentUrl, MapEntry(httpClient, response));
+      }
+      throw ObtainiumError(tr('tooManyRedirects'));
+    } catch (_) {
+      if (sharedClient == null) httpClient.close(force: true);
+      rethrow;
     }
-    httpClient?.close();
-    throw ObtainiumError(tr('tooManyRedirects'));
   }
 
   Future<http.Response> httpClientResponseStreamToFinalResponse(
     HttpClient httpClient,
     String method,
     String url,
-    HttpClientResponse response,
-  ) async {
+    HttpClientResponse response, {
+    bool closeClient = true,
+  }) async {
     try {
       final bytes = (await response.fold<BytesBuilder>(
-        BytesBuilder(),
+        BytesBuilder(copy: false),
         (b, d) => b..add(d),
-      )).toBytes();
+      )).takeBytes();
 
       final headers = <String, String>{};
       response.headers.forEach((name, values) {
@@ -2093,7 +2122,7 @@ class HttpService {
         request: http.Request(method, Uri.parse(url)),
       );
     } finally {
-      httpClient.close();
+      if (closeClient) httpClient.close();
     }
   }
 
@@ -2101,9 +2130,10 @@ class HttpService {
     if (res.statusCode == 404) return NoReleasesError();
 
     final reasonLower = res.reasonPhrase?.toLowerCase() ?? '';
-    final bodySample = res.body.length > 1000
-        ? res.body.substring(0, 1000).toLowerCase()
-        : res.body.toLowerCase();
+    final body = res.body;
+    final bodySample = body.length > 1000
+        ? body.substring(0, 1000).toLowerCase()
+        : body.toLowerCase();
     final isRateLimit =
         res.statusCode == 429 ||
         res.statusCode == 403 ||

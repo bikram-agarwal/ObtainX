@@ -19,6 +19,20 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:obtainium/http/source_request_session.dart';
+
+class _RealHttpOverrides extends HttpOverrides {}
+
+class _AuthenticatedRepo extends FDroidRepo {
+  @override
+  Future<Map<String, String>?> getRequestHeaders(
+    Map<String, dynamic> additionalSettings,
+    String url, {
+    bool forAPKDownload = false,
+  }) async {
+    return {'Authorization': additionalSettings['auth'] as String};
+  }
+}
 
 /// Stub source that returns a controllable [APKDetails] from
 /// [getLatestAPKDetails] without doing any network or HTML work.
@@ -474,6 +488,52 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
+
+  test(
+    'repository HTTP requests share in-flight work but isolate credentials and refreshes',
+    () async {
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requests = <String?>[];
+        final ports = <int>[];
+        server.listen((request) async {
+          requests.add(request.headers.value(HttpHeaders.authorizationHeader));
+          ports.add(request.connectionInfo!.remotePort);
+          request.response.write('<repo/>');
+          await request.response.close();
+        });
+        final url = 'http://127.0.0.1:${server.port}/index.xml';
+        final source = _AuthenticatedRepo();
+        await SourceRequestSession.run(() async {
+          final responses = await Future.wait(
+            List.generate(12, (_) {
+              return source.sourceRequest(url, {'auth': 'first'});
+            }),
+          );
+          expect(requests, ['first']);
+          expect(
+            responses.every((response) => identical(response, responses.first)),
+            isTrue,
+          );
+          await source.sourceRequest(url, {'auth': 'second'});
+          await source.sourceRequest(url, {
+            'auth': 'first',
+            'allowInsecure': true,
+          });
+          expect(requests, ['first', 'second', 'first']);
+          // Responses outside the repository cache still reuse the session's socket.
+          await source.sourceRequest('$url?next=1', {'auth': 'first'});
+          expect(ports[0], ports[1]);
+          expect(ports[0], ports[3]);
+        });
+        await SourceRequestSession.run(() async {
+          await source.sourceRequest(url, {'auth': 'first'});
+        });
+        expect(requests.length, 5);
+      }, _RealHttpOverrides());
+    },
+  );
 
   test(
     'source resolution reuses templates but returns fresh mutable sources',
