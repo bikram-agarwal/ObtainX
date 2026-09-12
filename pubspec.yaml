@@ -71,6 +71,7 @@ dependencies:
       url: https://github.com/AlexBacich/shared-storage
       ref: 6dbcdf2c2045e326f59c062f542724aedf73cb6e
   crypto: ^3.0.7
+  collection: ^1.19.1
   bcrypt: ^1.2.0
   app_links: ^7.2.1
   equations: ^6.0.0

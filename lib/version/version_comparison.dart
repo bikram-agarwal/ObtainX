@@ -200,23 +200,52 @@ _ParsedRelease? _cachedRelease(String label) {
 /// Choose a single ordering policy for a source list. Mixing version order and
 /// date/name fallbacks pair by pair can create cycles and arbitrary results.
 bool versionsHaveConsistentOrder(Iterable<String> labels) {
-  final unique = labels.toSet().toList();
-  for (var firstIndex = 0; firstIndex < unique.length; firstIndex++) {
-    for (
-      var secondIndex = firstIndex + 1;
-      secondIndex < unique.length;
-      secondIndex++
-    ) {
-      if (compareVersionStrings(
-            unique[firstIndex],
-            unique[secondIndex],
-          ).relation ==
-          VersionRelation.unknown) {
-        return false;
-      }
+  final distinct = labels.toSet();
+  if (distinct.length < 2) return true;
+  final normalized = distinct.map(normalizeVersionLabel).toSet();
+  if (normalized.contains('')) return false;
+  if (normalized.length == 1) return true;
+
+  bool? dateScheme;
+  bool? buildIdScheme;
+  String? variant;
+  final builds = <String, (String?, bool)>{};
+  for (final label in normalized) {
+    final isDate = _releaseDate(label) != null;
+    dateScheme ??= isDate;
+    if (dateScheme != isDate) return false;
+    if (isDate) continue;
+    final release = _cachedRelease(label);
+    if (release == null) return false;
+    buildIdScheme ??= release.core.length == 1;
+    variant ??= release.variant;
+    if (buildIdScheme != (release.core.length == 1) ||
+        variant != release.variant) {
+      return false;
     }
+
+    // Hash and revision ambiguity only matters within the same numeric release
+    // and prerelease. Group equivalent components once instead of checking
+    // every pair (and churning the bounded parser cache on large source lists).
+    final core = release.core.map(_canonicalComponent).toList();
+    while (core.length > 1 && core.last == '0') {
+      core.removeLast();
+    }
+    final group =
+        '${core.join('.')}|${release.qualifier}|'
+        '${release.qualifierParts.map(_canonicalComponent).join('.')}';
+    final build = (release.hash, release.revision != null);
+    final previous = builds[group];
+    if (previous != null && previous != build) return false;
+    builds[group] = build;
   }
   return true;
+}
+
+String _canonicalComponent(String value) {
+  if (!_decimal.hasMatch(value)) return value;
+  final digits = value.replaceFirst(RegExp(r'^0+'), '');
+  return digits.isEmpty ? '0' : digits;
 }
 
 DateTime? _releaseDate(String value) {

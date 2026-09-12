@@ -9,6 +9,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/version/partial_download_version.dart';
 
 int compareAlphaNumeric(String a, String b) {
   final List<String> aParts = _splitAlphaNumeric(a);
@@ -566,15 +567,55 @@ class HTML extends AppSource {
           throw NoVersionError();
         }
       }
-      version ??=
-          additionalSettings['defaultPseudoVersioningMethod'] == 'APKLinkHash'
-          ? rel.hashCode.toString()
-          : (await checkPartialDownloadHashDynamic(
-              rel,
-              headers: apkReqHeaders,
-              allowInsecure: additionalSettings['allowInsecure'] == true,
-              onResponseMetadata: captureDownloadMetadata,
-            )).toString();
+      if (version == null) {
+        if (additionalSettings['defaultPseudoVersioningMethod'] ==
+            'APKLinkHash') {
+          version = rel.hashCode.toString();
+          additionalSettings.remove(partialDownloadFingerprintKey);
+        } else {
+          final saved = additionalSettings[partialDownloadFingerprintKey];
+          final savedFingerprint = saved is Map && saved['url'] == rel
+              ? saved['fingerprint']
+              : null;
+          final parsedSize = savedFingerprint is String
+              ? int.tryParse(
+                  savedFingerprint.split(':').elementAtOrNull(1) ?? '',
+                )
+              : null;
+          final savedSize =
+              parsedSize != null && parsedSize >= 128 && parsedSize <= 1024
+              ? parsedSize
+              : null;
+          final fingerprint = await checkPartialDownloadHashDynamic(
+            rel,
+            // Keep an established prefix size. Shrinking an unstable response
+            // would change the fingerprint even if the APK had not changed.
+            startingSize: savedSize ?? 1024,
+            lowerLimit: savedSize ?? 128,
+            headers: apkReqHeaders,
+            allowInsecure: additionalSettings['allowInsecure'] == true,
+            onResponseMetadata: captureDownloadMetadata,
+          );
+          version = resolvePartialDownloadVersion(
+            fingerprint: fingerprint,
+            downloadUrl: rel,
+            settings: additionalSettings,
+            previousVersion:
+                previouslyCheckedApp?.rawLatestVersionFromSource ??
+                previouslyCheckedApp?.latestVersion,
+            samePreviousDownload:
+                previouslyCheckedApp?.apkUrls.any(
+                      (asset) => asset.value == rel,
+                    ) ==
+                    true &&
+                previouslyCheckedApp
+                        ?.additionalSettings['defaultPseudoVersioningMethod'] ==
+                    additionalSettings['defaultPseudoVersioningMethod'],
+          );
+        }
+      } else {
+        additionalSettings.remove(partialDownloadFingerprintKey);
+      }
       final bool ambiguousDownloadUrl = !AppSource.isApkOrContainerFile(
         Uri.parse(rel).path,
         includeArchives: true,

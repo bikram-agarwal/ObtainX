@@ -33,6 +33,7 @@ import android.system.Os
 import android.text.format.DateFormat
 import android.util.DisplayMetrics
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -115,6 +116,8 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private val changedPackages = linkedSetOf<String>()
+        private var packageChangeReceiver: BroadcastReceiver? = null
         private var notificationsMethodChannel: MethodChannel? = null
         private val downloadCancelLock = Any()
         private val pendingDownloadCancelAppIds = linkedSetOf<String>()
@@ -255,6 +258,26 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installNativeCrashHandler(this)
         super.onCreate(savedInstanceState)
+        // Keep observing while the activity is covered or recreated. A new
+        // process performs a full Dart load before relying on this journal.
+        if (packageChangeReceiver == null) {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == Intent.ACTION_PACKAGE_REMOVED &&
+                        intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
+                    intent.data?.schemeSpecificPart?.let { changedPackages.add(it) }
+                }
+            }
+            ContextCompat.registerReceiver(applicationContext, receiver, IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addAction(Intent.ACTION_PACKAGE_CHANGED)
+                addDataScheme("package")
+            }, ContextCompat.RECEIVER_EXPORTED)
+            packageChangeReceiver = receiver
+        }
+
     }
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
@@ -395,6 +418,10 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     result.success(getApplicationLabels(packageNames))
+                }
+                "consumePackageChanges" -> {
+                    result.success(changedPackages.toList())
+                    changedPackages.clear()
                 }
                 "getInstalledPackageInfo", "getInstalledPackageInfos" -> {
                     val requestedPackage = call.argument<String>("packageName")

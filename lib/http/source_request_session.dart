@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:obtainium/http/response_bytes.dart';
 
 /// Connection and repository-response ownership for one update operation.
 /// A new operation always starts fresh; parallel app checks share in-flight work.
@@ -33,7 +34,9 @@ class SourceRequestSession {
 
   HttpClient clientFor(bool allowInsecure) {
     return _clients.putIfAbsent(allowInsecure, () {
-      final client = HttpClient()..maxConnectionsPerHost = 8;
+      final client = HttpClient()
+        ..maxConnectionsPerHost = 8
+        ..connectionTimeout = sourceConnectionTimeout;
       if (allowInsecure) {
         client.badCertificateCallback = (_, _, _) => true;
       }

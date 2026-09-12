@@ -19,6 +19,7 @@ import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:obtainium/services/app_check_store.dart';
 
 /// App persistence (load/save/remove), icons, and version-detection helpers.
 const _corruptFileSuffix = '.corrupt';
@@ -236,10 +237,16 @@ extension AppsProviderLifecycle on AppsProvider {
     try {
       // Commit any deferred "remove from ObtainX" whose in-memory deferral was
       // lost (e.g. process restart) before re-reading the app JSON dir.
-      await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
+      if (singleId == null) {
+        await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
+      }
       final sp = SourceProvider();
       final List<List<String>> errors = [];
-      final installedAppsData = await getAllInstalledInfo(light: true);
+      final installedAppsData = singleId == null
+          ? await getAllInstalledInfo(light: true)
+          : [
+              await getInstalledInfo(singleId, throwOnError: true),
+            ].nonNulls.toList();
       final Map<String, PackageInfo> installedAppsMap = {
         for (var i in installedAppsData)
           if (i.packageName != null) i.packageName!: i,
@@ -249,9 +256,27 @@ extension AppsProviderLifecycle on AppsProvider {
           ? lastFullDiskLoadAt
           : null;
       final DateTime diskLoadStartedAt = DateTime.now();
-      final List<FileSystemEntity> appFiles = await (await getAppsDir())
-          .list()
-          .toList();
+      final appsDirectory = await getAppsDir();
+      final directoryModifiedAtStart = (await appsDirectory.stat()).modified;
+      // A relative sqflite path uses Android's internal database directory.
+      // App JSON may live on external storage, which is unsuitable for SQLite.
+      final checks = appCheckStore ??= AppCheckStore('app_checks.db');
+      final checkStoreModifiedAtStart = await checks.modified();
+      Map<String, Map<String, Object?>> checkTimes = {};
+      try {
+        checkTimes = await checks.read(singleId: singleId);
+      } catch (error) {
+        // Timestamp storage is optional for loading the durable app records.
+        unawaited(
+          logs.add(
+            'Could not load check timestamps: $error',
+            level: LogLevel.warning,
+          ),
+        );
+      }
+      final List<FileSystemEntity> appFiles = singleId == null
+          ? await appsDirectory.list().toList()
+          : [File('${appsDirectory.path}/$singleId.json')];
       final DateTime staleSaveTempCutoff = DateTime.now().subtract(
         _staleSaveTempAge,
       );
@@ -285,7 +310,7 @@ extension AppsProviderLifecycle on AppsProvider {
               return;
             }
             if (!lowerPath.endsWith('.json')) return;
-            final String fileName = item.path.split('/').last;
+            final String fileName = _fileBasename(item.path);
             if (singleId != null &&
                 fileName.toLowerCase() != '${singleId.toLowerCase()}.json') {
               return;
@@ -302,6 +327,20 @@ extension AppsProviderLifecycle on AppsProvider {
                 final FileStat stat = await item.stat();
                 if (stat.modified.isBefore(reuseWatermark)) {
                   app = existing.app;
+                  final checkpointJson = <String, dynamic>{
+                    'id': app.id,
+                    appRecordRevisionKey: checks.revisions[app.id],
+                    'lastUpdateCheck':
+                        app.lastUpdateCheck?.microsecondsSinceEpoch,
+                  };
+                  checks.apply(checkpointJson, checkTimes);
+                  final checked = dateTimeFromJsonValue(
+                    checkpointJson['lastUpdateCheck'],
+                  );
+                  if (checked != app.lastUpdateCheck) {
+                    app = app.copyWith(lastUpdateCheck: checked);
+                    dataChanged = true;
+                  }
                   reused = true;
                 }
               } catch (_) {
@@ -310,9 +349,11 @@ extension AppsProviderLifecycle on AppsProvider {
             }
             if (!reused) {
               try {
-                app = App.fromJson(
-                  jsonDecode(await File(item.path).readAsString()),
-                );
+                final json =
+                    jsonDecode(await File(item.path).readAsString())
+                        as Map<String, dynamic>;
+                checks.apply(json, checkTimes);
+                app = App.fromJson(json);
                 dataChanged = dataChanged || existing == null;
               } catch (err) {
                 if (err is FormatException) {
@@ -407,14 +448,19 @@ extension AppsProviderLifecycle on AppsProvider {
                     installedInfo != null && before?.installedInfo == null
                     ? null
                     : before?.icon;
-                apps[app.id] = AppInMemory(
-                  app,
-                  before?.downloadProgress,
-                  installedInfo,
-                  icon,
-                  sourceType: sourceType,
-                  download: before?.download,
-                );
+                if (!identical(before?.app, app) ||
+                    installedInfoChanged ||
+                    before?.sourceType != sourceType ||
+                    before?.icon != icon) {
+                  apps[app.id] = AppInMemory(
+                    app,
+                    before?.downloadProgress,
+                    installedInfo,
+                    icon,
+                    sourceType: sourceType,
+                    download: before?.download,
+                  );
+                }
               } catch (e) {
                 if (e is RateLimitError || e is SocketException) {
                   unawaited(
@@ -437,6 +483,8 @@ extension AppsProviderLifecycle on AppsProvider {
       }
       if (singleId == null) {
         lastFullDiskLoadAt = diskLoadStartedAt;
+        appDirectoryModifiedAt = directoryModifiedAtStart;
+        appCheckStoreModifiedAt = checkStoreModifiedAtStart;
       }
       if (folderMembershipsToPersist.isNotEmpty) {
         await saveApps(
@@ -445,7 +493,7 @@ extension AppsProviderLifecycle on AppsProvider {
           autoExportAfterSave: false,
         );
       }
-      if (shouldMigrateFolderCriteria) {
+      if (shouldMigrateFolderCriteria && singleId == null) {
         if (appFolders.any((folder) => folder.loadedFromLegacyRule)) {
           settingsProvider.appFolders = appFolders
               .map(
@@ -976,6 +1024,8 @@ extension AppsProviderLifecycle on AppsProvider {
         }
       }
       final Directory appsDirectory = await getAppsDir();
+      final checks = appCheckStore ??= AppCheckStore('app_checks.db');
+      final checkpoints = <Map<String, Object?>>[];
       final sourceProvider = SourceProvider();
       final appFolders = settingsProvider.appFolders;
       final Map<String, PackageInfo>? effectiveInstalledInfoSnapshot =
@@ -1056,28 +1106,44 @@ extension AppsProviderLifecycle on AppsProvider {
               isUpToDate: appIsUpToDateForFiltering(app),
             );
             if (!onlyIfExists || this.apps.containsKey(app.id)) {
-              final String filePath = '${appsDirectory.path}/${app.id}.json';
-              final String tmpPath =
-                  '$filePath.tmp_${DateTime.now().microsecondsSinceEpoch}_${_saveAppsTmpNonce++}';
-              final File tmpFile = File(tmpPath);
-              try {
-                await tmpFile.writeAsString(
-                  jsonEncode(app.toJson()),
-                  flush: true,
-                ); // #2089
-                await tmpFile.rename(filePath);
-              } finally {
+              final revision = checks.revisions[app.id];
+              if (!updateInstalledInfo &&
+                  cached != null &&
+                  revision != null &&
+                  onlyAppCheckTimeChanged(cached.app, app)) {
+                checkpoints.add({
+                  'id': app.id,
+                  'revision': revision,
+                  'checked': app.lastUpdateCheck!.microsecondsSinceEpoch,
+                });
+              } else {
+                final String filePath = '${appsDirectory.path}/${app.id}.json';
+                final String tmpPath =
+                    '$filePath.tmp_${DateTime.now().microsecondsSinceEpoch}_${_saveAppsTmpNonce++}';
+                final File tmpFile = File(tmpPath);
+                final nextRevision = AppCheckStore.newRevision();
                 try {
-                  if (await tmpFile.exists()) {
-                    await tmpFile.delete();
-                  }
-                } catch (cleanupError) {
-                  unawaited(
-                    logs.add(
-                      'Failed to clean save temp for ${app.id}: $cleanupError',
-                      level: LogLevel.warning,
+                  await tmpFile.writeAsString(
+                    jsonEncode(
+                      app.toJson()..[appRecordRevisionKey] = nextRevision,
                     ),
-                  );
+                    flush: true,
+                  ); // #2089
+                  await tmpFile.rename(filePath);
+                  checks.revisions[app.id] = nextRevision;
+                } finally {
+                  try {
+                    if (await tmpFile.exists()) {
+                      await tmpFile.delete();
+                    }
+                  } catch (cleanupError) {
+                    unawaited(
+                      logs.add(
+                        'Failed to clean save temp for ${app.id}: $cleanupError',
+                        level: LogLevel.warning,
+                      ),
+                    );
+                  }
                 }
               }
             }
@@ -1099,6 +1165,9 @@ extension AppsProviderLifecycle on AppsProvider {
           await Future<void>.delayed(Duration.zero);
         }
       }
+      await checks.save(checkpoints);
+      appCheckStoreModifiedAt = await checks.modified();
+      appDirectoryModifiedAt = (await appsDirectory.stat()).modified;
       markAppsChanged();
       notify();
       if (autoExportAfterSave) {
@@ -1138,6 +1207,7 @@ extension AppsProviderLifecycle on AppsProvider {
       }),
     );
     if (appIds.isNotEmpty) {
+      await appCheckStore?.remove(appIds);
       markAppsChanged();
       notify();
       scheduleAutoExport();
@@ -1382,6 +1452,7 @@ extension AppsProviderLifecycle on AppsProvider {
     List<String> appIds, {
     bool deleteMainJson = true,
   }) async {
+    await appCheckStore?.remove(appIds);
     final List<FileSystemEntity> apkFiles = apkDir.listSync();
     final Directory appsDirectory = await getAppsDir();
     await Future.wait(

@@ -45,6 +45,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/http/source_request_session.dart';
+import 'package:obtainium/http/response_bytes.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/version/version_detection_mode.dart';
@@ -696,17 +697,23 @@ class App {
     }
   }
 
-  Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson({bool encodeNested = true}) => {
     'id': id,
     'url': url,
     'author': author,
     'name': name,
     'installedVersion': installedVersion,
     'latestVersion': latestVersion,
-    'apkUrls': jsonEncode(stringMapListTo2DList(apkUrls)),
-    'otherAssetUrls': jsonEncode(stringMapListTo2DList(otherAssetUrls)),
+    'apkUrls': encodeNested
+        ? jsonEncode(stringMapListTo2DList(apkUrls))
+        : stringMapListTo2DList(apkUrls),
+    'otherAssetUrls': encodeNested
+        ? jsonEncode(stringMapListTo2DList(otherAssetUrls))
+        : stringMapListTo2DList(otherAssetUrls),
     'preferredApkIndex': preferredApkIndex,
-    'additionalSettings': jsonEncode(additionalSettings),
+    'additionalSettings': encodeNested
+        ? jsonEncode(additionalSettings)
+        : additionalSettings,
     'lastUpdateCheck': lastUpdateCheck?.microsecondsSinceEpoch,
     'pinned': pinned,
     'categories': categories,
@@ -2050,9 +2057,12 @@ class TypedSettings {
 
 class HttpService {
   static const int maxRedirects = 10;
+  final Duration responseTimeout;
+
+  HttpService({this.responseTimeout = sourceResponseTimeout});
 
   HttpClient createHttpClient(bool insecure) {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = sourceConnectionTimeout;
     if (insecure) {
       client.badCertificateCallback =
           (X509Certificate cert, String host, int port) => true;
@@ -2091,7 +2101,20 @@ class HttpService {
         createHttpClient(additionalSettings['allowInsecure'] == true);
     try {
       while (redirectCount < maxRedirects) {
-        final request = await httpClient.openUrl(method, currentUrl);
+        bool openTimedOut = false;
+        final pendingRequest = httpClient.openUrl(method, currentUrl).then((
+          request,
+        ) {
+          if (openTimedOut) request.abort();
+          return request;
+        });
+        final request = await pendingRequest.timeout(
+          responseTimeout,
+          onTimeout: () {
+            openTimedOut = true;
+            throw TimeoutException(tr('unexpectedError'), responseTimeout);
+          },
+        );
         withDefaultObtainXUserAgent(requestHeaders).forEach((
           String headerName,
           String headerValue,
@@ -2104,7 +2127,13 @@ class HttpService {
           request.headers.contentType = ContentType.json;
           request.write(jsonEncode(postBody));
         }
-        final response = await request.close();
+        final response = await request.close().timeout(
+          responseTimeout,
+          onTimeout: () {
+            request.abort();
+            throw TimeoutException(tr('unexpectedError'), responseTimeout);
+          },
+        );
 
         if (followRedirects &&
             (response.statusCode >= 300 && response.statusCode <= 399)) {
@@ -2113,7 +2142,7 @@ class HttpService {
             currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
             redirectCount++;
             cookies = response.cookies;
-            await response.drain<void>();
+            await response.timeout(responseTimeout).drain<void>();
             continue;
           }
         }
@@ -2135,10 +2164,14 @@ class HttpService {
     bool closeClient = true,
   }) async {
     try {
-      final bytes = (await response.fold<BytesBuilder>(
-        BytesBuilder(copy: false),
-        (b, d) => b..add(d),
-      )).takeBytes();
+      final bytes =
+          (await response
+                  .timeout(responseTimeout)
+                  .fold<BytesBuilder>(
+                    BytesBuilder(copy: false),
+                    (b, d) => b..add(d),
+                  ))
+              .takeBytes();
 
       final headers = <String, String>{};
       response.headers.forEach((name, values) {

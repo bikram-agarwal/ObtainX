@@ -9,6 +9,7 @@ import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/version/partial_download_version.dart';
 
 // ── Bounded update-check parallelism (device-tuned) ─────────────────────────
 // Start fast on capable devices, but keep a bounded worker pool so a large app
@@ -187,6 +188,11 @@ App? mergeFetchedUpdateWithLiveState({
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  settings.remove(partialDownloadFingerprintKey);
+  if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {
+    settings[partialDownloadFingerprintKey] =
+        fetchedApp.additionalSettings[partialDownloadFingerprintKey];
   }
   return normalizeSelectedSourceVersion(
     liveApp.copyWith(
