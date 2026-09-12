@@ -142,9 +142,17 @@ void main() {
           releaseDate: releaseDate,
           installedTime: DateTime.utc(2026, 6, 2),
         );
-        expect(appHasActionableUpdate(app), isTrue);
-        expect(versionOrderUncertainUpdate(app), isFalse);
-        expect(appUpdateIsUserVisible(app), isTrue);
+        expect(
+          versionDecisionForApp(app).relation,
+          VersionRelation.sourceChanged,
+        );
+        expect(appHasActionableUpdate(app), isFalse);
+        expect(versionOrderUncertainUpdate(app), isTrue);
+        expect(appUpdateIsUserVisible(app), isFalse);
+        expect(
+          appUpdateIsUserVisible(app, includeVersionOrderUncertain: true),
+          isTrue,
+        );
       }
     },
   );

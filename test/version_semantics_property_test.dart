@@ -51,6 +51,22 @@ const List<String> _versionCorpus = <String>[
   '2.0.0-facade',
   '1.0.0+20260412a',
   '2.0.0+20260412a',
+  '6.12.36',
+  '6.12.36-huawei',
+  '6.1.0-huawei',
+  '6.12.36-oppo',
+  '6.12.36-new-store-arm64-v8a',
+  '1.2.3-foss',
+  '1.2.3-market',
+  '1.2.3-beta1-oppo',
+  '1.2.3-novel-beta1',
+  '1.2.3-2-oppo',
+  '1.2.3-deadbeef',
+  '1.2.3-dec46b0',
+  'C.6.odad-stub.948481320',
+  '6.playstore.pixel3.945720966',
+  '6.playstore.pixel9.948481320',
+  '28.playstore.oemfull.969713662',
   '',
 ];
 
@@ -273,18 +289,29 @@ void main() {
     });
   });
 
-  test('effective equality is transitive and preserves ordering', () {
-    _forEachPair((String a, String b) {
-      if (!versionsEffectivelyEqual(a, b)) return;
-      for (final third in _versionCorpus) {
-        expect(
-          compareVersionsByNumericSegments(a, third),
-          compareVersionsByNumericSegments(b, third),
-          reason: 'equivalent ($a, $b) disagree against $third',
-        );
-      }
-    });
-  });
+  test(
+    'same-release labels preserve ordering when both identify enough detail',
+    () {
+      _forEachPair((String a, String b) {
+        if (!versionsEffectivelyEqual(a, b)) return;
+        for (final third in _versionCorpus) {
+          final firstOrder = compareVersionsByNumericSegments(a, third);
+          final secondOrder = compareVersionsByNumericSegments(b, third);
+          if (firstOrder != null && secondOrder != null) {
+            expect(
+              firstOrder,
+              secondOrder,
+              reason: 'same-release ($a, $b) disagree against $third',
+            );
+          } else {
+            // A bare release can match either commit without making two distinct
+            // commits equivalent. Such a list must not use the version comparator.
+            expect(versionsHaveConsistentOrder([a, b, third]), isFalse);
+          }
+        }
+      });
+    },
+  );
 
   test('words and date stamps are not treated as build hashes', () {
     for (final String word in <String>[

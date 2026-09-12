@@ -250,8 +250,12 @@ void main() {
           provider.getCorrectedInstallStatusAppIfPossible(app, installed) ??
           app;
       expect(app.additionalSettings[unreconciledVersionComparisonKey], isNull);
-      expect(versionOrderUncertainUpdate(app), isFalse);
-      expect(appHasActionableUpdate(app), isTrue);
+      expect(versionOrderUncertainUpdate(app), mode == 'pseudo');
+      expect(appHasActionableUpdate(app), mode == 'versionCode');
+      expect(
+        appUpdateIsUserVisible(app, includeVersionOrderUncertain: true),
+        isTrue,
+      );
       expect(app.installedVersion, mode == 'versionCode' ? '106' : '9.18.50');
     });
   }

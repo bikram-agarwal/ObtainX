@@ -105,8 +105,7 @@ class ItchIO extends AppSource {
     final hints = RegExp(r'\b(?:version\s+|v(?=\d))', caseSensitive: false);
     for (final hint in hints.allMatches(searchArea)) {
       final candidate = releaseVersionPattern.matchAsPrefix(
-        searchArea,
-        hint.end,
+        searchArea.substring(hint.end),
       );
       if (candidate != null) {
         matches.add(candidate.group(0)!);

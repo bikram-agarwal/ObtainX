@@ -1788,6 +1788,7 @@ Future<void> bgUpdateCheck(
 
     final List<App> trackOnlyToNotify = [];
     final List<App> toNotify = [];
+    final List<App> reviewToNotify = [];
     for (var i = 0; i < result.updates.length; i++) {
       // checkUpdates reports "the source's version string changed", not "the
       // device is behind". Re-read the post-save app so the verdict is computed
@@ -1811,9 +1812,14 @@ Future<void> bgUpdateCheck(
         );
         continue;
       }
-      final willInstallInBackground =
-          installable &&
-          await appsProvider.canInstallSilentlyInBackground(update);
+      if (!installable) {
+        if (!update.settings.getBool('skipUpdateNotifications')) {
+          reviewToNotify.add(update);
+        }
+        continue;
+      }
+      final willInstallInBackground = await appsProvider
+          .canInstallSilentlyInBackground(update);
       if (!canInstall || !willInstallInBackground) {
         if (notifiable && !update.settings.getBool('skipUpdateNotifications')) {
           unawaited(
@@ -1842,11 +1848,17 @@ Future<void> bgUpdateCheck(
         ),
       );
     }
+    if (reviewToNotify.isNotEmpty) {
+      unawaited(
+        notificationsProvider.notify(VersionReviewNotification(reviewToNotify)),
+      );
+    }
 
     unawaited(
       bgLogs.add(
         'BG update task: Notified ${toNotify.length} updates, '
         '${trackOnlyToNotify.length} track-only, '
+        '${reviewToNotify.length} releases needing review, '
         '${result.toThrow.rawErrors.length} errors',
       ),
     );

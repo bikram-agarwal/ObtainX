@@ -295,6 +295,7 @@ class APKDetails {
 
   /// Release names/titles seen before title filtering (RegEx assist).
   List<String> rawReleaseTitleCandidates;
+  final String? releaseTitle;
 
   /// Size of the preferred APK in bytes, if known at update-check time (e.g. GitHub releases).
   int? apkSizeBytes;
@@ -313,6 +314,7 @@ class APKDetails {
     this.allAssetUrls = const [],
     this.iconUrl,
     this.rawReleaseTitleCandidates = const [],
+    this.releaseTitle,
     this.apkSizeBytes,
     this.isReproducible,
     this.reproducibleStatus,
@@ -901,6 +903,10 @@ abstract class AppSource {
   }
 
   App postProcessApp(App app) {
+    return app;
+  }
+
+  Future<App> resolveVersionComparison(App app) async {
     return app;
   }
 
@@ -1806,6 +1812,10 @@ class SourceProvider {
     // Capture raw snapshots before version extraction / release-date/title
     // replacement and APK filtering mutate them (used by the RegEx assist).
     final String rawLatestVersionFromSource = apk.version;
+    additionalSettings.remove('rawSelectedReleaseTitle');
+    if (apk.releaseTitle != null) {
+      additionalSettings['rawSelectedReleaseTitle'] = apk.releaseTitle;
+    }
     final codesByAsset = <String, int>{
       if (apk.versionCode != null && apk.apkUrls.isNotEmpty)
         apk.apkUrls.last.key: apk.versionCode!,
@@ -1965,7 +1975,7 @@ class SourceProvider {
           apk.attestationStatus ??
           (sameVersionAsPrevious ? currentApp.latestAttestationStatus : null),
     );
-    return source.postProcessApp(finalApp);
+    return source.resolveVersionComparison(source.postProcessApp(finalApp));
   }
 
   // Returns errors in [results, errors] instead of throwing them

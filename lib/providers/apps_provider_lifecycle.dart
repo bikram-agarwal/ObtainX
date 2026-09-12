@@ -167,8 +167,27 @@ extension AppsProviderLifecycle on AppsProvider {
         settings['lastInstalledTime'] = installedInfo.lastUpdateTime;
       }
       final real = _getRealInstalledVersion(app, installedInfo);
+      if (trackOnly &&
+          app.usesStandardVersionDetection &&
+          !app.usesVersionCodeAsOsVersion &&
+          settings[trackedDeviceStateVersionKey] != 1) {
+        // Migrate a legacy source alias once, retaining its acknowledgement
+        // separately before adopting the actual package version.
+        if (!resetToDevice &&
+            installed != null &&
+            installed != real &&
+            settings[acknowledgedSourceReleaseKey] == null) {
+          settings[acknowledgedSourceReleaseKey] = acknowledgeSourceRelease(
+            app.copyWith(
+              latestVersion: installed,
+              additionalSettings: settings,
+            ),
+          ).additionalSettings[acknowledgedSourceReleaseKey];
+        }
+        settings[trackedDeviceStateVersionKey] = 1;
+      }
       if (resetToDevice ||
-          (app.usesStandardVersionDetection && !trackOnly) ||
+          app.usesStandardVersionDetection ||
           app.usesVersionCodeAsOsVersion) {
         installed = real;
       } else if (installed == null) {
@@ -201,7 +220,7 @@ extension AppsProviderLifecycle on AppsProvider {
           pending.matchesPackage(installedInfo)) {
         settings[confirmedInstallReleaseKey] = pending.toJson();
         settings.remove(pendingInstallReleaseKey);
-        if ((!app.usesStandardVersionDetection || trackOnly) &&
+        if (!app.usesStandardVersionDetection &&
             !app.usesVersionCodeAsOsVersion) {
           installed = pending.version;
         }
@@ -219,34 +238,77 @@ extension AppsProviderLifecycle on AppsProvider {
     return identical(corrected, originalApp) ? null : corrected;
   }
 
-  Future<void> loadApps({String? singleId, bool silent = false}) async {
-    await waitForAppsToLoad();
-    appsLoadingCompleter = Completer<void>();
-    if (!silent) {
-      loadingApps = true;
-      notify();
-    }
+  Future<void> loadApps({
+    String? singleId,
+    bool silent = false,
+    Duration installedInfoTimeout = const Duration(seconds: 20),
+  }) async {
+    // Reserve the queue slot before yielding. Waiting first lets two callers
+    // both see an idle loader and overwrite each other's completion signal.
+    final previousLoad = appsLoadingCompleter;
+    final loadCompletion = Completer<void>();
+    appsLoadingCompleter = loadCompletion;
     bool dataChanged = false;
-    final appFolders = settingsProvider.appFolders;
-    final shouldMigrateFolderCriteria =
-        (settingsProvider.prefs?.getInt('folderCriteriaMigrationVersion') ??
-            0) <
-        folderCriteriaMigrationVersion;
-    final folderMembershipsToPersist = <App>[];
     final correctedInstallStatusIds = <String>[];
+    var stage = 'waiting for an earlier load';
+    var wasSlow = false;
+    final slowLoad = Timer(const Duration(seconds: 15), () {
+      wasSlow = true;
+      unawaited(
+        logs.add(
+          'App load still waiting after 15s (${singleId ?? "all apps"}): $stage',
+          level: LogLevel.warning,
+        ),
+      );
+    });
     try {
+      await previousLoad?.future;
+      if (!silent) {
+        loadingApps = true;
+        notify();
+      }
+      stage = 'reading folder settings';
+      final appFolders = settingsProvider.appFolders;
+      final shouldMigrateFolderCriteria =
+          (settingsProvider.prefs?.getInt('folderCriteriaMigrationVersion') ??
+              0) <
+          folderCriteriaMigrationVersion;
+      final folderMembershipsToPersist = <App>[];
       // Commit any deferred "remove from ObtainX" whose in-memory deferral was
       // lost (e.g. process restart) before re-reading the app JSON dir.
       if (singleId == null) {
+        stage = 'cleaning pending removals';
         await _purgeStalePendingRemovalFilesWithoutLiveDeferral();
       }
       final sp = SourceProvider();
       final List<List<String>> errors = [];
-      final installedAppsData = singleId == null
-          ? await getAllInstalledInfo(light: true)
-          : [
-              await getInstalledInfo(singleId, throwOnError: true),
-            ].nonNulls.toList();
+      stage = 'reading installed packages';
+      var installedInfoAvailable = true;
+      List<PackageInfo> installedAppsData = [];
+      try {
+        installedAppsData = singleId == null
+            ? await getAllInstalledInfo(
+                light: true,
+              ).timeout(installedInfoTimeout)
+            : [
+                await getInstalledInfo(
+                  singleId,
+                  throwOnError: true,
+                ).timeout(installedInfoTimeout),
+              ].nonNulls.toList();
+      } catch (error) {
+        if (singleId != null) rethrow;
+        // Missing observations are not evidence of an uninstall. The saved
+        // library remains useful while Android's package service is unavailable.
+        installedInfoAvailable = false;
+        unawaited(
+          logs.add(
+            'Installed package snapshot unavailable; loading saved apps without '
+            'changing install state: $error',
+            level: LogLevel.warning,
+          ),
+        );
+      }
       final Map<String, PackageInfo> installedAppsMap = {
         for (var i in installedAppsData)
           if (i.packageName != null) i.packageName!: i,
@@ -261,6 +323,7 @@ extension AppsProviderLifecycle on AppsProvider {
       // A relative sqflite path uses Android's internal database directory.
       // App JSON may live on external storage, which is unsuitable for SQLite.
       final checks = appCheckStore ??= AppCheckStore('app_checks.db');
+      stage = 'reading check timestamp database';
       final checkStoreModifiedAtStart = await checks.modified();
       Map<String, Map<String, Object?>> checkTimes = {};
       try {
@@ -289,6 +352,8 @@ extension AppsProviderLifecycle on AppsProvider {
         final int chunkEnd = min(chunkStart + loadChunkSize, appFiles.length);
         await Future.wait(
           appFiles.sublist(chunkStart, chunkEnd).map((item) async {
+            stage =
+                'reading app records (${chunkStart + 1}-$chunkEnd/${appFiles.length})';
             final String lowerPath = item.path.toLowerCase();
             final bool isSaveTempFile =
                 lowerPath.endsWith('.json.tmp') ||
@@ -389,13 +454,16 @@ extension AppsProviderLifecycle on AppsProvider {
                   overrideSource: app.overrideSource,
                 );
                 final String sourceType = src.sourceIdentifier;
-                final PackageInfo? installedInfo = installedAppsMap[app.id];
+                final PackageInfo? installedInfo = installedInfoAvailable
+                    ? installedAppsMap[app.id]
+                    : before?.installedInfo;
                 // Sampled before the reconcile: "externally uninstalled" is the
                 // *transition* from a recorded version to none, and only step 1
                 // of the reconcile can make it.
                 final bool hadInstalledVersion = app.installedVersion != null;
-                final App? correctedApp =
-                    getCorrectedInstallStatusAppIfPossible(app, installedInfo);
+                final App? correctedApp = installedInfoAvailable
+                    ? getCorrectedInstallStatusAppIfPossible(app, installedInfo)
+                    : null;
                 if (correctedApp != null) {
                   app = correctedApp;
                   dataChanged = true;
@@ -482,13 +550,15 @@ extension AppsProviderLifecycle on AppsProvider {
         // number of file handles open at once.
       }
       if (singleId == null) {
-        lastFullDiskLoadAt = diskLoadStartedAt;
+        lastFullDiskLoadAt = installedInfoAvailable ? diskLoadStartedAt : null;
         appDirectoryModifiedAt = directoryModifiedAtStart;
         appCheckStoreModifiedAt = checkStoreModifiedAtStart;
       }
       if (folderMembershipsToPersist.isNotEmpty) {
+        stage = 'saving folder membership changes';
         await saveApps(
           folderMembershipsToPersist,
+          attemptToCorrectInstallStatus: installedInfoAvailable,
           updateInstalledInfo: false,
           autoExportAfterSave: false,
         );
@@ -511,6 +581,7 @@ extension AppsProviderLifecycle on AppsProvider {
         );
       }
       if (errors.isNotEmpty) {
+        stage = 'processing invalid app records';
         for (var error in errors) {
           unawaited(
             logs.add(
@@ -535,9 +606,15 @@ extension AppsProviderLifecycle on AppsProvider {
         }
       }
     } finally {
-      loadingApps = false;
-      appsLoadingCompleter?.complete();
-      appsLoadingCompleter = null;
+      slowLoad.cancel();
+      if (identical(appsLoadingCompleter, loadCompletion)) {
+        loadingApps = false;
+        appsLoadingCompleter = null;
+      }
+      loadCompletion.complete();
+      if (wasSlow) {
+        unawaited(logs.add('App load finished (${singleId ?? "all apps"})'));
+      }
       if (!silent || dataChanged) {
         markAppsChanged();
         notify();
@@ -976,7 +1053,39 @@ extension AppsProviderLifecycle on AppsProvider {
     await updateAppIcon(appId, ignoreCache: true);
   }
 
-  /// Persists a list of [App] objects to disk as JSON files and updates in-memory state.
+  /// Atomically replaces one app record and invalidates older checkpoints.
+  Future<void> _writeAppRecord(
+    Directory directory,
+    App app,
+    AppCheckStore checks,
+  ) async {
+    final filePath = '${directory.path}/${app.id}.json';
+    final tmpFile = File(
+      '$filePath.tmp_${DateTime.now().microsecondsSinceEpoch}_${_saveAppsTmpNonce++}',
+    );
+    final revision = AppCheckStore.newRevision();
+    try {
+      await tmpFile.writeAsString(
+        jsonEncode(app.toJson()..[appRecordRevisionKey] = revision),
+        flush: true,
+      );
+      await tmpFile.rename(filePath);
+      checks.revisions[app.id] = revision;
+    } finally {
+      try {
+        if (await tmpFile.exists()) await tmpFile.delete();
+      } catch (error) {
+        unawaited(
+          logs.add(
+            'Failed to clean save temp for ${app.id}: $error',
+            level: LogLevel.warning,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Persists a list of [App] objects to disk and updates in-memory state.
   Future<void> saveApps(
     List<App> apps, {
     bool attemptToCorrectInstallStatus = true,
@@ -1000,8 +1109,18 @@ extension AppsProviderLifecycle on AppsProvider {
     final Future<void> pendingSaves = _saveAppsQueue;
     final Completer<void> saveCompletion = Completer<void>();
     _saveAppsQueue = saveCompletion.future;
+    var stage = 'waiting for an earlier save';
+    final slowSave = Timer(const Duration(seconds: 15), () {
+      unawaited(
+        logs.add(
+          'App save still waiting after 15s (${effectiveApps.length} apps): $stage',
+          level: LogLevel.warning,
+        ),
+      );
+    });
     try {
       await pendingSaves;
+      stage = 'reading installed package information';
       Map<String, PackageInfo>? installedInfoSnapshot = prefetchedInstalledInfo;
       if (installedInfoSnapshot == null &&
           updateInstalledInfo &&
@@ -1026,11 +1145,13 @@ extension AppsProviderLifecycle on AppsProvider {
       final Directory appsDirectory = await getAppsDir();
       final checks = appCheckStore ??= AppCheckStore('app_checks.db');
       final checkpoints = <Map<String, Object?>>[];
+      final checkpointApps = <App>[];
       final sourceProvider = SourceProvider();
       final appFolders = settingsProvider.appFolders;
       final Map<String, PackageInfo>? effectiveInstalledInfoSnapshot =
           installedInfoSnapshot;
       const int saveChunkSize = 16;
+      stage = 'writing app records';
       for (
         int chunkStart = 0;
         chunkStart < effectiveApps.length;
@@ -1085,7 +1206,10 @@ extension AppsProviderLifecycle on AppsProvider {
               }
             }
             app = app.copyWith(name: installedAppName ?? app.name);
-            if (attemptToCorrectInstallStatus) {
+            // A cached null may mean the package service was unavailable on
+            // launch. Only a fresh query can establish that an app is absent.
+            if (attemptToCorrectInstallStatus &&
+                (updateInstalledInfo || info != null)) {
               app = getCorrectedInstallStatusAppIfPossible(app, info) ?? app;
             }
             app = normalizeSkippedLatestVersion(
@@ -1108,6 +1232,7 @@ extension AppsProviderLifecycle on AppsProvider {
             if (!onlyIfExists || this.apps.containsKey(app.id)) {
               final revision = checks.revisions[app.id];
               if (!updateInstalledInfo &&
+                  checks.isAvailable &&
                   cached != null &&
                   revision != null &&
                   onlyAppCheckTimeChanged(cached.app, app)) {
@@ -1116,35 +1241,9 @@ extension AppsProviderLifecycle on AppsProvider {
                   'revision': revision,
                   'checked': app.lastUpdateCheck!.microsecondsSinceEpoch,
                 });
+                checkpointApps.add(app);
               } else {
-                final String filePath = '${appsDirectory.path}/${app.id}.json';
-                final String tmpPath =
-                    '$filePath.tmp_${DateTime.now().microsecondsSinceEpoch}_${_saveAppsTmpNonce++}';
-                final File tmpFile = File(tmpPath);
-                final nextRevision = AppCheckStore.newRevision();
-                try {
-                  await tmpFile.writeAsString(
-                    jsonEncode(
-                      app.toJson()..[appRecordRevisionKey] = nextRevision,
-                    ),
-                    flush: true,
-                  ); // #2089
-                  await tmpFile.rename(filePath);
-                  checks.revisions[app.id] = nextRevision;
-                } finally {
-                  try {
-                    if (await tmpFile.exists()) {
-                      await tmpFile.delete();
-                    }
-                  } catch (cleanupError) {
-                    unawaited(
-                      logs.add(
-                        'Failed to clean save temp for ${app.id}: $cleanupError',
-                        level: LogLevel.warning,
-                      ),
-                    );
-                  }
-                }
+                await _writeAppRecord(appsDirectory, app, checks);
               }
             }
             if (cached != null) {
@@ -1165,7 +1264,25 @@ extension AppsProviderLifecycle on AppsProvider {
           await Future<void>.delayed(Duration.zero);
         }
       }
-      await checks.save(checkpoints);
+      stage = 'saving check timestamps';
+      try {
+        await checks.save(checkpoints);
+      } catch (error) {
+        stage = 'saving check timestamps in app records';
+        unawaited(
+          logs.add(
+            'Check timestamp save failed; falling back to ${checkpointApps.length} '
+            'app records: $error',
+            level: LogLevel.warning,
+          ),
+        );
+        for (final app in checkpointApps) {
+          // A fresh record revision also rejects a timed-out SQLite write that
+          // commits later with the old revision. No app state is lost on reload.
+          await _writeAppRecord(appsDirectory, app, checks);
+        }
+      }
+      stage = 'reading storage modification times';
       appCheckStoreModifiedAt = await checks.modified();
       appDirectoryModifiedAt = (await appsDirectory.stat()).modified;
       markAppsChanged();
@@ -1174,6 +1291,7 @@ extension AppsProviderLifecycle on AppsProvider {
         scheduleAutoExport();
       }
     } finally {
+      slowSave.cancel();
       saveCompletion.complete();
     }
   }

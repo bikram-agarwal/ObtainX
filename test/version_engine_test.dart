@@ -23,11 +23,11 @@ void main() {
       '1Password for Android 8.12.9-28.BETA',
       VersionRelation.older,
     ),
-    ('8.12.9-27.BETA', '8.12.9-27.STABLE', VersionRelation.unknown),
+    ('8.12.9-27.BETA', '8.12.9-27.STABLE', VersionRelation.older),
     ('1.2.3-1', '1.2.3-2', VersionRelation.older),
     ('1.2.3-1', '1.2.3', VersionRelation.unknown),
     ('8.8 (88)', '8.8 (89)', VersionRelation.older),
-    ('2.19.1 (git 67d1c5a)', 'v2.19.1', VersionRelation.unknown),
+    ('2.19.1 (git 67d1c5a)', 'v2.19.1', VersionRelation.same),
     ('2.19.0 (git 67d1c5a)', 'v2.19.1', VersionRelation.older),
     ('1.5.3-DEV (75094D8)', '1.5.4-DEV (75094D8)', VersionRelation.older),
     ('1.5.3-DEV (75094D8)', 'debug-75094d8', VersionRelation.unknown),
@@ -118,7 +118,7 @@ void main() {
       }
     }
   });
-  test('Pseudo and track-only track any exact source label change', () {
+  test('Pseudo and track-only never turn an older source into an update', () {
     for (final settings in [
       {'versionDetection': 'pseudo'},
       {'versionDetection': 'auto', 'trackOnly': true},
@@ -138,9 +138,9 @@ void main() {
           preferredApkIndex: 0,
           additionalSettings: settings,
         );
-        expect(appHasActionableUpdate(app), isTrue);
-        expect(versionOrderUncertainUpdate(app), isFalse);
-        expect(appIsUpToDateForFiltering(app), isFalse);
+        expect(appHasActionableUpdate(app), isFalse);
+        expect(versionOrderUncertainUpdate(app), installed != '2.0');
+        expect(appIsUpToDateForFiltering(app), installed == '2.0');
         expect(
           appHasActionableUpdate(app.copyWith(installedVersion: latest)),
           isFalse,

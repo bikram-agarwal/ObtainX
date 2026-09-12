@@ -5191,17 +5191,18 @@ class AppsPageState extends State<AppsPage> {
                           !appsProvider.isVersionDetectionPossible(
                             appsProvider.apps[appToUpdate.id],
                           )) {
-                        appToMark = appToUpdate.copyWith(
-                          installedVersion: appToUpdate.latestVersion,
-                          additionalSettings: isTrackOnly
-                              ? (Map<String, dynamic>.from(
-                                    appToUpdate.additionalSettings,
+                        appToMark = acknowledgeSourceRelease(appToUpdate);
+                        if (isTrackOnly) {
+                          appToMark = appToMark.copyWith(
+                            additionalSettings:
+                                Map<String, dynamic>.from(
+                                    appToMark.additionalSettings,
                                   )
                                   ..[trackOnlyUserMarkedInstalledKey] = true
                                   ..['trackOnlyUndeterminedInstalledVersion'] =
-                                      false)
-                              : appToUpdate.additionalSettings,
-                        );
+                                      false,
+                          );
+                        }
                       }
                       if (hasLegacyReset) {
                         appToMark = appToMark.copyWith(

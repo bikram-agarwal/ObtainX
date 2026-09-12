@@ -59,13 +59,35 @@ AppVersionDisplayVerdict appVersionVerdictForDisplay(App? app) {
   }
   final decision = versionDecisionForApp(app);
   return switch (decision.relation) {
-    VersionRelation.unknown => AppVersionDisplayVerdict.uncertain,
+    VersionRelation.unknown ||
+    VersionRelation.sourceChanged => AppVersionDisplayVerdict.uncertain,
     VersionRelation.older => AppVersionDisplayVerdict.updateAvailable,
     VersionRelation.newer => AppVersionDisplayVerdict.newerOnDevice,
     VersionRelation.same =>
-      app.installedVersion == app.latestVersion
+      normalizeVersionLabel(app.installedVersion!) ==
+                  normalizeVersionLabel(app.latestVersion) ||
+              decision.reason == 'sameBuildHash'
           ? AppVersionDisplayVerdict.sameVersion
           : AppVersionDisplayVerdict.effectivelyEqual,
+  };
+}
+
+String versionDecisionTitleKey(VersionDecision decision) {
+  return switch (decision.reason) {
+    'differentVariants' => 'version_variant_differs',
+    'sourceAcknowledged' => 'sameVersion',
+    _ =>
+      decision.relation == VersionRelation.same
+          ? 'effectivelyEqual'
+          : 'versionOrderUnclear',
+  };
+}
+
+String versionDecisionDetailKey(VersionDecision decision) {
+  return switch (decision.reason) {
+    'differentVariants' => 'version_variant_differs_detail',
+    'sourceCommitAncestry' => 'version_commit_ancestry_detail',
+    _ => 'versionOrderUnclearSubtitle',
   };
 }
 
@@ -2762,9 +2784,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   hapticSelection();
                   App? updatedApp = app?.app.deepCopy();
                   if (updatedApp != null) {
-                    updatedApp = updatedApp.copyWith(
-                      installedVersion: updatedApp.latestVersion,
-                    );
+                    updatedApp = acknowledgeSourceRelease(updatedApp);
                     updatedApp.additionalSettings.remove(
                       'skippedLatestVersion',
                     );
@@ -2853,8 +2873,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         );
       }
 
-      final bool actionBlocked = updating || areDownloadsRunning;
+      // Opening a track-only release, acknowledging it, or skipping it does
+      // not use the download queue. Only this page's refresh blocks them.
+      final bool actionBlocked = app == null || updating;
       final bool buildVerificationBlocked =
+          !trackOnly &&
           app != null &&
           source != null &&
           buildVerificationEnforcementBlocksInstall(
@@ -2870,7 +2893,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             )
           : null;
       final bool installActionBlocked =
-          actionBlocked || buildVerificationBlocked;
+          actionBlocked ||
+          (!trackOnly && areDownloadsRunning) ||
+          buildVerificationBlocked;
       final installedVersion = app?.app.installedVersion;
       final bool installedVersionIsNull = installedVersion == null;
       final bool actionableUpdate =
@@ -2890,9 +2915,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           app != null &&
           (app.app.additionalSettings[installStatusResetKey] != null ||
               app.installedInfo != null);
-      // Version order unclear: user should use Update and/or Skip only; no manual
-      // "mark as latest" second button (mutually exclusive with actionableUpdate).
-      final bool uncertainOnly = uncertainUpdate;
+      // Non-tracked installs with unknown order keep the manual Update/Skip
+      // choice. Track-only apps can always acknowledge a source release.
+      final bool uncertainOnly =
+          uncertainUpdate &&
+          versionDecisionForApp(app.app).relation !=
+              VersionRelation.sourceChanged;
       final bool primaryActionEnabled =
           !installActionBlocked &&
           (installedVersionIsNull ||
@@ -3039,7 +3067,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         );
       }
 
-      if (trackOnlyHasVersionUpdate && !uncertainOnly) {
+      if (trackOnlyHasVersionUpdate) {
         // Outer Row is in a Column with unbounded max height. A nested Row of
         // two horizontal Expanded children + stretch can get infinite cross-axis
         // extent and break layout (blank page). Fixed height bounds the inner Row.
@@ -3086,26 +3114,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   ),
                 ),
               ],
-            ),
-          ),
-        );
-      }
-
-      if (trackOnlyHasVersionUpdate && uncertainOnly) {
-        return wrapPrimaryBarWithSkip(
-          FilledButton(
-            style: expressiveFilled,
-            onPressed: installActionBlocked || skipActive
-                ? null
-                : openTrackOnlyReleasePage,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.center,
-              child: Text(
-                updateLabel,
-                maxLines: 1,
-                textAlign: TextAlign.center,
-              ),
             ),
           ),
         );
@@ -3396,12 +3404,16 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         if (versionVerdict == AppVersionDisplayVerdict.effectivelyEqual) {
           stripeColor = pageTheme.colorScheme.surfaceContainerHigh;
           stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
-          stripeLabel = tr('effectivelyEqual');
+          stripeLabel = tr(
+            versionDecisionTitleKey(versionDecisionForApp(app!.app)),
+          );
           verdictIcon = Icons.balance;
         } else if (versionVerdict == AppVersionDisplayVerdict.uncertain) {
           stripeColor = pageTheme.colorScheme.surfaceContainerHighest;
           stripeTextColor = pageTheme.colorScheme.onSurfaceVariant;
-          stripeLabel = tr('versionOrderUnclear');
+          stripeLabel = tr(
+            versionDecisionTitleKey(versionDecisionForApp(app!.app)),
+          );
           verdictIcon = Icons.help_outline_rounded;
         } else if (versionVerdict == AppVersionDisplayVerdict.newerOnDevice) {
           stripeColor = pageTheme.colorScheme.primaryContainer;
@@ -3455,11 +3467,19 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (versionVerdict == AppVersionDisplayVerdict.uncertain)
+                      if (app != null &&
+                          (versionVerdict ==
+                                  AppVersionDisplayVerdict.uncertain ||
+                              versionDecisionForApp(app.app).reason ==
+                                  'sourceCommitAncestry'))
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(
-                            tr('versionOrderUnclearSubtitle'),
+                            tr(
+                              versionDecisionDetailKey(
+                                versionDecisionForApp(app.app),
+                              ),
+                            ),
                             style: pageTheme.textTheme.bodySmall?.copyWith(
                               color: stripeTextColor?.withAlpha(210),
                               fontWeight: FontWeight.w400,

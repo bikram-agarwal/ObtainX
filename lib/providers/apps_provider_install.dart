@@ -1442,9 +1442,8 @@ extension AppsProviderInstall on AppsProvider {
     // same save for any track-only app whose package is absent from the device.
     await saveApps(
       trackOnlyAppsToUpdate.map((e) {
-        var a = apps[e]!.app;
+        var a = acknowledgeSourceRelease(apps[e]!.app);
         a = a.copyWith(
-          installedVersion: a.latestVersion,
           additionalSettings: Map<String, dynamic>.from(a.additionalSettings)
             ..[trackOnlyUserMarkedInstalledKey] = true
             ..['trackOnlyUndeterminedInstalledVersion'] = false

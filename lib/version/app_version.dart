@@ -10,6 +10,9 @@ const observedPackageIdKey = 'observedPackageId';
 const confirmedInstallReleaseKey = 'confirmedInstallRelease';
 const pendingInstallReleaseKey = 'pendingInstallRelease';
 const sourceVersionCodesKey = 'sourceVersionCodes';
+const sourceBuildComparisonKey = 'sourceBuildComparison';
+const acknowledgedSourceReleaseKey = 'acknowledgedSourceRelease';
+const trackedDeviceStateVersionKey = 'trackedDeviceStateVersion';
 
 String _versionSettingsIdentity(App app) {
   return jsonEncode([
@@ -21,6 +24,110 @@ String _versionSettingsIdentity(App app) {
         : VersionService.defaultMatchGroup,
     app.additionalSettings['releaseCommitShaAsVersion'] == true,
   ]);
+}
+
+String _sourceContextIdentity(App app) {
+  return jsonEncode([
+    app.id,
+    app.url,
+    app.overrideSource,
+    _versionSettingsIdentity(app),
+  ]);
+}
+
+String _deviceObservationIdentity(App app) {
+  return jsonEncode([
+    app.additionalSettings[observedPackageIdKey],
+    app.additionalSettings[observedVersionNameKey],
+    app.additionalSettings[observedVersionCodeKey],
+  ]);
+}
+
+/// Evidence from an asynchronous source request cannot outlive its exact
+/// source, device observation, extraction settings, or selected artifact.
+String versionEvidenceIdentity(App app) {
+  return jsonEncode([
+    _sourceContextIdentity(app),
+    _deviceObservationIdentity(app),
+    app.installedVersion,
+    app.latestVersion,
+    if (app.apkUrls.isNotEmpty)
+      [
+        app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)].key,
+        app
+            .apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)]
+            .value,
+      ],
+  ]);
+}
+
+/// A manual acknowledgement is not an APK installation receipt. Keep the
+/// source baseline independently so refreshes never replace a real version.
+App acknowledgeSourceRelease(App app) {
+  final asset = app.apkUrls.isEmpty
+      ? null
+      : app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  return app.copyWith(
+    installedVersion:
+        app.usesStandardVersionDetection && app.installedVersion != null
+        ? app.installedVersion
+        : app.latestVersion,
+    additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+      ..[acknowledgedSourceReleaseKey] = {
+        'context': _sourceContextIdentity(app),
+        'observation': _deviceObservationIdentity(app),
+        'version': app.latestVersion,
+        'assetName': asset?.key,
+        'assetUrl': asset?.value,
+      }
+      ..remove('skippedLatestVersion'),
+  );
+}
+
+Map? _sourceAcknowledgement(App app) {
+  final acknowledgement = app.additionalSettings[acknowledgedSourceReleaseKey];
+  if (acknowledgement is! Map ||
+      acknowledgement['context'] != _sourceContextIdentity(app) ||
+      acknowledgement['observation'] != _deviceObservationIdentity(app) ||
+      acknowledgement['version'] is! String) {
+    return null;
+  }
+  return acknowledgement;
+}
+
+/// Known APK flavors are artifact metadata, not a list of version suffixes.
+/// This check only applies to a selected download and never orders releases.
+String? _apkFlavor(String description) {
+  final matches =
+      RegExp(r'(?:^|[._ -])(foss|oss|fdroid|market|gplay)(?=$|[._ -])')
+          .allMatches(description.toLowerCase())
+          .map((match) => match.group(1)!)
+          .toSet();
+  return matches.length == 1 ? matches.single : null;
+}
+
+bool _selectedAssetChangesFlavor(App app) {
+  if (getVersionStringSource(app.additionalSettings) !=
+          versionStringSourceDefault ||
+      app.apkUrls.isEmpty ||
+      app.installedVersion == null) {
+    return false;
+  }
+  final installedFlavor = _apkFlavor(
+    releaseDescription(app.installedVersion!) ?? '',
+  );
+  if (installedFlavor == null) return false;
+  final asset =
+      app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  var flavor = _apkFlavor(asset.key);
+  // Image Toolbox publishes both flavors under one tag. The non-FOSS asset
+  // has no suffix, but the repository explicitly identifies it as Market.
+  if (flavor == null &&
+      app.id == 'ru.tech.imageresizershrinker' &&
+      asset.key.toLowerCase().startsWith('image-toolbox-')) {
+    flavor = 'market';
+  }
+  return flavor != null && flavor != installedFlavor;
 }
 
 /// Immutable identity captured when an asset is selected, not after its download
@@ -182,6 +289,24 @@ int? selectedSourceVersionCode(App app) {
   return int.tryParse((metadata['codes'] as Map)[asset.key]?.toString() ?? '');
 }
 
+/// Supplement a coarse source label using only its currently selected APK.
+/// Custom version extraction remains authoritative and receives no filename data.
+String? selectedSourceBuildHash(App app) {
+  final asset =
+      app.apkUrls.isEmpty ||
+          app.usesVersionCodeAsOsVersion ||
+          (app.additionalSettings['versionExtractionRegEx']
+                  ?.toString()
+                  .trim()
+                  .isNotEmpty ??
+              false) ||
+          getVersionStringSource(app.additionalSettings) !=
+              versionStringSourceDefault
+      ? null
+      : app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  return releaseBuildHash(app.latestVersion, assetName: asset?.key);
+}
+
 /// Keep the visible code in sync when the selected APK changes between checks.
 App normalizeSelectedSourceVersion(App app) {
   final code = selectedSourceVersionCode(app);
@@ -211,16 +336,6 @@ VersionDecision versionDecisionForApp(App app) {
       installed == null ? 'notInstalled' : 'missingVersion',
     );
   }
-  if (!app.usesVersionCodeAsOsVersion &&
-      (!app.usesStandardVersionDetection ||
-          app.settings.getBool('trackOnly'))) {
-    return VersionDecision(
-      installed == app.latestVersion
-          ? VersionRelation.same
-          : VersionRelation.older,
-      'sourceTracking',
-    );
-  }
   final sourceCode = selectedSourceVersionCode(app);
   final observationMatches =
       app.additionalSettings[observedPackageIdKey] == app.id &&
@@ -233,16 +348,6 @@ VersionDecision versionDecisionForApp(App app) {
           app.additionalSettings[observedVersionCodeKey]?.toString() ?? '',
         )
       : null;
-  if (sourceCode != null && deviceCode != null) {
-    return VersionDecision(
-      sourceCode == deviceCode
-          ? VersionRelation.same
-          : sourceCode > deviceCode
-          ? VersionRelation.older
-          : VersionRelation.newer,
-      'selectedApkCode',
-    );
-  }
   if (app.usesVersionCodeAsOsVersion) {
     final latestCode = sourceCode?.toString() ?? app.latestVersion.trim();
     if (!RegExp(r'^\d+$').hasMatch(installed.trim()) ||
@@ -259,7 +364,11 @@ VersionDecision versionDecisionForApp(App app) {
       'versionCode',
     );
   }
-  final direct = compareVersionStrings(installed, app.latestVersion);
+  final direct = compareVersionStrings(
+    installed,
+    app.latestVersion,
+    latestBuildHash: selectedSourceBuildHash(app),
+  );
   final receipt = InstallReleaseSnapshot.fromJson(
     app.additionalSettings[confirmedInstallReleaseKey],
   );
@@ -276,12 +385,89 @@ VersionDecision versionDecisionForApp(App app) {
           'confirmedInstalledRelease',
         );
       }
-    } else {
-      final mapped = compareVersionStrings(receipt.version, app.latestVersion);
-      if (mapped.relation != VersionRelation.unknown) {
-        return VersionDecision(mapped.relation, 'confirmedSourceVersion');
-      }
     }
+  }
+  final acknowledgement = _sourceAcknowledgement(app);
+  final asset = app.apkUrls.isEmpty
+      ? null
+      : app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  if (acknowledgement != null &&
+      acknowledgement['version'] == app.latestVersion &&
+      acknowledgement['assetName'] == asset?.key &&
+      acknowledgement['assetUrl'] == asset?.value &&
+      direct.relation != VersionRelation.newer &&
+      direct.relation != VersionRelation.same) {
+    return const VersionDecision(VersionRelation.same, 'sourceAcknowledged');
+  }
+  // Matching Google series/build identifiers already name the same release;
+  // distribution labels alone do not make another update available.
+  if (direct.reason == 'googleBuild' &&
+      direct.relation == VersionRelation.same) {
+    return direct;
+  }
+  // Matching Google series/build identifiers already name the same release;
+  // distribution labels alone do not make another update available.
+  if (direct.reason == 'googleBuild' &&
+      direct.relation == VersionRelation.same) {
+    return direct;
+  }
+  final variantsDiffer =
+      releaseVariantsDiffer(installed, app.latestVersion) ||
+      _selectedAssetChangesFlavor(app);
+  if (variantsDiffer && direct.relation != VersionRelation.newer) {
+    return const VersionDecision(VersionRelation.unknown, 'differentVariants');
+  }
+  // A clear release/build order wins in name-based modes. Codes can refine
+  // equal release names or resolve unorderable labels; explicitly selected
+  // Version Code mode was handled above.
+  if (direct.relation == VersionRelation.older ||
+      direct.relation == VersionRelation.newer) {
+    return direct;
+  }
+  if (sourceCode != null &&
+      deviceCode != null &&
+      app.usesStandardVersionDetection) {
+    final codeRelation = sourceCode == deviceCode
+        ? VersionRelation.same
+        : sourceCode > deviceCode
+        ? VersionRelation.older
+        : VersionRelation.newer;
+    if (!variantsDiffer &&
+        !(direct.reason == 'differentBuildHashes' &&
+            codeRelation == VersionRelation.same)) {
+      return VersionDecision(codeRelation, 'selectedApkCode');
+    }
+  }
+  if (receipt != null &&
+      observationMatches &&
+      receipt.matchesObservation(app) &&
+      receipt.version != app.latestVersion) {
+    final mapped = compareVersionStrings(receipt.version, app.latestVersion);
+    if (mapped.relation != VersionRelation.unknown) {
+      return VersionDecision(mapped.relation, 'confirmedSourceVersion');
+    }
+  }
+  if (direct.relation != VersionRelation.unknown) return direct;
+  final evidence = app.additionalSettings[sourceBuildComparisonKey];
+  if (direct.reason == 'differentBuildHashes' &&
+      evidence is Map &&
+      evidence['identity'] == versionEvidenceIdentity(app)) {
+    final relation = switch (evidence['status']) {
+      'ahead' => VersionRelation.older,
+      'behind' => VersionRelation.newer,
+      'identical' => VersionRelation.same,
+      _ => VersionRelation.unknown,
+    };
+    if (relation != VersionRelation.unknown) {
+      return VersionDecision(relation, 'sourceCommitAncestry');
+    }
+  }
+  if (!app.usesStandardVersionDetection ||
+      (app.settings.getBool('trackOnly') && acknowledgement != null)) {
+    return const VersionDecision(
+      VersionRelation.sourceChanged,
+      'sourceTracking',
+    );
   }
   return direct;
 }
@@ -347,8 +533,7 @@ App recordConfirmedInstall(
   if (confirmed) {
     settings[confirmedInstallReleaseKey] = release.toJson();
   }
-  final sourceTracking =
-      !app.usesStandardVersionDetection || app.settings.getBool('trackOnly');
+  final sourceTracking = !app.usesStandardVersionDetection;
   return app.copyWith(
     installedVersion: app.usesVersionCodeAsOsVersion
         ? info.versionCode?.toString()

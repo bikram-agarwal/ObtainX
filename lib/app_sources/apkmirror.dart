@@ -534,22 +534,29 @@ DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
   return null;
 }
 
+String? apkMirrorVersionFromTitle(String? title) {
+  if (title == null) return null;
+  final authorStart = title.lastIndexOf(' by ');
+  final label = (authorStart < 0 ? title : title.substring(0, authorStart))
+      .trim();
+  final systemVersion = RegExp(
+    r'(?<![a-z0-9.])(?:(?:[a-z]\.)?\d+\.(?:playstore\.[a-z0-9_-]+|odad-stub)\.\d{6,}|(?:stargate\.android_)?\d{8}_\d+_rc\d+\.release_[a-z_]+)$',
+    caseSensitive: false,
+  ).firstMatch(label);
+  if (systemVersion != null) return systemVersion.group(0);
+  final release = releaseVersionPattern.firstMatch(label);
+  if (release != null) return label.substring(release.start).trim();
+  final digit = RegExp(r'\d').firstMatch(label);
+  return digit == null ? label : label.substring(digit.start).trim();
+}
+
 class APKMirror extends AppSource {
   APKMirror() {
     name = 'APKMirror';
     hosts = ['apkmirror.com'];
     enforceTrackOnly = true;
-    // APKMirror's release titles rarely match the versionName inside the APK
-    // (they carry architecture/dpi/build suffixes), so shared-format matching
-    // can't reconcile the two and step 2 of
-    // getCorrectedInstallStatusAppIfPossible would otherwise never adopt the
-    // device's version — leaving a stale installedVersion that pull-to-refresh
-    // cannot correct. RockMods (also track-only) sets this for the same reason.
-    // Trade-off: the device's version now wins whenever the two differ, so if
-    // it can't be reconciled with latestVersion either, an update stays on
-    // offer. Track-only apps are excluded from the auto-disable fallback in
-    // step 4, so there's no automatic cleanup for that case — "mark updated"
-    // can also be re-overwritten on the next reconcile.
+    // Track-only controls opening the store page; installed packages still
+    // participate in the shared device-version comparison.
     naiveStandardVersionDetection = true;
     showReleaseDateAsVersionToggle = true;
     appIdInferIsOptional = true;
@@ -779,12 +786,7 @@ class APKMirror extends AppSource {
     if (releasePageUrl != null && !releasePageUrl.startsWith('$standardUrl/')) {
       releasePageUrl = null;
     }
-    String? version = titleString
-        ?.substring(
-          RegExp('[0-9]').firstMatch(titleString)?.start ?? 0,
-          RegExp(' by ').allMatches(titleString).last.start,
-        )
-        .trim();
+    String? version = apkMirrorVersionFromTitle(titleString);
     if (version == null || version.isEmpty) {
       version = titleString;
     }
@@ -823,6 +825,7 @@ class APKMirror extends AppSource {
       changeLog: releasePageUrl,
       iconUrl: iconUrl,
       rawReleaseTitleCandidates: rawReleaseTitleCandidates,
+      releaseTitle: titleString,
     );
   }
 

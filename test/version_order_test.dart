@@ -286,13 +286,10 @@ void main() {
     },
   );
 
-  test(
-    'dot-separated hash suffixes like 26.03 and 26.03.a4d75424 are recognized as distinct versions',
-    () {
-      expect(versionsEffectivelyEqual('26.03', '26.03.a4d75424'), false);
-      expect(versionsEffectivelyEqual('26.03.a4d75424', '26.03'), false);
-    },
-  );
+  test('a one-sided dot-separated hash still identifies the same release', () {
+    expect(versionsEffectivelyEqual('26.03', '26.03.a4d75424'), true);
+    expect(versionsEffectivelyEqual('26.03.a4d75424', '26.03'), true);
+  });
 
   test(
     'zero-only trailing dot segments like 1.2 and 1.2.0 are effectively equal',
@@ -838,8 +835,8 @@ void main() {
     'disabled version detection preserves installed version when system version equals stored version',
     () {
       // installed == realInstalledVersion == '9.18.50', but latest == '107' (different format).
-      // The system must NOT silently coerce installedVersion → latestVersion here; that would hide
-      // the available update. The update from '9.18.50' to '107' must remain visible.
+      // Do not silently relabel the device. The changed source identifier stays
+      // visible for manual review without claiming that it is a newer APK.
       final appsProvider = AppsProvider(isBg: true);
       final app = App(
         id: 'app.revanced.android.youtube',
@@ -872,7 +869,15 @@ void main() {
       expect(app.installedVersion, '9.18.50');
       expect(app.latestVersion, '107');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
-      expect(appHasActionableUpdate(app), true);
+      expect(appHasActionableUpdate(app), false);
+      expect(
+        versionDecisionForApp(app).relation,
+        VersionRelation.sourceChanged,
+      );
+      expect(
+        appUpdateIsUserVisible(app, includeVersionOrderUncertain: true),
+        true,
+      );
     },
   );
 
@@ -1319,8 +1324,8 @@ This app description should not be included.
       expect(correctedApp, isNotNull);
       expect(correctedApp!.installedVersion, '2.19.1 (git 50a6b17)');
       expect(appHasActionableUpdate(correctedApp), false);
-      expect(versionOrderUncertainUpdate(correctedApp), true);
-      // An unverified hash decoration does not rewrite the observed version.
+      expect(versionOrderUncertainUpdate(correctedApp), false);
+      // A source omitting the hash does not rewrite the observed version.
       expect(correctedApp.additionalSettings['versionDetection'], 'auto');
     });
 
@@ -1649,19 +1654,19 @@ This app description should not be included.
   );
 
   test(
-    'dot-separated hash suffix is not the same release as its numeric core',
+    'an omitted source hash does not change the release or stored device label',
     () {
       expect(
         reconcileVersionDifferences('26.06', '26.06.9df4c85')?.areEqual,
-        isNull,
+        isTrue,
       );
       expect(
         reconcileVersionDifferences('26.06', '26.06-9df4c85')?.areEqual,
-        isNull,
+        isTrue,
       );
       expect(
         reconcileVersionDifferences('2.19.1', '2.19.1 (git 50a6b17)')?.areEqual,
-        isNull,
+        isTrue,
       );
 
       final appsProvider = AppsProvider(isBg: true);

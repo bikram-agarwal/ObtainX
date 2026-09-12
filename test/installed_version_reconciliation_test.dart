@@ -58,7 +58,7 @@ void main() {
       ),
       ('1.0.915254043.release', '1.0.896819557.release', VersionRelation.newer),
       ('9.18.50', '107', VersionRelation.unknown),
-      ('2.19.1 (git 67d1c5a)', 'v2.19.1', VersionRelation.unknown),
+      ('2.19.1 (git 67d1c5a)', 'v2.19.1', VersionRelation.same),
     ]) {
       test(
         '$mode preserves $device against $latest through save and reload',

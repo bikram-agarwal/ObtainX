@@ -46,7 +46,9 @@ bool isSkipActiveForCurrentLatest(App app) {
   final skipped = app.additionalSettings['skippedLatestVersion'];
   return skipped is String &&
       skipped.isNotEmpty &&
-      skipped == app.latestVersion;
+      (skipped == app.latestVersion ||
+          compareVersionStrings(skipped, app.latestVersion).relation ==
+              VersionRelation.same);
 }
 
 bool appIsUpToDateForFiltering(App app) {
@@ -61,7 +63,7 @@ App normalizeSkippedLatestVersion(App app) {
   final skipped = app.additionalSettings['skippedLatestVersion'];
   if (skipped is! String || skipped.isEmpty) return app;
   final decision = versionDecisionForApp(app);
-  if (skipped == app.latestVersion &&
+  if (isSkipActiveForCurrentLatest(app) &&
       (app.installedVersion == null ||
           (decision.relation != VersionRelation.same &&
               decision.relation != VersionRelation.newer))) {
@@ -88,7 +90,9 @@ bool versionOrderUncertainUpdate(App app) {
       isSkipActiveForCurrentLatest(app)) {
     return false;
   }
-  return versionDecisionForApp(app).relation == VersionRelation.unknown;
+  final relation = versionDecisionForApp(app).relation;
+  return relation == VersionRelation.unknown ||
+      relation == VersionRelation.sourceChanged;
 }
 
 bool appUpdateIsUserVisible(
@@ -188,6 +192,16 @@ App? mergeFetchedUpdateWithLiveState({
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  settings.remove(sourceBuildComparisonKey);
+  if (fetchedApp.additionalSettings[sourceBuildComparisonKey] != null) {
+    settings[sourceBuildComparisonKey] =
+        fetchedApp.additionalSettings[sourceBuildComparisonKey];
+  }
+  settings.remove('rawSelectedReleaseTitle');
+  if (fetchedApp.additionalSettings['rawSelectedReleaseTitle'] != null) {
+    settings['rawSelectedReleaseTitle'] =
+        fetchedApp.additionalSettings['rawSelectedReleaseTitle'];
   }
   settings.remove(partialDownloadFingerprintKey);
   if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {

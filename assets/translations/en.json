@@ -833,6 +833,9 @@
     "telegramApp": "Telegram App",
     "tooManyRedirects": "Too many redirects",
     "vibrant": "Vibrant",
+    "version_variant_differs": "Different build variant",
+    "version_variant_differs_detail": "This source release targets a different app or device variant. Select a matching APK or review the source before switching variants.",
+    "version_commit_ancestry_detail": "Build order verified using GitHub commit history.",
     "action": {
         "one": "Action",
         "other": "Actions"

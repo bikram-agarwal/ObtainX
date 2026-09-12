@@ -28,6 +28,7 @@ const int silentUpdateAttemptNotificationId = 8;
 // so these were bumped up from their original fork values (8 and 9).
 const int malwareScanSkippedNotificationId = 9;
 const int errorInstallingUpdatesNotificationId = 10;
+const int versionReviewNotificationId = 11;
 const int downloadNotificationBaseId = 100;
 
 /// Size of the ID space for per-download notifications. Kept just under the
@@ -172,6 +173,19 @@ class TrackOnlyUpdateNotification extends ObtainiumNotification {
         tr('updatesAvailableNotifChannel'),
         tr('updatesAvailableNotifDescription'),
         Importance.max,
+      );
+}
+
+class VersionReviewNotification extends ObtainiumNotification {
+  VersionReviewNotification(List<App> releases)
+    : super(
+        versionReviewNotificationId,
+        tr('versionOrderUnclear'),
+        releases.map((app) => app.finalName).join(', '),
+        'UPDATES_AVAILABLE',
+        tr('updatesAvailableNotifChannel'),
+        tr('updatesAvailableNotifDescription'),
+        Importance.defaultImportance,
       );
 }
 
