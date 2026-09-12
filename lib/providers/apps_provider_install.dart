@@ -1428,6 +1428,22 @@ extension AppsProviderInstall on AppsProvider {
     appsToInstall = moveStrToEnd(appsToInstall, '$obtainiumId.fdroid');
     appsToInstall = moveStrToEnd(appsToInstall, '$obtainiumId.debug');
 
+    // Acquire install privileges once for the whole batch. This used to run per
+    // app inside the download step, which with parallel downloads meant one
+    // check per app racing all the others (and, for Shizuku, racing the first
+    // install) as soon as the APKs were ready - the batch stalled with nothing
+    // in the logs (ObtainX#283). One prompt up front is also less intrusive.
+    if (appsToInstall.isNotEmpty) {
+      try {
+        await getInstaller().ensurePermission(toastTheme: dialogTheme);
+      } catch (error) {
+        for (final id in appsToInstall) {
+          errors.add(id, error, appName: apps[id]?.name);
+        }
+        throw errors;
+      }
+    }
+
     Future<void> installDownloadResult(_InstallResult result) async {
       if ((result.downloadedFile == null && result.downloadedDir == null) ||
           errors.appIdNames.containsKey(result.id)) {
@@ -1861,7 +1877,6 @@ extension AppsProviderInstall on AppsProvider {
       notify();
       willBeSilent = await canInstallSilently(apps[id]!.app);
       final installer = getInstaller();
-      await installer.ensurePermission(toastTheme: toastTheme);
       // Only the stock installer surfaces a system install prompt that pulls the
       // user away; wait for them to return before proceeding.
       if (!willBeSilent &&

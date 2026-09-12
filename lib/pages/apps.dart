@@ -689,6 +689,11 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
             s.folderGroupNonInstalledSeparately(viewSettingsId),
             s.folderGroupTrackOnlySeparately(viewSettingsId),
             s.folderGroupUpdatesSeparately(viewSettingsId),
+            s.folderShowAppTypeBadge(viewSettingsId),
+            s.folderShowTrackedStoreBadge(viewSettingsId),
+            s.folderShowCategoriesBadge(viewSettingsId),
+            s.folderShowAuthorBadge(viewSettingsId),
+            s.folderShowVersionBadge(viewSettingsId),
           ),
   ]);
 }
@@ -2297,6 +2302,41 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
               ? settingsProvider.setFolderGroupUpdatesSeparately(folderId, v)
               : (settingsProvider.groupUpdatesSeparately = v);
 
+          final effectiveShowAppTypeBadge = folderId != null
+              ? settingsProvider.folderShowAppTypeBadge(folderId)
+              : settingsProvider.showAppTypeBadge;
+          void setEffectiveShowAppTypeBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowAppTypeBadge(folderId, v)
+              : (settingsProvider.showAppTypeBadge = v);
+
+          final effectiveShowTrackedStoreBadge = folderId != null
+              ? settingsProvider.folderShowTrackedStoreBadge(folderId)
+              : settingsProvider.showTrackedStoreBadge;
+          void setEffectiveShowTrackedStoreBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowTrackedStoreBadge(folderId, v)
+              : (settingsProvider.showTrackedStoreBadge = v);
+
+          final effectiveShowCategoriesBadge = folderId != null
+              ? settingsProvider.folderShowCategoriesBadge(folderId)
+              : settingsProvider.showCategoriesBadge;
+          void setEffectiveShowCategoriesBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowCategoriesBadge(folderId, v)
+              : (settingsProvider.showCategoriesBadge = v);
+
+          final effectiveShowAuthorBadge = folderId != null
+              ? settingsProvider.folderShowAuthorBadge(folderId)
+              : settingsProvider.showAuthorBadge;
+          void setEffectiveShowAuthorBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowAuthorBadge(folderId, v)
+              : (settingsProvider.showAuthorBadge = v);
+
+          final effectiveShowVersionBadge = folderId != null
+              ? settingsProvider.folderShowVersionBadge(folderId)
+              : settingsProvider.showVersionBadge;
+          void setEffectiveShowVersionBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowVersionBadge(folderId, v)
+              : (settingsProvider.showVersionBadge = v);
+
           final colorScheme = Theme.of(ctx).colorScheme;
           final textTheme = Theme.of(ctx).textTheme;
 
@@ -2335,9 +2375,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.person_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showAppTypeBadge')),
-                        selected: settingsProvider.showAppTypeBadge,
+                        selected: effectiveShowAppTypeBadge,
                         onSelected: (value) {
-                          settingsProvider.showAppTypeBadge = value;
+                          setEffectiveShowAppTypeBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2345,9 +2385,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.store_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showTrackedStoreBadge')),
-                        selected: settingsProvider.showTrackedStoreBadge,
+                        selected: effectiveShowTrackedStoreBadge,
                         onSelected: (value) {
-                          settingsProvider.showTrackedStoreBadge = value;
+                          setEffectiveShowTrackedStoreBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2355,9 +2395,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.category_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showCategoriesBadge')),
-                        selected: settingsProvider.showCategoriesBadge,
+                        selected: effectiveShowCategoriesBadge,
                         onSelected: (value) {
-                          settingsProvider.showCategoriesBadge = value;
+                          setEffectiveShowCategoriesBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2365,9 +2405,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.badge_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showAuthorBadge')),
-                        selected: settingsProvider.showAuthorBadge,
+                        selected: effectiveShowAuthorBadge,
                         onSelected: (value) {
-                          settingsProvider.showAuthorBadge = value;
+                          setEffectiveShowAuthorBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2375,9 +2415,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.sell_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showVersionBadge')),
-                        selected: settingsProvider.showVersionBadge,
+                        selected: effectiveShowVersionBadge,
                         onSelected: (value) {
-                          settingsProvider.showVersionBadge = value;
+                          setEffectiveShowVersionBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -3113,6 +3153,35 @@ class AppsPageState extends State<AppsPage> {
     return id != null
         ? sp.folderGroupUpdatesSeparately(id)
         : sp.groupUpdatesSeparately;
+  }
+
+  bool _effectiveShowAppTypeBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderShowAppTypeBadge(id) : sp.showAppTypeBadge;
+  }
+
+  bool _effectiveShowTrackedStoreBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null
+        ? sp.folderShowTrackedStoreBadge(id)
+        : sp.showTrackedStoreBadge;
+  }
+
+  bool _effectiveShowCategoriesBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null
+        ? sp.folderShowCategoriesBadge(id)
+        : sp.showCategoriesBadge;
+  }
+
+  bool _effectiveShowAuthorBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderShowAuthorBadge(id) : sp.showAuthorBadge;
+  }
+
+  bool _effectiveShowVersionBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderShowVersionBadge(id) : sp.showVersionBadge;
   }
 
   void _saveCollapsedGroups(List<String> keys, {required bool add}) {
@@ -4637,11 +4706,13 @@ class AppsPageState extends State<AppsPage> {
           areDownloadsRunning: downloadsRunning,
           iconWidget: getAppIcon(index, appOverride: appOverride),
           sourceHost: sourceHost,
-          showAppTypeBadge: settingsProvider.showAppTypeBadge,
-          showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
-          showCategoriesBadge: settingsProvider.showCategoriesBadge,
-          showAuthorBadge: settingsProvider.showAuthorBadge,
-          showVersionBadge: settingsProvider.showVersionBadge,
+          showAppTypeBadge: _effectiveShowAppTypeBadge(settingsProvider),
+          showTrackedStoreBadge: _effectiveShowTrackedStoreBadge(
+            settingsProvider,
+          ),
+          showCategoriesBadge: _effectiveShowCategoriesBadge(settingsProvider),
+          showAuthorBadge: _effectiveShowAuthorBadge(settingsProvider),
+          showVersionBadge: _effectiveShowVersionBadge(settingsProvider),
           onTap: selectedAppIds.isNotEmpty
               ? () => toggleAppSelected(app.app)
               : navigateToAppPage,

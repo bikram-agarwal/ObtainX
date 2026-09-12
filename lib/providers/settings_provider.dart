@@ -1293,6 +1293,38 @@ class SettingsProvider with ChangeNotifier {
   void setFolderGroupUpdatesSeparately(String id, bool v) =>
       _setFolderViewField(id, 'groupUpdatesSeparately', v);
 
+  bool folderShowAppTypeBadge(String id) =>
+      (_getFolderViewRaw(id)?['showAppTypeBadge'] as bool?) ?? showAppTypeBadge;
+
+  void setFolderShowAppTypeBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showAppTypeBadge', v);
+
+  bool folderShowTrackedStoreBadge(String id) =>
+      (_getFolderViewRaw(id)?['showTrackedStoreBadge'] as bool?) ??
+      showTrackedStoreBadge;
+
+  void setFolderShowTrackedStoreBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showTrackedStoreBadge', v);
+
+  bool folderShowCategoriesBadge(String id) =>
+      (_getFolderViewRaw(id)?['showCategoriesBadge'] as bool?) ??
+      showCategoriesBadge;
+
+  void setFolderShowCategoriesBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showCategoriesBadge', v);
+
+  bool folderShowAuthorBadge(String id) =>
+      (_getFolderViewRaw(id)?['showAuthorBadge'] as bool?) ?? showAuthorBadge;
+
+  void setFolderShowAuthorBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showAuthorBadge', v);
+
+  bool folderShowVersionBadge(String id) =>
+      (_getFolderViewRaw(id)?['showVersionBadge'] as bool?) ?? showVersionBadge;
+
+  void setFolderShowVersionBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showVersionBadge', v);
+
   Locale? get forcedLocale {
     final Locale? storedLocale = parseStoredLocaleTag(
       prefs?.getString('forcedLocale'),
