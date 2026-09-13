@@ -362,8 +362,56 @@ DateTime? dateTimeFromJsonValue(dynamic value) {
   return null;
 }
 
+/// Separates Android package ID from store identity in a listing ID (and
+/// therefore in on-disk record names). Package IDs cannot contain `@`.
+const String appListingKeySeparator = '@';
+
+/// Store identity for [app] (the AppSource runtime type, e.g. `GitHub`).
+///
+/// This is derived from the app's *current* URL, so it changes whenever the
+/// tracked source is swapped. It decides whether adding an app would duplicate
+/// an existing listing - never which record on disk a listing belongs to (see
+/// [App.listingId]).
+String sourceIdentifierForApp(App app) {
+  try {
+    return SourceProvider()
+        .getSourceTemplate(app.url, overrideSource: app.overrideSource)
+        .sourceIdentifier;
+  } catch (_) {
+    return app.overrideSource ?? 'Unknown';
+  }
+}
+
+/// Candidate listing ID for a package tracked from a second store.
+String appListingKey(String packageId, String sourceIdentifier) =>
+    '$packageId$appListingKeySeparator$sourceIdentifier';
+
+/// Normalizes a stored `listingId`, collapsing a value that merely restates
+/// [packageId] (and anything blank) back to null.
+String? listingIdFromJsonValue(Object? value, {required String packageId}) {
+  final String? listingId = value?.toString().trim();
+  if (listingId == null || listingId.isEmpty || listingId == packageId) {
+    return null;
+  }
+  return listingId;
+}
+
 class App {
   final String id;
+
+  /// Stable identity for this one listing, letting a single package be tracked
+  /// from more than one store at once.
+  ///
+  /// Null for a package's only listing, whose key is just [id] - so records
+  /// written before multi-store tracking keep their file names. A second
+  /// listing of the same package gets a value like `com.example.app@FDroid`,
+  /// assigned once when it is added.
+  ///
+  /// Deliberately **not** derived from the tracked source: swapping a listing
+  /// from GitHub to F-Droid rewrites [url] and [overrideSource], and a
+  /// source-derived key would silently re-point the listing at a different
+  /// record (losing the original and breaking the swap back).
+  final String? listingId;
   final String url;
   final String author;
   final String name;
@@ -410,6 +458,7 @@ class App {
 
   const App({
     required this.id,
+    this.listingId,
     required this.url,
     required this.author,
     required this.name,
@@ -445,6 +494,9 @@ class App {
   String toString() {
     return 'ID: $id URL: $url INSTALLED: $installedVersion LATEST: $latestVersion APK: $apkUrls PREFERREDAPK: $preferredApkIndex ADDITIONALSETTINGS: ${additionalSettings.toString()} LASTCHECK: ${lastUpdateCheck.toString()} PINNED $pinned';
   }
+
+  /// Key identifying this listing in [AppsProvider.apps] and on disk.
+  String get listingKey => listingId ?? id;
 
   bool get hasPendingRepoRename =>
       pendingRepoRenameUrl != null && pendingRepoRenameUrl!.isNotEmpty;
@@ -508,6 +560,7 @@ class App {
 
   App copyWith({
     String? id,
+    Object? listingId = _sentinel,
     String? url,
     String? author,
     String? name,
@@ -540,6 +593,9 @@ class App {
   }) {
     return App(
       id: id ?? this.id,
+      listingId: listingId == _sentinel
+          ? this.listingId
+          : listingId?.toString(),
       url: url ?? this.url,
       author: author ?? this.author,
       name: name ?? this.name,
@@ -633,6 +689,10 @@ class App {
     try {
       return App(
         id: json['id']?.toString() ?? '',
+        listingId: listingIdFromJsonValue(
+          json['listingId'],
+          packageId: json['id']?.toString() ?? '',
+        ),
         url: json['url']?.toString() ?? '',
         author: json['author']?.toString() ?? '',
         name: json['name']?.toString() ?? '',
@@ -701,6 +761,10 @@ class App {
 
   Map<String, dynamic> toJson({bool encodeNested = true}) => {
     'id': id,
+    // Omitted for a package's only listing, so single-store records stay
+    // byte-for-byte compatible with what earlier versions (and Obtainium)
+    // wrote and expect.
+    if (listingId != null) 'listingId': listingId,
     'url': url,
     'author': author,
     'name': name,

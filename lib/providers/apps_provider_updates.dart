@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/http/source_request_session.dart';
@@ -167,7 +168,7 @@ List<String> appIdsForManualRefresh({
         }
         return folderIdsForApp(app).where(existingFolderIds.contains).isEmpty;
       })
-      .map((App app) => app.id)
+      .map((App app) => app.listingKey)
       .toList();
 }
 
@@ -345,6 +346,24 @@ Future<String?> resolveSwappableStoreListingUrl({
   }
 }
 
+/// Settings whose values are written against one store's file and release
+/// names, so they cannot survive a move to another store.
+///
+/// A filter like `foss` picks the right asset out of a GitHub release and
+/// matches nothing at all among APKPure's `<package>-<versionCode>-<arch>.apk`
+/// names. An empty APK list after filtering is not a fallback - it is the
+/// "no APK found" failure the user sees - so these are dropped and the
+/// destination's defaults apply, exactly as when adding the app from that
+/// store by hand.
+const Set<String> storeShapedAppSettingKeys = {
+  'apkFilterRegEx',
+  'invertAPKFilter',
+  'zippedApkFilterRegEx',
+  'tarballedApkFilterRegEx',
+  'versionExtractionRegEx',
+  'matchGroupToUse',
+};
+
 App prepareAppForTrackedSourceSwap({
   required App app,
   required AppSource previousSource,
@@ -362,9 +381,35 @@ App prepareAppForTrackedSourceSwap({
     partialDownloadFingerprintKey,
     'skippedLatestVersion',
     unreconciledVersionComparisonKey,
+    ...storeShapedAppSettingKeys,
   ]) {
     settings.remove(metadataKey);
   }
+  // Options the previous store owns are meaningless at the destination, and one
+  // store's key can mean something different at another. Keys both stores offer
+  // stay (same option, same semantics), as do keys that belong to neither form
+  // - notably 'appId', which identifies the package rather than the store.
+  final Set<String> destinationSettingKeys = destinationSource
+      .flatCombinedFormItemsReadOnly
+      .map((GeneratedFormItem item) => item.key)
+      .toSet();
+  for (final GeneratedFormItem previousSourceItem
+      in previousSource.additionalSourceAppSpecificSettingFormItems.expand(
+        (List<GeneratedFormItem> row) => row,
+      )) {
+    if (!destinationSettingKeys.contains(previousSourceItem.key)) {
+      settings.remove(previousSourceItem.key);
+    }
+  }
+  // Whatever the destination offers and the previous store never set has to
+  // arrive at its default, not absent: APKPure's 'useFirstApkOfVersion'
+  // defaults to on, and reading a missing key as off makes a swapped listing
+  // behave unlike the same app added directly from APKPure.
+  getDefaultValuesFromFormItems(
+    destinationSource.combinedAppSpecificSettingFormItems,
+  ).forEach((String key, dynamic defaultValue) {
+    settings.putIfAbsent(key, () => defaultValue);
+  });
   if (destinationSource.enforceTrackOnly) {
     settings['trackOnly'] = true;
   } else if (previousSource.enforceTrackOnly) {
@@ -638,6 +683,10 @@ extension AppsProviderUpdates on AppsProvider {
       throw ObtainiumError(tr('unexpectedError'));
     }
     final App currentApp = entry.app;
+    // [appId] identifies the listing being swapped, which is not the Android
+    // package ID once a package is tracked from more than one store. The
+    // store-availability cache is keyed by package, so it needs this.
+    final String packageId = currentApp.id;
     final String originalUrl = currentApp.url;
     final String? originalOverrideSource = currentApp.overrideSource;
     final SourceProvider sourceProvider = SourceProvider();
@@ -648,13 +697,13 @@ extension AppsProviderUpdates on AppsProvider {
     if (previousSource.sourceIdentifier == 'GitHub' ||
         isSwappableGitHubRepoUrl(originalUrl)) {
       await preserveAlternateGitHubSourceInCache(
-        packageId: appId,
+        packageId: packageId,
         githubUrl: previousSource.standardizeUrl(originalUrl),
       );
     }
     final String? resolvedUrl = await resolveSwappableStoreListingUrl(
       storeName: storeName,
-      packageId: appId,
+      packageId: packageId,
       candidateUrl: candidateUrl,
     );
     if (resolvedUrl == null || resolvedUrl.isEmpty) {
@@ -670,6 +719,14 @@ extension AppsProviderUpdates on AppsProvider {
       destinationSource: destinationSource,
       standardizedDestinationUrl: standardizedUrl,
     );
+    // Swapping stores must obey the same rule as adding an app: one listing per
+    // package per store. Without this, swapping a package's GitHub listing onto
+    // F-Droid while it is already tracked from F-Droid leaves it tracked twice
+    // from the same store. Checked before the fetch so it costs no request.
+    if (sameStoreListingIn(apps, requestedApp, ignoreKey: entry.listingKey) !=
+        null) {
+      throw ObtainiumError(tr('appAlreadyAdded'));
+    }
     App fetchedApp = await sourceProvider.getApp(
       destinationSource,
       standardizedUrl,
@@ -691,11 +748,9 @@ extension AppsProviderUpdates on AppsProvider {
     if (mergedApp == null) {
       return null;
     }
+    // saveApps re-resolves the store from the app's new URL, so the listing
+    // already reports the destination store here.
     await saveApps([mergedApp]);
-    final AppInMemory? savedEntry = apps[appId];
-    if (savedEntry != null) {
-      savedEntry.sourceType = destinationSource.sourceIdentifier;
-    }
     return mergedApp;
   }
 
@@ -726,7 +781,7 @@ extension AppsProviderUpdates on AppsProvider {
                 app.app.settings.getBool('trackOnly');
           }
         })
-        .map((e) => e.app.id)
+        .map((e) => e.listingKey)
         .toList();
     appIds.sort(
       (a, b) =>
@@ -794,7 +849,9 @@ extension AppsProviderUpdates on AppsProvider {
       final MultiAppMultiError errors = MultiAppMultiError();
       List<String> appIds;
       if (specificIds != null) {
-        appIds = specificIds.where(apps.containsKey).toSet().toList();
+        // Keep only IDs that resolve to exactly one listing, so an ambiguous
+        // package ID (tracked from two stores) can't null-crash below.
+        appIds = specificIds.where((id) => apps[id] != null).toSet().toList();
         if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps) {
           appIds.removeWhere((id) {
             final App app = apps[id]!.app;
@@ -867,7 +924,7 @@ extension AppsProviderUpdates on AppsProvider {
           for (final _FetchedAppUpdate result in batch) {
             final App? mergedApp = mergeFetchedUpdateWithLiveState(
               requestedApp: result.requestedApp,
-              liveApp: apps[result.requestedApp.id]?.app,
+              liveApp: apps[result.requestedApp.listingKey]?.app,
               fetchedApp: result.fetchedApp,
             );
             if (mergedApp == null) continue;
@@ -968,13 +1025,13 @@ extension AppsProviderUpdates on AppsProvider {
       if (installed == null) {
         if (!(nonInstalledOnly || !installedOnly)) continue;
         // Never installed → always installable.
-        updateAppIds.add(app.id);
+        updateAppIds.add(appInMemory.listingKey);
       } else {
         if (!(installedOnly || !nonInstalledOnly)) continue;
         if (appHasActionableUpdate(app) ||
             (includeVersionOrderUncertain &&
                 versionOrderUncertainUpdate(app))) {
-          updateAppIds.add(app.id);
+          updateAppIds.add(appInMemory.listingKey);
         }
       }
     }

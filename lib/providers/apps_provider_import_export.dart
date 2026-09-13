@@ -65,7 +65,12 @@ extension AppsProviderImportExport on AppsProvider {
       for (final folder in settingsProvider.appFolders) folder.id: folder.name,
     };
     final appList = apps.values
-        .where((e) => selectedIds == null || selectedIds.contains(e.app.id))
+        .where(
+          (e) =>
+              selectedIds == null ||
+              selectedIds.contains(e.listingKey) ||
+              selectedIds.contains(e.app.id),
+        )
         .map((e) {
           // Inject a folderId→name map so folder membership can be restored
           // (by name) on a device with different folder IDs. Mirrors fork main.

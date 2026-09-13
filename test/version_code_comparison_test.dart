@@ -6,7 +6,7 @@ import 'package:obtainium/providers/source_provider.dart';
 
 class _CodeTestProvider implements AppsProvider {
   @override
-  Map<String, AppInMemory> apps = {};
+  AppListings apps = AppListings();
 
   @override
   dynamic noSuchMethod(Invocation invocation) {

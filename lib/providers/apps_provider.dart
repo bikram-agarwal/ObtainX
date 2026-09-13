@@ -3,6 +3,7 @@
 // Exposes related functions such as those used to add, remove, download, and install Apps.
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -91,7 +92,10 @@ App resetInstallStatusToDeviceVersion(App app, PackageInfo? installedInfo) {
       Map<String, dynamic>.from(app.additionalSettings)
         ..remove(installStatusResetKey)
         ..remove(pendingInstallReleaseKey)
-        ..remove(confirmedInstallReleaseKey);
+        ..remove(confirmedInstallReleaseKey)
+        ..remove(acknowledgedSourceReleaseKey)
+        ..remove(trackOnlyUserMarkedInstalledKey)
+        ..remove('trackOnlyUndeterminedInstalledVersion');
   final String? installedVersion = app.usesVersionCodeAsOsVersion
       ? installedInfo?.versionCode?.toString()
       : installedInfo?.versionName;
@@ -175,6 +179,12 @@ class AppInMemory {
     download: download,
   );
 
+  String get listingKey => app.listingKey;
+
+  /// Store this listing currently tracks, resolved live when the cached
+  /// [sourceType] has not been filled in yet.
+  String get sourceIdentifier => sourceType ?? sourceIdentifierForApp(app);
+
   String get name => app.finalName;
   String get author => app.overrideAuthor ?? app.finalAuthor;
 
@@ -194,6 +204,75 @@ class AppInMemory {
 
     return certificateHashesFromSignatures(signatures ?? const <List<int>>[]);
   }
+}
+
+/// In-memory library keyed by [App.listingKey], so one Android package can be
+/// tracked from several stores at once.
+///
+/// A package's only listing is keyed by its package ID, which keeps every
+/// existing caller (and record file name) working unchanged. Lookups by
+/// package ID also resolve while that package has exactly one listing.
+class AppListings extends MapBase<String, AppInMemory> {
+  final Map<String, AppInMemory> _byListingKey = {};
+
+  @override
+  AppInMemory? operator [](Object? key) {
+    if (key is! String) return null;
+    final AppInMemory? direct = _byListingKey[key];
+    if (direct != null) return direct;
+    final List<AppInMemory> packageListings = listingsForPackage(key).toList();
+    return packageListings.length == 1 ? packageListings.first : null;
+  }
+
+  @override
+  void operator []=(String key, AppInMemory value) {
+    value.sourceType ??= sourceIdentifierForApp(value.app);
+    final String listingKey = value.listingKey;
+    if (key != listingKey) {
+      // A package-ID rename legitimately re-keys a listing, and it carries the
+      // same listing ID across the move, so the stale key has to go. Any other
+      // mismatch means [key] holds a *different* store's listing of this
+      // package, which must survive - dropping it silently destroyed the
+      // second listing of every multi-store app on load.
+      final AppInMemory? occupant = _byListingKey[key];
+      if (occupant != null &&
+          occupant.app.listingId == value.app.listingId &&
+          occupant.app.id != value.app.id) {
+        _byListingKey.remove(key);
+      }
+    }
+    _byListingKey[listingKey] = value;
+  }
+
+  @override
+  void clear() => _byListingKey.clear();
+
+  @override
+  Iterable<String> get keys => _byListingKey.keys;
+
+  @override
+  AppInMemory? remove(Object? key) {
+    if (key is! String) return null;
+    final AppInMemory? direct = _byListingKey.remove(key);
+    if (direct != null) return direct;
+    final List<AppInMemory> packageListings = listingsForPackage(key).toList();
+    if (packageListings.length != 1) return null;
+    return _byListingKey.remove(packageListings.first.listingKey);
+  }
+
+  @override
+  bool containsKey(Object? key) {
+    if (key is! String) return false;
+    return _byListingKey.containsKey(key) || listingsForPackage(key).isNotEmpty;
+  }
+
+  /// Exact-key membership, ignoring the package-ID fallback in [containsKey].
+  bool containsListingKey(String listingKey) =>
+      _byListingKey.containsKey(listingKey);
+
+  /// Every tracked listing of [packageId], one per store.
+  Iterable<AppInMemory> listingsForPackage(String packageId) =>
+      _byListingKey.values.where((listing) => listing.app.id == packageId);
 }
 
 class DownloadedApk {
@@ -1138,6 +1217,27 @@ Future<Directory> getAppStorageDir() async {
   return await getApplicationDocumentsDirectory();
 }
 
+/// The listing in [listings] that already tracks [app]'s package from the same
+/// store, or null when that store is free.
+///
+/// The same package from a *different* store is allowed, so this - not the
+/// package ID alone - is what decides whether adding, renaming, or swapping an
+/// app would duplicate a listing. [ignoreKey] drops one listing from the
+/// comparison, for when an existing listing is being edited and so must not
+/// collide with itself.
+AppInMemory? sameStoreListingIn(
+  AppListings listings,
+  App app, {
+  String? ignoreKey,
+}) {
+  final String sourceIdentifier = sourceIdentifierForApp(app);
+  for (final AppInMemory listing in listings.listingsForPackage(app.id)) {
+    if (listing.listingKey == (ignoreKey ?? app.listingKey)) continue;
+    if (listing.sourceIdentifier == sourceIdentifier) return listing;
+  }
+  return null;
+}
+
 /// Null requests a full reconciliation; an empty list means no reload work.
 List<String>? appIdsForResumeReload({
   required DateTime now,
@@ -1167,7 +1267,7 @@ class AppsProvider with ChangeNotifier {
       StreamController<void>.broadcast();
 
   // In memory App state (should always be kept in sync with local storage versions)
-  Map<String, AppInMemory> apps = {};
+  final AppListings apps = AppListings();
   bool loadingApps = false;
 
   // Active per-app download cancellation tokens, keyed by app ID.
@@ -1363,7 +1463,7 @@ class AppsProvider with ChangeNotifier {
           appCheckStoreModifiedAt != checkStoreModified,
       backgroundSaved: _needsBgReload,
       changedPackages: changedPackages,
-      trackedIds: apps.keys.toSet(),
+      trackedIds: apps.values.map((listing) => listing.app.id).toSet(),
     );
     try {
       if (reloadIds == null) {
@@ -1586,6 +1686,24 @@ class AppsProvider with ChangeNotifier {
     super.dispose();
   }
 
+  /// Returns [app] carrying the listing ID it should be stored under.
+  ///
+  /// The first listing of a package keeps a null listing ID (key = package ID).
+  /// Any further store for that package gets a stable `package@Source` ID,
+  /// suffixed if that is somehow taken, so the two records never collide.
+  App withAllocatedListingId(App app) {
+    if (app.listingId != null) return app;
+    if (!apps.containsListingKey(app.id)) return app;
+    final String base = appListingKey(app.id, sourceIdentifierForApp(app));
+    if (!apps.containsListingKey(base)) return app.copyWith(listingId: base);
+    for (int suffix = 2; ; suffix++) {
+      final String candidate = '$base$appListingKeySeparator$suffix';
+      if (!apps.containsListingKey(candidate)) {
+        return app.copyWith(listingId: candidate);
+      }
+    }
+  }
+
   Future<List<List<String>>> addAppsByURL(
     List<String> urls, {
     AppSource? sourceOverride,
@@ -1598,10 +1716,10 @@ class AppsProvider with ChangeNotifier {
     final List<App> pps = results[0];
     final Map<String, dynamic> errorsMap = results[1];
     for (var app in pps) {
-      if (apps.containsKey(app.id)) {
+      if (sameStoreListingIn(apps, app) != null) {
         errorsMap.addAll({app.id: tr('appAlreadyAdded')});
       } else {
-        await saveApps([app], onlyIfExists: false);
+        await saveApps([withAllocatedListingId(app)], onlyIfExists: false);
       }
     }
     final List<List<String>> errors = errorsMap.keys

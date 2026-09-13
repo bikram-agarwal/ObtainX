@@ -96,7 +96,7 @@ App _app(
 
 class _Provider implements AppsProvider {
   @override
-  Map<String, AppInMemory> apps = {};
+  AppListings apps = AppListings();
 
   @override
   dynamic noSuchMethod(Invocation invocation) {

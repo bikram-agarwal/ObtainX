@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
+import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
@@ -170,6 +171,49 @@ void main() {
       prepared.additionalSettings.containsKey('skippedLatestVersion'),
       false,
     );
+  });
+
+  test('prepareAppForTrackedSourceSwap drops store-shaped filters', () {
+    // An asset filter that selects the FOSS build out of a GitHub release
+    // matches none of APKPure's '<package>-<versionCode>-<arch>.apk' names, and
+    // filtering every APK away is reported as "no APK found".
+    final App app = _app(
+      id: 'eu.darken.sdmse',
+      additionalSettings: const {
+        'apkFilterRegEx': 'foss',
+        'invertAPKFilter': true,
+        'versionExtractionRegEx': r'v(\d+\.\d+\.\d+)',
+        'matchGroupToUse': r'$1',
+        'includePrereleases': true,
+        'trackOnly': false,
+        'versionDetection': 'standard',
+      },
+    );
+
+    final App prepared = prepareAppForTrackedSourceSwap(
+      app: app,
+      previousSource: GitHub(),
+      destinationSource: APKPure(),
+      standardizedDestinationUrl:
+          'https://apkpure.com/sd-maid-2se-system-cleaner/eu.darken.sdmse',
+    );
+
+    for (final String droppedKey in storeShapedAppSettingKeys) {
+      expect(
+        prepared.additionalSettings[droppedKey] ?? '',
+        anyOf(equals(''), equals(false)),
+        reason: '$droppedKey must not survive a store swap',
+      );
+    }
+    // GitHub's own options go with it, and APKPure's arrive at the defaults a
+    // hand-added APKPure app would get.
+    expect(
+      prepared.additionalSettings.containsKey('includePrereleases'),
+      false,
+    );
+    expect(prepared.additionalSettings['useFirstApkOfVersion'], true);
+    // Choices that describe the app rather than the store are untouched.
+    expect(prepared.additionalSettings['versionDetection'], 'standard');
   });
 
   test('prepareAppForTrackedSourceSwap enforces track-only on APKMirror', () {

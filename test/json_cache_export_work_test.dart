@@ -28,7 +28,7 @@ class _ExportProvider implements AppsProvider {
   _ExportProvider(this.apps, this.settingsProvider);
 
   @override
-  Map<String, AppInMemory> apps;
+  AppListings apps;
   @override
   final SettingsProvider settingsProvider;
 
@@ -86,7 +86,7 @@ void main() {
     'export preserves app schema and folders without modifying live settings',
     () async {
       final settings = _ExportSettings();
-      final apps = <String, AppInMemory>{};
+      final apps = AppListings();
       for (final appId in ['first', 'second', 'excluded']) {
         final app = App(
           id: appId,

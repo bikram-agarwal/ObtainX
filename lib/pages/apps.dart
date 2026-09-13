@@ -906,7 +906,7 @@ class _AppListItem extends StatelessWidget {
         context
             .read<AppsProvider>()
             .downloadAndInstallLatestApps([
-              app.app.id,
+              app.listingKey,
             ], globalNavigatorKey.currentContext)
             .catchError((e) {
               if (!context.mounted) return <String>[];
@@ -1097,8 +1097,9 @@ class _AppListItem extends StatelessWidget {
                     foregroundColor: colorScheme.onErrorContainer,
                   ),
                   icon: const Icon(Icons.stop_rounded, size: 19),
-                  onPressed: () =>
-                      context.read<AppsProvider>().cancelDownload(app.app.id),
+                  onPressed: () => context.read<AppsProvider>().cancelDownload(
+                    app.listingKey,
+                  ),
                 ),
             ],
           ),
@@ -1650,9 +1651,15 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           }
         }
       case SwipeAction.open:
-        unawaited(packageManager.openApp(widget.appId));
+        final String? packageId = app?.id;
+        if (packageId != null) {
+          unawaited(packageManager.openApp(packageId));
+        }
       case SwipeAction.appInfo:
-        unawaited(provider.openAppSettings(widget.appId));
+        final String? packageId = app?.id;
+        if (packageId != null) {
+          unawaited(provider.openAppSettings(packageId));
+        }
       case SwipeAction.none:
         break;
     }
@@ -3592,22 +3599,27 @@ class AppsPageState extends State<AppsPage> {
       if (shouldAbort()) return;
       _storeScanRunning = true;
       try {
+        // Store availability is cached per Android package, so a package
+        // tracked from two stores is only worth scanning once.
         late final List<String> idsForStoreHintScan;
         if (widget.onDemandOnlyList) {
           idsForStoreHintScan = appsProvider.apps.values
               .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
               .map((a) => a.app.id)
+              .toSet()
               .toList();
         } else if (widget.folderId != null) {
           final String folderId = widget.folderId!;
           idsForStoreHintScan = appsProvider.apps.values
               .where((a) => folderIdsForApp(a.app).contains(folderId))
               .map((a) => a.app.id)
+              .toSet()
               .toList();
         } else {
           idsForStoreHintScan = appsProvider.apps.values
               .where((a) => a.app.additionalSettings['onDemandOnly'] != true)
               .map((a) => a.app.id)
+              .toSet()
               .toList();
         }
         if (idsForStoreHintScan.isEmpty) return;
@@ -3663,7 +3675,7 @@ class AppsPageState extends State<AppsPage> {
       // freshness interval while [checkUpdates] still applies the
       // installed/track-only preference.
       final Future<List<App>> refreshFuture = appsProvider.checkUpdates(
-        specificIds: _listedAppsCache.map((a) => a.app.id).toList(),
+        specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
       );
       return refreshFuture
           .catchError((e) {
@@ -3716,12 +3728,13 @@ class AppsPageState extends State<AppsPage> {
         .where((element) => appsProvider.apps.containsKey(element))
         .toSet();
 
-    void toggleAppSelected(App app) {
+    void toggleAppSelected(AppInMemory listing) {
       setState(() {
-        if (selectedAppIds.contains(app.id)) {
-          selectedAppIds.removeWhere((a) => a == app.id);
+        final String listingKey = listing.listingKey;
+        if (selectedAppIds.contains(listingKey)) {
+          selectedAppIds.removeWhere((id) => id == listingKey);
         } else {
-          selectedAppIds.add(app.id);
+          selectedAppIds.add(listingKey);
         }
       });
       _notifyHomeFabChromeIfChanged();
@@ -3919,7 +3932,7 @@ class AppsPageState extends State<AppsPage> {
       if (_effectivePinUpdates(settingsProvider)) {
         final temp = <AppInMemory>[];
         workingList = workingList.where((sa) {
-          if (_existingUpdatesCache.contains(sa.app.id)) {
+          if (_existingUpdatesCache.contains(sa.listingKey)) {
             temp.add(sa);
             return false;
           }
@@ -3966,7 +3979,7 @@ class AppsPageState extends State<AppsPage> {
               filter.authorFilter.trim().isNotEmpty);
       if (crossFolderSearchActive) {
         final Set<String> mainListedIds = {
-          for (final a in _listedAppsCache) a.app.id,
+          for (final a in _listedAppsCache) a.listingKey,
         };
         // Folder id → its position in settings order, for picking a single
         // home folder when an app belongs to several (avoids listing — and
@@ -3978,7 +3991,7 @@ class AppsPageState extends State<AppsPage> {
         final Map<String, List<AppInMemory>> matchesByFolder = {};
         final List<AppInMemory> onDemandMatches = [];
         for (final appInMem in appsProvider.apps.values) {
-          if (mainListedIds.contains(appInMem.app.id)) {
+          if (mainListedIds.contains(appInMem.listingKey)) {
             continue; // already shown in the main results — no duplicate
           }
           if (!appMatchesFilters(appInMem)) continue;
@@ -4048,16 +4061,18 @@ class AppsPageState extends State<AppsPage> {
     // though it isn't in [listedApps] — otherwise tapping one would be reset
     // to the first main-list app on the next frame.
     bool isSelectableAppId(String id) =>
-        listedApps.any((sa) => sa.app.id == id) ||
-        _crossFolderMatchesCache.any((g) => g.apps.any((a) => a.app.id == id));
+        listedApps.any((sa) => sa.listingKey == id) ||
+        _crossFolderMatchesCache.any(
+          (g) => g.apps.any((a) => a.listingKey == id),
+        );
     String? effectiveSelectedAppId = selectedAppId;
     if (isLargeScreen) {
       if (effectiveSelectedAppId == null && listedApps.isNotEmpty) {
-        effectiveSelectedAppId = listedApps.first.app.id;
+        effectiveSelectedAppId = listedApps.first.listingKey;
       } else if (effectiveSelectedAppId != null &&
           !isSelectableAppId(effectiveSelectedAppId)) {
         effectiveSelectedAppId = listedApps.isNotEmpty
-            ? listedApps.first.app.id
+            ? listedApps.first.listingKey
             : null;
       }
       if (effectiveSelectedAppId != selectedAppId) {
@@ -4130,12 +4145,12 @@ class AppsPageState extends State<AppsPage> {
     final separateUpdates = _effectiveGroupUpdatesSeparately(settingsProvider);
     bool isInUpdatesGroup(AppInMemory entry) =>
         separateUpdates &&
-        _existingUpdatesCache.contains(entry.app.id) &&
+        _existingUpdatesCache.contains(entry.listingKey) &&
         (widget.onDemandOnlyList ||
             entry.app.additionalSettings['onDemandOnly'] != true);
 
     final Set<String> listedAppIdSet = {
-      for (final AppInMemory listed in listedApps) listed.app.id,
+      for (final AppInMemory listed in listedApps) listed.listingKey,
     };
 
     List<String> filterListedMassObtainIds(Iterable<String> ids) =>
@@ -4170,7 +4185,7 @@ class AppsPageState extends State<AppsPage> {
     final Set<String> pageUpdateBadgeIds = separateUpdates
         ? {
             for (final AppInMemory listed in listedApps)
-              if (isInUpdatesGroup(listed)) listed.app.id,
+              if (isInUpdatesGroup(listed)) listed.listingKey,
           }
         : existingUpdateIdsAllOrSelected.toSet();
     if (selectedAppIds.isEmpty) {
@@ -4640,33 +4655,31 @@ class AppsPageState extends State<AppsPage> {
     }
 
     GestureDetector getAppIcon(int appIndex, {AppInMemory? appOverride}) {
-      final String rowAppId = (appOverride ?? listedApps[appIndex]).app.id;
-      // Kick off icon loading once; putIfAbsent prevents duplicate loads.
-      // _AppIconWidget independently watches the icon bytes via context.select,
-      // so only that widget rebuilds when the icon arrives — not the full page.
-      if (appsProvider.apps[rowAppId]?.icon == null) {
+      final String rowListingKey =
+          (appOverride ?? listedApps[appIndex]).listingKey;
+      final String rowPackageId = (appOverride ?? listedApps[appIndex]).app.id;
+      if (appsProvider.apps[rowListingKey]?.icon == null) {
         _appListIconWarmFutures.putIfAbsent(
-          rowAppId,
-          () => appsProvider.updateAppIcon(rowAppId),
+          rowPackageId,
+          () => appsProvider.updateAppIcon(rowListingKey),
         );
       }
       return GestureDetector(
         child: Hero(
           tag: widget.folderId != null
-              ? 'folder-${widget.folderId}-icon-$rowAppId'
-              : 'app-icon-$rowAppId',
-          // Preserve the ClipRRect/shape during the flight.
+              ? 'folder-${widget.folderId}-icon-$rowListingKey'
+              : 'app-icon-$rowListingKey',
           flightShuttleBuilder: (_, animation, _, _, _) =>
-              _AppIconWidget(appId: rowAppId),
-          child: _AppIconWidget(appId: rowAppId),
+              _AppIconWidget(appId: rowListingKey),
+          child: _AppIconWidget(appId: rowListingKey),
         ),
-        onDoubleTap: () => packageManager.openApp(rowAppId),
+        onDoubleTap: () => packageManager.openApp(rowPackageId),
         onLongPress: () {
           Navigator.push(
             context,
             heroFriendlyAppPageRoute(
               (_) => AppPage(
-                appId: rowAppId,
+                appId: rowListingKey,
                 showOppositeOfPreferredView: true,
                 appsListHeroFolderId: widget.folderId,
               ),
@@ -4683,7 +4696,7 @@ class AppsPageState extends State<AppsPage> {
       AppInMemory? appOverride,
     }) {
       final app = appOverride ?? listedApps[index];
-      final appId = app.app.id;
+      final listingKey = app.listingKey;
       final installed = app.app.installedVersion;
       final hasUpdate = installed != null && appHasActionableUpdate(app.app);
       final hasUncertainUpdate =
@@ -4721,8 +4734,8 @@ class AppsPageState extends State<AppsPage> {
       // (callback = openContainer) and the [reduceVisualEffects] fallback
       // path (callback = direct Navigator.push).
       Widget buildRowWith(VoidCallback navigateToAppPage) => _SwipeableListItem(
-        key: ValueKey(appId),
-        appId: appId,
+        key: ValueKey(listingKey),
+        appId: listingKey,
         hasUpdate: hasUpdate || hasUncertainUpdate,
         isPinned: app.app.pinned,
         isInstalled: installed != null,
@@ -4732,13 +4745,13 @@ class AppsPageState extends State<AppsPage> {
         leftAction: settingsProvider.leftSwipeAction,
         appsListHeroFolderId: widget.folderId,
         child: _AppListItem(
-          appId: appId,
-          isSelected: selectedAppIds.contains(appId),
+          appId: listingKey,
+          isSelected: selectedAppIds.contains(listingKey),
           isSplitPaneActive:
               isLargeScreen &&
-              effectiveSelectedAppId == appId &&
+              effectiveSelectedAppId == listingKey &&
               selectedAppIds.isEmpty,
-          showCheckmark: selectedAppIds.contains(appId),
+          showCheckmark: selectedAppIds.contains(listingKey),
           areDownloadsRunning: downloadsRunning,
           iconWidget: getAppIcon(index, appOverride: appOverride),
           sourceHost: sourceHost,
@@ -4750,9 +4763,9 @@ class AppsPageState extends State<AppsPage> {
           showAuthorBadge: _effectiveShowAuthorBadge(settingsProvider),
           showVersionBadge: _effectiveShowVersionBadge(settingsProvider),
           onTap: selectedAppIds.isNotEmpty
-              ? () => toggleAppSelected(app.app)
+              ? () => toggleAppSelected(app)
               : navigateToAppPage,
-          onLongPress: () => toggleAppSelected(app.app),
+          onLongPress: () => toggleAppSelected(app),
           highlightTouchTargets: settingsProvider.highlightTouchTargets,
           categoryColors: settingsProvider.categories,
           itemBorderRadius: itemRadius,
@@ -4781,28 +4794,30 @@ class AppsPageState extends State<AppsPage> {
       // view) still uses the standard Navigator.push - that's a secondary
       // path and doesn't benefit from container transform.
       final Widget swipeItem = isLargeScreen
-          ? buildRowWith(() => setState(() => selectedAppId = appId))
+          ? buildRowWith(() => setState(() => selectedAppId = listingKey))
           : settingsProvider.reduceVisualEffects
           ? buildRowWith(
               () => Navigator.push(
                 context,
                 heroFriendlyAppPageRoute(
                   (_) => AppPage(
-                    appId: appId,
+                    appId: listingKey,
                     appsListHeroFolderId: widget.folderId,
                   ),
                 ),
               ),
             )
           : AppDetailsContainer(
-              key: ValueKey('open-$appId'),
+              key: ValueKey('open-$listingKey'),
               closedShape: itemRadius != null
                   ? RoundedRectangleBorder(borderRadius: itemRadius)
                   : const RoundedRectangleBorder(),
               // We drive the open trigger from [_AppListItem.onTap] ourselves
               // so selection-mode taps stay routed to [toggleAppSelected].
-              openBuilder: (BuildContext _) =>
-                  AppPage(appId: appId, appsListHeroFolderId: widget.folderId),
+              openBuilder: (BuildContext _) => AppPage(
+                appId: listingKey,
+                appsListHeroFolderId: widget.folderId,
+              ),
               closedBuilder: (BuildContext _, VoidCallback openContainer) =>
                   buildRowWith(openContainer),
             );
@@ -5242,7 +5257,7 @@ class AppsPageState extends State<AppsPage> {
     void downloadSelectedAppAssets([Iterable<App>? targetApps]) {
       final appsToDownload = targetApps ?? getSelectedApps();
       appsProvider
-          .downloadAppAssets(appsToDownload.map((e) => e.id).toList())
+          .downloadAppAssets(appsToDownload.map((e) => e.listingKey).toList())
           .catchError((e) {
             showError(e);
             return <String>[];
@@ -5280,7 +5295,7 @@ class AppsPageState extends State<AppsPage> {
       const encoder = JsonEncoder.withIndent('    ');
       final exportJSON = encoder.convert(
         appsProvider.generateExportJSON(
-          appIds: appsToExport.map((e) => e.id).toList(),
+          appIds: appsToExport.map((e) => e.listingKey).toList(),
           overrideExportSettings: 0,
         ),
       );
@@ -5333,7 +5348,7 @@ class AppsPageState extends State<AppsPage> {
                               : () {
                                   setState(() {
                                     for (final appInMem in listedApps) {
-                                      selectedAppIds.add(appInMem.app.id);
+                                      selectedAppIds.add(appInMem.listingKey);
                                     }
                                   });
                                   _notifyHomeFabChromeIfChanged();
@@ -6889,7 +6904,7 @@ class AppsPageState extends State<AppsPage> {
 
     if (isLargeScreen) {
       setState(() {
-        selectedAppId = app.app.id;
+        selectedAppId = app.listingKey;
       });
       if (autoScroll) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -6900,8 +6915,10 @@ class AppsPageState extends State<AppsPage> {
       Navigator.push(
         context,
         heroFriendlyAppPageRoute(
-          (_) =>
-              AppPage(appId: app.app.id, appsListHeroFolderId: widget.folderId),
+          (_) => AppPage(
+            appId: app.listingKey,
+            appsListHeroFolderId: widget.folderId,
+          ),
         ),
       );
     }
@@ -6913,7 +6930,9 @@ class AppsPageState extends State<AppsPage> {
     final sp = context.read<SettingsProvider>();
     final groupBy = _effectiveGroupBy(sp);
 
-    final int index = _listedAppsCache.indexWhere((sa) => sa.app.id == appId);
+    final int index = _listedAppsCache.indexWhere(
+      (sa) => sa.listingKey == appId || sa.app.id == appId,
+    );
     if (index == -1) return;
 
     double offset = 120.0; // Base header height approximation

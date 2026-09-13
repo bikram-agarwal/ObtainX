@@ -846,8 +846,11 @@ class HomePageState extends State<HomePage> {
           if (currentKey.currentState?.handleBack() == true) return;
         }
         if (selectedIndexHistory.isNotEmpty) {
+          // Back leaves the tabs, it does not retrace them. Tabs are siblings,
+          // so visiting Add app → Backup → Settings should not cost three
+          // presses to get out - the Apps tab is the one place back leads to.
           setState(() {
-            selectedIndexHistory.removeLast();
+            selectedIndexHistory.clear();
           });
           return;
         }

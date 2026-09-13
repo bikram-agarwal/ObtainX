@@ -25,7 +25,7 @@ class _RealHttpOverrides extends HttpOverrides {}
 
 class _StorageProvider implements AppsProvider {
   @override
-  Map<String, AppInMemory> apps = {};
+  AppListings apps = AppListings();
   @override
   Directory? cachedAppsDir;
   @override
