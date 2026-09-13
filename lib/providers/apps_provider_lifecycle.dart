@@ -337,9 +337,21 @@ extension AppsProviderLifecycle on AppsProvider {
           ),
         );
       }
+      // A single-ID load is by Android package, which can have a record per
+      // store it is tracked from. Naming the known records keeps this off a
+      // full directory listing.
       final List<FileSystemEntity> appFiles = singleId == null
           ? await appsDirectory.list().toList()
-          : [File('${appsDirectory.path}/$singleId.json')];
+          : <FileSystemEntity>[
+              for (final String recordName in <String>{
+                singleId,
+                for (final AppInMemory listing in apps.listingsForPackage(
+                  singleId,
+                ))
+                  listing.listingKey,
+              })
+                File('${appsDirectory.path}/$recordName.json'),
+            ];
       final DateTime staleSaveTempCutoff = DateTime.now().subtract(
         _staleSaveTempAge,
       );
@@ -377,7 +389,7 @@ extension AppsProviderLifecycle on AppsProvider {
             if (!lowerPath.endsWith('.json')) return;
             final String fileName = _fileBasename(item.path);
             if (singleId != null &&
-                fileName.toLowerCase() != '${singleId.toLowerCase()}.json') {
+                !_appRecordFileMatchesPackageOrListing(fileName, singleId)) {
               return;
             }
             final String idFromFile = fileName.substring(
@@ -394,7 +406,8 @@ extension AppsProviderLifecycle on AppsProvider {
                   app = existing.app;
                   final checkpointJson = <String, dynamic>{
                     'id': app.id,
-                    appRecordRevisionKey: checks.revisions[app.id],
+                    'listingId': app.listingId,
+                    appRecordRevisionKey: checks.revisions[app.listingKey],
                     'lastUpdateCheck':
                         app.lastUpdateCheck?.microsecondsSinceEpoch,
                   };
@@ -419,6 +432,16 @@ extension AppsProviderLifecycle on AppsProvider {
                         as Map<String, dynamic>;
                 checks.apply(json, checkTimes);
                 app = App.fromJson(json);
+                // The file name is the record's identity, so a record whose
+                // stored listing ID disagrees with it adopts the file name.
+                // This also reclaims records written by builds that derived the
+                // name from the tracked source.
+                if (idFromFile != app.listingKey) {
+                  app = app.copyWith(
+                    listingId: idFromFile == app.id ? null : idFromFile,
+                  );
+                  dataChanged = true;
+                }
                 dataChanged = dataChanged || existing == null;
               } catch (err) {
                 if (err is FormatException) {
@@ -445,7 +468,7 @@ extension AppsProviderLifecycle on AppsProvider {
             if (app != null) {
               final String loadingAppId = app.id;
               final String loadingAppName = app.finalName;
-              final AppInMemory? before = apps[app.id];
+              final AppInMemory? before = apps[app.listingKey];
               try {
                 // Source validation is read-only; avoid constructing an adapter
                 // for every app during each list load.
@@ -520,7 +543,7 @@ extension AppsProviderLifecycle on AppsProvider {
                     installedInfoChanged ||
                     before?.sourceType != sourceType ||
                     before?.icon != icon) {
-                  apps[app.id] = AppInMemory(
+                  apps[app.listingKey] = AppInMemory(
                     app,
                     before?.downloadProgress,
                     installedInfo,
@@ -749,12 +772,17 @@ extension AppsProviderLifecycle on AppsProvider {
     }
   }
 
+  // Icons belong to the Android package and are shared by every store listing
+  // of it, while callers hold a listing key as often as a package ID. Both
+  // resolvers accept either.
   File _userAppIconPngFile(String appId) {
-    return File('${userAppIconsDir.path}/$appId.user.png');
+    final String packageId = apps[appId]?.app.id ?? appId;
+    return File('${userAppIconsDir.path}/$packageId.user.png');
   }
 
   File _deducedAppIconPngFile(String appId) {
-    return File('${deducedAppIconsDir.path}/$appId.png');
+    final String packageId = apps[appId]?.app.id ?? appId;
+    return File('${deducedAppIconsDir.path}/$packageId.png');
   }
 
   /// Whether a deduced icon (APK-extracted or store-fetched) is already stored,
@@ -810,18 +838,17 @@ extension AppsProviderLifecycle on AppsProvider {
       unawaited(
         logs.add('App icon unavailable for $appId (clearing stale info): $e'),
       );
-      final AppInMemory? existing = apps[appId];
-      if (existing != null && existing.installedInfo != null) {
-        apps.update(
-          appId,
-          (value) => AppInMemory(
-            value.app,
-            null,
-            null,
-            value.icon,
-            sourceType: value.sourceType,
-            download: value.download,
-          ),
+      // Install state is per package, so clear it on every listing of it.
+      for (final AppInMemory listing
+          in apps.listingsForPackage(appId).toList()) {
+        if (listing.installedInfo == null) continue;
+        apps[listing.listingKey] = AppInMemory(
+          listing.app,
+          null,
+          null,
+          listing.icon,
+          sourceType: listing.sourceType,
+          download: listing.download,
         );
       }
       return null;
@@ -851,11 +878,15 @@ extension AppsProviderLifecycle on AppsProvider {
       final Uint8List icon = await _resizeIconForStorage(archiveIcon);
       await _deducedAppIconPngFile(appId).writeAsBytes(icon);
       unawaited(mirrorIconToIconsDir(appId, isUserIcon: false));
-      if (apps.containsKey(appId) &&
-          apps[appId]!.installedInfo == null &&
-          !_userAppIconPngFile(appId).existsSync()) {
-        apps.update(appId, (value) => value.copyWith(icon: icon));
-        notify();
+      if (!_userAppIconPngFile(appId).existsSync()) {
+        bool iconApplied = false;
+        for (final AppInMemory listing
+            in apps.listingsForPackage(appId).toList()) {
+          if (listing.installedInfo != null) continue;
+          apps[listing.listingKey] = listing.copyWith(icon: icon);
+          iconApplied = true;
+        }
+        if (iconApplied) notify();
       }
     } catch (e) {
       unawaited(logs.add('APK icon extraction failed for $appId: $e'));
@@ -863,31 +894,39 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   Future<void> updateAppIcon(String? appId, {bool ignoreCache = false}) async {
-    if (appId == null || apps[appId] == null) return;
+    if (appId == null) return;
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return;
+    final String packageId = listing.app.id;
 
-    final File userIconFile = _userAppIconPngFile(appId);
+    final File userIconFile = _userAppIconPngFile(packageId);
     if (userIconFile.existsSync()) {
       try {
         final Uint8List iconBytes = await userIconFile.readAsBytes();
         if (_bytesLookLikePng(iconBytes)) {
-          final Uint8List? currentIcon = apps[appId]!.icon;
+          final Uint8List? currentIcon = listing.icon;
           if (currentIcon != null &&
               currentIcon.length == iconBytes.length &&
               listEquals(currentIcon, iconBytes)) {
             return;
           }
-          apps.update(appId, (value) => value.copyWith(icon: iconBytes));
+          for (final AppInMemory packageListing
+              in apps.listingsForPackage(packageId).toList()) {
+            apps[packageListing.listingKey] = packageListing.copyWith(
+              icon: iconBytes,
+            );
+          }
           notify();
           return;
         }
       } catch (e) {
-        unawaited(logs.add('User icon load failed for $appId: $e'));
+        unawaited(logs.add('User icon load failed for $packageId: $e'));
       }
     }
 
-    final File cachedIcon = File('${iconsCacheDir.path}/$appId.png');
-    final bool isInstalled = apps[appId]!.installedInfo != null;
-    if (apps[appId]!.icon != null && !ignoreCache) {
+    final File cachedIcon = File('${iconsCacheDir.path}/$packageId.png');
+    final bool isInstalled = listing.installedInfo != null;
+    if (listing.icon != null && !ignoreCache) {
       // In-memory icons for non-installed apps (APK extract, store fetch) are
       // already the right answer. After a later install, that same in-memory
       // icon would otherwise stick forever and beat the device launcher icon.
@@ -907,7 +946,7 @@ extension AppsProviderLifecycle on AppsProvider {
     if (alreadyCached) {
       icon = await cachedIcon.readAsBytes();
     } else {
-      icon = await _getInstalledAppIconSafely(appId);
+      icon = await _getInstalledAppIconSafely(packageId);
       if (icon != null) {
         icon = await _resizeIconForStorage(icon);
         await cachedIcon.writeAsBytes(icon);
@@ -916,22 +955,22 @@ extension AppsProviderLifecycle on AppsProvider {
     // Deduced icons are for non-installed apps only: extracted from the app's
     // own APK, or fetched from a store listing. Persisted outside the cache so
     // "clear cache" can't force that download or network fetch to happen again.
-    final File deducedIcon = _deducedAppIconPngFile(appId);
+    final File deducedIcon = _deducedAppIconPngFile(packageId);
     if (!isInstalled && icon == null && deducedIcon.existsSync()) {
       try {
         icon = await deducedIcon.readAsBytes();
       } catch (e) {
-        unawaited(logs.add('Deduced icon load failed for $appId: $e'));
+        unawaited(logs.add('Deduced icon load failed for $packageId: $e'));
       }
     }
     if (!isInstalled && icon == null) {
-      final url = apps[appId]!.app.iconUrl;
+      final url = listing.app.iconUrl;
       if (url != null && url.isNotEmpty) {
         final Uint8List? fetchedIcon = await _fetchIconFromUrl(url);
         if (fetchedIcon != null) {
           icon = await _resizeIconForStorage(fetchedIcon);
           await deducedIcon.writeAsBytes(icon);
-          unawaited(mirrorIconToIconsDir(appId, isUserIcon: false));
+          unawaited(mirrorIconToIconsDir(packageId, isUserIcon: false));
         }
       }
     }
@@ -939,23 +978,17 @@ extension AppsProviderLifecycle on AppsProvider {
       final Uint8List? resolvedIcon = icon;
       // Use the constructor (not copyWith) so a null icon actually clears the
       // in-memory icon on ignoreCache resets; preserve the shared DownloadState.
-      apps.update(
-        apps[appId]!.app.id,
-        (value) => AppInMemory(
-          value.app,
+      for (final AppInMemory packageListing
+          in apps.listingsForPackage(packageId).toList()) {
+        apps[packageListing.listingKey] = AppInMemory(
+          packageListing.app,
           null,
-          value.installedInfo,
+          packageListing.installedInfo,
           resolvedIcon,
-          sourceType: value.sourceType,
-          download: value.download,
-        ),
-        ifAbsent: () => AppInMemory(
-          apps[appId]!.app,
-          null,
-          apps[appId]?.installedInfo,
-          resolvedIcon,
-        ),
-      );
+          sourceType: packageListing.sourceType,
+          download: packageListing.download,
+        );
+      }
       notify();
     }
   }
@@ -969,8 +1002,10 @@ extension AppsProviderLifecycle on AppsProvider {
   /// (installed app or its cache, then the deduced icon, then [App.iconUrl]).
   /// Does not read [userAppIconsDir] or mutate state.
   Future<Uint8List?> loadIconPreviewExcludingUserOverride(String appId) async {
-    if (apps[appId] == null) return null;
-    final File cachedIcon = File('${iconsCacheDir.path}/$appId.png');
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return null;
+    final String packageId = listing.app.id;
+    final File cachedIcon = File('${iconsCacheDir.path}/$packageId.png');
     if (cachedIcon.existsSync()) {
       try {
         return await cachedIcon.readAsBytes();
@@ -978,8 +1013,8 @@ extension AppsProviderLifecycle on AppsProvider {
         unawaited(logs.add('loadIconPreviewExcludingUserOverride cache: $e'));
       }
     }
-    Uint8List? icon = await _getInstalledAppIconSafely(appId);
-    if (apps[appId]!.installedInfo != null) {
+    Uint8List? icon = await _getInstalledAppIconSafely(packageId);
+    if (listing.installedInfo != null) {
       return icon;
     }
     final File deducedIcon = _deducedAppIconPngFile(appId);
@@ -991,7 +1026,7 @@ extension AppsProviderLifecycle on AppsProvider {
       }
     }
     if (icon == null) {
-      final String? url = apps[appId]!.app.iconUrl;
+      final String? url = listing.app.iconUrl;
       if (url != null && url.isNotEmpty) {
         icon = await _fetchIconFromUrl(url);
       }
@@ -1005,18 +1040,24 @@ extension AppsProviderLifecycle on AppsProvider {
     String appId,
     Uint8List bytes,
   ) async {
-    if (apps[appId] == null) {
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) {
       return tr('unexpectedError');
     }
     if (!_bytesLookLikePng(bytes)) {
       return tr('changeAppIconInvalidPng');
     }
+    final String packageId = listing.app.id;
     try {
-      final File dest = _userAppIconPngFile(appId);
+      final File dest = _userAppIconPngFile(packageId);
       await dest.writeAsBytes(bytes);
-      apps.update(appId, (value) => value.copyWith(icon: bytes));
+      // One icon file, so every listing of this package shows the new icon.
+      for (final AppInMemory packageListing
+          in apps.listingsForPackage(packageId).toList()) {
+        apps[packageListing.listingKey] = packageListing.copyWith(icon: bytes);
+      }
       notify();
-      unawaited(mirrorIconToIconsDir(appId, isUserIcon: true));
+      unawaited(mirrorIconToIconsDir(packageId, isUserIcon: true));
       return null;
     } catch (e) {
       unawaited(logs.add('applyUserAppIconPngBytes: $e'));
@@ -1044,11 +1085,14 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   Future<void> resetAppIconToDefault(String appId) async {
-    if (apps[appId] == null) return;
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return;
     final File userFile = _userAppIconPngFile(appId);
     if (userFile.existsSync()) {
       deleteFile(userFile);
-      unawaited(removeMirroredIconFromIconsDir(appId, isUserIcon: true));
+      unawaited(
+        removeMirroredIconFromIconsDir(listing.app.id, isUserIcon: true),
+      );
     }
     await updateAppIcon(appId, ignoreCache: true);
   }
@@ -1059,7 +1103,8 @@ extension AppsProviderLifecycle on AppsProvider {
     App app,
     AppCheckStore checks,
   ) async {
-    final filePath = '${directory.path}/${app.id}.json';
+    final String listingKey = app.listingKey;
+    final filePath = '${directory.path}/$listingKey.json';
     final tmpFile = File(
       '$filePath.tmp_${DateTime.now().microsecondsSinceEpoch}_${_saveAppsTmpNonce++}',
     );
@@ -1070,14 +1115,14 @@ extension AppsProviderLifecycle on AppsProvider {
         flush: true,
       );
       await tmpFile.rename(filePath);
-      checks.revisions[app.id] = revision;
+      checks.revisions[listingKey] = revision;
     } finally {
       try {
         if (await tmpFile.exists()) await tmpFile.delete();
       } catch (error) {
         unawaited(
           logs.add(
-            'Failed to clean save temp for ${app.id}: $error',
+            'Failed to clean save temp for $listingKey: $error',
             level: LogLevel.warning,
           ),
         );
@@ -1098,10 +1143,11 @@ extension AppsProviderLifecycle on AppsProvider {
   }) async {
     if (apps.isEmpty) return;
     final List<App> uniqueApps = <App>[];
-    final Set<String> seenIds = <String>{};
+    final Set<String> seenListingKeys = <String>{};
     for (int appIndex = apps.length - 1; appIndex >= 0; appIndex--) {
-      if (seenIds.add(apps[appIndex].id)) {
-        uniqueApps.add(apps[appIndex].deepCopy());
+      final App candidate = apps[appIndex];
+      if (seenListingKeys.add(candidate.listingKey)) {
+        uniqueApps.add(candidate.deepCopy());
       }
     }
     final List<App> effectiveApps = uniqueApps.reversed.toList();
@@ -1164,7 +1210,8 @@ extension AppsProviderLifecycle on AppsProvider {
         await Future.wait(
           effectiveApps.sublist(chunkStart, chunkEnd).map((a) async {
             var app = a.copyWith();
-            final AppInMemory? cached = this.apps[app.id];
+            final String listingKey = app.listingKey;
+            final AppInMemory? cached = this.apps[listingKey];
             final PackageInfo? info;
             if (!updateInstalledInfo) {
               info = cached?.installedInfo;
@@ -1215,29 +1262,40 @@ extension AppsProviderLifecycle on AppsProvider {
             app = normalizeSkippedLatestVersion(
               normalizeSelectedSourceVersion(app),
             );
-            final sourceIdentifier =
-                cached?.sourceType ??
-                sourceProvider
-                    .getSourceTemplate(
-                      app.url,
-                      overrideSource: app.overrideSource,
-                    )
-                    .sourceIdentifier;
+            // The cached store is only a shortcut past a per-app source lookup
+            // on bulk saves. It is stale the moment the URL or override moves,
+            // which is exactly what a tracked-source swap does - reusing it
+            // there would leave the listing (and its folder memberships)
+            // claiming the store it just left.
+            final bool cachedSourceStillApplies =
+                cached?.sourceType != null &&
+                cached!.app.url == app.url &&
+                cached.app.overrideSource == app.overrideSource;
+            final String sourceIdentifier = cachedSourceStillApplies
+                ? cached.sourceType!
+                : sourceProvider
+                      .getSourceTemplate(
+                        app.url,
+                        overrideSource: app.overrideSource,
+                      )
+                      .sourceIdentifier;
             reconcileAppFolderMemberships(
               app,
               appFolders,
               sourceIdentifier: sourceIdentifier,
               isUpToDate: appIsUpToDateForFiltering(app),
             );
-            if (!onlyIfExists || this.apps.containsKey(app.id)) {
-              final revision = checks.revisions[app.id];
+            if (!onlyIfExists ||
+                this.apps.containsListingKey(listingKey) ||
+                cached != null) {
+              final revision = checks.revisions[listingKey];
               if (!updateInstalledInfo &&
                   checks.isAvailable &&
                   cached != null &&
                   revision != null &&
                   onlyAppCheckTimeChanged(cached.app, app)) {
                 checkpoints.add({
-                  'id': app.id,
+                  'id': listingKey,
                   'revision': revision,
                   'checked': app.lastUpdateCheck!.microsecondsSinceEpoch,
                 });
@@ -1247,16 +1305,22 @@ extension AppsProviderLifecycle on AppsProvider {
               }
             }
             if (cached != null) {
-              this.apps[app.id] = AppInMemory(
+              this.apps[listingKey] = AppInMemory(
                 app,
                 cached.downloadProgress,
                 info,
                 icon,
-                sourceType: cached.sourceType,
+                sourceType: sourceIdentifier,
                 download: cached.download,
               );
             } else if (!onlyIfExists) {
-              this.apps[app.id] = AppInMemory(app, null, info, icon);
+              this.apps[listingKey] = AppInMemory(
+                app,
+                null,
+                info,
+                icon,
+                sourceType: sourceIdentifier,
+              );
             }
           }),
         );
@@ -1296,116 +1360,198 @@ extension AppsProviderLifecycle on AppsProvider {
     }
   }
 
-  /// Deletes app JSON files, cached APKs, and icons for the given app IDs, then updates state.
+  /// Deletes app JSON files, cached APKs, and icons for the given listing keys
+  /// (a bare package ID removes every listing of that package), then updates
+  /// state.
+  ///
+  /// Per-package files - launcher/deduced icons - are only deleted once the
+  /// last listing of that package goes, since the other store's listing of the
+  /// same package still displays them.
   Future<void> removeApps(List<String> appIds) async {
+    if (appIds.isEmpty) return;
+    final Directory appsDirectory = await getAppsDir();
+    final List<String> listingKeys = _listingKeysFromIds(appIds);
+    final Set<String> removedKeys = listingKeys.toSet();
+    final Set<String> packagesLosingLastListing =
+        {
+          for (final String listingKey in listingKeys)
+            _packageIdForListingKey(listingKey),
+        }..removeWhere(
+          (String packageId) => apps
+              .listingsForPackage(packageId)
+              .any((listing) => !removedKeys.contains(listing.listingKey)),
+        );
     final apkFiles = apkDir.listSync();
     await Future.wait(
-      appIds.map((appId) async {
-        final File file = File('${(await getAppsDir()).path}/$appId.json');
-        if (file.existsSync()) {
-          deleteFile(file);
+      listingKeys.map((listingKey) async {
+        final String packageId = _packageIdForListingKey(listingKey);
+        final bool lastListingForPackage = packagesLosingLastListing.contains(
+          packageId,
+        );
+        final File listingFile = File('${appsDirectory.path}/$listingKey.json');
+        if (listingFile.existsSync()) {
+          deleteFile(listingFile);
         }
         await Future.wait(
           apkFiles
-              .where(
-                (element) => element.path.split('/').last.startsWith('$appId-'),
-              )
+              .where((element) {
+                final String base = _fileBasename(element.path);
+                if (base.startsWith('$listingKey-')) return true;
+                return lastListingForPackage && base.startsWith('$packageId-');
+              })
               .map((element) => element.delete(recursive: true)),
         );
-        final cachedIcon = File('${iconsCacheDir.path}/$appId.png');
-        if (cachedIcon.existsSync()) cachedIcon.deleteSync();
-        final File deducedIcon = _deducedAppIconPngFile(appId);
-        if (deducedIcon.existsSync()) {
-          deducedIcon.deleteSync();
-          unawaited(removeMirroredIconFromIconsDir(appId, isUserIcon: false));
+        if (lastListingForPackage) {
+          final cachedIcon = File('${iconsCacheDir.path}/$packageId.png');
+          if (cachedIcon.existsSync()) cachedIcon.deleteSync();
+          final File deducedIcon = _deducedAppIconPngFile(packageId);
+          if (deducedIcon.existsSync()) {
+            deducedIcon.deleteSync();
+            unawaited(
+              removeMirroredIconFromIconsDir(packageId, isUserIcon: false),
+            );
+          }
         }
-        if (apps.containsKey(appId)) {
-          apps.remove(appId);
-        }
+        apps.remove(listingKey);
       }),
     );
-    if (appIds.isNotEmpty) {
-      await appCheckStore?.remove(appIds);
-      markAppsChanged();
-      notify();
-      scheduleAutoExport();
-    }
+    await appCheckStore?.remove(listingKeys);
+    markAppsChanged();
+    notify();
+    scheduleAutoExport();
   }
 
-  /// Persists [updatedApp] under its new package ID and removes the entry
-  /// stored under [previousPackageId].
+  /// Android package behind [listingKey], read from the live listing when it is
+  /// still tracked and otherwise recovered from the key itself.
+  String _packageIdForListingKey(String listingKey) =>
+      apps[listingKey]?.app.id ??
+      listingKey.split(appListingKeySeparator).first;
+
+  /// Expands caller-supplied IDs to exact listing keys. A package ID with
+  /// several listings expands to all of them, matching the old behavior where
+  /// removing an app removed everything tracked for that package.
+  List<String> _listingKeysFromIds(List<String> ids) {
+    final Set<String> listingKeys = {};
+    for (final String id in ids) {
+      if (apps.containsListingKey(id)) {
+        listingKeys.add(id);
+        continue;
+      }
+      final List<AppInMemory> packageListings = apps
+          .listingsForPackage(id)
+          .toList();
+      if (packageListings.isEmpty) {
+        listingKeys.add(id);
+      } else {
+        listingKeys.addAll(
+          packageListings.map((listing) => listing.listingKey),
+        );
+      }
+    }
+    return listingKeys.toList();
+  }
+
+  /// Persists [updatedApp] under its new package ID, moving the listing stored
+  /// under [previousListingKey].
+  ///
+  /// Only a listing keyed by its package ID (a package's sole listing) changes
+  /// key here; one carrying an explicit [App.listingId] keeps its key, and so
+  /// its record, throughout.
   Future<void> renameAppPackageId(
-    String previousPackageId,
+    String previousListingKey,
     App updatedApp,
   ) async {
     final String newPackageId = updatedApp.id.trim();
-    final AppInMemory? previousEntry = apps[previousPackageId];
+    final AppInMemory? previousEntry = apps[previousListingKey];
     if (newPackageId.isEmpty) {
       throw ObtainiumError(tr('invalidAndroidPackageId'));
     }
     if (previousEntry == null) {
       throw ObtainiumError(tr('unexpectedError'));
     }
+    final String previousPackageId = previousEntry.app.id;
+    // Keep the listing's stored identity: renaming the package must not move
+    // this listing onto another store's record.
+    final App renamedApp = updatedApp.copyWith(
+      id: newPackageId,
+      listingId: previousEntry.app.listingId,
+    );
     if (newPackageId == previousPackageId) {
-      await saveApps([updatedApp], updateInstalledInfo: false);
+      await saveApps([renamedApp], updateInstalledInfo: false);
       return;
     }
-    if (apps.containsKey(newPackageId)) {
+    if (sameStoreListingIn(
+          apps,
+          renamedApp,
+          ignoreKey: previousEntry.listingKey,
+        ) !=
+        null) {
       throw ObtainiumError(tr('appAlreadyAdded'));
     }
     if (previousEntry.downloadProgress != null) {
       throw ObtainiumError(tr('unexpectedError'));
     }
 
+    // Icons are stored per package, so they may only follow the rename when no
+    // other store's listing of the old package is left behind to use them.
+    final bool iconsFollowRename =
+        apps.listingsForPackage(previousPackageId).length <= 1;
     final File previousUserIcon = _userAppIconPngFile(previousPackageId);
     final File newUserIcon = _userAppIconPngFile(newPackageId);
-    if (newUserIcon.existsSync()) {
-      deleteFile(newUserIcon);
-    }
-    if (previousUserIcon.existsSync()) {
-      previousUserIcon.renameSync(newUserIcon.path);
-    }
     final File previousDeducedIcon = _deducedAppIconPngFile(previousPackageId);
     final File newDeducedIcon = _deducedAppIconPngFile(newPackageId);
-    if (newDeducedIcon.existsSync()) {
-      deleteFile(newDeducedIcon);
-    }
-    if (previousDeducedIcon.existsSync()) {
-      previousDeducedIcon.renameSync(newDeducedIcon.path);
+    if (iconsFollowRename) {
+      if (newUserIcon.existsSync()) {
+        deleteFile(newUserIcon);
+      }
+      if (previousUserIcon.existsSync()) {
+        previousUserIcon.renameSync(newUserIcon.path);
+      }
+      if (newDeducedIcon.existsSync()) {
+        deleteFile(newDeducedIcon);
+      }
+      if (previousDeducedIcon.existsSync()) {
+        previousDeducedIcon.renameSync(newDeducedIcon.path);
+      }
     }
 
     try {
       await saveApps(
-        [updatedApp.copyWith(id: newPackageId)],
+        [renamedApp],
         onlyIfExists: false,
         autoExportAfterSave: false,
       );
     } catch (_) {
-      if (newUserIcon.existsSync() && !previousUserIcon.existsSync()) {
-        newUserIcon.renameSync(previousUserIcon.path);
-      }
-      if (newDeducedIcon.existsSync() && !previousDeducedIcon.existsSync()) {
-        newDeducedIcon.renameSync(previousDeducedIcon.path);
+      if (iconsFollowRename) {
+        if (newUserIcon.existsSync() && !previousUserIcon.existsSync()) {
+          newUserIcon.renameSync(previousUserIcon.path);
+        }
+        if (newDeducedIcon.existsSync() && !previousDeducedIcon.existsSync()) {
+          newDeducedIcon.renameSync(previousDeducedIcon.path);
+        }
       }
       rethrow;
     }
 
-    unawaited(
-      removeMirroredIconFromIconsDir(previousPackageId, isUserIcon: true),
-    );
-    unawaited(
-      removeMirroredIconFromIconsDir(previousPackageId, isUserIcon: false),
-    );
-    if (newUserIcon.existsSync()) {
-      unawaited(mirrorIconToIconsDir(newPackageId, isUserIcon: true));
-    }
-    if (newDeducedIcon.existsSync()) {
-      unawaited(mirrorIconToIconsDir(newPackageId, isUserIcon: false));
+    if (iconsFollowRename) {
+      unawaited(
+        removeMirroredIconFromIconsDir(previousPackageId, isUserIcon: true),
+      );
+      unawaited(
+        removeMirroredIconFromIconsDir(previousPackageId, isUserIcon: false),
+      );
+      if (newUserIcon.existsSync()) {
+        unawaited(mirrorIconToIconsDir(newPackageId, isUserIcon: true));
+      }
+      if (newDeducedIcon.existsSync()) {
+        unawaited(mirrorIconToIconsDir(newPackageId, isUserIcon: false));
+      }
     }
 
-    final AppInMemory? newEntry = apps[newPackageId];
+    final String newListingKey = renamedApp.listingKey;
+    final AppInMemory? newEntry = apps[newListingKey];
     if (newEntry != null) {
-      apps[newPackageId] = AppInMemory(
+      apps[newListingKey] = AppInMemory(
         newEntry.app,
         previousEntry.downloadProgress,
         newEntry.installedInfo,
@@ -1416,15 +1562,17 @@ extension AppsProviderLifecycle on AppsProvider {
     }
 
     final ({String? title, String message})? pageError = appPageErrors.remove(
-      previousPackageId,
+      previousListingKey,
     );
     if (pageError != null) {
-      appPageErrors[newPackageId] = pageError;
+      appPageErrors[newListingKey] = pageError;
     }
-    detailPageAutoChecksInFlight.remove(previousPackageId);
-    lastDetailPageAutoCheckStartedAt.remove(previousPackageId);
+    detailPageAutoChecksInFlight.remove(previousListingKey);
+    lastDetailPageAutoCheckStartedAt.remove(previousListingKey);
 
-    await removeApps([previousPackageId]);
+    if (newListingKey != previousEntry.listingKey) {
+      await removeApps([previousEntry.listingKey]);
+    }
   }
 
   Future<RemoveAppsWithModalResult> removeAppsWithModal(
@@ -1473,10 +1621,10 @@ extension AppsProviderLifecycle on AppsProvider {
     if (!removeFromObtainium && !uninstall) {
       return RemoveAppsWithModalResult.cancelled;
     }
-    final List<AppInMemory> rowSnapshots = appsToAffect
-        .where((App a) => apps[a.id] != null)
-        .map((App a) => apps[a.id]!.deepCopy())
-        .toList();
+    final List<AppInMemory> rowSnapshots = [
+      for (final App appEntry in appsToAffect)
+        apps[appEntry.listingKey]?.deepCopy(),
+    ].whereType<AppInMemory>().toList();
     if (uninstall) {
       for (final App appEntry in appsToAffect) {
         if (appEntry.installedVersion != null) {
@@ -1486,7 +1634,9 @@ extension AppsProviderLifecycle on AppsProvider {
     }
     if (removeFromObtainium) {
       if (uninstall) {
-        await removeApps(appsToAffect.map((e) => e.id).toList());
+        await removeApps(
+          appsToAffect.map((appEntry) => appEntry.listingKey).toList(),
+        );
         return const RemoveAppsWithModalResult._(
           confirmed: true,
           removedFromObtainiumImmediately: true,
@@ -1496,7 +1646,7 @@ extension AppsProviderLifecycle on AppsProvider {
         await scheduleDeferredObtainiumRemovals(rowSnapshots);
         return RemoveAppsWithModalResult._(
           confirmed: true,
-          deferredUndoAppIds: appsToAffect.map((App e) => e.id).toSet(),
+          deferredUndoAppIds: rowSnapshots.map((row) => row.listingKey).toSet(),
           obtainiumEntryRemovedOrScheduled: true,
         );
       }
@@ -1562,6 +1712,17 @@ extension AppsProviderLifecycle on AppsProvider {
     final int win = rawPath.lastIndexOf('\\');
     final int index = unix > win ? unix : win;
     return index < 0 ? rawPath : rawPath.substring(index + 1);
+  }
+
+  bool _appRecordFileMatchesPackageOrListing(String fileName, String id) {
+    final String lowerName = fileName.toLowerCase();
+    final String lowerId = id.toLowerCase();
+    if (lowerName == '$lowerId.json') return true;
+    if (lowerName.startsWith('$lowerId$appListingKeySeparator') &&
+        lowerName.endsWith('.json')) {
+      return true;
+    }
+    return lowerName == '$lowerId.json';
   }
 
   /// Deletes APK cache, icon files, and optionally the main app JSON under
@@ -1674,7 +1835,7 @@ extension AppsProviderLifecycle on AppsProvider {
     List<AppInMemory> rowSnapshots,
   ) async {
     for (final AppInMemory row in rowSnapshots) {
-      final String appId = row.app.id;
+      final String appId = row.listingKey;
       deferredObtainiumSnapshots[appId] = row.deepCopy();
       await _moveAppJsonToPendingRemoval(appId);
       apps.remove(appId);
@@ -1742,20 +1903,26 @@ extension AppsProviderLifecycle on AppsProvider {
     if (!_androidApplicationIdPattern.hasMatch(trimmed)) {
       throw ObtainiumError(tr('invalidAndroidPackageId'));
     }
-    if (trimmed == previousPackageId) {
-      return;
-    }
-    if (!apps.containsKey(previousPackageId)) {
+    final AppInMemory? previousEntry = apps[previousPackageId];
+    if (previousEntry == null) {
       throw ObtainiumError(tr('unexpectedError'));
     }
-    final existingApp = apps[previousPackageId]!.app;
+    final existingApp = previousEntry.app;
+    if (trimmed == existingApp.id) {
+      return;
+    }
     if (!existingApp.settings.getBool('trackOnly')) {
       throw ObtainiumError(tr('unexpectedError'));
     }
-    if (apps.containsKey(trimmed)) {
+    final App renamed = existingApp.copyWith(id: trimmed);
+    if (sameStoreListingIn(
+          apps,
+          renamed,
+          ignoreKey: previousEntry.listingKey,
+        ) !=
+        null) {
       throw ObtainiumError(tr('appAlreadyAdded'));
     }
-    final App renamed = existingApp.copyWith(id: trimmed);
     final App updatedApp = renamed.copyWith(
       additionalSettings: {
         ...renamed.additionalSettings,

@@ -99,12 +99,21 @@ class AppCheckStore {
     }
   }
 
+  /// [singleId] reads one Android package: its own row plus a row for every
+  /// further store the package is tracked from (`package@Store`). `_` and `%`
+  /// are legal in package IDs and are LIKE wildcards, so they are escaped.
   Future<Map<String, Map<String, Object?>>> read({String? singleId}) async {
     return _run('read', (database) async {
       final rows = await database.query(
         'checks',
-        where: singleId == null ? null : 'id = ?',
-        whereArgs: singleId == null ? null : [singleId],
+        where: singleId == null ? null : "id = ? OR id LIKE ? ESCAPE '\\'",
+        whereArgs: singleId == null
+            ? null
+            : [
+                singleId,
+                '${singleId.replaceAll('_', r'\_').replaceAll('%', r'\%')}'
+                    '$appListingKeySeparator%',
+              ],
       );
       return {for (final row in rows) row['id'] as String: row};
     });
@@ -114,7 +123,9 @@ class AppCheckStore {
     Map<String, dynamic> json,
     Map<String, Map<String, Object?>> checks,
   ) {
-    final id = json['id'] as String;
+    // Checkpoints are per tracked listing, not per Android package: one package
+    // can be tracked from several stores, each with its own record.
+    final id = (json['listingId'] ?? json['id']) as String;
     final revision = json[appRecordRevisionKey];
     if (revision is! String) {
       revisions.remove(id);

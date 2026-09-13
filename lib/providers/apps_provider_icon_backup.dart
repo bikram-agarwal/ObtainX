@@ -124,11 +124,16 @@ extension AppsProviderIconBackup on AppsProvider {
       unawaited(logs.add('Deduced icon restore failed for $appId: $e'));
       return false;
     }
-    if (apps.containsKey(appId) &&
-        apps[appId]!.installedInfo == null &&
-        !hasUserAppIconOverride(appId)) {
-      apps.update(appId, (value) => value.copyWith(icon: bytes));
-      notify();
+    if (!hasUserAppIconOverride(appId)) {
+      bool iconApplied = false;
+      // One icon file per package, shared by each of its store listings.
+      for (final AppInMemory listing
+          in apps.listingsForPackage(appId).toList()) {
+        if (listing.installedInfo != null) continue;
+        apps[listing.listingKey] = listing.copyWith(icon: bytes);
+        iconApplied = true;
+      }
+      if (iconApplied) notify();
     }
     return true;
   }

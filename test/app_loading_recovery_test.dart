@@ -38,7 +38,7 @@ class _Logs implements LogsProvider {
 
 class _Provider implements AppsProvider {
   @override
-  Map<String, AppInMemory> apps = {};
+  AppListings apps = AppListings();
   @override
   Directory? cachedAppsDir;
   @override

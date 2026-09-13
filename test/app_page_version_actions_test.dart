@@ -14,7 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class _Apps extends ChangeNotifier implements AppsProvider {
   @override
-  final Map<String, AppInMemory> apps = {};
+  final AppListings apps = AppListings();
   @override
   final Map<String, ({String? title, String message})> appPageErrors = {};
 
@@ -188,7 +188,123 @@ void main() {
     await tester.longPress(fdroidIcon);
     await tester.pumpAndSettle();
     expect(find.text(tr('swapToThisSource')), findsOneWidget);
-    expect(find.text(tr('copyUrl')), findsOneWidget);
+    expect(find.text(tr('trackHereToo')), findsOneWidget);
+    expect(find.text(tr('copyLink')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('alternate store already tracked offers its listing instead', (
+    tester,
+  ) async {
+    final settings = SettingsProvider()..prefs = preferences;
+    Localization.load(
+      const Locale('en'),
+      translations: Translations(translations),
+    );
+    final provider = _Apps();
+    final model = _app('1.0.0', '1.0.0', trackOnly: false);
+    provider.apps[model.listingKey] = AppInMemory(model, null, null, icon);
+    // The same package already tracked from F-Droid, so swapping this GitHub
+    // listing onto F-Droid would leave it tracked twice from one store.
+    final App fdroidListing = model.copyWith(
+      listingId: appListingKey(model.id, 'FDroid'),
+      url: 'https://f-droid.org/packages/${model.id}/',
+    );
+    provider.apps[fdroidListing.listingKey] = AppInMemory(
+      fdroidListing,
+      null,
+      null,
+      icon,
+    );
+    addTearDown(provider.dispose);
+    addTearDown(settings.dispose);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(480, 1600);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AppsProvider>.value(value: provider),
+          ChangeNotifierProvider<SettingsProvider>.value(value: settings),
+        ],
+        child: MaterialApp(home: AppPage(appId: model.listingKey)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder fdroidIcon = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is StoreSourceIconImage &&
+          widget.assetPath == StoreSourceIconPaths.fdroid,
+    );
+    expect(fdroidIcon, findsOneWidget);
+    await tester.longPress(fdroidIcon);
+    await tester.pumpAndSettle();
+    expect(find.text(tr('swapToThisSource')), findsNothing);
+    expect(find.text(tr('trackHereToo')), findsNothing);
+    expect(find.text(tr('showTrackedItem')), findsOneWidget);
+    expect(find.text(tr('copyLink')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a sibling listing surfaces its store as an alternate source', (
+    tester,
+  ) async {
+    final settings = SettingsProvider()..prefs = preferences;
+    Localization.load(
+      const Locale('en'),
+      translations: Translations(translations),
+    );
+    final provider = _Apps();
+    // GitHub repo URLs cannot be derived from a package ID, so a store scan
+    // never finds one. The sibling listing is the only thing that knows it.
+    final App githubListing = _app('1.0.0', '1.0.0', trackOnly: false);
+    provider.apps[githubListing.listingKey] = AppInMemory(
+      githubListing,
+      null,
+      null,
+      icon,
+    );
+    final App fdroidListing = githubListing.copyWith(
+      listingId: appListingKey(githubListing.id, 'FDroid'),
+      url: 'https://f-droid.org/packages/${githubListing.id}/',
+    );
+    provider.apps[fdroidListing.listingKey] = AppInMemory(
+      fdroidListing,
+      null,
+      null,
+      icon,
+    );
+    addTearDown(provider.dispose);
+    addTearDown(settings.dispose);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(480, 1600);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AppsProvider>.value(value: provider),
+          ChangeNotifierProvider<SettingsProvider>.value(value: settings),
+        ],
+        child: MaterialApp(home: AppPage(appId: fdroidListing.listingKey)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder githubIcon = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is StoreSourceIconImage &&
+          widget.assetPath == StoreSourceIconPaths.github,
+    );
+    expect(githubIcon, findsOneWidget);
+    await tester.longPress(githubIcon);
+    await tester.pumpAndSettle();
+    expect(find.text(tr('swapToThisSource')), findsNothing);
+    expect(find.text(tr('showTrackedItem')), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

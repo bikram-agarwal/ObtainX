@@ -366,17 +366,17 @@ extension AppsProviderInstall on AppsProvider {
       if (actualPackageName == null) {
         throw ObtainiumError(tr('couldNotGetIdFromApk'))..url = app.url;
       }
-      if (apps[app.id] != null && !isTempIdBool && !app.allowIdChange) {
+      if (apps[app.listingKey] != null && !isTempIdBool && !app.allowIdChange) {
         throw IDChangedError(actualPackageName)..url = app.url;
       }
       final idChangeWasAllowed = app.allowIdChange;
-      final originalAppId = app.id;
+      final originalListingKey = app.listingKey;
       app = app.copyWith(id: actualPackageName, allowIdChange: false);
       downloadedFile = downloadedFile.renameSync(
-        '${downloadedFile.parent.path}/${app.id}-${downloadReleaseCacheKey(InstallReleaseSnapshot.fromApp(app))}.${downloadedFile.path.split('.').last}',
+        '${downloadedFile.parent.path}/${app.listingKey}-${downloadReleaseCacheKey(InstallReleaseSnapshot.fromApp(app))}.${downloadedFile.path.split('.').last}',
       );
-      if (apps[originalAppId] != null) {
-        await removeApps([originalAppId]);
+      if (apps[originalListingKey] != null) {
+        await removeApps([originalListingKey]);
         await saveApps([
           app,
         ], onlyIfExists: !isTempIdBool && !idChangeWasAllowed);
@@ -386,24 +386,19 @@ extension AppsProviderInstall on AppsProvider {
   }
 
   Future<void> updatePendingRepoRename(String appId, String? newUrl) async {
-    if (apps.containsKey(appId)) {
-      apps[appId]!.app = apps[appId]!.app.copyWith(
-        pendingRepoRenameUrl: newUrl,
-      );
-      await saveApps([apps[appId]!.app]);
-    }
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return;
+    listing.app = listing.app.copyWith(pendingRepoRenameUrl: newUrl);
+    await saveApps([listing.app]);
   }
 
   /// Applies a detected repository rename: adopts [newUrl] and clears the
   /// pending-rename flag so update checks resume.
   Future<void> acceptRepoRename(String appId, String newUrl) async {
-    if (apps.containsKey(appId)) {
-      apps[appId]!.app = apps[appId]!.app.copyWith(
-        url: newUrl,
-        pendingRepoRenameUrl: null,
-      );
-      await saveApps([apps[appId]!.app]);
-    }
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return;
+    listing.app = listing.app.copyWith(url: newUrl, pendingRepoRenameUrl: null);
+    await saveApps([listing.app]);
   }
 
   /// Downloads the preferred APK for [app], returning a [DownloadedApk] or [DownloadedDir].
@@ -417,16 +412,16 @@ extension AppsProviderInstall on AppsProvider {
     final initialNotification = DownloadNotification(
       app.finalName,
       0,
-      appId: app.id,
+      appId: app.listingKey,
     );
     final notifId = initialNotification.id;
     var nativeDownloadServiceStarted = false;
-    final cancellationToken = registerDownloadCancellation(app.id);
+    final cancellationToken = registerDownloadCancellation(app.listingKey);
     try {
-      if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = 0;
-        apps[app.id]!.downloadReceivedBytes = null;
-        apps[app.id]!.downloadTotalBytes = null;
+      if (apps[app.listingKey] != null) {
+        apps[app.listingKey]!.downloadProgress = 0;
+        apps[app.listingKey]!.downloadReceivedBytes = null;
+        apps[app.listingKey]!.downloadTotalBytes = null;
         notify();
       }
       if (app.apkUrls.isEmpty) throw NoAPKError();
@@ -435,7 +430,7 @@ extension AppsProviderInstall on AppsProvider {
       }
       if (app.preferredApkIndex < 0) app = app.copyWith(preferredApkIndex: 0);
       final downloadRelease = InstallReleaseSnapshot.fromApp(app);
-      if (apps[app.id] != null) apps[app.id]!.app = app;
+      if (apps[app.listingKey] != null) apps[app.listingKey]!.app = app;
       final AppSource source = SourceProvider().getSource(
         app.url,
         overrideSource: app.overrideSource,
@@ -484,7 +479,7 @@ extension AppsProviderInstall on AppsProvider {
       nativeDownloadServiceStarted =
           await NativeFeatures.startDownloadForegroundService(
             id: initialNotification.id,
-            appId: app.id,
+            appId: app.listingKey,
             title: initialNotification.title,
             message: initialNotification.message,
             channelCode: initialNotification.channelCode,
@@ -498,7 +493,7 @@ extension AppsProviderInstall on AppsProvider {
       }
       int? prevProg;
       var fileNameNoExt =
-          '${app.id}-${downloadReleaseCacheKey(downloadRelease)}';
+          '${app.listingKey}-${downloadReleaseCacheKey(downloadRelease)}';
       if (source.urlsAlwaysHaveExtension) {
         fileNameNoExt =
             '$fileNameNoExt.${app.apkUrls[app.preferredApkIndex].key.split('.').last}';
@@ -515,10 +510,10 @@ extension AppsProviderInstall on AppsProvider {
       ]) {
         onProgress?.call(progress, received, total);
         final int? prog = progress?.ceil();
-        if (apps[app.id] != null) {
-          apps[app.id]!.downloadReceivedBytes = received;
-          apps[app.id]!.downloadTotalBytes = total;
-          apps[app.id]!.downloadProgress = progress;
+        if (apps[app.listingKey] != null) {
+          apps[app.listingKey]!.downloadReceivedBytes = received;
+          apps[app.listingKey]!.downloadTotalBytes = total;
+          apps[app.listingKey]!.downloadProgress = progress;
           // Only rebuild listeners when the displayed (integer) percent
           // actually changes, to avoid redundant whole-page rebuilds on
           // every sub-percent download tick.
@@ -532,7 +527,7 @@ extension AppsProviderInstall on AppsProvider {
           // Only foreground downloads are cancellable from the notification;
           // the background isolate's token isn't reachable from the main
           // isolate that handles the action tap.
-          appId: isBg ? null : app.id,
+          appId: isBg ? null : app.listingKey,
           receivedBytes: received,
           totalBytes: total,
         );
@@ -544,7 +539,7 @@ extension AppsProviderInstall on AppsProvider {
             unawaited(
               NativeFeatures.showDownloadProgressNotification(
                 id: notif.id,
-                appId: app.id,
+                appId: app.listingKey,
                 title: notif.title,
                 message: notif.message,
                 channelCode: notif.channelCode,
@@ -598,15 +593,16 @@ extension AppsProviderInstall on AppsProvider {
         );
         downloadedFile = await runDownload(unauthenticatedHeaders);
       }
-      if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = _remainingStepsProgress.toDouble();
+      if (apps[app.listingKey] != null) {
+        apps[app.listingKey]!.downloadProgress = _remainingStepsProgress
+            .toDouble();
         notify();
         notif = DownloadNotification(app.finalName, _remainingStepsProgress);
         if (nativeDownloadServiceStarted) {
           unawaited(
             NativeFeatures.showDownloadProgressNotification(
               id: notif.id,
-              appId: app.id,
+              appId: app.listingKey,
               title: notif.title,
               message: notif.message,
               channelCode: notif.channelCode,
@@ -756,15 +752,15 @@ extension AppsProviderInstall on AppsProvider {
         );
       }
     } finally {
-      clearDownloadCancellation(app.id);
+      clearDownloadCancellation(app.listingKey);
       if (nativeDownloadServiceStarted) {
         await NativeFeatures.stopDownloadForegroundService();
       }
       unawaited(notificationsProvider?.cancel(notifId));
-      if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = null;
-        apps[app.id]!.downloadReceivedBytes = null;
-        apps[app.id]!.downloadTotalBytes = null;
+      if (apps[app.listingKey] != null) {
+        apps[app.listingKey]!.downloadProgress = null;
+        apps[app.listingKey]!.downloadReceivedBytes = null;
+        apps[app.listingKey]!.downloadTotalBytes = null;
         notify();
       }
     }
@@ -1380,7 +1376,7 @@ extension AppsProviderInstall on AppsProvider {
       final trackOnly = apps[id]!.app.settings.getBool('trackOnly');
       final refreshBeforeDownload = apps[id]!.needsRefreshBeforeDownload;
       if (refreshBeforeDownload) {
-        await checkUpdate(apps[id]!.app.id);
+        await checkUpdate(id);
       }
       if (!trackOnly) {
         apkUrl = await confirmAppFileUrl(
@@ -1599,7 +1595,7 @@ extension AppsProviderInstall on AppsProvider {
       MapEntry<String, String>? fileUrl;
       final refreshBeforeDownload = apps[id]!.needsRefreshBeforeDownload;
       if (refreshBeforeDownload) {
-        await checkUpdate(apps[id]!.app.id);
+        await checkUpdate(id);
       }
       if (apps[id]!.app.apkUrls.isNotEmpty ||
           apps[id]!.app.otherAssetUrls.isNotEmpty) {

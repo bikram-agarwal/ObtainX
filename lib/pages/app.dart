@@ -17,6 +17,7 @@ import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/app_smooth_surface.dart';
 import 'package:obtainium/components/category_action_chip.dart';
+import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
@@ -208,11 +209,31 @@ bool _trackedUrlIsFromHost(String? trackedUrl, String hostFragment) {
   return uri.host.toLowerCase().contains(hostFragment);
 }
 
+/// Maps a listing URL to the store name whose "other sources" slot it fills,
+/// or null when that source has no slot of its own.
+///
+/// Used to fold a package's *other* tracked listings into the row, so the five
+/// scannable slots prefer a sibling's real URL over a guessed one.
+String? _storeSlotNameForUrl(String url) {
+  const Map<String, String> slotNamesByHostFragment = <String, String>{
+    'github.com': 'GitHub',
+    'f-droid.org': 'F-Droid',
+    'apkpure.': 'APKPure',
+    'apkmirror.com': 'APKMirror',
+  };
+  for (final MapEntry<String, String> slot in slotNamesByHostFragment.entries) {
+    if (_trackedUrlIsFromHost(url, slot.key)) return slot.value;
+  }
+  return null;
+}
+
 /// Resolves the URL to display for a store chip, consulting the bulk-scan cache.
 /// Returns null when the chip should be hidden.
 ///
 /// Logic:
 /// - [alreadyTracked] → hide (user already tracks this store)
+/// - [siblingListingUrl] != null → another listing of this same package tracks
+///   this store → show its URL (known-good, outranks any scan result)
 /// - [storeData] == null → app never scanned → show [fallbackUrl] (unverified)
 /// - cache entry == `""` → confirmed absent → hide
 /// - cache entry is a non-empty URL → show with that URL
@@ -223,8 +244,16 @@ String? _resolveStoreUrl({
   required String storeName,
   required String? fallbackUrl,
   required bool alreadyTracked,
+  String? siblingListingUrl,
 }) {
   if (alreadyTracked) return null;
+  // A sibling listing's URL is already proven to resolve on this store, so it
+  // beats the scan cache - including the "confirmed absent" sentinel, which a
+  // store scan writes for any source whose URL it cannot derive from a package
+  // ID (GitHub repo URLs, most notably).
+  if (siblingListingUrl != null && siblingListingUrl.isNotEmpty) {
+    return siblingListingUrl;
+  }
   // Key absent means this store was never explicitly checked for this app
   // (either no scan at all, or a different store's check ran first).
   // In both cases show the fallback URL — don't suppress unverified stores.
@@ -588,6 +617,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
   bool _swappingTrackedSource = false;
+  // Set while a second listing for this package is being created from another
+  // store. Shares the swap's blocking overlay: both are page-wide source
+  // actions the user must not interact around, and both end with the page
+  // pointing somewhere else.
+  bool _trackingAdditionalSource = false;
   App? _swapSecurityAppSnapshot;
   AppSource? _swapSecuritySourceSnapshot;
   List<String>? _swapSecurityCertificateHashesSnapshot;
@@ -757,6 +791,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _lastWebViewSurfaceColorApplied = null;
       _scheduledOpenInEditMode = false;
       _swappingTrackedSource = false;
+      _trackingAdditionalSource = false;
       _swapSecurityAppSnapshot = null;
       _swapSecuritySourceSnapshot = null;
       _swapSecurityCertificateHashesSnapshot = null;
@@ -764,7 +799,15 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _clearEditIconStaging();
       _signingCertificateLoadKey = null;
       _signingCertificateInfoFuture = null;
-      _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(widget.appId);
+      // Cached per Android package, which is not the listing key once a package
+      // is tracked from two stores.
+      _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(
+        Provider.of<AppsProvider>(
+              context,
+              listen: false,
+            ).apps[widget.appId]?.app.id ??
+            widget.appId,
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         unawaited(_maybeLazyResolveApkMirrorSize());
@@ -1059,12 +1102,19 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return;
     }
     final bool packageIdChanged = newId != updatedApp.id;
-    if (packageIdChanged && appsProvider.apps.containsKey(newId)) {
-      _showPageError(ObtainiumError(tr('appAlreadyAdded')));
-      return;
-    }
     if (packageIdChanged) {
       updatedApp = updatedApp.copyWith(allowIdChange: true, id: newId);
+      // The same package from a different store is allowed, so only a listing
+      // of the new package on *this* listing's store is a conflict.
+      if (sameStoreListingIn(
+            appsProvider.apps,
+            updatedApp,
+            ignoreKey: widget.appId,
+          ) !=
+          null) {
+        _showPageError(ObtainiumError(tr('appAlreadyAdded')));
+        return;
+      }
     }
     updatedApp = updatedApp.copyWith(categories: _editCategories);
 
@@ -1105,7 +1155,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           updateInstalledInfo: false,
         );
       }
-      await appsProvider.updateAppIcon(updatedApp.id);
+      await appsProvider.updateAppIcon(updatedApp.listingKey);
     } catch (error) {
       if (mounted) {
         _showPageError(error);
@@ -1119,13 +1169,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           final AppsPageState? appsPageState = context
               .findAncestorStateOfType<AppsPageState>();
           if (appsPageState != null) {
-            appsPageState.openAppById(newId, autoScroll: false);
+            appsPageState.openAppById(updatedApp.listingKey, autoScroll: false);
           } else {
             unawaited(
               Navigator.of(context).pushReplacement(
                 MaterialPageRoute<void>(
                   builder: (BuildContext context) =>
-                      AppPage(appId: newId, isEmbedded: true),
+                      AppPage(appId: updatedApp.listingKey, isEmbedded: true),
                 ),
               ),
             );
@@ -1135,7 +1185,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             Navigator.of(context).pushReplacement(
               heroFriendlyAppPageRoute<void>(
                 (BuildContext context) => AppPage(
-                  appId: newId,
+                  appId: updatedApp.listingKey,
                   appsListHeroFolderId: widget.appsListHeroFolderId,
                 ),
               ),
@@ -1882,7 +1932,15 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_refreshUses24HourFormat());
-    _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(widget.appId);
+    // Cached per Android package, which is not the listing key once a package
+    // is tracked from two stores.
+    _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(
+      Provider.of<AppsProvider>(
+            context,
+            listen: false,
+          ).apps[widget.appId]?.app.id ??
+          widget.appId,
+    );
     // Defer to post-frame so the first paint isn't competing with our
     // SourceProvider lookup. The actual HTTP walk inside is fully async.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1975,23 +2033,53 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   /// or when an icon was already extracted from a downloaded APK. Caches results
   /// and triggers a FutureBuilder rebuild so the Other Sources row updates in
   /// place.
-  Future<void> _maybeCheckAndCacheAllStores(String appId) async {
-    if (appId.isEmpty || !mounted) return;
+  Future<void> _maybeCheckAndCacheAllStores(String listingKey) async {
+    if (listingKey.isEmpty || !mounted) return;
 
     final appsProvider = Provider.of<AppsProvider>(context, listen: false);
-    final AppInMemory? appBeforeStoreCheck = appsProvider.apps[appId];
-    final trackedUrl = appBeforeStoreCheck?.app.url;
+    final AppInMemory? appBeforeStoreCheck = appsProvider.apps[listingKey];
+    if (appBeforeStoreCheck == null) return;
+    // Store availability and icons belong to the Android package, so they are
+    // shared by every listing of it - only the library lookups above are keyed
+    // by listing.
+    final String appId = appBeforeStoreCheck.app.id;
+    final trackedUrl = appBeforeStoreCheck.app.url;
     // No icon to hunt for when the device already supplies one (app is
     // installed), or when one was deduced from a downloaded APK and stored
     // permanently - that one is authoritative and needs no improving on.
     final shouldResolveMissingIcon =
-        appBeforeStoreCheck != null &&
         appBeforeStoreCheck.icon == null &&
         appBeforeStoreCheck.installedInfo == null &&
         appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true &&
         !appsProvider.hasDeducedAppIcon(appId);
 
     final storeData = await BulkScanCache.loadForApp(appId) ?? {};
+    // Resolve cheapest-first: the library, then the scan cache, and only then
+    // the network. Another listing of this same package is the most
+    // authoritative answer available and costs nothing, so fold those URLs in
+    // before deciding what still needs looking up - every store a sibling
+    // already tracks then falls out of the checks below instead of being
+    // fetched again. Persisting them also means the answer outlives that
+    // sibling being deleted, which for GitHub is the difference between
+    // knowing the repo URL and never being able to derive it again.
+    final Map<String, String> siblingStoreUrls = <String, String>{};
+    for (final AppInMemory sibling in appsProvider.apps.listingsForPackage(
+      appId,
+    )) {
+      if (sibling.listingKey == listingKey || sibling.app.url.isEmpty) continue;
+      final String? slotName = _storeSlotNameForUrl(sibling.app.url);
+      if (slotName == null || storeData[slotName] == sibling.app.url) continue;
+      if (slotName == 'GitHub' && !isSwappableGitHubRepoUrl(sibling.app.url)) {
+        continue;
+      }
+      siblingStoreUrls[slotName] = sibling.app.url;
+      storeData[slotName] = sibling.app.url;
+    }
+    if (siblingStoreUrls.isNotEmpty) {
+      await BulkScanCache.save(<String, Map<String, String>>{
+        appId: siblingStoreUrls,
+      });
+    }
     final apkMirrorIconUrls = <String, String>{};
 
     final futures = <Future<MapEntry<String, String?>>>[];
@@ -2067,7 +2155,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         playStoreListingUrl: entry['PlayStore'],
       );
     }
-    final AppInMemory? currentApp = appsProvider.apps[appId];
+    final AppInMemory? currentApp = appsProvider.apps[listingKey];
     if (resolvedIconUrl != null &&
         currentApp != null &&
         currentApp.icon == null &&
@@ -2076,10 +2164,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       await appsProvider.saveApps([
         currentApp.app.copyWith(iconUrl: resolvedIconUrl),
       ], updateInstalledInfo: false);
-      await appsProvider.updateAppIcon(appId);
+      await appsProvider.updateAppIcon(listingKey);
     }
 
-    if (mounted && widget.appId == appId) {
+    if (mounted && widget.appId == listingKey) {
       setState(() {
         _storeAvailabilityCacheFuture = Future.value(entry);
       });
@@ -2227,8 +2315,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   Future<void> _showAlternateStoreSwapMenu({
     required BuildContext menuContext,
     required Offset globalPosition,
-    required String storeName,
     required String url,
+    String? storeName,
+    String? trackedListingKey,
   }) async {
     final RelativeRect position = RelativeRect.fromLTRB(
       globalPosition.dx,
@@ -2236,28 +2325,171 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       globalPosition.dx + 1,
       globalPosition.dy + 1,
     );
+    final AppsProvider appsProvider = Provider.of<AppsProvider>(
+      menuContext,
+      listen: false,
+    );
+    final AppInMemory? currentListing = appsProvider.apps[widget.appId];
+    // A package gets one listing per store, so when this store already has one
+    // the swap would duplicate it. Offer that listing instead of a dead action.
+    final AppInMemory? existingStoreListing = trackedListingKey != null
+        ? appsProvider.apps[trackedListingKey]
+        : currentListing == null
+        ? null
+        : sameStoreListingIn(
+            appsProvider.apps,
+            currentListing.app.copyWith(url: url, overrideSource: null),
+            ignoreKey: currentListing.listingKey,
+          );
     final String? choice = await showMenu<String>(
       context: menuContext,
       position: position,
       items: [
-        PopupMenuItem<String>(
-          value: 'swap',
-          child: Text(tr('swapToThisSource')),
-        ),
-        PopupMenuItem<String>(value: 'copy', child: Text(tr('copyUrl'))),
+        if (existingStoreListing != null)
+          PopupMenuItem<String>(
+            value: 'open',
+            child: Text(tr('showTrackedItem')),
+          )
+        else if (storeName != null) ...[
+          PopupMenuItem<String>(
+            value: 'track',
+            child: Text(tr('trackHereToo')),
+          ),
+          PopupMenuItem<String>(
+            value: 'swap',
+            child: Text(tr('swapToThisSource')),
+          ),
+        ],
+        PopupMenuItem<String>(value: 'copy', child: Text(tr('copyLink'))),
       ],
     );
     if (!mounted) return;
     switch (choice) {
+      case 'track':
+        hapticSelection();
+        await _runTrackAdditionalSource(candidateUrl: url);
       case 'swap':
         hapticSelection();
-        await _runSwapTrackedSource(storeName: storeName, candidateUrl: url);
+        await _runSwapTrackedSource(storeName: storeName!, candidateUrl: url);
+      case 'open':
+        hapticSelection();
+        _openListing(existingStoreListing!.listingKey);
       case 'copy':
         if (!menuContext.mounted) return;
         _toastUrl(menuContext, url);
         await Clipboard.setData(ClipboardData(text: url));
       default:
         break;
+    }
+  }
+
+  /// Shows another listing of this same package, selecting it in the embedded
+  /// two-pane layout.
+  ///
+  /// Replaces this page rather than stacking on it: hopping between a package's
+  /// store listings is a sideways move, so back stays one level from the app
+  /// list however many times the user hops.
+  void _openListing(String listingKey) {
+    if (widget.isEmbedded) {
+      final AppsPageState? appsPageState = context
+          .findAncestorStateOfType<AppsPageState>();
+      if (appsPageState != null) {
+        appsPageState.openAppById(listingKey);
+        return;
+      }
+      unawaited(
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (BuildContext _) =>
+                AppPage(appId: listingKey, isEmbedded: true),
+          ),
+        ),
+      );
+      return;
+    }
+    unawaited(
+      Navigator.of(context).pushReplacement(
+        heroFriendlyAppPageRoute<void>(
+          (BuildContext _) => AppPage(
+            appId: listingKey,
+            appsListHeroFolderId: widget.appsListHeroFolderId,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _runTrackAdditionalSource({required String candidateUrl}) async {
+    if (updating) return;
+    final String currentListingKey = widget.appId;
+    bool openedNewListing = false;
+    final AppsProvider appsProvider = Provider.of<AppsProvider>(
+      context,
+      listen: false,
+    );
+    try {
+      final AppInMemory? currentListing = appsProvider.apps[currentListingKey];
+      if (currentListing == null) return;
+      setState(() {
+        updating = true;
+        _trackingAdditionalSource = true;
+      });
+
+      final AppSource destinationSource = _sourceProvider.getSource(
+        candidateUrl,
+      );
+      final Map<String, dynamic> destinationSettings =
+          getDefaultValuesFromFormItems(
+            destinationSource.combinedAppSpecificSettingFormItems,
+          );
+      // This action starts from a listing whose package is already known.
+      // Supplying it avoids downloading an APK merely to rediscover the same ID
+      // and prevents a store page from being associated with the wrong package.
+      destinationSettings['appId'] = currentListing.app.id;
+      App additionalListing = await _sourceProvider.getApp(
+        destinationSource,
+        candidateUrl,
+        destinationSettings,
+        trackOnlyOverride: destinationSource.enforceTrackOnly,
+      );
+      if (additionalListing.id != currentListing.app.id) {
+        throw ObtainiumError(tr('appIdMismatch'));
+      }
+      if (sameStoreListingIn(appsProvider.apps, additionalListing) != null) {
+        throw ObtainiumError(tr('appAlreadyAdded'));
+      }
+
+      additionalListing = additionalListing.copyWith(
+        categories: currentListing.app.categories,
+      );
+      additionalListing = appsProvider.withAllocatedListingId(
+        additionalListing,
+      );
+      await appsProvider.saveApps([additionalListing], onlyIfExists: false);
+      final App? savedListing =
+          appsProvider.apps[additionalListing.listingKey]?.app;
+      if (savedListing != null) {
+        await appsProvider.assignMatchingFoldersToAppIfNeeded(savedListing);
+      }
+      await appsProvider.updateAppIcon(additionalListing.listingKey);
+      appsProvider.clearAppPageError(currentListingKey);
+      if (!mounted || widget.appId != currentListingKey) return;
+      // Show what was just created. Replaces this page rather than stacking on
+      // it, like every other hop between a package's listings (see
+      // [_openListing]). The overlay is deliberately left up until the new page
+      // takes over, so the wait never ends on a page that looks idle.
+      _openListing(additionalListing.listingKey);
+      openedNewListing = true;
+    } catch (error) {
+      if (!mounted || widget.appId != currentListingKey) return;
+      _showPageError(error, title: tr('error'));
+    } finally {
+      if (!openedNewListing && mounted && widget.appId == currentListingKey) {
+        setState(() {
+          updating = false;
+          _trackingAdditionalSource = false;
+        });
+      }
     }
   }
 
@@ -2300,7 +2532,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       if (!mounted || widget.appId != appId) return;
       setState(() {
         _requestedMissingIconLoad = false;
-        _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(appId);
+        // Cached per Android package, not per listing.
+        _storeAvailabilityCacheFuture = BulkScanCache.loadForApp(
+          appsProvider.apps[appId]?.app.id ?? appId,
+        );
         _cachedSource = null;
         _cachedSourceKey = null;
       });
@@ -2330,12 +2565,15 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     required String url,
     String? assetPath,
     String? swapStoreName,
+    String? trackedListingKey,
   }) {
     final String? swappableStoreName =
         swapStoreName != null &&
             swappableAlternateStoreNames.contains(swapStoreName)
         ? swapStoreName
         : null;
+    final bool hasLongPressMenu =
+        swappableStoreName != null || trackedListingKey != null;
     return Builder(
       builder: (BuildContext iconBuilderContext) {
         final ColorScheme colorScheme = Theme.of(
@@ -2357,7 +2595,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           child: InkWell(
             onTap: () =>
                 launchUrlString(url, mode: LaunchMode.externalApplication),
-            onLongPress: swappableStoreName != null
+            onLongPress: hasLongPressMenu
                 ? null
                 : () {
                     _toastUrl(iconBuilderContext, url);
@@ -2375,7 +2613,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             ),
           ),
         );
-        if (swappableStoreName == null) {
+        if (!hasLongPressMenu) {
           return iconButton;
         }
         return GestureDetector(
@@ -2385,6 +2623,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 menuContext: iconBuilderContext,
                 globalPosition: details.globalPosition,
                 storeName: swappableStoreName,
+                trackedListingKey: trackedListingKey,
                 url: url,
               ),
             );
@@ -3501,7 +3740,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         );
         if (!context.mounted) return;
         if (submittedPackageId == null || submittedPackageId.isEmpty) return;
-        if (submittedPackageId == widget.appId) return;
+        final AppInMemory? listingBeforeRename =
+            appsProvider.apps[widget.appId];
+        if (listingBeforeRename == null ||
+            submittedPackageId == listingBeforeRename.app.id) {
+          return;
+        }
+        // A listing keyed by its package ID moves key along with the rename;
+        // one carrying its own listing ID (a package tracked from two stores)
+        // keeps the key it already has.
+        final String renamedListingKey =
+            listingBeforeRename.app.listingId ?? submittedPackageId;
         try {
           setState(() {
             updating = true;
@@ -3511,12 +3760,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             submittedPackageId,
           );
           if (!context.mounted) return;
-          await appsProvider.checkUpdate(submittedPackageId);
+          await appsProvider.checkUpdate(renamedListingKey);
           if (!context.mounted) return;
           unawaited(
             Navigator.of(context).pushReplacement(
               heroFriendlyAppPageRoute<void>(
-                (ctx) => AppPage(appId: submittedPackageId),
+                (ctx) => AppPage(appId: renamedListingKey),
               ),
             ),
           );
@@ -4294,6 +4543,29 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
 
       final String? alternateStoresPackageId = app?.app.id;
       final String? alternateStoresTrackedUrl = app?.app.url;
+      // Every other listing of this same Android package is an alternate source
+      // in its own right, and its URL is known-good. Without this the row can
+      // only show what a package-ID store scan can guess, which is why a
+      // package tracked on both GitHub and F-Droid showed GitHub as an
+      // alternate on the GitHub-derived side only - no scan can turn a package
+      // ID into a GitHub repo URL.
+      final Map<String, String> siblingListingUrlsByStore = <String, String>{};
+      final List<AppInMemory> siblingListingsWithoutStoreSlot = <AppInMemory>[];
+      if (app != null) {
+        for (final AppInMemory sibling in appsProvider.apps.listingsForPackage(
+          app.app.id,
+        )) {
+          if (sibling.listingKey == app.listingKey || sibling.app.url.isEmpty) {
+            continue;
+          }
+          final String? slotName = _storeSlotNameForUrl(sibling.app.url);
+          if (slotName == null) {
+            siblingListingsWithoutStoreSlot.add(sibling);
+          } else {
+            siblingListingUrlsByStore[slotName] = sibling.app.url;
+          }
+        }
+      }
 
       final detailsChildren = <Widget>[
         if (app?.app.id != null && app!.app.id.isNotEmpty)
@@ -4388,12 +4660,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                     trackedUrl,
                     'f-droid.org',
                   ),
+                  siblingListingUrl: siblingListingUrlsByStore['F-Droid'],
                 );
                 final apkpureUrl = _resolveStoreUrl(
                   storeData: storeData,
                   storeName: 'APKPure',
                   fallbackUrl: null,
                   alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkpure.'),
+                  siblingListingUrl: siblingListingUrlsByStore['APKPure'],
                 );
                 final apkmirrorUrl = _resolveStoreUrl(
                   storeData: storeData,
@@ -4404,6 +4678,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                     trackedUrl,
                     'apkmirror.com',
                   ),
+                  siblingListingUrl: siblingListingUrlsByStore['APKMirror'],
                 );
                 final githubUrl = _resolveStoreUrl(
                   storeData: storeData,
@@ -4413,6 +4688,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                     trackedUrl,
                     'github.com',
                   ),
+                  siblingListingUrl: siblingListingUrlsByStore['GitHub'],
                 );
                 // Alternate icon order: Play Store, GitHub, F-Droid, APKPure,
                 // APKMirror (tracked source is always shown first, separately).
@@ -4462,6 +4738,21 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       url: apkmirrorUrl,
                       assetPath: StoreSourceIconPaths.apkmirror,
                       swapStoreName: 'APKMirror',
+                    ),
+                  );
+                }
+                // Listings on sources no store scan covers (GitLab, Codeberg, a
+                // plain APK link, ...) still belong here - the package really
+                // is tracked there, so the row would otherwise hide a source
+                // the user set up themselves.
+                for (final AppInMemory sibling
+                    in siblingListingsWithoutStoreSlot) {
+                  alternateSourceIcons.add(
+                    _buildStoreSourceLaunchIcon(
+                      iconContext: pageThemeContext,
+                      url: sibling.app.url,
+                      assetPath: storeSourceAssetPathForUrl(sibling.app.url),
+                      trackedListingKey: sibling.listingKey,
                     ),
                   );
                 }
@@ -4619,7 +4910,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         onTap: _editMode
             ? null
             : (app?.installedInfo != null
-                  ? () => packageManager.openApp(widget.appId)
+                  ? () => packageManager.openApp(app!.app.id)
                   : null),
         emptyPlaceholder: Container(
           height: scaledIconSize,
@@ -5343,7 +5634,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                                 scrollCacheExtent:
                                     const ScrollCacheExtent.pixels(1600),
                                 controller: _appPageScrollController,
-                                physics: _swappingTrackedSource
+                                physics:
+                                    _swappingTrackedSource ||
+                                        _trackingAdditionalSource
                                     ? const NeverScrollableScrollPhysics()
                                     : const AlwaysScrollableScrollPhysics(
                                         parent: ClampingScrollPhysics(),
@@ -5433,13 +5726,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                             ],
                           ),
                     onRefresh: () async {
-                      if (_editMode || _swappingTrackedSource) return;
+                      if (_editMode ||
+                          _swappingTrackedSource ||
+                          _trackingAdditionalSource) {
+                        return;
+                      }
                       if (app != null) {
                         await _runCheckUpdate(app.app.id);
                       }
                     },
                   ),
-                  if (_swappingTrackedSource)
+                  if (_swappingTrackedSource || _trackingAdditionalSource)
                     Positioned.fill(
                       child: AbsorbPointer(
                         child: ColoredBox(

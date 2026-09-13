@@ -1493,7 +1493,7 @@ class AddAppPageState extends State<AddAppPage> {
               );
             }
           }
-          if (appsProvider.apps.containsKey(app.id)) {
+          if (sameStoreListingIn(appsProvider.apps, app) != null) {
             throw ObtainiumError(tr('appAlreadyAdded'));
           }
           app.additionalSettings['useVersionCodeAsOSVersion'] =
@@ -1527,8 +1527,11 @@ class AddAppPageState extends State<AddAppPage> {
             app = app.copyWith(installedVersion: app.latestVersion);
           }
           app = app.copyWith(categories: pickedCategories);
+          // Tracking this package from a second store needs its own listing ID
+          // so the two records never overwrite each other.
+          app = appsProvider.withAllocatedListingId(app);
           await appsProvider.saveApps([app], onlyIfExists: false);
-          final liveApp = appsProvider.apps[app.id]?.app;
+          final liveApp = appsProvider.apps[app.listingKey]?.app;
           if (liveApp != null) {
             await appsProvider.assignMatchingFoldersToAppIfNeeded(liveApp);
           }
@@ -1541,13 +1544,15 @@ class AddAppPageState extends State<AddAppPage> {
                 widget._onEmbeddedAddCompleted;
             _resetUrlModeInput();
             onEmbeddedAddCompleted?.call();
-            unawaited(homeState.switchToAppsTabAndOpenApp(app.id));
+            unawaited(homeState.switchToAppsTabAndOpenApp(app.listingKey));
           } else {
             final NavigatorState? navigator = globalNavigatorKey.currentState;
             if (navigator != null && navigator.mounted) {
               unawaited(
                 navigator.push(
-                  heroFriendlyAppPageRoute((_) => AppPage(appId: app!.id)),
+                  heroFriendlyAppPageRoute(
+                    (_) => AppPage(appId: app!.listingKey),
+                  ),
                 ),
               );
             }
