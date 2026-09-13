@@ -680,7 +680,7 @@ void main() {
       expect(tr('versionOrderUnclear'), german['versionOrderUnclear']);
       expect(
         tr('version_commit_ancestry_detail'),
-        translations['version_commit_ancestry_detail'],
+        german['version_commit_ancestry_detail'],
       );
       final localizedNotification = VersionReviewNotification([
         _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),

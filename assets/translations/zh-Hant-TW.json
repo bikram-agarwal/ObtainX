@@ -479,6 +479,10 @@
     "apply": "套用",
     "trackedSource": "追蹤來源",
     "sources": "來源",
+    "swapToThisSource": "切換到此來源",
+    "copyUrl": "複製 URL",
+    "errorSwappingTrackedSource": "切換追蹤來源時發生錯誤",
+    "swapTrackedSourceUnsupportedStore": "此商店無法作為追蹤來源",
     "edit": "編輯",
     "verdict": "判定",
     "playStore": "Play 商店",
@@ -833,6 +837,9 @@
     "telegramApp": "Telegram 應用",
     "tooManyRedirects": "重新導向次數過多",
     "vibrant": "鮮豔",
+    "version_variant_differs": "不同的建置變體",
+    "version_variant_differs_detail": "此來源版本針對不同的應用程式或裝置變體。切換變體前請選取相符的 APK 或檢查來源。",
+    "version_commit_ancestry_detail": "已使用 GitHub 提交歷史驗證建置順序。",
     "action": {
         "one": "操作",
         "other": "操作"

@@ -479,6 +479,10 @@
     "apply": "Uygula",
     "trackedSource": "Takip Edilen Kaynak",
     "sources": "Kaynaklar",
+    "swapToThisSource": "Bu kaynağa geç",
+    "copyUrl": "URL'yi kopyala",
+    "errorSwappingTrackedSource": "Takip edilen kaynak değiştirilirken hata oluştu",
+    "swapTrackedSourceUnsupportedStore": "Bu mağaza takip edilen kaynak olarak kullanılamaz",
     "edit": "Düzenle",
     "verdict": "Sonuç",
     "playStore": "Play Store",
@@ -833,6 +837,9 @@
     "telegramApp": "Telegram App",
     "tooManyRedirects": "Çok fazla yönlendirme",
     "vibrant": "Canlı",
+    "version_variant_differs": "Farklı derleme varyantı",
+    "version_variant_differs_detail": "Bu kaynak sürümü farklı bir uygulama veya cihaz varyantını hedefliyor. Varyant değiştirmeden önce eşleşen bir APK seçin veya kaynağı inceleyin.",
+    "version_commit_ancestry_detail": "Derleme sırası GitHub commit geçmişi kullanılarak doğrulandı.",
     "action": {
         "one": "Eylem",
         "other": "Eylemler"

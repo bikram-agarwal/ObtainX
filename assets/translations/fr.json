@@ -479,6 +479,10 @@
     "apply": "Appliquer",
     "trackedSource": "Source suivie",
     "sources": "Sources",
+    "swapToThisSource": "Basculer vers cette source",
+    "copyUrl": "Copier l'URL",
+    "errorSwappingTrackedSource": "Erreur lors du changement de source suivie",
+    "swapTrackedSourceUnsupportedStore": "Cette boutique ne peut pas être utilisée comme source suivie",
     "edit": "Modifier",
     "verdict": "Verdict",
     "playStore": "Play Store",
@@ -833,6 +837,9 @@
     "telegramApp": "Telegram",
     "tooManyRedirects": "Trop de redirections",
     "vibrant": "Dynamique",
+    "version_variant_differs": "Variante de compilation différente",
+    "version_variant_differs_detail": "Cette version source cible une variante d'application ou d'appareil différente. Sélectionnez un APK correspondant ou examinez la source avant de changer de variante.",
+    "version_commit_ancestry_detail": "Ordre des compilations vérifié à l'aide de l'historique des commits GitHub.",
     "action": {
         "one": "Action",
         "other": "Actions"

@@ -491,6 +491,10 @@
     "apply": "Применить",
     "trackedSource": "Отслеживаемый источник",
     "sources": "Источники",
+    "swapToThisSource": "Переключиться на этот источник",
+    "copyUrl": "Копировать URL",
+    "errorSwappingTrackedSource": "Ошибка переключения отслеживаемого источника",
+    "swapTrackedSourceUnsupportedStore": "Этот магазин нельзя использовать как отслеживаемый источник",
     "edit": "Изменить",
     "verdict": "Вердикт",
     "playStore": "Play Store",
@@ -846,6 +850,9 @@
     "telegramApp": "Telegram App",
     "tooManyRedirects": "Слишком много перенаправлений",
     "vibrant": "Яркий",
+    "version_variant_differs": "Другой вариант сборки",
+    "version_variant_differs_detail": "Этот выпуск источника предназначен для другого приложения или варианта устройства. Выберите подходящий APK или просмотрите источник, прежде чем менять вариант.",
+    "version_commit_ancestry_detail": "Порядок сборок подтверждён по истории коммитов GitHub.",
     "action": {
         "one": "Действие",
         "other": "Действия"
