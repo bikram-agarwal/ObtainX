@@ -6,7 +6,8 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'
-    show Listenable, listEquals, visibleForTesting;
+    show Factory, Listenable, listEquals, visibleForTesting;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
@@ -605,9 +606,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   bool _webViewUrlLoaded = false;
   // True while the in-app webpage is loading, to drive the loading indicator.
   bool _webViewLoading = false;
-  // Height (logical px) of the translucent top bar the webpage scrolls behind.
-  // Injected into the page as top padding so its top content stays tappable.
-  double _webViewTopInset = 0;
   bool _scheduledDetailPageRefresh = false;
   bool _requestedMissingIconLoad = false;
   // Once true, the lazy APKMirror size resolver has fired for this AppPage
@@ -1991,15 +1989,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             if (mounted && _webViewLoading) {
               setState(() => _webViewLoading = false);
             }
-            // Pad the page down by the translucent top bar's height so its top
-            // content (e.g. a sign-in button) stays tappable while the rest
-            // still scrolls behind the bar, visible through its translucency.
-            if (_webViewTopInset > 0) {
-              _webViewController?.runJavaScript(
-                'if(document.body){document.body.style.paddingTop='
-                '"${_webViewTopInset.toStringAsFixed(0)}px";}',
-              );
-            }
           },
           onWebResourceError: (WebResourceError error) {
             if (error.isForMainFrame == true) {
@@ -2021,6 +2010,89 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               : NavigationDecision.navigate,
         ),
       );
+  }
+
+  Widget _buildSourceWebpageView(BuildContext themeContext) {
+    final Color webViewSurface =
+        Color.lerp(
+          Theme.of(themeContext).colorScheme.surface,
+          Colors.black,
+          Theme.of(themeContext).brightness == Brightness.dark ? 0.055 : 0.045,
+        ) ??
+        Theme.of(themeContext).colorScheme.surface;
+    _applyWebViewSurfaceColorIfNeeded(webViewSurface);
+    return WebViewWidget(
+      key: ObjectKey(_webViewController),
+      controller: _ensureWebViewController(),
+      gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{
+        Factory<EagerGestureRecognizer>(EagerGestureRecognizer.new),
+      },
+    );
+  }
+
+  Widget _buildSourceWebpageScaffold({
+    required BuildContext themedPageContext,
+    required ThemeData pageTheme,
+    required ColorScheme pageColorScheme,
+    required SettingsProvider settingsProvider,
+    required AppInMemory? app,
+    required String? persistentPageError,
+    required String? persistentPageErrorTitle,
+  }) {
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: pageColorScheme.brightness == Brightness.dark
+          ? SystemUiOverlayStyle.light
+          : SystemUiOverlayStyle.dark,
+      child: Scaffold(
+        backgroundColor: pageColorScheme.surface,
+        floatingActionButton: FloatingActionButton(
+          heroTag: 'app_page_webview_details_${widget.appId}',
+          tooltip: widget.isEmbedded ? null : tr('details'),
+          onPressed: () {
+            // MaterialPageRoute (not the hero-friendly fade route the apps list
+            // uses) so this push gets the theme's FadeForwardsPageTransitions
+            // slide. There is no icon Hero on the webpage screen to preserve.
+            Navigator.of(themedPageContext).push(
+              MaterialPageRoute<void>(
+                builder: (BuildContext _) => AppPage(
+                  appId: widget.appId,
+                  showOppositeOfPreferredView: settingsProvider.showAppWebpage,
+                  appsListHeroFolderId: widget.appsListHeroFolderId,
+                ),
+              ),
+            );
+          },
+          child: const Icon(Icons.info_outline_rounded),
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (app == null)
+              const SizedBox.shrink()
+            else
+              _buildSourceWebpageView(themedPageContext),
+            if (_webViewLoading)
+              Center(
+                child: ExpressiveLoadingIndicator(
+                  color: pageColorScheme.primary,
+                ),
+              ),
+            Positioned(
+              top: MediaQuery.paddingOf(themedPageContext).top,
+              left: 0,
+              right: 0,
+              child: _buildPersistentPageError(
+                themedPageContext,
+                pageTheme,
+                persistentPageError,
+                title: persistentPageErrorTitle,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// After a pull-to-refresh, checks all 4 stores (APKMirror, F-Droid, APKPure,
@@ -2661,11 +2733,15 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     );
 
     final bool useIconPageColors = settingsProvider.matchAppPageToIconColors;
-    final showAppWebpageFinal =
-        (settingsProvider.showAppWebpage &&
-            !widget.showOppositeOfPreferredView) ||
-        (!settingsProvider.showAppWebpage &&
-            widget.showOppositeOfPreferredView);
+    // Webpage mode is a full-screen WebView plus an info FAB. Edit always uses
+    // the normal details page, including swipe-to-edit.
+    final bool showAppWebpageFinal =
+        !widget.openInEditMode &&
+        !_editMode &&
+        ((settingsProvider.showAppWebpage &&
+                !widget.showOppositeOfPreferredView) ||
+            (!settingsProvider.showAppWebpage &&
+                widget.showOppositeOfPreferredView));
     final bool areDownloadsRunning = appsProvider.areDownloadsRunning();
     final AppInMemory? app = appsProvider.apps[widget.appId];
     final List<String> loadedCertificateHashes =
@@ -2794,7 +2870,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         ? themedPageColorScheme.withPureBlackBackgrounds()
         : themedPageColorScheme;
     final ColorScheme sharedPageBackgroundColorScheme = pageColorSchemeForPage;
-    final Brightness pageBrightness = pageColorSchemeForPage.brightness;
     // ThemeData.copyWith() is expensive — cache it and recompute only when the
     // icon scheme, parent brightness, or active black state actually changes.
     final String pageThemeKey =
@@ -2846,17 +2921,32 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
 
     if (showAppWebpageFinal) {
       _ensureWebViewController();
-      _webViewTopInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
-    }
-    if (showAppWebpageFinal && app != null && !_webViewUrlLoaded) {
-      _webViewUrlLoaded = true;
-      _webViewLoading = true;
-      final String webUrl = app.app.url;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _webViewController?.loadRequest(Uri.parse(webUrl));
-        }
-      });
+      if (app != null && !_webViewUrlLoaded) {
+        _webViewUrlLoaded = true;
+        _webViewLoading = true;
+        final String webUrl = app.app.url;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _webViewController?.loadRequest(Uri.parse(webUrl));
+          }
+        });
+      }
+      return Theme(
+        data: pageThemeForPage,
+        child: Builder(
+          builder: (BuildContext themedPageContext) {
+            return _buildSourceWebpageScaffold(
+              themedPageContext: themedPageContext,
+              pageTheme: pageThemeForPage,
+              pageColorScheme: pageColorSchemeForPage,
+              settingsProvider: settingsProvider,
+              app: app,
+              persistentPageError: effectivePersistentPageError,
+              persistentPageErrorTitle: effectivePersistentPageErrorTitle,
+            );
+          },
+        ),
+      );
     }
 
     String formatDateTimeToMinute(DateTime dateTime) {
@@ -5005,199 +5095,19 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 ),
               ],
             ),
-          ],
-        ),
-      );
-    }
-
-    Column getFullInfoColumn(
-      BuildContext themeContext,
-      AppInMemory? app, {
-      bool small = false,
-    }) {
-      final ThemeData dialogColumnTheme = Theme.of(themeContext);
-      const heroIconSize = 48.0;
-      final double dialogIconSize = small ? 70 : heroIconSize;
-      final double dialogIconRadius = small ? 12 : 16;
-      final double placeholderIconSize = small ? dialogIconSize : 30;
-      final iconWidget = _tappableAppIconDisplay(
-        themeContext: themeContext,
-        appInMemory: app,
-        size: dialogIconSize,
-        borderRadius: dialogIconRadius,
-        iconMemoryBytes: _heroIconMemoryOverrideForEdit(app),
-        exclusiveIconMemoryBytes: _editStagedClearOverride,
-        emptyPlaceholder: small
-            ? SizedBox(
-                height: dialogIconSize,
-                width: dialogIconSize,
-                child: Center(
-                  child: Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.rotationZ(0.31),
-                    child: Image(
-                      image: const AssetImage('assets/graphics/icon_small.png'),
-                      width: placeholderIconSize,
-                      height: placeholderIconSize,
-                      fit: BoxFit.contain,
-                      color: dialogColumnTheme.colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.5),
-                      colorBlendMode: BlendMode.modulate,
-                      gaplessPlayback: true,
-                    ),
-                  ),
-                ),
-              )
-            : Container(
-                height: dialogIconSize,
-                width: dialogIconSize,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(dialogIconRadius),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      dialogColumnTheme.colorScheme.primary,
-                      dialogColumnTheme.colorScheme.primary.withAlpha(200),
-                    ],
-                  ),
-                ),
-                child: Center(
-                  child: Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.rotationZ(0.31),
-                    child: Image(
-                      image: const AssetImage('assets/graphics/icon_small.png'),
-                      width: placeholderIconSize,
-                      height: placeholderIconSize,
-                      fit: BoxFit.contain,
-                      color: Colors.white.withValues(alpha: 0.5),
-                      colorBlendMode: BlendMode.modulate,
-                      gaplessPlayback: true,
-                    ),
-                  ),
+            if (!_editMode && app?.app.hasPendingRepoRename == true)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _buildRepoRenameWarning(
+                  app: app,
+                  appsProvider: appsProvider,
+                  onUpdate: (String listingKey) async {
+                    await _runCheckUpdate(listingKey);
+                  },
                 ),
               ),
-      );
-
-      if (small) {
-        // Header laid out like the normal app details page: icon on the left,
-        // with the name and developer left-aligned beside it (rather than
-        // centered and stacked).
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                iconWidget,
-                const SizedBox(width: 12),
-                // Flexible (not Expanded) so the icon + text sit centered as a
-                // block for short names, while long names can still wrap/shrink.
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        app?.name ?? tr('app'),
-                        style: dialogColumnTheme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        tr('byX', args: [app?.author ?? tr('unknown')]),
-                        style: dialogColumnTheme.textTheme.bodySmall?.copyWith(
-                          color: dialogColumnTheme.colorScheme.onSurfaceVariant,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: settingsProvider.highlightTouchTargets ? 2 : 8),
-            getInfoColumn(themeContext, app, small: true),
-            const SizedBox(height: 24),
           ],
-        );
-      }
-
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                iconWidget,
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        app?.name ?? tr('app'),
-                        style: dialogColumnTheme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        tr('byX', args: [app?.author ?? tr('unknown')]),
-                        style: dialogColumnTheme.textTheme.bodySmall?.copyWith(
-                          color: dialogColumnTheme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: _buildRepoRenameWarning(
-                          app: app,
-                          appsProvider: appsProvider,
-                          onUpdate: (String appId) async {
-                            await _runCheckUpdate(appId);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          getInfoColumn(themeContext, app, small: false),
-          const SizedBox(height: 24),
-        ],
-      );
-    }
-
-    Widget getAppWebView(BuildContext themeContext) {
-      if (app == null) return const SizedBox.shrink();
-      final Color webViewSurface =
-          Color.lerp(
-            Theme.of(themeContext).colorScheme.surface,
-            Colors.black,
-            Theme.of(themeContext).brightness == Brightness.dark
-                ? 0.055
-                : 0.045,
-          ) ??
-          Theme.of(themeContext).colorScheme.surface;
-      _applyWebViewSurfaceColorIfNeeded(webViewSurface);
-      return WebViewWidget(
-        key: ObjectKey(_webViewController),
-        controller: _ensureWebViewController(),
+        ),
       );
     }
 
@@ -5269,59 +5179,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                             },
                       tooltip: actionBarTooltip(tr('appOptions')),
                       icon: const Icon(Icons.tune),
-                    ),
-                  );
-                }
-                if (app != null && showAppWebpageFinal) {
-                  bottomBarActions.add(
-                    IconButton(
-                      color: Theme.of(themeContext).colorScheme.primary,
-                      iconSize: 24,
-                      onPressed: () {
-                        showAppModalSheet<void>(
-                          context: context,
-                          fullWidth: true,
-                          backgroundColor: pageThemeForPage.colorScheme.surface,
-                          builder: (BuildContext sheetRouteContext) {
-                            return Selector<AppsProvider, int>(
-                              selector:
-                                  (BuildContext _, AppsProvider provider) =>
-                                      appPageAppsRebuildToken(
-                                        provider,
-                                        widget.appId,
-                                      ),
-                              builder: (BuildContext _, int _, Widget? _) {
-                                final AppInMemory? sheetApp =
-                                    appsProvider.apps[widget.appId];
-                                return Theme(
-                                  data: pageThemeForPage,
-                                  child: Builder(
-                                    builder: (BuildContext sheetThemedContext) {
-                                      return AppSheetContent(
-                                        padding: const EdgeInsets.fromLTRB(
-                                          0,
-                                          0,
-                                          0,
-                                          16,
-                                        ),
-                                        children: [
-                                          getFullInfoColumn(
-                                            sheetThemedContext,
-                                            sheetApp,
-                                            small: true,
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        );
-                      },
-                      icon: const Icon(Icons.more_horiz),
-                      tooltip: actionBarTooltip(tr('more')),
                     ),
                   );
                 }
@@ -5539,29 +5396,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             },
             child: Scaffold(
               extendBody: true,
-              // Webpage mode: the WebView fills the whole body and renders
-              // behind a translucent top bar, so the page scrolls *behind* the
-              // bar (visible through its translucency). The page is padded down
-              // by the bar height (see the onPageFinished JS injection of
-              // _webViewTopInset) so its top content stays tappable instead of
-              // being trapped under the bar. A true gaussian blur isn't possible
-              // over an Android platform view, so this is a translucent tint.
-              extendBodyBehindAppBar: showAppWebpageFinal,
               resizeToAvoidBottomInset: true,
-              appBar: showAppWebpageFinal
-                  ? AppBar(
-                      backgroundColor: appPageDeeperSurfaceColor(
-                        pageColorSchemeForPage.surface,
-                        pageBrightness,
-                      ).withValues(alpha: 0.82),
-                      surfaceTintColor: Colors.transparent,
-                      elevation: 0,
-                      scrolledUnderElevation: 0,
-                      iconTheme: IconThemeData(
-                        color: pageColorSchemeForPage.onSurface,
-                      ),
-                    )
-                  : null,
               backgroundColor: settingsProvider.useGradientBackground
                   ? Colors.transparent
                   : sharedPageBackgroundColorScheme.surface,
@@ -5580,156 +5415,111 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 children: [
                   RefreshIndicator(
                     displacement: 20,
-                    child: showAppWebpageFinal
-                        ? Stack(
-                            // StackFit.expand gives the (non-positioned) WebView the
-                            // full body size; without it the Stack defaults to
-                            // StackFit.loose and collapses onto the normally-empty
-                            // error overlay, starving the WebView of size so it
-                            // renders blank.
-                            fit: StackFit.expand,
-                            children: [
-                              // #3: WebView fills the whole body (behind the top
-                              // bar and bottom action bar) so it reaches the screen
-                              // edges instead of stopping above the action bar.
-                              getAppWebView(themedPageContext),
-                              // #1: loading indicator until the page finishes — the
-                              // WebView is blank for a few seconds otherwise.
-                              if (_webViewLoading)
-                                Center(
-                                  child: ExpressiveLoadingIndicator(
-                                    color: pageColorSchemeForPage.primary,
-                                  ),
-                                ),
-                              // #4: error / verification banner pinned just below
-                              // the (translucent, body-overlapping) app bar at its
-                              // natural height. Positioned (not a non-positioned
-                              // child) so StackFit.expand can't stretch it to fill
-                              // the screen.
-                              Positioned(
-                                top:
-                                    MediaQuery.paddingOf(
-                                      themedPageContext,
-                                    ).top +
-                                    kToolbarHeight,
-                                left: 0,
-                                right: 0,
-                                child: _buildPersistentPageError(
-                                  themedPageContext,
-                                  pageThemeForPage,
-                                  effectivePersistentPageError,
-                                  title: effectivePersistentPageErrorTitle,
-                                ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (settingsProvider.useGradientBackground)
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: sharedPageBackgroundColorScheme
+                                    .schemePageBackgroundGradient,
                               ),
-                            ],
-                          )
-                        : Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              if (settingsProvider.useGradientBackground)
-                                Positioned.fill(
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      gradient: sharedPageBackgroundColorScheme
-                                          .schemePageBackgroundGradient,
-                                    ),
-                                  ),
-                                ),
-                              CustomScrollView(
-                                scrollCacheExtent:
-                                    const ScrollCacheExtent.pixels(1600),
-                                controller: _appPageScrollController,
-                                physics:
-                                    _swappingTrackedSource ||
-                                        _trackingAdditionalSource
-                                    ? const NeverScrollableScrollPhysics()
-                                    : const AlwaysScrollableScrollPhysics(
-                                        parent: ClampingScrollPhysics(),
-                                      ),
-                                slivers: [
-                                  SliverToBoxAdapter(
-                                    child: SafeArea(
-                                      top: true,
-                                      bottom: false,
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(top: 12),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.stretch,
-                                          children: [
-                                            Row(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                if (!widget.isEmbedded)
-                                                  IconButton(
-                                                    icon: const Icon(
-                                                      Icons.arrow_back,
-                                                    ),
-                                                    color: pageThemeForPage
-                                                        .colorScheme
-                                                        .primary,
-                                                    onPressed: updating
-                                                        ? null
-                                                        : () => Navigator.of(
-                                                            themedPageContext,
-                                                          ).maybePop(),
-                                                    tooltip:
-                                                        MaterialLocalizations.of(
-                                                          themedPageContext,
-                                                        ).backButtonTooltip,
-                                                  ),
-                                                if (widget.isEmbedded)
-                                                  const SizedBox(width: 16),
-                                                Expanded(
-                                                  child: buildDetailHeroContent(
-                                                    themedPageContext,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            if (_editMode && app != null)
-                                              _buildEditMetadataSection(
-                                                themedPageContext,
-                                                app,
-                                                appsProvider,
-                                                settingsProvider,
-                                              )
-                                            else ...[
-                                              _buildPersistentPageError(
-                                                themedPageContext,
-                                                pageThemeForPage,
-                                                effectivePersistentPageError,
-                                                title:
-                                                    effectivePersistentPageErrorTitle,
-                                              ),
-                                              getInfoColumn(
-                                                themedPageContext,
-                                                app,
-                                                small: false,
-                                              ),
-                                            ],
-                                            if (_editMode)
-                                              SizedBox(
-                                                height:
-                                                    _editModeBottomSpacerHeight,
-                                              )
-                                            else
-                                              SizedBox(
-                                                height:
-                                                    _bottomActionBarHeight > 0
-                                                    ? _bottomActionBarHeight
-                                                    : 80,
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                            ),
                           ),
+                        CustomScrollView(
+                          scrollCacheExtent: const ScrollCacheExtent.pixels(
+                            1600,
+                          ),
+                          controller: _appPageScrollController,
+                          physics:
+                              _swappingTrackedSource ||
+                                  _trackingAdditionalSource
+                              ? const NeverScrollableScrollPhysics()
+                              : const AlwaysScrollableScrollPhysics(
+                                  parent: ClampingScrollPhysics(),
+                                ),
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: SafeArea(
+                                top: true,
+                                bottom: false,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          if (!widget.isEmbedded)
+                                            IconButton(
+                                              icon: const Icon(
+                                                Icons.arrow_back,
+                                              ),
+                                              color: pageThemeForPage
+                                                  .colorScheme
+                                                  .primary,
+                                              onPressed: updating
+                                                  ? null
+                                                  : () => Navigator.of(
+                                                      themedPageContext,
+                                                    ).maybePop(),
+                                              tooltip: MaterialLocalizations.of(
+                                                themedPageContext,
+                                              ).backButtonTooltip,
+                                            ),
+                                          if (widget.isEmbedded)
+                                            const SizedBox(width: 16),
+                                          Expanded(
+                                            child: buildDetailHeroContent(
+                                              themedPageContext,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (_editMode && app != null)
+                                        _buildEditMetadataSection(
+                                          themedPageContext,
+                                          app,
+                                          appsProvider,
+                                          settingsProvider,
+                                        )
+                                      else ...[
+                                        _buildPersistentPageError(
+                                          themedPageContext,
+                                          pageThemeForPage,
+                                          effectivePersistentPageError,
+                                          title:
+                                              effectivePersistentPageErrorTitle,
+                                        ),
+                                        getInfoColumn(
+                                          themedPageContext,
+                                          app,
+                                          small: false,
+                                        ),
+                                      ],
+                                      if (_editMode)
+                                        SizedBox(
+                                          height: _editModeBottomSpacerHeight,
+                                        )
+                                      else
+                                        SizedBox(
+                                          height: _bottomActionBarHeight > 0
+                                              ? _bottomActionBarHeight
+                                              : 80,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                     onRefresh: () async {
                       if (_editMode ||
                           _swappingTrackedSource ||

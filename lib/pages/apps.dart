@@ -1469,10 +1469,16 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
   @override
   void initState() {
     super.initState();
-    _settleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
+    _settleController =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 250),
+        )..addListener(() {
+          final nextOffset = _settleAnimation?.value;
+          if (nextOffset != null && nextOffset != _dragOffset) {
+            setState(() => _dragOffset = nextOffset);
+          }
+        });
   }
 
   @override
@@ -1483,12 +1489,13 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
 
   void _settleToZero() {
     _settleController.stop();
-    _settleAnimation =
-        Tween<double>(begin: _dragOffset, end: 0.0).animate(
-          CurvedAnimation(parent: _settleController, curve: Curves.easeOut),
-        )..addListener(() {
-          setState(() => _dragOffset = _settleAnimation!.value);
-        });
+    if (_dragOffset == 0) return;
+    // One controller listener for the lifetime of the row. Repeated swipes
+    // must not retain a new listener and CurvedAnimation after every release.
+    _settleAnimation = Tween<double>(
+      begin: _dragOffset,
+      end: 0.0,
+    ).chain(CurveTween(curve: Curves.easeOut)).animate(_settleController);
     _settleController
       ..reset()
       ..forward();
@@ -1742,33 +1749,34 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       child: ClipRect(
         child: Stack(
           children: [
-            Positioned.fill(
-              child: Container(
-                color: bgColor,
-                alignment: bgAlign,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Opacity(
-                  opacity: revealProgress,
-                  child: Transform.scale(
-                    scale: 0.88 + 0.12 * revealProgress,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: bgIconLeading
-                          ? [
-                              Icon(bgIcon, color: iconColor),
-                              const SizedBox(width: 8),
-                              Text(bgLabel, style: labelStyle),
-                            ]
-                          : [
-                              Text(bgLabel, style: labelStyle),
-                              const SizedBox(width: 8),
-                              Icon(bgIcon, color: iconColor),
-                            ],
+            if (revealProgress > 0)
+              Positioned.fill(
+                child: Container(
+                  color: bgColor,
+                  alignment: bgAlign,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Opacity(
+                    opacity: revealProgress,
+                    child: Transform.scale(
+                      scale: 0.88 + 0.12 * revealProgress,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: bgIconLeading
+                            ? [
+                                Icon(bgIcon, color: iconColor),
+                                const SizedBox(width: 8),
+                                Text(bgLabel, style: labelStyle),
+                              ]
+                            : [
+                                Text(bgLabel, style: labelStyle),
+                                const SizedBox(width: 8),
+                                Icon(bgIcon, color: iconColor),
+                              ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
             Transform.translate(
               offset: Offset(_dragOffset, 0),
               child: widget.child,
