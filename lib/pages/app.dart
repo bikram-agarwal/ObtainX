@@ -606,6 +606,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   bool _webViewUrlLoaded = false;
   // True while the in-app webpage is loading, to drive the loading indicator.
   bool _webViewLoading = false;
+  // Whether the embedded page has history to go back through. Drives the
+  // webpage scaffold's PopScope.canPop, so it must be refreshed after every
+  // navigation: predictive back reads canPop *before* the gesture completes,
+  // and a stale value animates the wrong outcome.
+  bool _webViewCanGoBack = false;
   bool _scheduledDetailPageRefresh = false;
   bool _requestedMissingIconLoad = false;
   // Once true, the lazy APKMirror size resolver has fired for this AppPage
@@ -783,6 +788,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _cachedPageThemeKey = null;
       _webViewUrlLoaded = false;
       _webViewLoading = false;
+      _webViewCanGoBack = false;
       _scheduledDetailPageRefresh = false;
       _requestedMissingIconLoad = false;
       _attemptedApkMirrorSizeResolution = false;
@@ -1989,6 +1995,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             if (mounted && _webViewLoading) {
               setState(() => _webViewLoading = false);
             }
+            unawaited(_refreshWebViewCanGoBack());
+          },
+          // Single-page apps (GitHub, most docs sites) push history entries
+          // without a full page load, so onPageFinished alone would miss them.
+          onUrlChange: (UrlChange change) {
+            unawaited(_refreshWebViewCanGoBack());
           },
           onWebResourceError: (WebResourceError error) {
             if (error.isForMainFrame == true) {
@@ -2010,6 +2022,31 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               : NavigationDecision.navigate,
         ),
       );
+  }
+
+  Future<void> _refreshWebViewCanGoBack() async {
+    final WebViewController? controller = _webViewController;
+    if (controller == null) return;
+    final bool canGoBack = await controller.canGoBack();
+    if (!mounted || _webViewCanGoBack == canGoBack) return;
+    setState(() => _webViewCanGoBack = canGoBack);
+  }
+
+  Future<void> _handleSourceWebpageBack(BuildContext pageContext) async {
+    final WebViewController? controller = _webViewController;
+    if (controller != null && await controller.canGoBack()) {
+      await controller.goBack();
+      await _refreshWebViewCanGoBack();
+      return;
+    }
+    // canPop was computed from a stale history check (the page dropped its
+    // last entry since the last refresh), so this press was swallowed. Correct
+    // the flag and leave the screen, which is what the user asked for.
+    if (!mounted) return;
+    setState(() => _webViewCanGoBack = false);
+    if (pageContext.mounted) {
+      await Navigator.of(pageContext).maybePop();
+    }
   }
 
   Widget _buildSourceWebpageView(BuildContext themeContext) {
@@ -2039,57 +2076,67 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     required String? persistentPageError,
     required String? persistentPageErrorTitle,
   }) {
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: pageColorScheme.brightness == Brightness.dark
-          ? SystemUiOverlayStyle.light
-          : SystemUiOverlayStyle.dark,
-      child: Scaffold(
-        backgroundColor: pageColorScheme.surface,
-        floatingActionButton: FloatingActionButton(
-          heroTag: 'app_page_webview_details_${widget.appId}',
-          tooltip: widget.isEmbedded ? null : tr('details'),
-          onPressed: () {
-            // MaterialPageRoute (not the hero-friendly fade route the apps list
-            // uses) so this push gets the theme's FadeForwardsPageTransitions
-            // slide. There is no icon Hero on the webpage screen to preserve.
-            Navigator.of(themedPageContext).push(
-              MaterialPageRoute<void>(
-                builder: (BuildContext _) => AppPage(
-                  appId: widget.appId,
-                  showOppositeOfPreferredView: settingsProvider.showAppWebpage,
-                  appsListHeroFolderId: widget.appsListHeroFolderId,
+    return PopScope(
+      // Back walks the embedded page's own history first, like a browser, and
+      // only leaves the screen once the page has nowhere left to go back to.
+      canPop: !_webViewCanGoBack,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        unawaited(_handleSourceWebpageBack(themedPageContext));
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: pageColorScheme.brightness == Brightness.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        child: Scaffold(
+          backgroundColor: pageColorScheme.surface,
+          floatingActionButton: FloatingActionButton(
+            heroTag: 'app_page_webview_details_${widget.appId}',
+            tooltip: widget.isEmbedded ? null : tr('details'),
+            onPressed: () {
+              // MaterialPageRoute (not the hero-friendly fade route the apps list
+              // uses) so this push gets the theme's FadeForwardsPageTransitions
+              // slide. There is no icon Hero on the webpage screen to preserve.
+              Navigator.of(themedPageContext).push(
+                MaterialPageRoute<void>(
+                  builder: (BuildContext _) => AppPage(
+                    appId: widget.appId,
+                    showOppositeOfPreferredView:
+                        settingsProvider.showAppWebpage,
+                    appsListHeroFolderId: widget.appsListHeroFolderId,
+                  ),
+                ),
+              );
+            },
+            child: const Icon(Icons.info_outline_rounded),
+          ),
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (app == null)
+                const SizedBox.shrink()
+              else
+                _buildSourceWebpageView(themedPageContext),
+              if (_webViewLoading)
+                Center(
+                  child: ExpressiveLoadingIndicator(
+                    color: pageColorScheme.primary,
+                  ),
+                ),
+              Positioned(
+                top: MediaQuery.paddingOf(themedPageContext).top,
+                left: 0,
+                right: 0,
+                child: _buildPersistentPageError(
+                  themedPageContext,
+                  pageTheme,
+                  persistentPageError,
+                  title: persistentPageErrorTitle,
                 ),
               ),
-            );
-          },
-          child: const Icon(Icons.info_outline_rounded),
-        ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (app == null)
-              const SizedBox.shrink()
-            else
-              _buildSourceWebpageView(themedPageContext),
-            if (_webViewLoading)
-              Center(
-                child: ExpressiveLoadingIndicator(
-                  color: pageColorScheme.primary,
-                ),
-              ),
-            Positioned(
-              top: MediaQuery.paddingOf(themedPageContext).top,
-              left: 0,
-              right: 0,
-              child: _buildPersistentPageError(
-                themedPageContext,
-                pageTheme,
-                persistentPageError,
-                title: persistentPageErrorTitle,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

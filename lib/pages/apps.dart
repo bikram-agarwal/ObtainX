@@ -53,6 +53,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -3540,6 +3541,7 @@ class AppsPageState extends State<AppsPage> {
     // route / an inactive home tab? See [_coveredByOpaqueRoute]. Read (and
     // cached into the field) before the select()s below, because their selectors
     // run later, on provider notifications, and read the field.
+    final buildTiming = PerformanceRecorder.instance.startOperation();
     final bool pageVisible = TickerMode.valuesOf(context).enabled;
     _coveredByOpaqueRoute = !pageVisible;
     if (!pageVisible) {
@@ -3776,6 +3778,7 @@ class AppsPageState extends State<AppsPage> {
       _effectiveGroupUpdatesSeparately(settingsProvider),
     ]);
     if (listBuildToken != _lastListBuildToken) {
+      final listTiming = PerformanceRecorder.instance.startOperation();
       _lastListBuildToken = listBuildToken;
       var workingList = appsProvider.apps.values.toList();
 
@@ -4047,6 +4050,10 @@ class AppsPageState extends State<AppsPage> {
           _crossFolderMatchesCache = matches;
         }
       }
+      PerformanceRecorder.instance.finishOperation(
+        PerformanceOperation.appsFilterSort,
+        listTiming,
+      );
     }
     // ── Use cached results ──────────────────────────────────────────────────
     var listedApps = _listedAppsCache;
@@ -6043,7 +6050,7 @@ class AppsPageState extends State<AppsPage> {
       showFilterSheet,
     );
 
-    return PopScope(
+    final page = PopScope(
       canPop: !shouldInterceptBack,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
@@ -6892,6 +6899,11 @@ class AppsPageState extends State<AppsPage> {
         return listScaffold;
       }(),
     );
+    PerformanceRecorder.instance.finishOperation(
+      PerformanceOperation.appsPageBuild,
+      buildTiming,
+    );
+    return page;
   }
 
   void openAppById(String appId, {bool autoScroll = true}) {
