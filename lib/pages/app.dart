@@ -41,6 +41,7 @@ import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/services/store_icon_resolver.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:provider/provider.dart';
 import 'package:markdown/markdown.dart' as md;
 
@@ -601,6 +602,42 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   // the details card's detailRow (label width 100, no gap) so the two cards'
   // value columns line up vertically.
   static const double _versionRowLabelWidth = 92;
+
+  // Android's WebView never renders an attachment response; it hands it to a
+  // DownloadListener, which webview_flutter bridges back into
+  // onNavigationRequest indistinguishable from a tap. Approving it just
+  // re-requests the same URL and nothing is ever downloaded, so URLs ending in
+  // one of these go to the system instead of the WebView.
+  static const Set<String> _webViewDownloadExtensions = <String>{
+    'apk',
+    'apks',
+    'xapk',
+    'apkm',
+    'aab',
+    'zip',
+    '7z',
+    'rar',
+    'tar',
+    'gz',
+    'tgz',
+    'bz2',
+    'xz',
+    'zst',
+    'exe',
+    'msi',
+    'dmg',
+    'pkg',
+    'deb',
+    'rpm',
+    'appimage',
+    'iso',
+    'img',
+    'jar',
+    'bin',
+    'sig',
+    'asc',
+    'pdf',
+  };
 
   WebViewController? _webViewController;
   bool _webViewUrlLoaded = false;
@@ -1976,8 +2013,34 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     });
   }
 
+  /// Opts the page out of the inset handling Android's WebView adopted in M139,
+  /// where it reserves space in the web content for the system bars and display
+  /// cutout. This view is deliberately full-bleed under those bars, and the
+  /// reservation disagrees with the size Flutter gives the native view - which
+  /// paints a blank slab over part of the page that only clears on the next
+  /// scroll (flutter/flutter#175840). The IME inset is deliberately left in
+  /// place so a focused field still gets the viewport shrunk for the keyboard.
+  Future<void> _ignoreSystemBarInsetsInWebContent(
+    AndroidWebViewController androidController,
+  ) async {
+    try {
+      await androidController.setInsetsForWebContentToIgnore(
+        const <AndroidWebViewInsets>[
+          AndroidWebViewInsets.systemBars,
+          AndroidWebViewInsets.displayCutout,
+        ],
+      );
+    } catch (error) {
+      // Older WebView builds have no inset listener to install, and their
+      // pre-M139 behavior is what this call was asking for anyway.
+      unawaited(LogsProvider().add(error.toString(), level: LogLevel.info));
+    }
+  }
+
   WebViewController _ensureWebViewController() {
-    return _webViewController ??= WebViewController()
+    final WebViewController? existingController = _webViewController;
+    if (existingController != null) return existingController;
+    final WebViewController controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -2013,15 +2076,34 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               );
             }
           },
-          onNavigationRequest: (NavigationRequest request) =>
-              !(request.url.startsWith('http://') ||
-                  request.url.startsWith('https://') ||
-                  request.url.startsWith('ftp://') ||
-                  request.url.startsWith('ftps://'))
-              ? NavigationDecision.prevent
-              : NavigationDecision.navigate,
+          onNavigationRequest: (NavigationRequest request) {
+            final String url = request.url;
+            if (!(url.startsWith('http://') ||
+                url.startsWith('https://') ||
+                url.startsWith('ftp://') ||
+                url.startsWith('ftps://'))) {
+              return NavigationDecision.prevent;
+            }
+            final String lastPathSegment =
+                Uri.tryParse(url)?.pathSegments.lastOrNull ?? '';
+            final int extensionStart = lastPathSegment.lastIndexOf('.');
+            if (extensionStart > 0 &&
+                _webViewDownloadExtensions.contains(
+                  lastPathSegment.substring(extensionStart + 1).toLowerCase(),
+                )) {
+              unawaited(_handOffSourceWebpageDownload(url));
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
         ),
       );
+    final platformController = controller.platform;
+    if (platformController is AndroidWebViewController) {
+      unawaited(_ignoreSystemBarInsetsInWebContent(platformController));
+    }
+    _webViewController = controller;
+    return controller;
   }
 
   Future<void> _refreshWebViewCanGoBack() async {
@@ -2047,6 +2129,39 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     if (pageContext.mounted) {
       await Navigator.of(pageContext).maybePop();
     }
+  }
+
+  /// Sends a file the embedded page asked for to the system browser or download
+  /// manager, the only place it can actually land: the WebView will not save it,
+  /// and ObtainX's own downloader only handles APKs for apps it tracks.
+  Future<void> _handOffSourceWebpageDownload(String url) async {
+    bool launched = false;
+    try {
+      launched = await launchUrlString(
+        url,
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (error) {
+      unawaited(LogsProvider().add(error.toString(), level: LogLevel.error));
+    }
+    if (!mounted) return;
+    _showPageMessage(
+      launched
+          ? tr('downloadOpenedExternally')
+          : tr('downloadCouldNotOpenExternally'),
+    );
+  }
+
+  /// The webpage view has no browser chrome, so a long press on the details FAB
+  /// is its only way to re-fetch a page. The loading indicator is re-shown here
+  /// (unlike on in-page navigations) because an explicit reload of an unchanged
+  /// page can otherwise look like nothing happened.
+  Future<void> _reloadSourceWebpage() async {
+    final WebViewController? controller = _webViewController;
+    if (controller == null || !_webViewUrlLoaded || _webViewLoading) return;
+    hapticMediumImpact();
+    setState(() => _webViewLoading = true);
+    await controller.reload();
   }
 
   Widget _buildSourceWebpageView(BuildContext themeContext) {
@@ -2090,25 +2205,32 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             : SystemUiOverlayStyle.dark,
         child: Scaffold(
           backgroundColor: pageColorScheme.surface,
-          floatingActionButton: FloatingActionButton(
-            heroTag: 'app_page_webview_details_${widget.appId}',
-            tooltip: widget.isEmbedded ? null : tr('details'),
-            onPressed: () {
-              // MaterialPageRoute (not the hero-friendly fade route the apps list
-              // uses) so this push gets the theme's FadeForwardsPageTransitions
-              // slide. There is no icon Hero on the webpage screen to preserve.
-              Navigator.of(themedPageContext).push(
-                MaterialPageRoute<void>(
-                  builder: (BuildContext _) => AppPage(
-                    appId: widget.appId,
-                    showOppositeOfPreferredView:
-                        settingsProvider.showAppWebpage,
-                    appsListHeroFolderId: widget.appsListHeroFolderId,
+          floatingActionButton: GestureDetector(
+            // FloatingActionButton has no onLongPress, and its InkWell only
+            // claims long presses when it has a handler of its own - so this
+            // ancestor wins the gesture without costing the FAB its tap.
+            onLongPress: () => unawaited(_reloadSourceWebpage()),
+            child: FloatingActionButton(
+              heroTag: 'app_page_webview_details_${widget.appId}',
+              tooltip: widget.isEmbedded ? null : tr('detailsLongPressReload'),
+              onPressed: () {
+                // MaterialPageRoute (not the hero-friendly fade route the apps
+                // list uses) so this push gets the theme's
+                // FadeForwardsPageTransitions slide. There is no icon Hero on
+                // the webpage screen to preserve.
+                Navigator.of(themedPageContext).push(
+                  MaterialPageRoute<void>(
+                    builder: (BuildContext _) => AppPage(
+                      appId: widget.appId,
+                      showOppositeOfPreferredView:
+                          settingsProvider.showAppWebpage,
+                      appsListHeroFolderId: widget.appsListHeroFolderId,
+                    ),
                   ),
-                ),
-              );
-            },
-            child: const Icon(Icons.info_outline_rounded),
+                );
+              },
+              child: const Icon(Icons.info_outline_rounded),
+            ),
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           body: Stack(

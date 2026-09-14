@@ -33,6 +33,9 @@ dependencies:
   provider: ^6.1.5+1
   http: ^1.6.0
   webview_flutter: ^4.14.1
+  # Direct dependency only for AndroidWebViewController's platform-specific
+  # inset opt-out, which the cross-platform package does not expose.
+  webview_flutter_android: ^4.14.1
   # Upstream Material `dynamic_color` package. We use only `DynamicColorBuilder`
   # and the `.harmonized()` ColorScheme extension - both available in the
   # upstream package - so the previous `dynamic_system_colors` fork (which
@@ -47,7 +50,7 @@ dependencies:
   permission_handler: ^13.0.0
   fluttertoast: ^10.0.0
   device_info_plus: ^13.2.0
-  file_picker: ^12.0.0
+  file_picker: ^13.0.0
   animations: ^3.0.0
   android_package_installer: # TODO: Upstream PR pending; if not accepted, keep fork maintained
     git:
