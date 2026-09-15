@@ -17,6 +17,11 @@ class AppDetailsContainer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final surfaceColor = Theme.of(context).colorScheme.surface;
+    // OpenContainer calls openBuilder on every animation tick. Keep the child
+    // widget stable so those ticks only transform the existing details page.
+    // Builder still gives the page the route's context, and inherited settings
+    // and provider changes can rebuild it normally.
+    final openContent = Builder(builder: openBuilder);
     return OpenContainer<void>(
       closedColor: Colors.transparent,
       openColor: surfaceColor,
@@ -30,7 +35,7 @@ class AppDetailsContainer extends StatelessWidget {
       transitionDuration: const Duration(milliseconds: 320),
       closedShape: closedShape,
       tappable: false,
-      openBuilder: (context, closeContainer) => openBuilder(context),
+      openBuilder: (context, closeContainer) => openContent,
       closedBuilder: closedBuilder,
     );
   }

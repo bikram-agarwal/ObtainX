@@ -1511,26 +1511,31 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           : bodyColumn,
     );
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: AppSmoothRoundedSurface(
-        backgroundColor: decoration.color ?? Colors.transparent,
-        borderColor: cardBorderSide.color,
-        borderWidth: cardBorderSide.width,
-        borderRadius: cardBorderRadius.topLeft.x,
-        boxShadow: decoration.boxShadow ?? const [],
-        // Only these cards have a child that paints to the edge (the header
-        // stripe / corner watermark), so only they need the content clipped to
-        // the rounded corners; plain cards keep the smooth painted corner
-        // without a saveLayer.
-        clipContent: headerStripe != null || cardWatermark != null,
-        child: headerStripe != null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [headerStripe, body],
-              )
-            : body,
+    // These cards share one scroll sliver. Retain each card's painting so a
+    // scroll only moves its layer instead of repainting shadows, rounded clips
+    // and text, including cards beyond the visible viewport.
+    return RepaintBoundary(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: AppSmoothRoundedSurface(
+          backgroundColor: decoration.color ?? Colors.transparent,
+          borderColor: cardBorderSide.color,
+          borderWidth: cardBorderSide.width,
+          borderRadius: cardBorderRadius.topLeft.x,
+          boxShadow: decoration.boxShadow ?? const [],
+          // Only these cards have a child that paints to the edge (the header
+          // stripe / corner watermark), so only they need the content clipped to
+          // the rounded corners; plain cards keep the smooth painted corner
+          // without a saveLayer.
+          clipContent: headerStripe != null || cardWatermark != null,
+          child: headerStripe != null
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [headerStripe, body],
+                )
+              : body,
+        ),
       ),
     );
   }

@@ -2527,9 +2527,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                 value: effectiveGroupBy,
                 menuWidth: appDropdownMenuWidth(ctx, [
                   tr('groupByNone'),
+                  tr('groupByAppType'),
                   tr('category'),
                   tr('groupByTrackedSource'),
-                  tr('groupByAppType'),
                   tr('groupByUpdateStatus'),
                 ]),
                 items: [
@@ -2538,16 +2538,16 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                     child: Text(tr('groupByNone')),
                   ),
                   DropdownMenuItem(
+                    value: AppsListGroupBy.appType,
+                    child: Text(tr('groupByAppType')),
+                  ),
+                  DropdownMenuItem(
                     value: AppsListGroupBy.category,
                     child: Text(tr('category')),
                   ),
                   DropdownMenuItem(
                     value: AppsListGroupBy.source,
                     child: Text(tr('groupByTrackedSource')),
-                  ),
-                  DropdownMenuItem(
-                    value: AppsListGroupBy.appType,
-                    child: Text(tr('groupByAppType')),
                   ),
                   DropdownMenuItem(
                     value: AppsListGroupBy.updateStatus,
