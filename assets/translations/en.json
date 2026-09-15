@@ -628,6 +628,7 @@
     "groupByNone": "None",
     "groupByTrackedSource": "Tracked source",
     "groupByAppType": "App type",
+    "groupByUpdateStatus": "Update status",
     "appTypeUser": "User Apps",
     "appTypeSystem": "System Apps",
     "appTypePrivileged": "Privileged Apps",

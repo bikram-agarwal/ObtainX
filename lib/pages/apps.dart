@@ -600,6 +600,18 @@ const int _androidFlagUpdatedSystemApp =
 /// App type groups for the "Group by App Type" feature.
 enum AppTypeGroup { user, system, privileged }
 
+/// Update-status groups for the "Group by Update status" feature, in the order
+/// they appear in the list: most actionable first. The verdict itself is the one
+/// the app details page shows in its stripe ([appVersionVerdictForDisplay]).
+const List<AppVersionDisplayVerdict> updateStatusGroupOrder = [
+  AppVersionDisplayVerdict.updateAvailable,
+  AppVersionDisplayVerdict.uncertain,
+  AppVersionDisplayVerdict.newerOnDevice,
+  AppVersionDisplayVerdict.effectivelyEqual,
+  AppVersionDisplayVerdict.sameVersion,
+  AppVersionDisplayVerdict.notInstalled,
+];
+
 /// Returns the [AppTypeGroup] for a given [AppInMemory] based on Android package flags.
 /// Non-installed apps (no [AppInMemory.installedInfo]) are treated as user apps.
 AppTypeGroup classifyAppType(AppInMemory app) {
@@ -2518,6 +2530,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                   tr('category'),
                   tr('groupByTrackedSource'),
                   tr('groupByAppType'),
+                  tr('groupByUpdateStatus'),
                 ]),
                 items: [
                   DropdownMenuItem(
@@ -2535,6 +2548,10 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                   DropdownMenuItem(
                     value: AppsListGroupBy.appType,
                     child: Text(tr('groupByAppType')),
+                  ),
+                  DropdownMenuItem(
+                    value: AppsListGroupBy.updateStatus,
+                    child: Text(tr('groupByUpdateStatus')),
                   ),
                 ],
                 onChanged: (newValue) {
@@ -2559,16 +2576,21 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  FilterChip(
-                    showCheckmark: false,
-                    label: Text(tr('updates')),
-                    selected: effectiveGroupUpdatesSeparately,
-                    onSelected: (value) {
-                      setEffectiveGroupUpdatesSeparately(value);
-                      setSheetState(() {});
-                    },
-                  ),
-                  if (effectiveGroupBy != AppsListGroupBy.none) ...[
+                  // Group-by update status already owns those two buckets.
+                  // The chips override Group by, so they stay hidden here
+                  // (prefs are left intact for other grouping modes).
+                  if (effectiveGroupBy != AppsListGroupBy.updateStatus)
+                    FilterChip(
+                      showCheckmark: false,
+                      label: Text(tr('updates')),
+                      selected: effectiveGroupUpdatesSeparately,
+                      onSelected: (value) {
+                        setEffectiveGroupUpdatesSeparately(value);
+                        setSheetState(() {});
+                      },
+                    ),
+                  if (effectiveGroupBy != AppsListGroupBy.none &&
+                      effectiveGroupBy != AppsListGroupBy.updateStatus)
                     FilterChip(
                       showCheckmark: false,
                       label: Text(tr('nonInstalledApps')),
@@ -2578,6 +2600,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         setSheetState(() {});
                       },
                     ),
+                  if (effectiveGroupBy != AppsListGroupBy.none)
                     FilterChip(
                       showCheckmark: false,
                       label: Text(tr('trackOnly')),
@@ -2587,7 +2610,6 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         setSheetState(() {});
                       },
                     ),
-                  ],
                 ],
               ),
               Divider(color: colorScheme.outlineVariant),
@@ -3007,6 +3029,7 @@ class AppsPageState extends State<AppsPage> {
   List<String> _listedSourcesCache = const [];
   List<String?> _listedCategoriesCache = const [];
   List<AppTypeGroup> _listedAppTypesCache = const [];
+  List<AppVersionDisplayVerdict> _listedUpdateStatusesCache = const [];
 
   /// Maps category key (`__null__` for uncategorized) → indices into [_listedAppsCache].
   Map<String, List<int>> _categoryGroupListedIndices = const {};
@@ -3016,6 +3039,10 @@ class AppsPageState extends State<AppsPage> {
 
   /// Maps [AppTypeGroup] → indices into [_listedAppsCache].
   Map<AppTypeGroup, List<int>> _appTypeGroupListedIndices = const {};
+
+  /// Maps [AppVersionDisplayVerdict] → indices into [_listedAppsCache].
+  Map<AppVersionDisplayVerdict, List<int>> _updateStatusGroupListedIndices =
+      const {};
   List<int> _nonInstalledListedIndices = const [];
   List<int> _trackOnlyListedIndices = const [];
 
@@ -3156,6 +3183,11 @@ class AppsPageState extends State<AppsPage> {
   }
 
   bool _effectiveGroupNonInstalledSeparately(SettingsProvider sp) {
+    // Group-by update status already has a Not installed bucket (the details
+    // stripe verdict). Pulling the same apps into the "group separately"
+    // section would empty that group and show two competing Not installed
+    // treatments.
+    if (_effectiveGroupBy(sp) == AppsListGroupBy.updateStatus) return false;
     final id = _viewSettingsId;
     return id != null
         ? sp.folderGroupNonInstalledSeparately(id)
@@ -3170,6 +3202,10 @@ class AppsPageState extends State<AppsPage> {
   }
 
   bool _effectiveGroupUpdatesSeparately(SettingsProvider sp) {
+    // The separate Updates group is coarser than the stripe: it also takes
+    // version-order-unclear apps. Leaving it on while grouping by update
+    // status would empty both "Update available" and "Version order unclear".
+    if (_effectiveGroupBy(sp) == AppsListGroupBy.updateStatus) return false;
     final id = _viewSettingsId;
     return id != null
         ? sp.folderGroupUpdatesSeparately(id)
@@ -4220,12 +4256,14 @@ class AppsPageState extends State<AppsPage> {
         _effectiveGroupNonInstalledSeparately(settingsProvider) &&
         (effectiveGroupBy == AppsListGroupBy.category ||
             effectiveGroupBy == AppsListGroupBy.source ||
-            effectiveGroupBy == AppsListGroupBy.appType);
+            effectiveGroupBy == AppsListGroupBy.appType ||
+            effectiveGroupBy == AppsListGroupBy.updateStatus);
     final segregateTrackOnly =
         _effectiveGroupTrackOnlySeparately(settingsProvider) &&
         (effectiveGroupBy == AppsListGroupBy.category ||
             effectiveGroupBy == AppsListGroupBy.source ||
-            effectiveGroupBy == AppsListGroupBy.appType);
+            effectiveGroupBy == AppsListGroupBy.appType ||
+            effectiveGroupBy == AppsListGroupBy.updateStatus);
 
     final tempRenamed = <AppInMemory>[];
     final tempPinned = <AppInMemory>[];
@@ -4241,8 +4279,9 @@ class AppsPageState extends State<AppsPage> {
     }
     listedApps = [...tempRenamed, ...tempPinned, ...tempNotPinned];
 
-    // Apps that go into normal category/source/appType groups (excluding
-    // segregated non-installed, segregated track-only, and the updates group when those features are on).
+    // Apps that go into normal category/source/appType/updateStatus groups
+    // (excluding segregated non-installed, segregated track-only, and the
+    // updates group when those features are on).
     List<AppInMemory> appsForGroups(List<AppInMemory> source) => source
         .where(
           (e) =>
@@ -4419,6 +4458,39 @@ class AppsPageState extends State<AppsPage> {
         _appTypeGroupListedIndices = const {};
       }
 
+      // 4. Update statuses
+      if (effectiveGroupBy == AppsListGroupBy.updateStatus) {
+        // Bucketed in a single pass instead of one scan per group: a verdict
+        // costs a version comparison, so the per-group scans the groupings
+        // above use would redo that work for every status.
+        final nextUpdateStatusMap = <AppVersionDisplayVerdict, List<int>>{};
+        for (
+          int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++
+        ) {
+          final AppInMemory row = listedApps[listingIndex];
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
+          if (segregateTrackOnly &&
+              row.app.additionalSettings['trackOnly'] == true) {
+            continue;
+          }
+          if (isInUpdatesGroup(row)) continue;
+          nextUpdateStatusMap
+              .putIfAbsent(appVersionVerdictForDisplay(row.app), () => <int>[])
+              .add(listingIndex);
+        }
+        _listedUpdateStatusesCache = updateStatusGroupOrder
+            .where(nextUpdateStatusMap.containsKey)
+            .toList();
+        _updateStatusGroupListedIndices = nextUpdateStatusMap;
+      } else {
+        _listedUpdateStatusesCache = const [];
+        _updateStatusGroupListedIndices = const {};
+      }
+
       // Group membership is a strict hierarchy — each app lands in at most one
       // of these groups: Updates > Track-only > Not-installed. An app with an
       // actionable update therefore never also shows under Track-only or
@@ -4473,6 +4545,7 @@ class AppsPageState extends State<AppsPage> {
     final listedCategories = _listedCategoriesCache;
     final listedSources = _listedSourcesCache;
     final listedAppTypes = _listedAppTypesCache;
+    final listedUpdateStatuses = _listedUpdateStatusesCache;
 
     List<String> getActiveGroupKeys() {
       final folderPrefix = widget.folderId != null
@@ -4490,6 +4563,10 @@ class AppsPageState extends State<AppsPage> {
       } else if (effectiveGroupBy == AppsListGroupBy.appType) {
         for (final type in listedAppTypes) {
           keys.add('${folderPrefix}appType:${type.name}');
+        }
+      } else if (effectiveGroupBy == AppsListGroupBy.updateStatus) {
+        for (final verdict in listedUpdateStatuses) {
+          keys.add('${folderPrefix}updateStatus:${verdict.name}');
         }
       }
       if (showNonInstalledGroupSection) {
@@ -5064,6 +5141,31 @@ class AppsPageState extends State<AppsPage> {
         AppTypeGroup.user => tr('appTypeUser'),
         AppTypeGroup.system => tr('appTypeSystem'),
         AppTypeGroup.privileged => tr('appTypePrivileged'),
+      };
+      return buildCollapsibleTile(
+        groupKey: groupKey,
+        title: title,
+        matchingIndices: matchingIndices,
+      );
+    }
+
+    Widget getUpdateStatusCollapsibleTile(AppVersionDisplayVerdict verdict) {
+      final folderPrefix = widget.folderId != null
+          ? 'folder_${widget.folderId}_'
+          : '';
+      final String groupKey = '${folderPrefix}updateStatus:${verdict.name}';
+      final matchingIndices =
+          _updateStatusGroupListedIndices[verdict] ?? const <int>[];
+      // The details-page stripe labels `effectivelyEqual` and `uncertain` from
+      // the per-app decision reason (e.g. "Different build variant"); a group
+      // header covers many apps, so it uses the verdict's general wording.
+      final String title = switch (verdict) {
+        AppVersionDisplayVerdict.updateAvailable => tr('updateAvailable'),
+        AppVersionDisplayVerdict.uncertain => tr('versionOrderUnclear'),
+        AppVersionDisplayVerdict.newerOnDevice => tr('newerOnDevice'),
+        AppVersionDisplayVerdict.effectivelyEqual => tr('effectivelyEqual'),
+        AppVersionDisplayVerdict.sameVersion => tr('sameVersion'),
+        AppVersionDisplayVerdict.notInstalled => tr('notInstalled'),
       };
       return buildCollapsibleTile(
         groupKey: groupKey,
@@ -5861,6 +5963,19 @@ class AppsPageState extends State<AppsPage> {
         return buildGroupedSliverList(
           mainChildCount: listedAppTypes.length,
           mainBuilder: (i) => getAppTypeCollapsibleTile(listedAppTypes[i]),
+        );
+      }
+
+      final useUpdateStatusGroups =
+          groupBy == AppsListGroupBy.updateStatus &&
+          (listedUpdateStatuses.isNotEmpty ||
+              showNonInstalledGroupSection ||
+              showTrackOnlyGroupSection);
+      if (useUpdateStatusGroups) {
+        return buildGroupedSliverList(
+          mainChildCount: listedUpdateStatuses.length,
+          mainBuilder: (i) =>
+              getUpdateStatusCollapsibleTile(listedUpdateStatuses[i]),
         );
       }
 
@@ -7047,6 +7162,28 @@ class AppsPageState extends State<AppsPage> {
               : '';
           final isCollapsed = _collapsedGroups.contains(
             '${folderPrefix}appType:${type.name}',
+          );
+          if (!isCollapsed) {
+            offset += indices.length * itemHeight;
+          }
+        }
+      }
+    } else if (groupBy == AppsListGroupBy.updateStatus) {
+      // Update-status group
+      for (final verdict in _listedUpdateStatusesCache) {
+        final indices = _updateStatusGroupListedIndices[verdict] ?? [];
+        if (indices.isEmpty) continue;
+        offset += headerHeight; // Group header
+        final verdictAppIndex = indices.indexOf(index);
+        if (verdictAppIndex != -1) {
+          offset += verdictAppIndex * itemHeight;
+          break;
+        } else {
+          final folderPrefix = widget.folderId != null
+              ? 'folder_${widget.folderId}_'
+              : '';
+          final isCollapsed = _collapsedGroups.contains(
+            '${folderPrefix}updateStatus:${verdict.name}',
           );
           if (!isCollapsed) {
             offset += indices.length * itemHeight;

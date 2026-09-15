@@ -68,7 +68,7 @@ enum SortColumnSettings {
 
 enum SortOrderSettings { ascending, descending }
 
-enum AppsListGroupBy { none, category, source, appType }
+enum AppsListGroupBy { none, category, source, appType, updateStatus }
 
 enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 
@@ -77,7 +77,8 @@ enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 // string [installerMode] getter/setter; the enum defines the shared vocabulary.
 // [AppsListGroupBy] is ObtainX's grouping model — it too persists under
 // upstream's `groupBy` key (its none/category/source names match upstream), with
-// `appType` as an ObtainX-only extra that Obtainium safely ignores.
+// `appType` and `updateStatus` as ObtainX-only extras that Obtainium safely
+// ignores.
 enum InstallerMode { system, shizuku, external, dhizuku }
 
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
@@ -252,10 +253,10 @@ class SettingsProvider with ChangeNotifier {
   /// Converges grouping onto upstream Obtainium's representation: pref key
   /// `groupBy`, value = [AppsListGroupBy] name. ObtainX's `none`/`category`/
   /// `source` names match upstream Obtainium's groupBy names, so Obtainium reads
-  /// them directly; ObtainX's extra `appType` value is one Obtainium simply
-  /// ignores (its getter falls back to `none`). Migrates from ObtainX's older
-  /// int `appsListGroupBy` key — which is authoritative because it alone can
-  /// encode `appType` — and the even-older `groupByCategory` bool.
+  /// them directly; ObtainX's extra `appType` and `updateStatus` values are ones
+  /// Obtainium simply ignores (its getter falls back to `none`). Migrates from
+  /// ObtainX's older int `appsListGroupBy` key — which is authoritative because
+  /// it alone can encode `appType` — and the even-older `groupByCategory` bool.
   void _migrateGroupBySetting() {
     if (prefs == null) return;
     if (prefs!.containsKey('appsListGroupBy')) {
