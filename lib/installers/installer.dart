@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
@@ -81,7 +82,7 @@ abstract class Installer {
 
   /// Ensures the installer has the privileges needed to install, prompting the
   /// user if necessary. Throws an [ObtainiumError] if permission is denied.
-  Future<void> ensurePermission();
+  Future<void> ensurePermission({ThemeData? toastTheme});
 
   /// Installs one or more APK file paths (a base APK plus optional splits).
   /// [installOptions] carries installer-specific key-value flags (e.g. Shizuku's

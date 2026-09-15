@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form_model.dart';
@@ -232,36 +233,72 @@ class FDroidRepo extends AppSource {
         .querySelector('marketvercode')
         ?.innerHtml;
     final int? marketvercode = int.tryParse(marketvercodeStr ?? '');
-    List selectedReleases = [];
     final bool trySelectingSuggestedVersionCode =
         additionalSettings['trySelectingSuggestedVersionCode'] != false;
     final bool pickHighestVersionCode =
         additionalSettings['pickHighestVersionCode'] == true ||
         additionalSettings['autoSelectHighestVersionCode'] == true;
+    // Which <version> (not which specific release) to use: prefer the repo's
+    // own suggested marketvercode, falling back to the newest available.
+    // Collapsing straight to the suggested release here would skip arch
+    // matching below — F-Droid repos ship one versionCode per CPU
+    // architecture under an identical <version>, and marketvercode can
+    // point at any one of them (obtainium#247 / ObtainX#247).
+    String? targetVersion;
     if (trySelectingSuggestedVersionCode && marketvercode != null) {
-      selectedReleases = releases
-          .where(
-            (e) =>
-                int.tryParse(e.querySelector('versioncode')?.innerHtml ?? '') ==
-                    marketvercode &&
-                e.querySelector('apkname') != null,
-          )
-          .toList();
+      final suggested = releases.where(
+        (e) =>
+            int.tryParse(e.querySelector('versioncode')?.innerHtml ?? '') ==
+                marketvercode &&
+            e.querySelector('apkname') != null,
+      );
+      if (suggested.isNotEmpty) {
+        targetVersion = suggested.first.querySelector('version')?.innerHtml;
+      }
     }
+    targetVersion ??= latestVersion;
     final String? appAuthorName = foundApps[0]
         .querySelector('author')
         ?.innerHtml;
     if (appAuthorName != null) {
       authorName = appAuthorName;
     }
-    if (selectedReleases.isEmpty) {
-      selectedReleases = releases
-          .where(
-            (e) =>
-                e.querySelector('version')?.innerHtml == latestVersion &&
-                e.querySelector('apkname') != null,
-          )
-          .toList();
+    // Every release sharing the resolved version — if there's more than one,
+    // it's an arch split, narrowed below by device compatibility before the
+    // pickHighestVersionCode toggle picks among what's left.
+    List selectedReleases = releases
+        .where(
+          (e) =>
+              e.querySelector('version')?.innerHtml == targetVersion &&
+              e.querySelector('apkname') != null,
+        )
+        .toList();
+    if (selectedReleases.length > 1) {
+      List<String> supportedAbis = [];
+      try {
+        supportedAbis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
+      } catch (e) {
+        unawaited(
+          LogsProvider().add(
+            'Failed to get supported ABIs: $e',
+            level: LogLevel.error,
+          ),
+        );
+      }
+      if (supportedAbis.isNotEmpty) {
+        // A release with no <nativecode> element is architecture-universal.
+        final compatible = selectedReleases.where((e) {
+          final String? nativecode = e.querySelector('nativecode')?.innerHtml;
+          if (nativecode == null || nativecode.trim().isEmpty) return true;
+          return nativecode
+              .split(',')
+              .map((s) => s.trim())
+              .any(supportedAbis.contains);
+        }).toList();
+        if (compatible.isNotEmpty) {
+          selectedReleases = compatible;
+        }
+      }
       if (selectedReleases.length > 1 && pickHighestVersionCode) {
         selectedReleases.sort((e1, e2) {
           return int.parse(

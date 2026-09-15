@@ -7,6 +7,8 @@ import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
 
 extension Unique<E, Id> on List<E> {
   List<E> unique([Id Function(E element)? id, bool inplace = true]) {
@@ -209,6 +211,48 @@ class APKPure extends AppSource {
     }
   }
 
+  /// APKPure's version-history API (used for everything else here) never
+  /// returns an icon - `icon_url` comes back empty for every app checked, this
+  /// one included - so the only place to get one is the listing page itself.
+  /// [normalizeApkPureHost] and [iconUrlFromStoreListingDocument]'s APKPure
+  /// branch are the single source of truth for the domain and selector this
+  /// needs - see their doc comments; the cross-store icon fallback in
+  /// `store_icon_resolver.dart` scrapes the same pages and must stay in sync.
+  Future<String?> _fetchIconUrl(
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    try {
+      final Uri pageUri = normalizeApkPureHost(Uri.parse(standardUrl));
+      final res = await sourceRequest(pageUri.toString(), additionalSettings);
+      if (res.statusCode != 200) return null;
+      final doc = await parseHtmlOffIsolate(res.body);
+      final String? raw = iconUrlFromStoreListingDocument(
+        doc,
+        pageUri.toString(),
+      );
+      if (raw == null) return null;
+      final Uri resolved = Uri.parse(raw);
+      // The page requests a 40px thumbnail (sized for its own tiny icon
+      // slot); ObtainX caches icons up to 128px, so ask the same resizing CDN
+      // for a size that won't look blurry once scaled back up.
+      if (resolved.queryParameters.containsKey('w')) {
+        return resolved
+            .replace(queryParameters: {...resolved.queryParameters, 'w': '200'})
+            .toString();
+      }
+      return resolved.toString();
+    } catch (e) {
+      unawaited(
+        LogsProvider().add(
+          'APKPure icon fetch failed: $e',
+          level: LogLevel.error,
+        ),
+      );
+      return null;
+    }
+  }
+
   @override
   Future<APKDetails> getLatestAPKDetails(
     String standardUrl,
@@ -284,11 +328,18 @@ class APKPure extends AppSource {
             }
             continue;
           }
-          return await getDetailsForVersion(
+          final APKDetails details = await getDetailsForVersion(
             v,
             supportedArchs,
             additionalSettings,
           );
+          if ((previouslyCheckedApp?.iconUrl ?? '').isEmpty) {
+            details.iconUrl = await _fetchIconUrl(
+              standardUrl,
+              additionalSettings,
+            );
+          }
+          return details;
         } catch (e) {
           if (additionalSettings['fallbackToOlderReleases'] != true ||
               i == versions.length - 1) {

@@ -42,11 +42,15 @@ class VivoAppStore extends AppSource {
     try {
       final json = await getDetailJson(standardUrl, additionalSettings);
       final versionName = json['version_name']?.toString();
-      final apkUrl = json['download_url']?.toString();
+      String? apkUrl =
+          json['download_url']?.toString() ?? json['apk']?.toString();
+      if (apkUrl != null && apkUrl.startsWith('/')) {
+        apkUrl = 'https://apkwsdl.vivo.com.cn/appstore$apkUrl';
+      }
       if (versionName == null) {
         throw NoVersionError();
       }
-      if (apkUrl == null) {
+      if (apkUrl == null || apkUrl.isEmpty) {
         throw NoAPKError();
       }
       final appName = json['title_zh']?.toString() ?? tr('app');

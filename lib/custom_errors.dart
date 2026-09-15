@@ -9,6 +9,7 @@ import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 
 class ObtainiumError {
   final String code;
@@ -324,9 +325,27 @@ String list2FriendlyString(List<String> list) {
             .join('');
 }
 
+class CancellationException implements Exception {
+  final String? message;
+  const CancellationException([this.message]);
+
+  @override
+  String toString() => message ?? tr('cancelled');
+}
+
 // Fork-only UI helpers: surface an error/message as a snackbar (recoverable)
 // or a copyable dialog (unexpected). Used across the fork's pages.
 void showMessage(dynamic e, {bool isError = false, ThemeData? theme}) {
+  final ScaffoldMessengerState? messenger = scaffoldMessengerKey.currentState;
+  if (e is CancellationException) {
+    unawaited(LogsProvider().add(e.toString(), level: LogLevel.info));
+    if (messenger != null) {
+      messenger.showSnackBar(
+        buildAppSnackBar(messenger.context, e.toString(), theme: theme),
+      );
+    }
+    return;
+  }
   unawaited(
     LogsProvider().add(
       e.toString(),
@@ -334,12 +353,16 @@ void showMessage(dynamic e, {bool isError = false, ThemeData? theme}) {
     ),
   );
   if (e is String || (e is ObtainiumError && !e.unexpected)) {
-    scaffoldMessengerKey.currentState?.showSnackBar(
-      SnackBar(
-        content: Text(e.toString()),
-        duration: const Duration(seconds: 4),
-      ),
-    );
+    if (messenger != null) {
+      messenger.showSnackBar(
+        buildAppSnackBar(
+          messenger.context,
+          e.toString(),
+          type: isError ? ToastType.error : ToastType.info,
+          theme: theme,
+        ),
+      );
+    }
   } else {
     final NavigatorState? navigator = globalNavigatorKey.currentState;
     if (navigator == null || !navigator.mounted) return;
@@ -358,12 +381,17 @@ void showMessage(dynamic e, {bool isError = false, ThemeData? theme}) {
             content: GestureDetector(
               onLongPress: () {
                 unawaited(Clipboard.setData(ClipboardData(text: e.toString())));
-                scaffoldMessengerKey.currentState?.showSnackBar(
-                  SnackBar(
-                    content: Text(tr('copiedToClipboard')),
-                    duration: const Duration(seconds: 4),
-                  ),
-                );
+                final ScaffoldMessengerState? clipboardMessenger =
+                    scaffoldMessengerKey.currentState;
+                if (clipboardMessenger != null) {
+                  clipboardMessenger.showSnackBar(
+                    buildAppSnackBar(
+                      clipboardMessenger.context,
+                      tr('copiedToClipboard'),
+                      theme: theme,
+                    ),
+                  );
+                }
               },
               child: Text(e.toString()),
             ),

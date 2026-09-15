@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
 import 'package:obtainium/providers/installer_provider.dart';
@@ -38,7 +39,7 @@ class ExternalInstaller extends Installer {
       settingsProvider.externalInstallerPackage != null;
 
   @override
-  Future<void> ensurePermission() async {
+  Future<void> ensurePermission({ThemeData? toastTheme}) async {
     if (settingsProvider.externalInstallerPackage == null) {
       throw ObtainiumError(tr('externalInstallerRequired'));
     }

@@ -11,6 +11,7 @@ void main() {
       'github.com': StoreSourceIconPaths.github,
       'gitlab.com': StoreSourceIconPaths.gitlab,
       'codeberg.org': StoreSourceIconPaths.codeberg,
+      'codefloe.com': StoreSourceIconPaths.forgejo,
       'f-droid.org': StoreSourceIconPaths.fdroid,
       'izzysoft.de': StoreSourceIconPaths.izzydroid,
       'git.sr.ht': StoreSourceIconPaths.sourcehut,
@@ -75,6 +76,14 @@ void main() {
     expect(
       storeSourceAssetPathForClassName('ItchIO'),
       StoreSourceIconPaths.itchio,
+    );
+    expect(
+      storeSourceAssetPathForClassName('Codeberg'),
+      StoreSourceIconPaths.codeberg,
+    );
+    expect(
+      storeSourceAssetPathForClassName('Forgejo'),
+      StoreSourceIconPaths.forgejo,
     );
   });
 

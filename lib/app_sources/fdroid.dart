@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:html/dom.dart' show Document;
 import 'package:html/parser.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -11,6 +13,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
 
 /// Returns a trimmed, non-empty display String from an F-Droid metadata value.
 ///
@@ -37,6 +40,32 @@ String? _fdroidDisplayString(Object? rawValue) {
     }
   }
   return null;
+}
+
+/// Extracts each release's supported CPU architectures from an F-Droid
+/// package page, keyed by versionCode. F-Droid only renders a
+/// `.package-version-nativecode` block for versions that ship one APK per
+/// ABI — a versionCode absent from a mapped entry, or mapped to an empty
+/// list, is architecture-universal. Each `.package-version-header` renders
+/// two `<a name>` anchors in a fixed order: versionName, then versionCode.
+Map<int, List<String>> _fdroidNativecodeByVersionCode(Document doc) {
+  final Map<int, List<String>> result = {};
+  for (final element in doc.querySelectorAll('li.package-version')) {
+    final nameAnchors = element.querySelectorAll(
+      '.package-version-header a[name]',
+    );
+    if (nameAnchors.length < 2) continue;
+    final int? versionCode = int.tryParse(
+      nameAnchors[1].attributes['name'] ?? '',
+    );
+    if (versionCode == null) continue;
+    result[versionCode] = element
+        .querySelectorAll('.package-nativecode')
+        .map((e) => e.text.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+  return result;
 }
 
 /// Extracts a human-friendly app display name from an F-Droid package page's
@@ -509,8 +538,14 @@ class FDroid extends AppSource {
         rawVersionNameCandidates.add(versionName);
       }
       String? version;
-      Iterable<dynamic> releaseChoices = [];
-      // Grab the versionCode suggested if the user chose to do that
+      // Grab the versionName the user's suggested-versionCode setting points
+      // at (if any) — this only decides *which version*, never a specific
+      // release. F-Droid ships one versionCode per CPU architecture under an
+      // identical versionName, and this API has no arch data, so collapsing
+      // straight to a single suggested release here risks silently picking
+      // an incompatible arch's build (obtainium#247 / ObtainX#247). Which
+      // release(s) survive within the resolved version is decided below,
+      // once per-versionCode arch data is available.
       // Only do so at this stage if the user has no release filter
       if (trySelectingSuggestedVersionCode &&
           response['suggestedVersionCode'] != null &&
@@ -522,14 +557,12 @@ class FDroid extends AppSource {
               element['versionCode'].toString() == suggestedVersionCodeText,
         );
         if (suggestedReleases.isNotEmpty) {
-          releaseChoices = suggestedReleases;
           version = suggestedReleases.first['versionName']?.toString();
         }
       }
       // Apply the release filter if any
       if (filterVersionsByRegEx?.isNotEmpty == true) {
         version = null;
-        releaseChoices = [];
         final versionFilter = RegExp(filterVersionsByRegEx!);
         for (var i = 0; i < releases.length; i++) {
           if (versionFilter.hasMatch(
@@ -548,86 +581,29 @@ class FDroid extends AppSource {
       if (version == null || version.isEmpty) {
         throw NoVersionError();
       }
-      // If a suggested release was not already picked, pick all those with the selected version
-      if (releaseChoices.isEmpty) {
-        releaseChoices = releases.where(
-          (element) => element['versionName']?.toString() == version,
-        );
-      }
-      // For the remaining releases, use the toggles to auto-select one if possible
-      if (releaseChoices.length > 1) {
-        if (autoSelectHighestVersionCode) {
-          releaseChoices = [releaseChoices.first];
-        } else if (trySelectingSuggestedVersionCode &&
-            response['suggestedVersionCode'] != null) {
-          final String suggestedVersionCodeText =
-              response['suggestedVersionCode'].toString();
-          final suggestedReleases = releaseChoices.where(
-            (element) =>
-                element['versionCode'].toString() == suggestedVersionCodeText,
-          );
-          if (suggestedReleases.isNotEmpty) {
-            releaseChoices = suggestedReleases;
-          }
-        }
-      }
+      // Every release sharing the resolved version name — if there's more
+      // than one, it's an arch split; narrowed further below.
+      Iterable<dynamic> releaseChoices = releases.where(
+        (element) => element['versionName']?.toString() == version,
+      );
       if (releaseChoices.isEmpty) {
         throw NoReleasesError();
       }
-      final List<dynamic> selectedReleases = releaseChoices.toList();
-      final List<String> apkUrls = selectedReleases
-          .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
-          .toList();
-      final List<String> uniqueApkUrls = apkUrls.toSet().toList();
       final App? prevApp = previouslyCheckedApp;
-      final int preferredReleaseIndex =
-          prevApp != null &&
-              prevApp.preferredApkIndex >= 0 &&
-              prevApp.preferredApkIndex < selectedReleases.length
-          ? prevApp.preferredApkIndex
-          : selectedReleases.length - 1;
-      final int? selectedVersionCode = int.tryParse(
-        selectedReleases[preferredReleaseIndex]['versionCode']?.toString() ??
-            '',
-      );
-      // Skip the per-check APK-size HEAD and the package-page fetch (icon/name)
-      // when the upstream version is unchanged since the last check. getApp()
-      // reuses the previous apkSizeBytes / iconUrl / name in that case, so these
-      // network round-trips would just be wasted work on a no-op refresh.
+      // Skip the per-check APK-size HEAD and the package-page fetch (icon/
+      // name/nativecode) when the upstream version is unchanged since the
+      // last check. getApp() reuses the previous apkSizeBytes / iconUrl /
+      // name / release selection in that case, so these network round-trips
+      // would just be wasted work on a no-op refresh.
       final bool versionUnchanged =
           prevApp != null &&
           prevApp.rawLatestVersionFromSource != null &&
           prevApp.rawLatestVersionFromSource == version;
-      int? apkSizeBytes;
-      if (uniqueApkUrls.isNotEmpty && !versionUnchanged) {
-        try {
-          final headers = await getRequestHeaders(
-            additionalSettings,
-            uniqueApkUrls.last,
-            forAPKDownload: true,
-          );
-          final responseWithClient = await sourceRequestStreamResponse(
-            'HEAD',
-            uniqueApkUrls.last,
-            headers,
-            additionalSettings,
-          );
-          final headResponse = responseWithClient.value.value;
-          final contentLength = headResponse.contentLength;
-          if (headResponse.statusCode >= 200 &&
-              headResponse.statusCode < 300 &&
-              contentLength >= 0) {
-            apkSizeBytes = contentLength;
-          }
-          responseWithClient.value.key.close();
-        } catch (_) {
-          // File size is optional; update detection should still succeed.
-        }
-      }
       // Display name resolution (readable-app-name): prefer the localized name
       // from the packages API, then the official package page's parsed/title
-      // name; fall back to the package id last. Icon is picked up from the same
-      // package page when available.
+      // name; fall back to the package id last. Icon and per-versionCode
+      // nativecode (used just below to filter out arch-incompatible releases)
+      // come from the same package page fetch.
       String? iconUrl;
       final String packageLabel;
       final Object? rawPackageName = response['packageName'];
@@ -650,6 +626,7 @@ class FDroid extends AppSource {
           hostIdenticalDespiteAnyChange ||
           pageHost == 'f-droid.org' ||
           pageHost == 'www.f-droid.org';
+      Map<int, List<String>>? nativecodeByVersionCode;
       if (canUseOfficialPackagePage && !versionUnchanged) {
         try {
           final pkgName = packageLabel;
@@ -666,11 +643,10 @@ class FDroid extends AppSource {
                 appName = htmlTitleName!;
               }
               final doc = await parseHtmlOffIsolate(pageRes.body);
-              iconUrl =
-                  doc
-                      .querySelector('meta[property="og:image"]')
-                      ?.attributes['content'] ??
-                  doc.querySelector('img.package-icon')?.attributes['src'];
+              iconUrl = iconUrlFromStoreListingDocument(
+                doc,
+                'https://$pageHost/packages/$pkgName/',
+              );
               final String? parsedName =
                   doc.querySelector('h1.package-name')?.text.trim() ??
                   doc.querySelector('h3.package-name')?.text.trim() ??
@@ -695,10 +671,111 @@ class FDroid extends AppSource {
                   }
                 }
               }
+              nativecodeByVersionCode = _fdroidNativecodeByVersionCode(doc);
             }
           }
         } catch (e) {
-          // Icon is optional
+          // Icon/nativecode are optional
+        }
+      }
+      // Narrow to releases whose nativecode (if any) is compatible with this
+      // device before letting the auto-select toggles pick among what's
+      // left, so they can't silently land on an incompatible arch's build.
+      // If nativecode data isn't available (page fetch skipped/failed, or it
+      // covers none of these versionCodes) this is a no-op — the toggles
+      // below fall back to their original, arch-blind behavior rather than
+      // risk filtering everything out on a parsing miss.
+      if (releaseChoices.length > 1 &&
+          nativecodeByVersionCode != null &&
+          nativecodeByVersionCode.isNotEmpty) {
+        List<String> supportedAbis = [];
+        try {
+          supportedAbis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
+        } catch (e) {
+          unawaited(
+            LogsProvider().add(
+              'Failed to get supported ABIs: $e',
+              level: LogLevel.error,
+            ),
+          );
+        }
+        if (supportedAbis.isNotEmpty) {
+          final List<dynamic> compatible = releaseChoices.where((element) {
+            final int? versionCode = int.tryParse(
+              element['versionCode']?.toString() ?? '',
+            );
+            final List<String>? archs = versionCode == null
+                ? null
+                : nativecodeByVersionCode![versionCode];
+            return archs == null ||
+                archs.isEmpty ||
+                archs.any(supportedAbis.contains);
+          }).toList();
+          if (compatible.isNotEmpty) {
+            releaseChoices = compatible;
+          }
+        }
+      }
+      // For the remaining (now arch-safe) releases, use the toggles to
+      // auto-select one if possible
+      if (releaseChoices.length > 1) {
+        if (autoSelectHighestVersionCode) {
+          releaseChoices = [releaseChoices.first];
+        } else if (trySelectingSuggestedVersionCode &&
+            response['suggestedVersionCode'] != null) {
+          final String suggestedVersionCodeText =
+              response['suggestedVersionCode'].toString();
+          final suggestedReleases = releaseChoices.where(
+            (element) =>
+                element['versionCode'].toString() == suggestedVersionCodeText,
+          );
+          if (suggestedReleases.isNotEmpty) {
+            releaseChoices = suggestedReleases;
+          }
+        }
+      }
+      if (releaseChoices.isEmpty) {
+        throw NoReleasesError();
+      }
+      final List<dynamic> selectedReleases = releaseChoices.toList();
+      final List<String> apkUrls = selectedReleases
+          .map((e) => '${apkUrlPrefix}_${e['versionCode']}.apk')
+          .toList();
+      final List<String> uniqueApkUrls = apkUrls.toSet().toList();
+      final int preferredReleaseIndex =
+          prevApp != null &&
+              prevApp.preferredApkIndex >= 0 &&
+              prevApp.preferredApkIndex < selectedReleases.length
+          ? prevApp.preferredApkIndex
+          : selectedReleases.length - 1;
+      final int? selectedVersionCode = int.tryParse(
+        selectedReleases[preferredReleaseIndex]['versionCode']?.toString() ??
+            '',
+      );
+      int? apkSizeBytes;
+      if (uniqueApkUrls.isNotEmpty && !versionUnchanged) {
+        try {
+          final headers = await getRequestHeaders(
+            additionalSettings,
+            uniqueApkUrls.last,
+            forAPKDownload: true,
+          );
+          final responseWithClient = await sourceRequestStreamResponse(
+            'HEAD',
+            uniqueApkUrls.last,
+            headers,
+            additionalSettings,
+          );
+          final headResponse = responseWithClient.value.value;
+          final contentLength = headResponse.contentLength;
+          if (headResponse.statusCode >= 200 &&
+              headResponse.statusCode < 300 &&
+              contentLength >= 0) {
+            apkSizeBytes = contentLength;
+          }
+          responseWithClient.value.key.close();
+        } catch (_) {
+          // File size is optional; update detection should still succeed.
         }
       }
       return APKDetails(

@@ -280,9 +280,23 @@ class _APKOriginWarningDialogState extends State<APKOriginWarningDialog> {
   }
 }
 
+/// What the user chose in a [MalwareScanWarningDialog].
+enum MalwareScanDialogChoice {
+  /// Abandon this install.
+  cancelInstall,
+
+  /// Install despite the flagged/failed scan.
+  installAnyway,
+
+  /// Ask VirusTotal about the same APK again. Offered for a failed scan only -
+  /// a real detection is not going to change on a retry.
+  retryScan,
+}
+
 /// Shown before installing an APK that VirusTotal flagged (or that could not be
-/// scanned). Returns `true` if the user chooses to install anyway, `null` if
-/// they cancel. (Fork feature re-homed here from the pre-merge apps_provider.)
+/// scanned). Pops a [MalwareScanDialogChoice]; a null result (dismissed without
+/// a choice) must be treated as [MalwareScanDialogChoice.cancelInstall]. (Fork
+/// feature re-homed here from the pre-merge apps_provider.)
 class MalwareScanWarningDialog extends StatelessWidget {
   const MalwareScanWarningDialog({
     super.key,
@@ -300,6 +314,11 @@ class MalwareScanWarningDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool flagged = status == malwareScanStatusFlagged;
+    // A failed scan means VirusTotal never returned a verdict at all, so asking
+    // again can still produce one - and cancelling keeps the downloaded APK, so
+    // a retry (here or later) costs no bandwidth. Neither applies to a real
+    // detection, so a flagged APK gets no retry.
+    final bool scanFailed = !flagged;
     return AlertDialog(
       scrollable: true,
       title: Text(
@@ -311,6 +330,14 @@ class MalwareScanWarningDialog extends StatelessWidget {
             tr(flagged ? 'malwareScanFlaggedTitle' : 'malwareScanErrorTitle'),
       ),
       actions: [
+        if (scanFailed)
+          TextButton(
+            onPressed: () {
+              hapticSelection();
+              Navigator.of(context).pop(MalwareScanDialogChoice.retryScan);
+            },
+            child: Text(tr('virusTotalRetryScan')),
+          ),
         if (reportUrl != null)
           TextButton(
             onPressed: () {
@@ -320,14 +347,14 @@ class MalwareScanWarningDialog extends StatelessWidget {
           ),
         TextButton(
           onPressed: () {
-            Navigator.of(context).pop(null);
+            Navigator.of(context).pop(MalwareScanDialogChoice.cancelInstall);
           },
           child: Text(tr('cancelInstall')),
         ),
         TextButton(
           onPressed: () {
             hapticSelection();
-            Navigator.of(context).pop(true);
+            Navigator.of(context).pop(MalwareScanDialogChoice.installAnyway);
           },
           style: TextButton.styleFrom(
             foregroundColor: Theme.of(context).colorScheme.error,

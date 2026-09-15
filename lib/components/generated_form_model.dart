@@ -481,7 +481,20 @@ Map<String, dynamic> getDefaultValuesFromFormItems(
       } else if (el is GeneratedFormSwitch) {
         entries.add(MapEntry(el.key, el.value ?? false));
       } else if (el is GeneratedFormSubForm) {
-        entries.add(MapEntry(el.key, el.value ?? []));
+        final List<Map<String, dynamic>> subFormValues = [];
+        final List<dynamic> rawList = el.value is List
+            ? (el.value as List)
+            : [];
+        for (final dynamic item in rawList) {
+          if (item is Map) {
+            final fullDefaults = getDefaultValuesFromFormItems(el.items);
+            for (final entry in item.entries) {
+              fullDefaults[entry.key.toString()] = entry.value;
+            }
+            subFormValues.add(fullDefaults);
+          }
+        }
+        entries.add(MapEntry(el.key, subFormValues));
       } else {
         entries.add(MapEntry(el.key, el.value ?? ''));
       }

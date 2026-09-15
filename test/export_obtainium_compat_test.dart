@@ -176,6 +176,39 @@ void main() {
     expect(merged?['installMethod'], InstallerMode.shizuku.name);
   });
 
+  test('imported dhizuku installMethod survives the merge unchanged', () {
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      <String, dynamic>{'installMethod': InstallerMode.dhizuku.name},
+      null,
+    );
+
+    expect(merged?['installMethod'], InstallerMode.dhizuku.name);
+  });
+
+  test(
+    'dhizuku installMethod sanitizes to shizuku for Obtainium export and round-trips via overlay',
+    () {
+      final SplitExportSettings split = splitSettingsForExport(
+        <String, dynamic>{'installMethod': InstallerMode.dhizuku.name},
+      );
+
+      // Shared block is Obtainium-compatible ('shizuku')
+      expect(split.settings['installMethod'], InstallerMode.shizuku.name);
+      // ObtainX overlay retains 'dhizuku'
+      expect(
+        split.settingsObtainX?['installMethod'],
+        InstallerMode.dhizuku.name,
+      );
+
+      final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+        split.settings,
+        split.settingsObtainX,
+      );
+      // ObtainX import restores 'dhizuku'
+      expect(merged?['installMethod'], InstallerMode.dhizuku.name);
+    },
+  );
+
   test(
     'ObtainX self-import round-trips groupBy=appType via the shared block',
     () {
@@ -225,5 +258,37 @@ void main() {
     final int sortColumn = split.settings['sortColumn'] as int;
     expect(sortColumn >= obtainiumSortColumnCount, isFalse);
     expect(split.settings.containsKey('collapsedGroups'), isFalse);
+  });
+
+  test('no-secrets export drops tokens and their validation fingerprints', () {
+    final Set<String> keys = {
+      'theme',
+      'github-creds',
+      'githubValidatedPATFingerprint',
+      'gitlab-creds',
+      'gitlab-validated-pat-fingerprint',
+      'virustotal-api-key',
+      'virustotal-api-key-validated-fingerprint',
+      'updateInterval',
+    };
+    keys.removeWhere(isSecretSettingKey);
+    expect(keys, {'theme', 'updateInterval'});
+  });
+
+  test('import detects PAT fingerprints as secrets', () {
+    expect(
+      hasSecretsInSettingsMap(<String, dynamic>{
+        'githubValidatedPATFingerprint': 'abc',
+        'theme': 0,
+      }),
+      isTrue,
+    );
+    expect(
+      hasSecretsInSettingsMap(<String, dynamic>{
+        'gitlab-validated-pat-fingerprint': 'abc',
+      }),
+      isTrue,
+    );
+    expect(hasSecretsInSettingsMap(<String, dynamic>{'theme': 0}), isFalse);
   });
 }

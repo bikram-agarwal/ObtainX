@@ -19,6 +19,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -78,6 +79,10 @@ const localeDir = 'assets/translations';
 
 final globalNavigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+// Lets code outside the shell's subtree (e.g. a pushed folder/app route) reach
+// the shell to switch tabs — findAncestorStateOfType can't, since those routes
+// are siblings of HomePage under the root navigator, not descendants.
+final homePageKey = GlobalKey<HomePageState>();
 
 void installDiagnosticErrorLogging() {
   final logs = LogsProvider(runDefaultClear: false);
@@ -607,10 +612,10 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   // settings help icons, IconButton tooltips on toolbars) to a consistent,
   // M3-themed look without any per-call-site changes.
   //
-  // Uses `inverseSurface` / `onInverseSurface` per the M3 spec for plain
-  // tooltips: a high-contrast block of colour against the surrounding app
-  // surface. Auto-flips with light/dark mode because [inverseSurface] is dark in
-  // light themes and light in dark themes.
+  // Same tinted-surface palette as the app's toasts/snackbars (see
+  // buildAppSnackBar / showAppToast in app_toast.dart) rather than the M3-spec
+  // high-contrast `inverseSurface` block, so tooltips read as theme-colored
+  // feedback consistent with the rest of the app's transient UI.
   //
   // Default [triggerMode] is manual so Flutter does not attach a global pointer
   // listener on every [Tooltip] (long-press mode). Rebuilding the tree during
@@ -618,14 +623,22 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   // tickers" framework errors. Call sites that need visible tooltips (e.g.
   // [HelpHintIcon]) set triggerMode explicitly.
   TooltipThemeData _tooltipThemeFor(ColorScheme scheme) {
+    final Color background = Color.lerp(
+      scheme.surfaceContainerHighest,
+      scheme.inverseSurface,
+      0.18,
+    )!;
     return TooltipThemeData(
       triggerMode: TooltipTriggerMode.manual,
-      decoration: BoxDecoration(
-        color: scheme.inverseSurface,
-        borderRadius: BorderRadius.circular(12),
+      decoration: ShapeDecoration(
+        color: background,
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
       ),
       textStyle: TextStyle(
-        color: scheme.onInverseSurface,
+        color: scheme.onSurface,
         fontSize: 13,
         fontWeight: FontWeight.w500,
         height: 1.4,
@@ -854,20 +867,21 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
             themeAnimationDuration: Duration.zero,
-            // Cap the system scaler globally before applying the in-app UI
-            // scale. The default preserves Flutter's non-linear curve; a
-            // custom app scale uses a bounded linear approximation.
+            // Scale the complete app viewport while independently capping the
+            // system text scaler. This keeps text, controls, icons, spacing,
+            // overlays, and touch targets at the same user-selected scale.
+            //
+            // Nothing else belongs in this builder. It used to also install
+            // FToastBuilder's app-wide Overlay around this MediaQuery, and an
+            // Overlay consumes [Overlay.initialEntries] exactly once in
+            // initState — so the entry kept serving the child instance it was
+            // first handed and every later rebuild of this builder was dropped.
+            // That froze MediaQuery at the launch size and pinned the
+            // phone/tablet layout to whichever one the app started in. The
+            // toast host now lives under [home] instead; see [AppToastHost].
             builder: (BuildContext context, Widget? child) {
-              final MediaQueryData mq = MediaQuery.of(context);
-              return MediaQuery(
-                data: mq.copyWith(
-                  textScaler: cappedAppTextScaler(
-                    systemTextScaler: mq.textScaler,
-                    userScale: settingsProvider.appUiScale,
-                    minimumEffectiveScale: SettingsProvider.appUiScaleMin,
-                    maximumEffectiveScale: SettingsProvider.appUiScaleMax,
-                  ),
-                ),
+              return AppUiScaler(
+                scale: settingsProvider.appUiScale,
                 child: child ?? const SizedBox.shrink(),
               );
             },
@@ -877,12 +891,19 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // nav/switch/segmented/tooltip themes.
             theme: lightTheme,
             darkTheme: darkTheme,
-            home: Shortcuts(
-              shortcuts: <LogicalKeySet, Intent>{
-                LogicalKeySet(LogicalKeyboardKey.select):
-                    const ActivateIntent(),
-              },
-              child: const HomePage(),
+            // The toast host sits here, inside the route, rather than in
+            // [builder]: it only needs a context whose ancestor is an Overlay
+            // (FToast looks one up), and the root navigator already provides
+            // one. Wrapping the app in a second, app-wide Overlay from the
+            // builder is what used to freeze MediaQuery — see the note there.
+            home: AppToastHost(
+              child: Shortcuts(
+                shortcuts: <LogicalKeySet, Intent>{
+                  LogicalKeySet(LogicalKeyboardKey.select):
+                      const ActivateIntent(),
+                },
+                child: HomePage(key: homePageKey),
+              ),
             ),
           );
         },

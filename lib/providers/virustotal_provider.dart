@@ -2,6 +2,7 @@
 // Not an [AppSource] - VirusTotal isn't a place apps come from, it's a check run
 // on the file after it's already been downloaded from wherever it came from.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -59,6 +60,22 @@ void storeApiKeyValidation(String apiKey, SettingsProvider settingsProvider) {
 const String virusTotalValidatedApiKeyFingerprintKey =
     'virustotal-api-key-validated-fingerprint';
 
+/// Whether VirusTotal scanning is usable at all right now: the global feature
+/// toggle is on AND a saved API key has passed validation. Per-app exclusions are
+/// NOT considered here - see AppsProvider.willScanApkWithVirusTotal for the
+/// per-install verdict. Mirrors GitHub.canVerifyAttestations: the form pages call
+/// this to decide whether the per-app switch is actionable, so page-level gating
+/// and the install-time gate can't drift apart.
+bool virusTotalScanningAvailable(SettingsProvider settingsProvider) {
+  if (!settingsProvider.enableVirusTotalScanning) {
+    return false;
+  }
+  final String? apiKey = settingsProvider.getSettingString(virusTotalApiKeyKey);
+  return apiKey != null &&
+      apiKey.isNotEmpty &&
+      hasValidatedApiKey(apiKey, settingsProvider);
+}
+
 const String _apiBase = 'https://www.virustotal.com/api/v3';
 
 // VirusTotal's free-tier direct-upload cap. Files larger than this must go
@@ -74,6 +91,8 @@ const List<Duration> _pollDelays = [
 ];
 const Duration _pollDelayAfterInitialAttempts = Duration(seconds: 10);
 const int _maxPollAttempts = 18;
+const Duration _requestTimeout = Duration(seconds: 30);
+const Duration _uploadTimeout = Duration(minutes: 10);
 
 class VirusTotalScanResult {
   final String status;
@@ -89,6 +108,8 @@ class _VirusTotalApiError implements Exception {
 }
 
 class _VirusTotalAnalysisTimeoutError implements Exception {}
+
+class _VirusTotalRequestTimeoutError implements Exception {}
 
 String _detailForApiError(int statusCode) {
   if (statusCode == 401 || statusCode == 403) {
@@ -116,29 +137,49 @@ class VirusTotalScanner {
     String sha256Hex,
     String apiKey,
   ) async {
-    final response = await http.get(
-      Uri.parse('$_apiBase/files/$sha256Hex'),
-      headers: {'x-apikey': apiKey},
-    );
-    if (response.statusCode == 404) {
-      return null;
+    final http.Client client = http.Client();
+    try {
+      final response = await client
+          .get(
+            Uri.parse('$_apiBase/files/$sha256Hex'),
+            headers: {'x-apikey': apiKey},
+          )
+          .timeout(
+            _requestTimeout,
+            onTimeout: () => throw _VirusTotalRequestTimeoutError(),
+          );
+      if (response.statusCode == 404) {
+        return null;
+      }
+      if (response.statusCode != 200) {
+        throw _VirusTotalApiError(response.statusCode);
+      }
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } finally {
+      client.close();
     }
-    if (response.statusCode != 200) {
-      throw _VirusTotalApiError(response.statusCode);
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   Future<String> _requestUploadUrl(String apiKey) async {
-    final response = await http.get(
-      Uri.parse('$_apiBase/files/upload_url'),
-      headers: {'x-apikey': apiKey},
-    );
-    if (response.statusCode != 200) {
-      throw _VirusTotalApiError(response.statusCode);
+    final http.Client client = http.Client();
+    try {
+      final response = await client
+          .get(
+            Uri.parse('$_apiBase/files/upload_url'),
+            headers: {'x-apikey': apiKey},
+          )
+          .timeout(
+            _requestTimeout,
+            onTimeout: () => throw _VirusTotalRequestTimeoutError(),
+          );
+      if (response.statusCode != 200) {
+        throw _VirusTotalApiError(response.statusCode);
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return body['data'] as String;
+    } finally {
+      client.close();
     }
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
-    return body['data'] as String;
   }
 
   // Streams the file from disk via MultipartFile.fromPath rather than reading
@@ -157,45 +198,68 @@ class VirusTotalScanner {
     // /files endpoint, so the api key header is sent either way.
     request.headers['x-apikey'] = apiKey;
     request.files.add(await http.MultipartFile.fromPath('file', file.path));
-    final streamedResponse = await request.send();
-    final response = await http.Response.fromStream(streamedResponse);
-    if (response.statusCode != 200) {
-      throw _VirusTotalApiError(response.statusCode);
+    final http.Client client = http.Client();
+    try {
+      final streamedResponse = await client
+          .send(request)
+          .timeout(
+            _uploadTimeout,
+            onTimeout: () => throw _VirusTotalRequestTimeoutError(),
+          );
+      final response = await http.Response.fromStream(streamedResponse).timeout(
+        _requestTimeout,
+        onTimeout: () => throw _VirusTotalRequestTimeoutError(),
+      );
+      if (response.statusCode != 200) {
+        throw _VirusTotalApiError(response.statusCode);
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      return (body['data'] as Map<String, dynamic>)['id'] as String;
+    } finally {
+      client.close();
     }
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
-    return (body['data'] as Map<String, dynamic>)['id'] as String;
   }
 
   Future<Map<String, dynamic>> _pollAnalysis(
     String analysisId,
     String apiKey,
   ) async {
-    for (var attempt = 0; attempt < _maxPollAttempts; attempt++) {
-      await Future.delayed(
-        attempt < _pollDelays.length
-            ? _pollDelays[attempt]
-            : _pollDelayAfterInitialAttempts,
-      );
-      final response = await http.get(
-        Uri.parse('$_apiBase/analyses/$analysisId'),
-        headers: {'x-apikey': apiKey},
-      );
-      if (response.statusCode != 200) {
-        throw _VirusTotalApiError(response.statusCode);
+    final http.Client client = http.Client();
+    try {
+      for (var attempt = 0; attempt < _maxPollAttempts; attempt++) {
+        await Future.delayed(
+          attempt < _pollDelays.length
+              ? _pollDelays[attempt]
+              : _pollDelayAfterInitialAttempts,
+        );
+        final response = await client
+            .get(
+              Uri.parse('$_apiBase/analyses/$analysisId'),
+              headers: {'x-apikey': apiKey},
+            )
+            .timeout(
+              _requestTimeout,
+              onTimeout: () => throw _VirusTotalRequestTimeoutError(),
+            );
+        if (response.statusCode != 200) {
+          throw _VirusTotalApiError(response.statusCode);
+        }
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final attributes =
+            (body['data'] as Map<String, dynamic>)['attributes']
+                as Map<String, dynamic>;
+        if (attributes['status'] == 'completed') {
+          final fileInfo =
+              (body['meta'] as Map<String, dynamic>?)?['file_info']
+                  as Map<String, dynamic>?;
+          return {
+            'stats': attributes['stats'] as Map<String, dynamic>,
+            'sha256': fileInfo?['sha256'] as String?,
+          };
+        }
       }
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final attributes =
-          (body['data'] as Map<String, dynamic>)['attributes']
-              as Map<String, dynamic>;
-      if (attributes['status'] == 'completed') {
-        final fileInfo =
-            (body['meta'] as Map<String, dynamic>?)?['file_info']
-                as Map<String, dynamic>?;
-        return {
-          'stats': attributes['stats'] as Map<String, dynamic>,
-          'sha256': fileInfo?['sha256'] as String?,
-        };
-      }
+    } finally {
+      client.close();
     }
     throw _VirusTotalAnalysisTimeoutError();
   }
@@ -263,6 +327,11 @@ class VirusTotalScanner {
         status: malwareScanStatusError,
         detail: tr('virusTotalErrorAnalysisTimedOut'),
       );
+    } on _VirusTotalRequestTimeoutError {
+      return VirusTotalScanResult(
+        status: malwareScanStatusError,
+        detail: tr('virusTotalErrorRequestTimedOut'),
+      );
     } catch (e) {
       return VirusTotalScanResult(
         status: malwareScanStatusError,
@@ -274,11 +343,17 @@ class VirusTotalScanner {
   /// Cheap authenticated request used by the "validate key" action in
   /// Settings - returns null if the key looks valid, or an error detail.
   Future<String?> validateApiKey(String apiKey) async {
+    final http.Client client = http.Client();
     try {
-      final response = await http.get(
-        Uri.parse('$_apiBase/users/$apiKey'),
-        headers: {'x-apikey': apiKey},
-      );
+      final response = await client
+          .get(
+            Uri.parse('$_apiBase/users/$apiKey'),
+            headers: {'x-apikey': apiKey},
+          )
+          .timeout(
+            _requestTimeout,
+            onTimeout: () => throw _VirusTotalRequestTimeoutError(),
+          );
       if (response.statusCode == 200 || response.statusCode == 404) {
         // 404 still means the key was accepted (the lookup target - the
         // key's own user object - just doesn't resolve the way expected);
@@ -286,8 +361,12 @@ class VirusTotalScanner {
         return null;
       }
       return _detailForApiError(response.statusCode);
+    } on _VirusTotalRequestTimeoutError {
+      return tr('virusTotalErrorRequestTimedOut');
     } catch (e) {
       return tr('virusTotalErrorGeneric', args: [e.toString()]);
+    } finally {
+      client.close();
     }
   }
 }

@@ -1,0 +1,90 @@
+name: Format Issue Body & Comments
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+
+jobs:
+  format-issue-or-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const isComment = !!context.payload.comment;
+            const target = isComment ? context.payload.comment : context.payload.issue;
+            const body = target.body;
+            if (!body) return;
+
+            let updatedBody = body;
+
+            // 1. Resize HTML screenshots (<img width="..." ... />) -> <img width="300" src="..." />
+            const htmlImgRegex = /<img\s+[^>]*src="(https:\/\/(?:github\.com|user-images\.githubusercontent\.com)\/[^"]+)"[^>]*\/?>/gi;
+            if (htmlImgRegex.test(updatedBody)) {
+              updatedBody = updatedBody.replace(htmlImgRegex, '<img width="300" src="$1" />');
+            }
+
+            // 2. Resize Markdown screenshots (![alt](url)) -> <img width="300" ... />
+            const mdImgRegex = /!\[([^\]]*)\]\((https:\/\/(?:github\.com|user-images\.githubusercontent\.com)\/[^\)]+)\)/g;
+            if (mdImgRegex.test(updatedBody)) {
+              updatedBody = updatedBody.replace(mdImgRegex, '<img width="300" alt="$1" src="$2" />');
+            }
+
+            // 3. Format raw logs in code blocks
+            if (isComment) {
+              const trimmed = updatedBody.trim();
+              const isCodeBlock = trimmed.startsWith('```');
+              const isAttachmentLink = /^\[.*?\]\(https?:\/\/[^\)]+\)$/i.test(trimmed) || /^https?:\/\/[^\s]+$/i.test(trimmed);
+              const hasDiagnosticHeader = /^===\s+(?:ObtainX|Obtainium)\s+Diagnostic Log\s+===$/im.test(trimmed);
+              const timestampedLogLines = trimmed.match(
+                /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?:\s+(?:debug|info|warning|error):/gim
+              ) || [];
+              const hasStackTrace = /(?:^|\n)[^\n]*(?:Exception|Error):[^\n]*\n(?:\s+at\s+[^\n]+\n?){2,}/m.test(trimmed);
+              const looksLikeRawLog =
+                hasDiagnosticHeader || timestampedLogLines.length >= 2 || hasStackTrace;
+
+              if (!isCodeBlock && !isAttachmentLink && looksLikeRawLog) {
+                updatedBody = `\`\`\`\n${trimmed}\n\`\`\``;
+              }
+            } else {
+              const logsSectionRegex = /(### ObtainX logs\s*\n\n)([\s\S]*?)(?=\n### |$)/i;
+              const logsMatch = updatedBody.match(logsSectionRegex);
+
+              if (logsMatch) {
+                const header = logsMatch[1];
+                const logsContent = logsMatch[2].trim();
+
+                if (logsContent.length > 0) {
+                  const isCodeBlock = logsContent.startsWith('```');
+                  const isAttachmentLink = /^\[.*?\]\(https?:\/\/[^\)]+\)$/i.test(logsContent) ||
+                                           /^https?:\/\/[^\s]+$/i.test(logsContent);
+
+                  if (!isCodeBlock && !isAttachmentLink) {
+                    const wrappedSection = `${header}\`\`\`\n${logsContent}\n\`\`\`\n`;
+                    updatedBody = updatedBody.replace(logsSectionRegex, wrappedSection);
+                  }
+                }
+              }
+            }
+
+            if (updatedBody !== body) {
+              if (isComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: context.payload.comment.id,
+                  body: updatedBody
+                });
+              } else {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.issue.number,
+                  body: updatedBody
+                });
+              }
+            }

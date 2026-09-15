@@ -215,6 +215,70 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
   return links;
 }
 
+String resolveHtmlAssetDisplayName({
+  required String downloadUrl,
+  required String version,
+  String? appName,
+  String? linkLabel,
+  DownloadResponseMetadata? responseMetadata,
+}) {
+  final String? responseFileName = responseMetadata?.suggestedFileName;
+  if (responseFileName != null) {
+    return responseFileName;
+  }
+
+  final Uri? finalUri = responseMetadata?.finalUri;
+  if (finalUri != null && finalUri.pathSegments.isNotEmpty) {
+    final String? finalUrlFileName = sanitizeDownloadFileName(
+      finalUri.pathSegments.last,
+    );
+    if (finalUrlFileName != null &&
+        AppSource.isApkOrContainerFile(
+          finalUrlFileName,
+          includeArchives: true,
+          includeTarballs: true,
+        )) {
+      return finalUrlFileName;
+    }
+  }
+
+  final Uri downloadUri = Uri.parse(downloadUrl);
+  if (downloadUri.pathSegments.isNotEmpty) {
+    final String? downloadUrlFileName = sanitizeDownloadFileName(
+      downloadUri.pathSegments.last,
+    );
+    if (downloadUrlFileName != null &&
+        AppSource.isApkOrContainerFile(
+          downloadUrlFileName,
+          includeArchives: true,
+          includeTarballs: true,
+        )) {
+      return downloadUrlFileName;
+    }
+  }
+
+  final String? sanitizedLinkLabel = sanitizeDownloadFileName(linkLabel);
+  if (sanitizedLinkLabel != null &&
+      AppSource.isApkOrContainerFile(
+        sanitizedLinkLabel,
+        includeArchives: true,
+        includeTarballs: true,
+      )) {
+    return sanitizedLinkLabel;
+  }
+
+  final String? sanitizedAppName = sanitizeDownloadFileName(appName);
+  final String? sanitizedVersion = sanitizeDownloadFileName(version);
+  if (sanitizedAppName != null && sanitizedVersion != null) {
+    return '$sanitizedAppName-$sanitizedVersion.apk';
+  }
+
+  final String fallbackName = downloadUri.pathSegments.isNotEmpty
+      ? downloadUri.pathSegments.last
+      : downloadUri.origin;
+  return '${downloadUrl.hashCode}-$fallbackName';
+}
+
 class HTML extends AppSource {
   @override
   List<List<GeneratedFormItem>> get combinedAppSpecificSettingFormItems {
@@ -443,7 +507,8 @@ class HTML extends AppSource {
       } else {
         links = [MapEntry(currentUrl, currentUrl)];
       }
-      final rel = links.last.key;
+      final MapEntry<String, String> selectedLink = links.last;
+      final String rel = selectedLink.key;
       var relDecoded = rel;
       try {
         relDecoded = Uri.decodeFull(rel);
@@ -468,12 +533,18 @@ class HTML extends AppSource {
         rel,
         forAPKDownload: true,
       );
+      DownloadResponseMetadata? downloadMetadata;
+      void captureDownloadMetadata(DownloadResponseMetadata metadata) {
+        downloadMetadata ??= metadata;
+      }
+
       if (version == null &&
           additionalSettings['defaultPseudoVersioningMethod'] == 'ETag') {
         version = await checkETagHeader(
           rel,
           headers: apkReqHeaders,
           allowInsecure: additionalSettings['allowInsecure'] == true,
+          onResponseMetadata: captureDownloadMetadata,
         );
         if (version == null || version.isEmpty) {
           throw NoVersionError();
@@ -486,18 +557,60 @@ class HTML extends AppSource {
               rel,
               headers: apkReqHeaders,
               allowInsecure: additionalSettings['allowInsecure'] == true,
+              onResponseMetadata: captureDownloadMetadata,
             )).toString();
-      return APKDetails(
-        version,
-        [rel].map((e) {
-          final uri = Uri.parse(e);
-          final fileName = uri.pathSegments.isNotEmpty
-              ? uri.pathSegments.last
-              : uri.origin;
-          return MapEntry('${e.hashCode}-$fileName', e);
-        }).toList(),
-        AppNames(uri.host, tr('app')),
+      final bool ambiguousDownloadUrl = !AppSource.isApkOrContainerFile(
+        Uri.parse(rel).path,
+        includeArchives: true,
+        includeTarballs: true,
       );
+      String? cachedDisplayName;
+      if (ambiguousDownloadUrl &&
+          previouslyCheckedApp?.latestVersion == version) {
+        final String legacyDisplayName = resolveHtmlAssetDisplayName(
+          downloadUrl: rel,
+          version: version,
+        );
+        for (final MapEntry<String, String> apkUrl
+            in previouslyCheckedApp!.apkUrls) {
+          if (apkUrl.value == rel &&
+              apkUrl.key.isNotEmpty &&
+              apkUrl.key != legacyDisplayName) {
+            cachedDisplayName = apkUrl.key;
+            break;
+          }
+        }
+      }
+      if (ambiguousDownloadUrl &&
+          downloadMetadata == null &&
+          cachedDisplayName == null) {
+        try {
+          downloadMetadata = await probeDownloadResponseMetadata(
+            rel,
+            headers: apkReqHeaders,
+            allowInsecure: additionalSettings['allowInsecure'] == true,
+          );
+        } catch (error) {
+          unawaited(
+            LogsProvider().add(
+              'Failed to resolve HTML download filename: $error',
+              level: LogLevel.debug,
+            ),
+          );
+        }
+      }
+      final String assetDisplayName =
+          cachedDisplayName ??
+          resolveHtmlAssetDisplayName(
+            downloadUrl: rel,
+            version: version,
+            appName: previouslyCheckedApp?.finalName,
+            linkLabel: selectedLink.value,
+            responseMetadata: downloadMetadata,
+          );
+      return APKDetails(version, [
+        MapEntry(assetDisplayName, rel),
+      ], AppNames(uri.host, tr('app')));
     } catch (e) {
       rethrowOrWrapError(e);
     }

@@ -23,21 +23,20 @@ import 'package:path_provider/path_provider.dart';
 
 /// App persistence (load/save/remove), icons, and version-detection helpers.
 const _corruptFileSuffix = '.corrupt';
+const Duration _staleSaveTempAge = Duration(hours: 1);
+final RegExp _saveTempFilePattern = RegExp(r'\.json\.tmp_\d+_\d+$');
 
 // Icons from getAppIcon() are often 192–432 px but only shown at ~40 dp, so
 // 128 px is plenty at any device pixel ratio. Resize before caching so both the
 // on-disk and in-memory representations stay small.
 const int _iconMaxCachePx = 128;
 
+int _saveAppsTmpNonce = 0;
+Future<void> _saveAppsQueue = Future<void>.value();
+
 final RegExp _androidApplicationIdPattern = RegExp(
   r'^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$',
 );
-
-class VersionComparison {
-  final bool areEqual;
-  final String version;
-  const VersionComparison({required this.areEqual, required this.version});
-}
 
 /// Outcome of [AppsProviderLifecycle.removeAppsWithModal].
 class RemoveAppsWithModalResult {
@@ -80,7 +79,11 @@ extension AppsProviderLifecycle on AppsProvider {
 
   String? _getRealInstalledVersion(App app, PackageInfo? installedInfo) {
     if (installedInfo == null) return null;
-    return app.settings.getBool('useVersionCodeAsOSVersion')
+    // Must use the same rule as the app page's displayed version: reading only
+    // the derived `useVersionCodeAsOSVersion` boolean made this compare
+    // versionName against a stored version code whenever the boolean and the
+    // versionDetection dropdown fell out of sync.
+    return app.usesVersionCodeAsOsVersion
         ? installedInfo.versionCode?.toString()
         : installedInfo.versionName;
   }
@@ -138,6 +141,12 @@ extension AppsProviderLifecycle on AppsProvider {
     final bool releaseCommitShaAsVersion = app.app.settings.getBool(
       'releaseCommitShaAsVersion',
     );
+    final bool hasComparableNumericReleaseVersions =
+        realInstalledVersion != null &&
+        recognizedNumericReleaseVersionsAreComparable(
+          realInstalledVersion,
+          app.app.latestVersion,
+        );
     return !app.app.settings.getBool('trackOnly') &&
         !app.app.settings.getBool('releaseDateAsVersion') &&
         !isHTMLWithNoVersionDetection &&
@@ -148,6 +157,7 @@ extension AppsProviderLifecycle on AppsProvider {
                   app.app.latestVersion,
                 ) !=
                 null ||
+            hasComparableNumericReleaseVersions ||
             naiveStandardVersionDetection ||
             hasCommitSha ||
             releaseCommitShaAsVersion);
@@ -192,16 +202,8 @@ extension AppsProviderLifecycle on AppsProvider {
       );
       modded = true;
     }
-    // versionDetection is a string enum ('auto'/'standard'/'pseudo'/'versionCode'),
-    // NOT a bool — getBool() would return false for every string value and
-    // suppress install-version reconciliation for all standard apps.
-    final versionDetection = app.additionalSettings['versionDetection'];
-    final versionDetectionIsStandard =
-        versionDetection == 'auto' ||
-        versionDetection == 'standard' ||
-        versionDetection == 'versionCode' ||
-        versionDetection == true ||
-        versionDetection == null;
+    final VersionDetectionMode versionDetection = app.versionDetectionMode;
+    final bool versionDetectionIsStandard = app.usesStandardVersionDetection;
     final naiveStandardVersionDetection = _getNaiveStandardVersionDetection(
       app,
     );
@@ -209,9 +211,41 @@ extension AppsProviderLifecycle on AppsProvider {
       app,
       installedInfo,
     );
+    // Migrate the 2.9.7 reset sentinel. It deliberately kept installedVersion
+    // null until a reinstall, which could strand an installed app indefinitely.
+    if (app.additionalSettings.containsKey(installStatusResetKey)) {
+      app = resetInstallStatusToDeviceVersion(app, installedInfo);
+      modded = true;
+    }
     // 1. Compare reported vs. real installed versions where one is null.
-    if (installedInfo == null && app.installedVersion != null && !trackOnly) {
-      app = app.copyWith(installedVersion: null);
+    // A track-only app is exempt from "absent from the device means not
+    // installed" ONLY while its package id is a temporary placeholder: there
+    // getInstalledInfo can never match anything, so clearing would be wrong.
+    // Once the id is a real package name the device lookup is authoritative
+    // (the app holds QUERY_ALL_PACKAGES), and the else-branch below already
+    // trusts it in the opposite direction — it adopts the device's version the
+    // moment the package appears. Exempting every track-only app instead (fork
+    // main's rule) strands sources that are always track-only (APKMirror,
+    // RockMods) on "installed <old version>" forever once the user uninstalls:
+    // nothing else ever nulls the stored version, so neither a restart nor
+    // pull-to-refresh can clear it, and the app keeps counting as installed.
+    final bool trackOnlyPackageIdIsUnverifiable =
+        trackOnly &&
+        (isTempId(app) ||
+            app.additionalSettings['trackOnlyTemporaryPackageId'] == true);
+    if (installedInfo == null &&
+        app.installedVersion != null &&
+        !trackOnlyPackageIdIsUnverifiable) {
+      final newSettings = Map<String, dynamic>.from(app.additionalSettings);
+      if (trackOnly) {
+        // The install state is now *determined* (not installed), so don't let
+        // the app page resurface its "is your package id wrong?" error card.
+        newSettings['trackOnlyUndeterminedInstalledVersion'] = false;
+      }
+      app = app.copyWith(
+        installedVersion: null,
+        additionalSettings: newSettings,
+      );
       modded = true;
     } else if (realInstalledVersion != null && app.installedVersion == null) {
       // With detection disabled (non-standard), the device manifest version
@@ -251,8 +285,8 @@ extension AppsProviderLifecycle on AppsProvider {
       }
     }
     // 1c. Auto-heal a stored installedVersion whose format no longer matches
-    // the active useVersionCodeAsOSVersion setting (versionCode int vs
-    // versionName) — parity with fork main.
+    // the active version-code setting (versionCode int vs versionName) — parity
+    // with fork main.
     if (realInstalledVersion != null &&
         app.installedVersion != null &&
         versionDetectionIsStandard) {
@@ -261,7 +295,7 @@ extension AppsProviderLifecycle on AppsProvider {
         r'^\d+$',
       ).hasMatch(app.installedVersion!);
       final isRealPureInteger = RegExp(r'^\d+$').hasMatch(realInstalledVersion);
-      if (app.additionalSettings['useVersionCodeAsOSVersion'] == true) {
+      if (app.usesVersionCodeAsOsVersion) {
         if (!isStoredPureInteger) {
           formatMismatch = true;
         }
@@ -279,6 +313,7 @@ extension AppsProviderLifecycle on AppsProvider {
     }
     // 2. Reconcile differences between reported and real installed versions.
     if (realInstalledVersion != null &&
+        app.installedVersion != null &&
         realInstalledVersion != app.installedVersion &&
         versionDetectionIsStandard) {
       // App's reported version and real version don't match (and it uses standard version detection)
@@ -293,6 +328,12 @@ extension AppsProviderLifecycle on AppsProvider {
         );
         modded = true;
       } else if (naiveStandardVersionDetection) {
+        // Only sources whose version strings are known not to match the APK
+        // manifest may overwrite the stored version with the device's. Doing it
+        // unconditionally strands apps whose two version strings share no
+        // standard format: the stored value (which matched latestVersion) gets
+        // replaced by one that doesn't, and for track-only or explicitly
+        // 'standard' apps step 4 below can't clean it up.
         app = app.copyWith(installedVersion: realInstalledVersion);
         modded = true;
       }
@@ -314,20 +355,41 @@ extension AppsProviderLifecycle on AppsProvider {
         modded = true;
       }
     }
+    final bool realInstalledVersionMatchesLatest =
+        realInstalledVersion != null &&
+        versionsEffectivelyEqual(realInstalledVersion, app.latestVersion);
+    // 3b. The device says the source's latest release IS what's installed, but
+    // the stored version still disagrees and none of the steps above could
+    // relate the two strings, so nothing adopted the device's verdict (#222).
+    // Steps 1b/2/3 all require the pair to share a standard format, a digit
+    // shape, or a dotted-numeric parse, and all three fail when the APK
+    // manifest's versionName carries text the source version lacks
+    // ('2.19.1 (git 50a6b17)' vs tag 'v2.19.1') or when a 'v' prefix combines
+    // with a changed segment count ('v7.1' stored vs device '7.1.1'). Without
+    // this step a single unrecorded install is permanent: the app reports the
+    // old version and offers the same update forever, surviving restarts and
+    // pull-to-refresh. Equality here is the same test step 4 already trusts to
+    // decide that detection is working, so adopting latest cannot invent a
+    // version the device isn't running.
+    // Version-code mode is excluded: there the device value is a version code,
+    // which is not comparable with a source version string.
+    if (realInstalledVersionMatchesLatest &&
+        versionDetectionIsStandard &&
+        !app.usesVersionCodeAsOsVersion &&
+        app.installedVersion != null &&
+        app.installedVersion != app.latestVersion) {
+      app = app.copyWith(installedVersion: app.latestVersion);
+      modded = true;
+    }
     // 4. Disable version detection if versions are not standardizable.
     // Guards (parity with fork main): only auto-disable plain auto-detection
     // (not versionCode mode or an already-non-standard mode), never for
     // track-only, and NOT when the real device version is effectively equal to
     // latest (e.g. same commit hash / sha-like) — those are reconcilable, not
     // failures. The disabled value is the string enum 'pseudo', never bool false.
-    final bool realInstalledVersionMatchesLatest =
-        realInstalledVersion != null &&
-        versionsEffectivelyEqual(realInstalledVersion, app.latestVersion);
     final bool canAutoDisable =
-        app.additionalSettings['useVersionCodeAsOSVersion'] != true &&
-        (versionDetection == 'auto' ||
-            versionDetection == true ||
-            versionDetection == null);
+        !app.usesVersionCodeAsOsVersion &&
+        versionDetection == VersionDetectionMode.auto;
     if (canAutoDisable &&
         !trackOnly &&
         installedInfo != null &&
@@ -338,7 +400,7 @@ extension AppsProviderLifecycle on AppsProvider {
         )) {
       app = app.copyWith(
         additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
-          ..['versionDetection'] = 'pseudo',
+          ..['versionDetection'] = VersionDetectionMode.pseudo.key,
         installedVersion: app.latestVersion,
       );
       unawaited(logs.add('Could not reconcile version formats for: ${app.id}'));
@@ -354,41 +416,11 @@ extension AppsProviderLifecycle on AppsProvider {
     return modded ? app : null;
   }
 
-  VersionComparison? reconcileVersionDifferences(
-    String templateVersion,
-    String comparisonVersion,
-  ) {
-    final templateVersionFormats = VersionService()
-        .findStandardFormatsForVersion(templateVersion, true);
-    var comparisonVersionFormats = VersionService()
-        .findStandardFormatsForVersion(comparisonVersion, true);
-    if (comparisonVersionFormats.isEmpty) {
-      comparisonVersionFormats = VersionService().findStandardFormatsForVersion(
-        comparisonVersion,
-        false,
-      );
-    }
-    final commonStandardFormats = templateVersionFormats.intersection(
-      comparisonVersionFormats,
-    );
-    if (commonStandardFormats.isEmpty) {
-      return null;
-    }
-    for (String pattern in commonStandardFormats) {
-      if (VersionService().doStringsMatchUnderRegEx(
-        pattern,
-        comparisonVersion,
-        templateVersion,
-      )) {
-        return VersionComparison(areEqual: true, version: comparisonVersion);
-      }
-    }
-    return VersionComparison(areEqual: false, version: templateVersion);
-  }
-
-  /// Delegates to [VersionService.doStringsMatchUnderRegEx].
-  bool doStringsMatchUnderRegEx(String pattern, String value1, String value2) =>
-      VersionService().doStringsMatchUnderRegEx(pattern, value1, value2);
+  // Version reconciliation deliberately lives ONLY as the top-level
+  // [reconcileVersionDifferences] in apps_provider.dart. A same-named member here
+  // shadows it for every call inside this extension, which is how the two copies
+  // drifted (this one was missing the shape fallback) and how genuine updates
+  // ended up being discarded. Call the top-level function; don't re-add a member.
 
   /// When version detection is disabled, decide whether an externally-observed
   /// device version should replace the stored pseudo/installed version.
@@ -462,6 +494,7 @@ extension AppsProviderLifecycle on AppsProvider {
             0) <
         folderCriteriaMigrationVersion;
     final folderMembershipsToPersist = <App>[];
+    final correctedInstallStatusIds = <String>[];
     try {
       // Commit any deferred "remove from ObtainX" whose in-memory deferral was
       // lost (e.g. process restart) before re-reading the app JSON dir.
@@ -481,6 +514,9 @@ extension AppsProviderLifecycle on AppsProvider {
       final List<FileSystemEntity> appFiles = await (await getAppsDir())
           .list()
           .toList();
+      final DateTime staleSaveTempCutoff = DateTime.now().subtract(
+        _staleSaveTempAge,
+      );
       const int loadChunkSize = 16;
       for (
         int chunkStart = 0;
@@ -490,7 +526,27 @@ extension AppsProviderLifecycle on AppsProvider {
         final int chunkEnd = min(chunkStart + loadChunkSize, appFiles.length);
         await Future.wait(
           appFiles.sublist(chunkStart, chunkEnd).map((item) async {
-            if (!item.path.toLowerCase().endsWith('.json')) return;
+            final String lowerPath = item.path.toLowerCase();
+            final bool isSaveTempFile =
+                lowerPath.endsWith('.json.tmp') ||
+                _saveTempFilePattern.hasMatch(lowerPath);
+            if (isSaveTempFile) {
+              try {
+                final FileStat tempFileStat = await item.stat();
+                if (tempFileStat.modified.isBefore(staleSaveTempCutoff)) {
+                  await item.delete();
+                }
+              } catch (error) {
+                unawaited(
+                  logs.add(
+                    'Failed to clean stale save temp ${item.path}: $error',
+                    level: LogLevel.warning,
+                  ),
+                );
+              }
+              return;
+            }
+            if (!lowerPath.endsWith('.json')) return;
             final String fileName = item.path.split('/').last;
             if (singleId != null &&
                 fileName.toLowerCase() != '${singleId.toLowerCase()}.json') {
@@ -555,12 +611,29 @@ extension AppsProviderLifecycle on AppsProvider {
                 );
                 final String sourceType = src.sourceIdentifier;
                 final PackageInfo? installedInfo = installedAppsMap[app.id];
+                // Sampled before the reconcile: "externally uninstalled" is the
+                // *transition* from a recorded version to none, and only step 1
+                // of the reconcile can make it.
+                final bool hadInstalledVersion = app.installedVersion != null;
                 final App? correctedApp =
                     getCorrectedInstallStatusAppIfPossible(app, installedInfo);
                 if (correctedApp != null) {
                   app = correctedApp;
                   dataChanged = true;
-                  if (correctedApp.installedVersion == null) {
+                  correctedInstallStatusIds.add(correctedApp.id);
+                  // Absence from the device is the signal for "externally
+                  // uninstalled" — not a null installedVersion, which is also
+                  // the state left behind by an explicit install status reset,
+                  // by an app added while it was not installed, and by a
+                  // track-only app whose package id was never resolved. Keying
+                  // off installedVersion alone would let
+                  // removeOnExternalUninstall delete a still-installed app, and
+                  // keying off it without [hadInstalledVersion] would delete
+                  // apps that were simply never installed the moment any
+                  // unrelated correction fired.
+                  if (hadInstalledVersion &&
+                      correctedApp.installedVersion == null &&
+                      installedInfo == null) {
                     removedAppIds.add(correctedApp.id);
                   }
                 }
@@ -589,11 +662,18 @@ extension AppsProviderLifecycle on AppsProvider {
                     before?.sourceType != sourceType) {
                   dataChanged = true;
                 }
+                // A later install must not keep showing an APK-extracted or
+                // store-fetched icon. Clearing here lets [updateAppIcon] load
+                // the device launcher icon instead of early-returning.
+                final Uint8List? icon =
+                    installedInfo != null && before?.installedInfo == null
+                    ? null
+                    : before?.icon;
                 apps[app.id] = AppInMemory(
                   app,
                   before?.downloadProgress,
                   installedInfo,
-                  before?.icon,
+                  icon,
                   sourceType: sourceType,
                   download: before?.download,
                 );
@@ -677,6 +757,47 @@ extension AppsProviderLifecycle on AppsProvider {
         notify();
       }
     }
+    // Deliberately after the load has been reported as finished, and not awaited:
+    // nothing on screen waits for these writes.
+    if (correctedInstallStatusIds.isNotEmpty) {
+      unawaited(persistInstallStatusCorrections(correctedInstallStatusIds));
+    }
+  }
+
+  /// Writes install-status corrections that [loadApps] applied in memory back to
+  /// their JSON files.
+  ///
+  /// Without this, the corrected version lives only in memory and is re-derived
+  /// on every load, so the file on disk — and therefore any backup or auto-export
+  /// taken before the app is saved for some other reason — keeps reporting the
+  /// stale version (#222).
+  ///
+  /// Cheap in the steady state: corrections are idempotent, so once a file has
+  /// been written this finds nothing to write on subsequent loads. Only a load
+  /// that actually corrected something persists anything.
+  ///
+  /// Reads each app from the live map rather than from a snapshot taken during the
+  /// load, so a change made while the load was running (e.g. an install
+  /// recording its version) wins instead of being overwritten.
+  Future<void> persistInstallStatusCorrections(List<String> appIds) async {
+    final List<App> appsToSave = <App>[];
+    for (final String appId in appIds) {
+      final AppInMemory? entry = apps[appId];
+      if (entry != null) {
+        appsToSave.add(entry.app);
+      }
+    }
+    if (appsToSave.isEmpty) return;
+    await saveApps(
+      appsToSave,
+      // These apps were just corrected against install info the load already
+      // read: don't re-query the package manager, don't redo the correction, and
+      // don't let a routine post-load write trigger an auto-export (same reasoning
+      // as the folder-membership save above).
+      attemptToCorrectInstallStatus: false,
+      updateInstalledInfo: false,
+      autoExportAfterSave: false,
+    );
   }
 
   bool _bytesLookLikeRasterImage(Uint8List bytes) {
@@ -748,6 +869,12 @@ extension AppsProviderLifecycle on AppsProvider {
         try {
           await entity.copy(destination.path);
           await entity.delete();
+          unawaited(
+            mirrorIconToIconsDir(
+              fileName.substring(0, fileName.length - '.user.png'.length),
+              isUserIcon: true,
+            ),
+          );
         } catch (e) {
           unawaited(logs.add('User icon migrate $fileName: $e'));
         }
@@ -763,7 +890,16 @@ extension AppsProviderLifecycle on AppsProvider {
     return File('${userAppIconsDir.path}/$appId.user.png');
   }
 
-  Future<Uint8List> _resizeIconForCache(Uint8List bytes) async {
+  File _deducedAppIconPngFile(String appId) {
+    return File('${deducedAppIconsDir.path}/$appId.png');
+  }
+
+  /// Whether a deduced icon (APK-extracted or store-fetched) is already stored,
+  /// so callers can skip the work of deducing another one.
+  bool hasDeducedAppIcon(String appId) =>
+      _deducedAppIconPngFile(appId).existsSync();
+
+  Future<Uint8List> _resizeIconForStorage(Uint8List bytes) async {
     try {
       final codec = await ui.instantiateImageCodec(
         bytes,
@@ -829,6 +965,40 @@ extension AppsProviderLifecycle on AppsProvider {
     }
   }
 
+  /// Stores the launcher icon out of a downloaded APK, for apps whose source
+  /// (a code-hosting repo) publishes no icon.
+  ///
+  /// The archive was already parsed for its package id, so the icon costs no
+  /// extra download - only a native decode. That makes it the most trustworthy
+  /// deduced icon available (it comes from the very artifact ObtainX ships), so
+  /// it overwrites a previously stored store-listing icon. It is only a fallback
+  /// for apps that aren't on the device: a user override and an installed app's
+  /// launcher icon both outrank it.
+  Future<void> storeIconFromApkArchive(
+    String appId,
+    String archiveFilePath,
+  ) async {
+    try {
+      final Uint8List? archiveIcon = await NativeFeatures.getApkArchiveIcon(
+        archiveFilePath,
+      );
+      if (archiveIcon == null || !_bytesLookLikeRasterImage(archiveIcon)) {
+        return;
+      }
+      final Uint8List icon = await _resizeIconForStorage(archiveIcon);
+      await _deducedAppIconPngFile(appId).writeAsBytes(icon);
+      unawaited(mirrorIconToIconsDir(appId, isUserIcon: false));
+      if (apps.containsKey(appId) &&
+          apps[appId]!.installedInfo == null &&
+          !_userAppIconPngFile(appId).existsSync()) {
+        apps.update(appId, (value) => value.copyWith(icon: icon));
+        notify();
+      }
+    } catch (e) {
+      unawaited(logs.add('APK icon extraction failed for $appId: $e'));
+    }
+  }
+
   Future<void> updateAppIcon(String? appId, {bool ignoreCache = false}) async {
     if (appId == null || apps[appId] == null) return;
 
@@ -852,28 +1022,55 @@ extension AppsProviderLifecycle on AppsProvider {
       }
     }
 
-    if (apps[appId]!.icon != null && !ignoreCache) return;
+    final File cachedIcon = File('${iconsCacheDir.path}/$appId.png');
+    final bool isInstalled = apps[appId]!.installedInfo != null;
+    if (apps[appId]!.icon != null && !ignoreCache) {
+      // In-memory icons for non-installed apps (APK extract, store fetch) are
+      // already the right answer. After a later install, that same in-memory
+      // icon would otherwise stick forever and beat the device launcher icon.
+      if (!isInstalled) return;
+      if (cachedIcon.existsSync()) return;
+    }
 
-    final cachedIcon = File('${iconsCacheDir.path}/$appId.png');
     if (ignoreCache && cachedIcon.existsSync()) {
       await cachedIcon.delete();
     }
-    final alreadyCached = cachedIcon.existsSync() && !ignoreCache;
     Uint8List? icon;
+    // When the app is on the device, the device supplies the icon - nothing
+    // ObtainX deduces can beat it. The launcher icon is re-derivable from the OS
+    // for free, so it stays in the (disposable) cache. A non-installed app has
+    // no launcher icon, so both of these come up empty and we fall through.
+    final bool alreadyCached = cachedIcon.existsSync() && !ignoreCache;
     if (alreadyCached) {
       icon = await cachedIcon.readAsBytes();
     } else {
       icon = await _getInstalledAppIconSafely(appId);
-    }
-    if (icon == null && !alreadyCached) {
-      final url = apps[appId]!.app.iconUrl;
-      if (url != null && url.isNotEmpty) {
-        icon = await _fetchIconFromUrl(url);
+      if (icon != null) {
+        icon = await _resizeIconForStorage(icon);
+        await cachedIcon.writeAsBytes(icon);
       }
     }
-    if (icon != null && !alreadyCached) {
-      icon = await _resizeIconForCache(icon);
-      await cachedIcon.writeAsBytes(icon);
+    // Deduced icons are for non-installed apps only: extracted from the app's
+    // own APK, or fetched from a store listing. Persisted outside the cache so
+    // "clear cache" can't force that download or network fetch to happen again.
+    final File deducedIcon = _deducedAppIconPngFile(appId);
+    if (!isInstalled && icon == null && deducedIcon.existsSync()) {
+      try {
+        icon = await deducedIcon.readAsBytes();
+      } catch (e) {
+        unawaited(logs.add('Deduced icon load failed for $appId: $e'));
+      }
+    }
+    if (!isInstalled && icon == null) {
+      final url = apps[appId]!.app.iconUrl;
+      if (url != null && url.isNotEmpty) {
+        final Uint8List? fetchedIcon = await _fetchIconFromUrl(url);
+        if (fetchedIcon != null) {
+          icon = await _resizeIconForStorage(fetchedIcon);
+          await deducedIcon.writeAsBytes(icon);
+          unawaited(mirrorIconToIconsDir(appId, isUserIcon: false));
+        }
+      }
     }
     if (icon != null || ignoreCache) {
       final Uint8List? resolvedIcon = icon;
@@ -905,9 +1102,9 @@ extension AppsProviderLifecycle on AppsProvider {
 
   bool validateUserAppIconPngBytes(Uint8List bytes) => _bytesLookLikePng(bytes);
 
-  /// Icon bytes as shown when the per-app user PNG override is ignored (cache,
-  /// installed app, or [App.iconUrl]). Does not read [userAppIconsDir] or mutate
-  /// state.
+  /// Icon bytes as shown when the per-app user PNG override is ignored
+  /// (installed app or its cache, then the deduced icon, then [App.iconUrl]).
+  /// Does not read [userAppIconsDir] or mutate state.
   Future<Uint8List?> loadIconPreviewExcludingUserOverride(String appId) async {
     if (apps[appId] == null) return null;
     final File cachedIcon = File('${iconsCacheDir.path}/$appId.png');
@@ -919,6 +1116,17 @@ extension AppsProviderLifecycle on AppsProvider {
       }
     }
     Uint8List? icon = await _getInstalledAppIconSafely(appId);
+    if (apps[appId]!.installedInfo != null) {
+      return icon;
+    }
+    final File deducedIcon = _deducedAppIconPngFile(appId);
+    if (icon == null && deducedIcon.existsSync()) {
+      try {
+        return await deducedIcon.readAsBytes();
+      } catch (e) {
+        unawaited(logs.add('loadIconPreviewExcludingUserOverride deduced: $e'));
+      }
+    }
     if (icon == null) {
       final String? url = apps[appId]!.app.iconUrl;
       if (url != null && url.isNotEmpty) {
@@ -945,6 +1153,7 @@ extension AppsProviderLifecycle on AppsProvider {
       await dest.writeAsBytes(bytes);
       apps.update(appId, (value) => value.copyWith(icon: bytes));
       notify();
+      unawaited(mirrorIconToIconsDir(appId, isUserIcon: true));
       return null;
     } catch (e) {
       unawaited(logs.add('applyUserAppIconPngBytes: $e'));
@@ -964,7 +1173,7 @@ extension AppsProviderLifecycle on AppsProvider {
         return tr('unexpectedError');
       }
       final Uint8List bytes = await sourceFile.readAsBytes();
-      return applyUserAppIconPngBytes(appId, bytes);
+      return await applyUserAppIconPngBytes(appId, bytes);
     } catch (e) {
       unawaited(logs.add('setUserAppIconFromPngPath: $e'));
       return tr('unexpectedError');
@@ -976,6 +1185,7 @@ extension AppsProviderLifecycle on AppsProvider {
     final File userFile = _userAppIconPngFile(appId);
     if (userFile.existsSync()) {
       deleteFile(userFile);
+      unawaited(removeMirroredIconFromIconsDir(appId, isUserIcon: true));
     }
     await updateAppIcon(appId, ignoreCache: true);
   }
@@ -991,131 +1201,171 @@ extension AppsProviderLifecycle on AppsProvider {
     bool autoExportAfterSave = true,
     Map<String, PackageInfo>? prefetchedInstalledInfo,
   }) async {
-    Map<String, PackageInfo>? installedInfoSnapshot = prefetchedInstalledInfo;
-    if (installedInfoSnapshot == null &&
-        updateInstalledInfo &&
-        apps.length > 1) {
-      try {
-        final List<PackageInfo> installedPackages = await getAllInstalledInfo(
-          light: true,
-        );
-        installedInfoSnapshot = {
-          for (final PackageInfo info in installedPackages)
-            if (info.packageName != null) info.packageName!: info,
-        };
-      } catch (e) {
-        unawaited(
-          logs.add(
-            'Failed to prefetch installed package info for bulk save: $e',
-            level: LogLevel.warning,
-          ),
-        );
+    if (apps.isEmpty) return;
+    final List<App> uniqueApps = <App>[];
+    final Set<String> seenIds = <String>{};
+    for (int appIndex = apps.length - 1; appIndex >= 0; appIndex--) {
+      if (seenIds.add(apps[appIndex].id)) {
+        uniqueApps.add(apps[appIndex].deepCopy());
       }
     }
-    final Directory appsDirectory = await getAppsDir();
-    final sourceProvider = SourceProvider();
-    final appFolders = settingsProvider.appFolders;
-    final Map<String, PackageInfo>? effectiveInstalledInfoSnapshot =
-        installedInfoSnapshot;
-    const int saveChunkSize = 16;
-    for (
-      int chunkStart = 0;
-      chunkStart < apps.length;
-      chunkStart += saveChunkSize
-    ) {
-      final int chunkEnd = min(chunkStart + saveChunkSize, apps.length);
-      await Future.wait(
-        apps.sublist(chunkStart, chunkEnd).map((a) async {
-          var app = a.copyWith();
-          final AppInMemory? cached = this.apps[app.id];
-          final PackageInfo? info;
-          if (!updateInstalledInfo) {
-            info = cached?.installedInfo;
-          } else if (effectiveInstalledInfoSnapshot != null) {
-            info = effectiveInstalledInfoSnapshot[app.id];
-          } else {
-            info = await getInstalledInfo(app.id);
-          }
-          Uint8List? icon = cached?.icon;
-          String? installedAppName;
-          if (!updateInstalledInfo) {
-            installedAppName = cached?.installedInfo == null
-                ? null
-                : cached?.app.name;
-          } else {
-            final bool installedPackageUnchanged =
-                cached != null &&
-                cached.installedInfo?.packageName == info?.packageName &&
-                cached.installedInfo?.versionName == info?.versionName &&
-                cached.installedInfo?.versionCode == info?.versionCode &&
-                cached.installedInfo?.lastUpdateTime == info?.lastUpdateTime;
-            if (installedPackageUnchanged) {
-              installedAppName = info == null ? null : cached.app.name;
+    final List<App> effectiveApps = uniqueApps.reversed.toList();
+
+    final Future<void> pendingSaves = _saveAppsQueue;
+    final Completer<void> saveCompletion = Completer<void>();
+    _saveAppsQueue = saveCompletion.future;
+    try {
+      await pendingSaves;
+      Map<String, PackageInfo>? installedInfoSnapshot = prefetchedInstalledInfo;
+      if (installedInfoSnapshot == null &&
+          updateInstalledInfo &&
+          effectiveApps.length > 1) {
+        try {
+          final List<PackageInfo> installedPackages = await getAllInstalledInfo(
+            light: true,
+          );
+          installedInfoSnapshot = {
+            for (final PackageInfo info in installedPackages)
+              if (info.packageName != null) info.packageName!: info,
+          };
+        } catch (e) {
+          unawaited(
+            logs.add(
+              'Failed to prefetch installed package info for bulk save: $e',
+              level: LogLevel.warning,
+            ),
+          );
+        }
+      }
+      final Directory appsDirectory = await getAppsDir();
+      final sourceProvider = SourceProvider();
+      final appFolders = settingsProvider.appFolders;
+      final Map<String, PackageInfo>? effectiveInstalledInfoSnapshot =
+          installedInfoSnapshot;
+      const int saveChunkSize = 16;
+      for (
+        int chunkStart = 0;
+        chunkStart < effectiveApps.length;
+        chunkStart += saveChunkSize
+      ) {
+        final int chunkEnd = min(
+          chunkStart + saveChunkSize,
+          effectiveApps.length,
+        );
+        await Future.wait(
+          effectiveApps.sublist(chunkStart, chunkEnd).map((a) async {
+            var app = a.copyWith();
+            final AppInMemory? cached = this.apps[app.id];
+            final PackageInfo? info;
+            if (!updateInstalledInfo) {
+              info = cached?.installedInfo;
+            } else if (effectiveInstalledInfoSnapshot != null) {
+              info = effectiveInstalledInfoSnapshot[app.id];
             } else {
-              icon = null;
-              final applicationInfo = info?.applicationInfo;
-              if (applicationInfo != null) {
+              info = await getInstalledInfo(app.id);
+            }
+            Uint8List? icon = cached?.icon;
+            String? installedAppName;
+            if (!updateInstalledInfo) {
+              installedAppName = cached?.installedInfo == null
+                  ? null
+                  : cached?.app.name;
+            } else {
+              final bool installedPackageUnchanged =
+                  cached != null &&
+                  cached.installedInfo?.packageName == info?.packageName &&
+                  cached.installedInfo?.versionName == info?.versionName &&
+                  cached.installedInfo?.versionCode == info?.versionCode &&
+                  cached.installedInfo?.lastUpdateTime == info?.lastUpdateTime;
+              if (installedPackageUnchanged) {
+                installedAppName = info == null ? null : cached.app.name;
+              } else {
+                icon = null;
+                final applicationInfo = info?.applicationInfo;
+                if (applicationInfo != null) {
+                  try {
+                    icon = await applicationInfo.getAppIcon();
+                    installedAppName = await applicationInfo.getAppLabel();
+                  } catch (e) {
+                    unawaited(
+                      logs.add(
+                        'Installed package details unavailable for ${app.id}: $e',
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+            app = app.copyWith(name: installedAppName ?? app.name);
+            if (attemptToCorrectInstallStatus) {
+              app = getCorrectedInstallStatusAppIfPossible(app, info) ?? app;
+            }
+            app = normalizeSkippedLatestVersion(app);
+            final sourceIdentifier =
+                cached?.sourceType ??
+                sourceProvider
+                    .getSourceTemplate(
+                      app.url,
+                      overrideSource: app.overrideSource,
+                    )
+                    .sourceIdentifier;
+            reconcileAppFolderMemberships(
+              app,
+              appFolders,
+              sourceIdentifier: sourceIdentifier,
+              isUpToDate: appIsUpToDateForFiltering(app),
+            );
+            if (!onlyIfExists || this.apps.containsKey(app.id)) {
+              final String filePath = '${appsDirectory.path}/${app.id}.json';
+              final String tmpPath =
+                  '$filePath.tmp_${DateTime.now().microsecondsSinceEpoch}_${_saveAppsTmpNonce++}';
+              final File tmpFile = File(tmpPath);
+              try {
+                await tmpFile.writeAsString(
+                  jsonEncode(app.toJson()),
+                  flush: true,
+                ); // #2089
+                await tmpFile.rename(filePath);
+              } finally {
                 try {
-                  icon = await applicationInfo.getAppIcon();
-                  installedAppName = await applicationInfo.getAppLabel();
-                } catch (e) {
+                  if (await tmpFile.exists()) {
+                    await tmpFile.delete();
+                  }
+                } catch (cleanupError) {
                   unawaited(
                     logs.add(
-                      'Installed package details unavailable for ${app.id}: $e',
+                      'Failed to clean save temp for ${app.id}: $cleanupError',
+                      level: LogLevel.warning,
                     ),
                   );
                 }
               }
             }
-          }
-          app = app.copyWith(name: installedAppName ?? app.name);
-          if (attemptToCorrectInstallStatus) {
-            app = getCorrectedInstallStatusAppIfPossible(app, info) ?? app;
-          }
-          app = normalizeSkippedLatestVersion(app);
-          final sourceIdentifier =
-              cached?.sourceType ??
-              sourceProvider
-                  .getSourceTemplate(
-                    app.url,
-                    overrideSource: app.overrideSource,
-                  )
-                  .sourceIdentifier;
-          reconcileAppFolderMemberships(
-            app,
-            appFolders,
-            sourceIdentifier: sourceIdentifier,
-            isUpToDate: appIsUpToDateForFiltering(app),
-          );
-          if (!onlyIfExists || this.apps.containsKey(app.id)) {
-            final String filePath = '${appsDirectory.path}/${app.id}.json';
-            await File(
-              '$filePath.tmp',
-            ).writeAsString(jsonEncode(app.toJson())); // #2089
-            await File('$filePath.tmp').rename(filePath);
-          }
-          if (cached != null) {
-            this.apps[app.id] = AppInMemory(
-              app,
-              cached.downloadProgress,
-              info,
-              icon,
-              sourceType: cached.sourceType,
-              download: cached.download,
-            );
-          } else if (!onlyIfExists) {
-            this.apps[app.id] = AppInMemory(app, null, info, icon);
-          }
-        }),
-      );
-      if (chunkEnd < apps.length) {
-        await Future<void>.delayed(Duration.zero);
+            if (cached != null) {
+              this.apps[app.id] = AppInMemory(
+                app,
+                cached.downloadProgress,
+                info,
+                icon,
+                sourceType: cached.sourceType,
+                download: cached.download,
+              );
+            } else if (!onlyIfExists) {
+              this.apps[app.id] = AppInMemory(app, null, info, icon);
+            }
+          }),
+        );
+        if (chunkEnd < effectiveApps.length) {
+          await Future<void>.delayed(Duration.zero);
+        }
       }
-    }
-    markAppsChanged();
-    notify();
-    if (autoExportAfterSave) {
-      scheduleAutoExport();
+      markAppsChanged();
+      notify();
+      if (autoExportAfterSave) {
+        scheduleAutoExport();
+      }
+    } finally {
+      saveCompletion.complete();
     }
   }
 
@@ -1137,6 +1387,11 @@ extension AppsProviderLifecycle on AppsProvider {
         );
         final cachedIcon = File('${iconsCacheDir.path}/$appId.png');
         if (cachedIcon.existsSync()) cachedIcon.deleteSync();
+        final File deducedIcon = _deducedAppIconPngFile(appId);
+        if (deducedIcon.existsSync()) {
+          deducedIcon.deleteSync();
+          unawaited(removeMirroredIconFromIconsDir(appId, isUserIcon: false));
+        }
         if (apps.containsKey(appId)) {
           apps.remove(appId);
         }
@@ -1147,6 +1402,101 @@ extension AppsProviderLifecycle on AppsProvider {
       notify();
       scheduleAutoExport();
     }
+  }
+
+  /// Persists [updatedApp] under its new package ID and removes the entry
+  /// stored under [previousPackageId].
+  Future<void> renameAppPackageId(
+    String previousPackageId,
+    App updatedApp,
+  ) async {
+    final String newPackageId = updatedApp.id.trim();
+    final AppInMemory? previousEntry = apps[previousPackageId];
+    if (newPackageId.isEmpty) {
+      throw ObtainiumError(tr('invalidAndroidPackageId'));
+    }
+    if (previousEntry == null) {
+      throw ObtainiumError(tr('unexpectedError'));
+    }
+    if (newPackageId == previousPackageId) {
+      await saveApps([updatedApp], updateInstalledInfo: false);
+      return;
+    }
+    if (apps.containsKey(newPackageId)) {
+      throw ObtainiumError(tr('appAlreadyAdded'));
+    }
+    if (previousEntry.downloadProgress != null) {
+      throw ObtainiumError(tr('unexpectedError'));
+    }
+
+    final File previousUserIcon = _userAppIconPngFile(previousPackageId);
+    final File newUserIcon = _userAppIconPngFile(newPackageId);
+    if (newUserIcon.existsSync()) {
+      deleteFile(newUserIcon);
+    }
+    if (previousUserIcon.existsSync()) {
+      previousUserIcon.renameSync(newUserIcon.path);
+    }
+    final File previousDeducedIcon = _deducedAppIconPngFile(previousPackageId);
+    final File newDeducedIcon = _deducedAppIconPngFile(newPackageId);
+    if (newDeducedIcon.existsSync()) {
+      deleteFile(newDeducedIcon);
+    }
+    if (previousDeducedIcon.existsSync()) {
+      previousDeducedIcon.renameSync(newDeducedIcon.path);
+    }
+
+    try {
+      await saveApps(
+        [updatedApp.copyWith(id: newPackageId)],
+        onlyIfExists: false,
+        autoExportAfterSave: false,
+      );
+    } catch (_) {
+      if (newUserIcon.existsSync() && !previousUserIcon.existsSync()) {
+        newUserIcon.renameSync(previousUserIcon.path);
+      }
+      if (newDeducedIcon.existsSync() && !previousDeducedIcon.existsSync()) {
+        newDeducedIcon.renameSync(previousDeducedIcon.path);
+      }
+      rethrow;
+    }
+
+    unawaited(
+      removeMirroredIconFromIconsDir(previousPackageId, isUserIcon: true),
+    );
+    unawaited(
+      removeMirroredIconFromIconsDir(previousPackageId, isUserIcon: false),
+    );
+    if (newUserIcon.existsSync()) {
+      unawaited(mirrorIconToIconsDir(newPackageId, isUserIcon: true));
+    }
+    if (newDeducedIcon.existsSync()) {
+      unawaited(mirrorIconToIconsDir(newPackageId, isUserIcon: false));
+    }
+
+    final AppInMemory? newEntry = apps[newPackageId];
+    if (newEntry != null) {
+      apps[newPackageId] = AppInMemory(
+        newEntry.app,
+        previousEntry.downloadProgress,
+        newEntry.installedInfo,
+        previousEntry.icon,
+        sourceType: previousEntry.sourceType,
+        download: previousEntry.download,
+      );
+    }
+
+    final ({String? title, String message})? pageError = appPageErrors.remove(
+      previousPackageId,
+    );
+    if (pageError != null) {
+      appPageErrors[newPackageId] = pageError;
+    }
+    detailPageAutoChecksInFlight.remove(previousPackageId);
+    lastDetailPageAutoCheckStartedAt.remove(previousPackageId);
+
+    await removeApps([previousPackageId]);
   }
 
   Future<RemoveAppsWithModalResult> removeAppsWithModal(
@@ -1302,9 +1652,15 @@ extension AppsProviderLifecycle on AppsProvider {
         if (standardIconCache.existsSync()) {
           deleteFile(standardIconCache);
         }
+        final File deducedIconStored = _deducedAppIconPngFile(appId);
+        if (deducedIconStored.existsSync()) {
+          deleteFile(deducedIconStored);
+          unawaited(removeMirroredIconFromIconsDir(appId, isUserIcon: false));
+        }
         final File userIconStored = _userAppIconPngFile(appId);
         if (userIconStored.existsSync()) {
           deleteFile(userIconStored);
+          unawaited(removeMirroredIconFromIconsDir(appId, isUserIcon: true));
         }
         final File legacyUserIconInCache = File(
           '${iconsCacheDir.path}/$appId.user.png',
@@ -1468,8 +1824,7 @@ extension AppsProviderLifecycle on AppsProvider {
         'trackOnlyTemporaryPackageId': isTempId(renamed),
       },
     );
-    await removeApps([previousPackageId]);
-    await saveApps([updatedApp], onlyIfExists: false);
+    await renameAppPackageId(previousPackageId, updatedApp);
   }
 
   /// Reconciles a newly added app with all smart folders. Prefer the live [App]

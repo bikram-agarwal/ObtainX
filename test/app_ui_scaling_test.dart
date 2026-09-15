@@ -3,43 +3,57 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/app_ui_scaling.dart';
 
 void main() {
-  const double minimumScale = 0.75;
-  const double maximumScale = 1.25;
+  testWidgets('scales layout, MediaQuery, text, and hit testing together', (
+    WidgetTester tester,
+  ) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(400, 800);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
 
-  TextScaler buildScaler({
-    required double systemScale,
-    required double userScale,
-  }) {
-    return cappedAppTextScaler(
-      systemTextScaler: TextScaler.linear(systemScale),
-      userScale: userScale,
-      minimumEffectiveScale: minimumScale,
-      maximumEffectiveScale: maximumScale,
+    MediaQueryData? scaledMediaQuery;
+    bool wasTapped = false;
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(
+          size: Size(400, 800),
+          padding: EdgeInsets.only(top: 20),
+          viewPadding: EdgeInsets.only(top: 20),
+          textScaler: TextScaler.linear(3.0),
+        ),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppUiScaler(
+            scale: 1.25,
+            child: Builder(
+              builder: (BuildContext context) {
+                scaledMediaQuery = MediaQuery.of(context);
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: GestureDetector(
+                    key: const ValueKey<String>('scaled-target'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => wasTapped = true,
+                    child: const SizedBox(width: 40, height: 20),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
-  }
 
-  test('default UI scale caps oversized system text scaling', () {
-    final TextScaler scaler = buildScaler(systemScale: 3.0, userScale: 1.0);
+    expect(scaledMediaQuery?.size, const Size(320, 640));
+    expect(scaledMediaQuery?.padding.top, 16);
+    expect(scaledMediaQuery?.textScaler.scale(20), 24);
 
-    expect(scaler.scale(10), 12);
-    expect(scaler.scale(20), 24);
-  });
+    final Finder target = find.byKey(const ValueKey<String>('scaled-target'));
+    expect(tester.getTopLeft(target), Offset.zero);
+    expect(tester.getBottomRight(target), const Offset(50, 25));
 
-  test('default UI scale preserves system scaling below the cap', () {
-    final TextScaler scaler = buildScaler(systemScale: 1.1, userScale: 1.0);
-
-    expect(scaler.scale(20), 22);
-  });
-
-  test('custom UI scale cannot exceed the app-supported maximum', () {
-    final TextScaler scaler = buildScaler(systemScale: 3.0, userScale: 1.25);
-
-    expect(scaler.scale(20), 25);
-  });
-
-  test('custom UI scale cannot fall below the app-supported minimum', () {
-    final TextScaler scaler = buildScaler(systemScale: 0.5, userScale: 0.75);
-
-    expect(scaler.scale(20), 15);
+    await tester.tapAt(const Offset(45, 20));
+    expect(wasTapped, isTrue);
   });
 }

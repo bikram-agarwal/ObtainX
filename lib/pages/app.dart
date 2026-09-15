@@ -5,11 +5,11 @@ import 'dart:math' as math;
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart'
+    show Listenable, listEquals, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -23,6 +23,7 @@ import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
@@ -35,12 +36,14 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:markdown/markdown.dart' as md;
 
-bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
+@visibleForTesting
+bool isInstalledVersionPseudoForDisplay(AppInMemory appInMemory) {
   final App appModel = appInMemory.app;
   final String? displayedInstalledVersion = appModel.installedVersion;
   if (displayedInstalledVersion == null || displayedInstalledVersion.isEmpty) {
@@ -55,6 +58,15 @@ bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
         );
   }
 
+  // Auto is allowed to infer/fall back to pseudo when source and device
+  // versions cannot be reconciled. Explicit Standard and Version Code are not:
+  // those modes must never present themselves as pseudo regardless of any
+  // mismatch in stored, source, or OS-reported versions.
+  if (appModel.versionDetectionMode == VersionDetectionMode.standard ||
+      appModel.versionDetectionMode == VersionDetectionMode.versionCode) {
+    return false;
+  }
+
   if (!versionsEffectivelyEqual(
     displayedInstalledVersion,
     appModel.latestVersion,
@@ -66,7 +78,7 @@ bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
   if (installedInfo == null) {
     return false;
   }
-  final String? realInstalledVersion = _usesVersionCodeAsOsVersion(appModel)
+  final String? realInstalledVersion = appModel.usesVersionCodeAsOsVersion
       ? installedInfo.versionCode.toString()
       : installedInfo.versionName;
   if (realInstalledVersion == null || realInstalledVersion.isEmpty) {
@@ -78,19 +90,14 @@ bool _isInstalledVersionPseudo(AppInMemory appInMemory) {
   );
 }
 
-bool _usesVersionCodeAsOsVersion(App appModel) {
-  return appModel.additionalSettings['useVersionCodeAsOSVersion'] == true ||
-      appModel.additionalSettings['versionDetection'] == 'versionCode';
-}
-
 /// The real OS-reported installed version (versionName, or versionCode when the
-/// app uses useVersionCodeAsOSVersion). Null when nothing is installed. Surfaced
-/// on the app page only when the displayed version is a pseudo-version, so the
-/// user can still see what's actually installed.
+/// app uses [App.usesVersionCodeAsOsVersion]). Null when nothing is installed.
+/// Surfaced on the app page only when the displayed version is a pseudo-version,
+/// so the user can still see what's actually installed.
 String? _realOsInstalledVersion(AppInMemory appInMemory) {
   final installedInfo = appInMemory.installedInfo;
   if (installedInfo == null) return null;
-  return _usesVersionCodeAsOsVersion(appInMemory.app)
+  return appInMemory.app.usesVersionCodeAsOsVersion
       ? installedInfo.versionCode.toString()
       : installedInfo.versionName;
 }
@@ -177,6 +184,11 @@ String? _resolveStoreUrl({
   }
   final entry = storeData[storeName]!;
   if (entry.isEmpty) return null; // confirmed absent (empty string sentinel)
+  if (storeName == 'APKPure' && !isWellFormedApkPureUrl(entry)) {
+    // Known-broken shape from a past bug - don't surface a link we know
+    // 404s just because it's sitting in the cache.
+    return null;
+  }
   return entry; // confirmed present
 }
 
@@ -218,11 +230,13 @@ Future<String?> _checkPlayStoreAvailability(String packageId) async {
   return null;
 }
 
-void _toastUrl(String url) {
-  Fluttertoast.showToast(
-    msg: url,
-    toastLength: Toast.LENGTH_LONG,
-    timeInSecForIosWeb: 5,
+void _toastUrl(BuildContext context, String url) {
+  showAppToast(
+    url,
+    context: context,
+    icon: Icons.link_rounded,
+    type: ToastType.info,
+    duration: const Duration(seconds: 4),
   );
 }
 
@@ -303,6 +317,7 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
     settings.checkUpdateOnDetailPage,
     settings.highlightTouchTargets,
     settings.cardCornerScale,
+    settings.updateButtonsAtTopOfAppPage,
     Object.hashAll(
       settings.categories.entries.map((e) => '${e.key}=${e.value}'),
     ),
@@ -361,47 +376,99 @@ class _DownloadProgressAction extends StatelessWidget {
               ? tr('flaggedByVirusTotal')
               : tr('virusTotalScanFailed'))
         : tr('downloadingX', args: ['${dp.round()}%$bytesLabel']);
-    final Color barColor = isFlaggedState
-        ? actionTheme.colorScheme.error
-        : actionTheme.colorScheme.primary;
-    final Color textColor = isFlaggedState
-        ? actionTheme.colorScheme.onError
-        : actionTheme.colorScheme.onSurface.withAlpha(200);
     final Widget progressBar = ClipRRect(
       borderRadius: BorderRadius.circular(expressiveRadius),
       child: SizedBox(
         height: 52,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Container(color: actionTheme.colorScheme.onSurface.withAlpha(31)),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: (isBusy || isFlaggedState) ? 1.0 : dp / 100,
-                child: Container(
-                  color: barColor.withAlpha(
-                    isFlaggedState ? 220 : (isBusy ? 55 : 220),
+        child: isFlaggedState
+            ? Container(
+                color: actionTheme.colorScheme.error,
+                alignment: Alignment.center,
+                child: Text(
+                  label,
+                  style: actionTheme.textTheme.labelLarge?.copyWith(
+                    color: actionTheme.colorScheme.onError,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
+              )
+            : isBusy
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    color: actionTheme.colorScheme.surfaceContainerHighest,
+                  ),
+                  LinearProgressIndicator(
+                    backgroundColor: Colors.transparent,
+                    color: actionTheme.colorScheme.primary,
+                  ),
+                  Center(
+                    child: Text(
+                      label,
+                      style: actionTheme.textTheme.labelLarge?.copyWith(
+                        color: actionTheme.colorScheme.onSurface,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : LayoutBuilder(
+                builder: (BuildContext context, BoxConstraints constraints) {
+                  final double progress = (dp / 100).clamp(0.0, 1.0);
+                  final double fillWidth = constraints.maxWidth * progress;
+
+                  Widget buildCenteredLabel(Color textColor) => Center(
+                    child: Text(
+                      label,
+                      style: actionTheme.textTheme.labelLarge?.copyWith(
+                        color: textColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  );
+
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Container(
+                        color: actionTheme.colorScheme.surfaceContainerHighest,
+                      ),
+                      buildCenteredLabel(
+                        actionTheme.colorScheme.onSurfaceVariant,
+                      ),
+                      if (fillWidth > 0)
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: fillWidth,
+                          child: ClipRect(
+                            child: OverflowBox(
+                              alignment: Alignment.centerLeft,
+                              minWidth: constraints.maxWidth,
+                              maxWidth: constraints.maxWidth,
+                              minHeight: constraints.maxHeight,
+                              maxHeight: constraints.maxHeight,
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  Container(
+                                    color: actionTheme.colorScheme.primary,
+                                  ),
+                                  buildCenteredLabel(
+                                    actionTheme.colorScheme.onPrimary,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
-            ),
-            if (isBusy)
-              LinearProgressIndicator(
-                backgroundColor: Colors.transparent,
-                color: actionTheme.colorScheme.primary.withAlpha(120),
-              ),
-            Center(
-              child: Text(
-                label,
-                style: actionTheme.textTheme.labelLarge?.copyWith(
-                  color: textColor,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
     return Column(
@@ -819,6 +886,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     ThemeData pageThemeForDialogs,
   ) {
     if (!_editMode || appData == null) return null;
+    final ColorScheme colorScheme = Theme.of(themeContext).colorScheme;
+    final Color disabledSaveFabColor =
+        Color.lerp(
+          colorScheme.surfaceContainerHighest,
+          colorScheme.onSurface,
+          Theme.of(themeContext).brightness == Brightness.dark ? 0.18 : 0.08,
+        ) ??
+        colorScheme.surfaceContainerHighest;
     return _MeasureSize(
       onChange: _handleEditModeFloatingActionButtonsSizeChanged,
       child: Column(
@@ -838,13 +913,33 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             child: const Icon(Icons.close),
           ),
           const SizedBox(height: 12),
-          FloatingActionButton(
-            heroTag: 'app_page_edit_save',
-            tooltip: widget.isEmbedded ? null : tr('save'),
-            onPressed: appData.downloadProgress != null || updating
-                ? null
-                : () => _saveEdit(appData, appsProvider),
-            child: const Icon(Icons.check),
+          ListenableBuilder(
+            listenable: Listenable.merge([
+              _nameController,
+              _authorController,
+              _urlController,
+              _packageController,
+              _notesController,
+            ]),
+            builder: (BuildContext context, Widget? child) {
+              final bool canSave =
+                  appData.downloadProgress == null &&
+                  !updating &&
+                  _isEditDirty(appData);
+              return FloatingActionButton(
+                heroTag: 'app_page_edit_save',
+                tooltip: widget.isEmbedded ? null : tr('save'),
+                backgroundColor: canSave ? null : disabledSaveFabColor,
+                foregroundColor: canSave
+                    ? null
+                    : colorScheme.onSurface.withValues(alpha: 0.48),
+                elevation: canSave ? null : 0,
+                onPressed: canSave
+                    ? () => _saveEdit(appData, appsProvider)
+                    : null,
+                child: const Icon(Icons.check),
+              );
+            },
           ),
         ],
       ),
@@ -901,8 +996,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     }
     final newUrl = _urlController.text.trim();
     updatedApp = updatedApp.copyWith(url: newUrl);
-    final newId = _packageController.text.trim();
-    if (newId.isNotEmpty && newId != updatedApp.id) {
+    final String newId = _packageController.text.trim();
+    if (newId.isEmpty) {
+      _showPageError(ObtainiumError(tr('invalidAndroidPackageId')));
+      return;
+    }
+    final bool packageIdChanged = newId != updatedApp.id;
+    if (packageIdChanged && appsProvider.apps.containsKey(newId)) {
+      _showPageError(ObtainiumError(tr('appAlreadyAdded')));
+      return;
+    }
+    if (packageIdChanged) {
       updatedApp = updatedApp.copyWith(allowIdChange: true, id: newId);
     }
     updatedApp = updatedApp.copyWith(categories: _editCategories);
@@ -934,14 +1038,55 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       }
     }
 
-    await appsProvider.saveApps(
-      [updatedApp],
-      onlyIfExists: true,
-      updateInstalledInfo: false,
-    );
-    await appsProvider.updateAppIcon(updatedApp.id);
+    try {
+      if (packageIdChanged) {
+        await appsProvider.renameAppPackageId(widget.appId, updatedApp);
+      } else {
+        await appsProvider.saveApps(
+          [updatedApp],
+          onlyIfExists: true,
+          updateInstalledInfo: false,
+        );
+      }
+      await appsProvider.updateAppIcon(updatedApp.id);
+    } catch (error) {
+      if (mounted) {
+        _showPageError(error);
+      }
+      return;
+    }
     if (mounted) {
       _clearEditIconStaging();
+      if (packageIdChanged) {
+        if (widget.isEmbedded) {
+          final AppsPageState? appsPageState = context
+              .findAncestorStateOfType<AppsPageState>();
+          if (appsPageState != null) {
+            appsPageState.openAppById(newId, autoScroll: false);
+          } else {
+            unawaited(
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute<void>(
+                  builder: (BuildContext context) =>
+                      AppPage(appId: newId, isEmbedded: true),
+                ),
+              ),
+            );
+          }
+        } else {
+          unawaited(
+            Navigator.of(context).pushReplacement(
+              heroFriendlyAppPageRoute<void>(
+                (BuildContext context) => AppPage(
+                  appId: newId,
+                  appsListHeroFolderId: widget.appsListHeroFolderId,
+                ),
+              ),
+            ),
+          );
+        }
+        return;
+      }
       setState(() => _editMode = false);
       if (_appPageScrollController.hasClients) {
         _appPageScrollController.jumpTo(0);
@@ -950,9 +1095,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickEditIcon(AppsProvider appsProvider) async {
-    final FilePickerResult? result;
+    final PlatformFile? picked;
     try {
-      result = await FilePicker.pickFiles(
+      picked = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: const ['png'],
       );
@@ -966,8 +1111,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return;
     }
     if (!mounted) return;
-    if (result == null || result.files.isEmpty) return;
-    final PlatformFile picked = result.files.single;
+    if (picked == null) return;
     final Uint8List? bytes = await _readPickedFileBytes(picked);
     if (bytes == null) return;
     if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
@@ -1766,18 +1910,28 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   /// After a pull-to-refresh, checks all 4 stores (APKMirror, F-Droid, APKPure,
   /// Play Store) for this single app concurrently. Cached stores are skipped,
   /// except that APKMirror is rechecked when its existing availability response
-  /// can also fill a missing app icon. Caches results and triggers a
-  /// FutureBuilder rebuild so the Other Sources row updates in place.
+  /// can also fill a missing app icon. Presence always runs for every store
+  /// that is still uncached. Icon resolution is separate: APKMirror API icon
+  /// first, then listing-page icons APKMirror -> F-Droid -> APKPure -> Play
+  /// Store, stopping at the first hit - and skipped entirely for installed apps
+  /// or when an icon was already extracted from a downloaded APK. Caches results
+  /// and triggers a FutureBuilder rebuild so the Other Sources row updates in
+  /// place.
   Future<void> _maybeCheckAndCacheAllStores(String appId) async {
     if (appId.isEmpty || !mounted) return;
 
     final appsProvider = Provider.of<AppsProvider>(context, listen: false);
     final AppInMemory? appBeforeStoreCheck = appsProvider.apps[appId];
     final trackedUrl = appBeforeStoreCheck?.app.url;
+    // No icon to hunt for when the device already supplies one (app is
+    // installed), or when one was deduced from a downloaded APK and stored
+    // permanently - that one is authoritative and needs no improving on.
     final shouldResolveMissingIcon =
         appBeforeStoreCheck != null &&
         appBeforeStoreCheck.icon == null &&
-        appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true;
+        appBeforeStoreCheck.installedInfo == null &&
+        appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true &&
+        !appsProvider.hasDeducedAppIcon(appId);
 
     final cache = await BulkScanCache.load();
     final storeData = cache[appId] ?? {};
@@ -1802,8 +1956,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         ]).then((result) => MapEntry('F-Droid', result[appId])),
       );
     }
+    final String cachedApkPureUrl = storeData['APKPure'] ?? '';
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
-        (storeData['APKPure'] ?? '').isEmpty) {
+        (cachedApkPureUrl.isEmpty ||
+            !isWellFormedApkPureUrl(cachedApkPureUrl))) {
       futures.add(
         BulkImportService.checkApkPure([
           appId,
@@ -1819,27 +1975,45 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    if (futures.isEmpty) return;
-
-    final results = await Future.wait(futures);
-
     final entry = cache.putIfAbsent(appId, () => {});
-    for (final result in results) {
-      if (result.value != null || (entry[result.key] ?? '').isEmpty) {
-        entry[result.key] = result.value ?? '';
+    if (futures.isNotEmpty) {
+      final results = await Future.wait(futures);
+      for (final result in results) {
+        final String existing = entry[result.key] ?? '';
+        // A malformed cached APKPure entry is never usable - a fresh "not
+        // found" (null) result must be allowed to overwrite it with the
+        // empty-string sentinel, not just a fresh URL. Every other store's
+        // cached value is trusted as-is once non-empty.
+        final bool existingIsUsable = result.key == 'APKPure'
+            ? existing.isNotEmpty && isWellFormedApkPureUrl(existing)
+            : existing.isNotEmpty;
+        if (result.value != null || !existingIsUsable) {
+          entry[result.key] = result.value ?? '';
+        }
       }
+      await BulkScanCache.save(cache);
+    } else if (!shouldResolveMissingIcon) {
+      return;
     }
-    await BulkScanCache.save(cache);
 
-    final String? apkMirrorIconUrl = apkMirrorIconUrls[appId];
+    String? resolvedIconUrl;
+    if (shouldResolveMissingIcon) {
+      resolvedIconUrl = await resolveIconUrlFromOtherStores(
+        apkMirrorIconUrl: apkMirrorIconUrls[appId],
+        apkMirrorListingUrl: entry['APKMirror'],
+        fdroidListingUrl: entry['F-Droid'],
+        apkPureListingUrl: entry['APKPure'],
+        playStoreListingUrl: entry['PlayStore'],
+      );
+    }
     final AppInMemory? currentApp = appsProvider.apps[appId];
-    if (apkMirrorIconUrl != null &&
+    if (resolvedIconUrl != null &&
         currentApp != null &&
         currentApp.icon == null &&
         currentApp.app.iconUrl?.isNotEmpty != true &&
         currentApp.app.url == trackedUrl) {
       await appsProvider.saveApps([
-        currentApp.app.copyWith(iconUrl: apkMirrorIconUrl),
+        currentApp.app.copyWith(iconUrl: resolvedIconUrl),
       ], updateInstalledInfo: false);
       await appsProvider.updateAppIcon(appId);
     }
@@ -2011,7 +2185,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       child: InkWell(
         onTap: () => launchUrlString(url, mode: LaunchMode.externalApplication),
         onLongPress: () {
-          _toastUrl(url);
+          _toastUrl(iconContext, url);
           Clipboard.setData(ClipboardData(text: url));
         },
         borderRadius: BorderRadius.circular(12),
@@ -2055,9 +2229,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             !widget.showOppositeOfPreferredView) ||
         (!settingsProvider.showAppWebpage &&
             widget.showOppositeOfPreferredView);
-
     final bool areDownloadsRunning = appsProvider.areDownloadsRunning();
-
     final AppInMemory? app = appsProvider.apps[widget.appId];
     final List<String> loadedCertificateHashes =
         app?.certificateHashes ?? const <String>[];
@@ -2081,6 +2253,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           context,
           listen: false,
         ).updateAppIcon(widget.appId, ignoreCache: false);
+        // updateAppIcon only falls back to an already-set App.iconUrl - it
+        // doesn't go looking for one. Without this, a freshly-added app whose
+        // source publishes no icon stays iconless until the user manually
+        // pulls to refresh (which is what actually resolves iconUrl via the
+        // other stores below).
+        unawaited(_maybeCheckAndCacheAllStores(widget.appId));
       });
     }
     if (widget.openInEditMode &&
@@ -2224,12 +2402,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     }
     final trackOnly = app?.app.additionalSettings['trackOnly'] == true;
 
+    // Defaults to true when there is no app yet, as the old inline chain did
+    // (its `== null` arm matched a null app).
     final bool isVersionDetectionStandard =
-        app?.app.additionalSettings['versionDetection'] == 'auto' ||
-        app?.app.additionalSettings['versionDetection'] == 'standard' ||
-        app?.app.additionalSettings['versionDetection'] == 'versionCode' ||
-        app?.app.additionalSettings['versionDetection'] == true ||
-        app?.app.additionalSettings['versionDetection'] == null;
+        app?.app.usesStandardVersionDetection ?? true;
 
     if (showAppWebpageFinal) {
       _webViewTopInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
@@ -2538,8 +2714,501 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    Column getInfoColumn(BuildContext pageThemeContext, {bool small = false}) {
+    Future<dynamic> showMarkUpdatedDialog() {
+      return _showPageDialog(
+        hostContext: context,
+        builder: (BuildContext ctx) {
+          return AlertDialog(
+            title: Text(tr('alreadyUpToDateQuestion')),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: Text(tr('no')),
+              ),
+              TextButton(
+                onPressed: () {
+                  hapticSelection();
+                  App? updatedApp = app?.app.deepCopy();
+                  if (updatedApp != null) {
+                    updatedApp = updatedApp.copyWith(
+                      installedVersion: updatedApp.latestVersion,
+                    );
+                    updatedApp.additionalSettings.remove(
+                      'skippedLatestVersion',
+                    );
+                    updatedApp.additionalSettings.remove(installStatusResetKey);
+                    appsProvider.saveApps(
+                      [updatedApp],
+                      attemptToCorrectInstallStatus: false,
+                      updateInstalledInfo: false,
+                    );
+                  }
+                  Navigator.of(context).pop();
+                },
+                child: Text(tr('yesMarkUpdated')),
+              ),
+            ],
+          );
+        },
+      );
+    }
+
+    Widget getBottomCenterActions(
+      BuildContext themeContext,
+      AppInMemory? app, {
+      required AppSource? source,
+      required bool trackOnly,
+      required bool isVersionDetectionStandard,
+      required bool areDownloadsRunning,
+    }) {
+      final ThemeData actionTheme = Theme.of(themeContext);
+      const double expressiveRadius = 26;
+      const EdgeInsets expressivePadding = EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 14,
+      );
+      const Size expressiveMinimumSize = Size(48, 52);
+      final RoundedRectangleBorder expressiveShape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(expressiveRadius),
+      );
+      const Size expressiveMaximumSize = Size(double.infinity, 52);
+      final ButtonStyle expressiveFilled = FilledButton.styleFrom(
+        minimumSize: expressiveMinimumSize,
+        maximumSize: expressiveMaximumSize,
+        padding: expressivePadding,
+        shape: expressiveShape,
+        elevation: 1,
+        shadowColor: actionTheme.colorScheme.shadow,
+        backgroundColor: actionTheme.colorScheme.primary,
+        foregroundColor: actionTheme.colorScheme.onPrimary,
+        disabledBackgroundColor: actionTheme.colorScheme.onSurface.withAlpha(
+          31,
+        ),
+        disabledForegroundColor: actionTheme.colorScheme.onSurface.withAlpha(
+          97,
+        ),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      );
+
+      if (_editMode) {
+        return const SizedBox.shrink();
+      }
+
+      // Update label shows size when known from the source metadata.
+      final int? knownApkSizeBytes = app?.app.apkSizeBytes;
+      // Appends "· 43 MB" to install/update labels when size is known.
+      String sizeAnnotated(String base) {
+        if (knownApkSizeBytes == null) {
+          return base;
+        }
+        return '$base · ${formatBytesForDisplay(knownApkSizeBytes)}';
+      }
+
+      final String updateLabel = sizeAnnotated(tr('update'));
+      final String installLabel = sizeAnnotated(tr('install'));
+      final String markInstalledLabel = sizeAnnotated(tr('markInstalled'));
+      final String markUpdatedLabel = sizeAnnotated(tr('markUpdated'));
+
+      // #2 — inline progress button replaces the action button while
+      // downloading/installing. The live bar is its own widget so the ~4 Hz
+      // progress ticks don't rebuild the whole page (see [_DownloadProgressAction]
+      // and the note in [appPageAppsRebuildToken]).
+      if (app?.downloadProgress != null) {
+        return _DownloadProgressAction(
+          appId: app!.app.id,
+          actionTheme: actionTheme,
+          expressiveRadius: expressiveRadius,
+        );
+      }
+
+      final bool actionBlocked = updating || areDownloadsRunning;
+      final bool buildVerificationBlocked =
+          app != null &&
+          source != null &&
+          buildVerificationEnforcementBlocksInstall(
+            app.app,
+            source,
+            settingsProvider,
+          );
+      final String? buildVerificationBlockedMessage = buildVerificationBlocked
+          ? buildVerificationEnforcedBlockedMessage(
+              app.app,
+              source,
+              settingsProvider,
+            )
+          : null;
+      final bool installActionBlocked =
+          actionBlocked || buildVerificationBlocked;
+      final installedVersion = app?.app.installedVersion;
+      final bool installedVersionIsNull = installedVersion == null;
+      final bool actionableUpdate =
+          app != null && appHasActionableUpdate(app.app);
+      final bool uncertainUpdate =
+          app != null && versionOrderUncertainUpdate(app.app);
+      final bool skipActive =
+          app != null && isSkipActiveForCurrentLatest(app.app);
+      final bool trackOnlyHasVersionUpdate =
+          trackOnly && (actionableUpdate || uncertainUpdate);
+      final bool nonStandardVersionBehind =
+          !trackOnly &&
+          !isVersionDetectionStandard &&
+          (actionableUpdate || uncertainUpdate);
+      final bool hasResetStatus =
+          installedVersionIsNull &&
+          app != null &&
+          (app.app.additionalSettings[installStatusResetKey] != null ||
+              app.installedInfo != null);
+      // Version order unclear: user should use Update and/or Skip only; no manual
+      // "mark as latest" second button (mutually exclusive with actionableUpdate).
+      final bool uncertainOnly = uncertainUpdate;
+      final bool primaryActionEnabled =
+          !installActionBlocked &&
+          (installedVersionIsNull ||
+              ((actionableUpdate || uncertainUpdate) && !skipActive));
+      final bool trackedFromApkMirror =
+          Uri.tryParse(app?.app.url ?? '')?.host.contains('apkmirror.com') ==
+          true;
+      if (trackedFromApkMirror) {
+        _logApkMirrorSizeDebugFromAppPage(
+          'button id=${app?.app.id ?? "<null>"} url=${app?.app.url ?? "<null>"} size=${knownApkSizeBytes?.toString() ?? "<null>"} trackOnly=$trackOnly installed=${installedVersion ?? "<null>"} latest=${app?.app.latestVersion ?? "<null>"} actionable=$actionableUpdate uncertain=$uncertainUpdate skip=$skipActive trackOnlyHasVersionUpdate=$trackOnlyHasVersionUpdate installedVersionIsNull=$installedVersionIsNull primaryActionEnabled=$primaryActionEnabled updateLabel="$updateLabel" markUpdatedLabel="$markUpdatedLabel"',
+        );
+      }
+
+      Widget wrapPrimaryBarWithSkip(Widget primaryBar) {
+        final App? appForSkip = app?.app;
+        if (appForSkip == null || appForSkip.installedVersion == null) {
+          return primaryBar;
+        }
+        final bool showSkipToggle =
+            appHasActionableUpdate(appForSkip) ||
+            versionOrderUncertainUpdate(appForSkip) ||
+            isSkipActiveForCurrentLatest(appForSkip);
+        if (!showSkipToggle) {
+          return primaryBar;
+        }
+        Future<void> toggleSkipVersion() async {
+          if (app == null) return;
+          final App copy = app.app.deepCopy();
+          if (isSkipActiveForCurrentLatest(copy)) {
+            copy.additionalSettings.remove('skippedLatestVersion');
+          } else {
+            copy.additionalSettings['skippedLatestVersion'] =
+                copy.latestVersion;
+          }
+          await appsProvider.saveApps([copy], updateInstalledInfo: false);
+          if (mounted) {
+            setState(() {});
+          }
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            primaryBar,
+            Center(
+              child: TextButton(
+                onPressed: actionBlocked ? null : () => toggleSkipVersion(),
+                child: Text(
+                  isSkipActiveForCurrentLatest(appForSkip)
+                      ? tr('unskipVersion')
+                      : tr('skipVersion'),
+                ),
+              ),
+            ),
+          ],
+        );
+      }
+
+      Future<void> runInstallOrMarkUpdated() async {
+        if (buildVerificationBlocked) {
+          _showPageError(
+            ObtainiumError(buildVerificationBlockedMessage!),
+            title: tr('errorInstallingUpdate'),
+          );
+          return;
+        }
+        try {
+          final successMessage = installedVersionIsNull
+              ? tr('installed')
+              : tr('appsUpdated');
+          hapticHeavyImpact();
+          final res = await appsProvider.downloadAndInstallLatestApps(
+            app?.app.id != null ? [app!.app.id] : [],
+            themeContext,
+            dialogTheme: _cachedPageTheme,
+          );
+          if (res.isNotEmpty && !trackOnly && themeContext.mounted) {
+            _showPageMessage(successMessage);
+          }
+        } catch (e) {
+          if (themeContext.mounted) {
+            _showPageError(e, title: tr('errorInstallingUpdate'));
+          }
+        }
+      }
+
+      void openTrackOnlyReleasePage() {
+        if (app == null) return;
+        launchUrlString(
+          trackOnlyDownloadPageUrl(app.app),
+          mode: LaunchMode.externalApplication,
+        );
+      }
+
+      if (hasResetStatus) {
+        const double dualButtonBarHeight = 52;
+        final bool markUpdatedActionBlocked =
+            updating || app.downloadProgress != null;
+        return wrapPrimaryBarWithSkip(
+          SizedBox(
+            height: dualButtonBarHeight,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    style: expressiveFilled,
+                    onPressed: installActionBlocked
+                        ? null
+                        : runInstallOrMarkUpdated,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        installLabel,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    style: expressiveFilled,
+                    onPressed: markUpdatedActionBlocked
+                        ? null
+                        : showMarkUpdatedDialog,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        tr('markUpdated'),
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      if (trackOnlyHasVersionUpdate && !uncertainOnly) {
+        // Outer Row is in a Column with unbounded max height. A nested Row of
+        // two horizontal Expanded children + stretch can get infinite cross-axis
+        // extent and break layout (blank page). Fixed height bounds the inner Row.
+        const double dualButtonBarHeight = 52;
+        return wrapPrimaryBarWithSkip(
+          SizedBox(
+            height: dualButtonBarHeight,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    style: expressiveFilled,
+                    onPressed: installActionBlocked || skipActive
+                        ? null
+                        : openTrackOnlyReleasePage,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        updateLabel,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    style: expressiveFilled,
+                    onPressed: installActionBlocked
+                        ? null
+                        : runInstallOrMarkUpdated,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        tr('markUpdated'),
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      if (trackOnlyHasVersionUpdate && uncertainOnly) {
+        return wrapPrimaryBarWithSkip(
+          FilledButton(
+            style: expressiveFilled,
+            onPressed: installActionBlocked || skipActive
+                ? null
+                : openTrackOnlyReleasePage,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: Text(
+                updateLabel,
+                maxLines: 1,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        );
+      }
+
+      if (nonStandardVersionBehind && !uncertainOnly) {
+        const double dualButtonBarHeight = 52;
+        final bool markUpdatedActionBlocked =
+            updating || app.downloadProgress != null;
+        return wrapPrimaryBarWithSkip(
+          SizedBox(
+            height: dualButtonBarHeight,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    style: expressiveFilled,
+                    onPressed: installActionBlocked || skipActive
+                        ? null
+                        : runInstallOrMarkUpdated,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        updateLabel,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    style: expressiveFilled,
+                    onPressed: markUpdatedActionBlocked
+                        ? null
+                        : showMarkUpdatedDialog,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        tr('markUpdated'),
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      if (nonStandardVersionBehind && uncertainOnly) {
+        return wrapPrimaryBarWithSkip(
+          FilledButton(
+            style: expressiveFilled,
+            onPressed: installActionBlocked || skipActive
+                ? null
+                : runInstallOrMarkUpdated,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: Text(
+                updateLabel,
+                maxLines: 1,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        );
+      }
+
+      final Widget singlePrimaryButton = FilledButton(
+        style: expressiveFilled,
+        onPressed: primaryActionEnabled ? runInstallOrMarkUpdated : null,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.center,
+          child: Text(
+            installedVersionIsNull
+                ? (!trackOnly ? installLabel : markInstalledLabel)
+                : (!trackOnly ? updateLabel : markUpdatedLabel),
+            maxLines: 1,
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+      return wrapPrimaryBarWithSkip(
+        buildVerificationBlocked
+            ? Tooltip(
+                message: buildVerificationBlockedMessage!,
+                child: singlePrimaryButton,
+              )
+            : skipActive
+            ? Tooltip(
+                message: tr('updateDisabledWhileVersionSkipped'),
+                child: singlePrimaryButton,
+              )
+            : singlePrimaryButton,
+      );
+    }
+
+    Column getInfoColumn(
+      BuildContext pageThemeContext,
+      AppInMemory? app, {
+      bool small = false,
+    }) {
       final ThemeData pageTheme = Theme.of(pageThemeContext);
+      AppSource? source;
+      if (app != null) {
+        final String sourceKey =
+            '${app.app.url} ${app.app.overrideSource ?? ''}';
+        if (sourceKey != _cachedSourceKey) {
+          _cachedSource = _sourceProvider.getSource(
+            app.app.url,
+            overrideSource: app.app.overrideSource,
+          );
+          _cachedSourceKey = sourceKey;
+        }
+        source = _cachedSource;
+      }
+      final bool trackOnly = app?.app.additionalSettings['trackOnly'] == true;
+      final bool isVersionDetectionStandard =
+          app?.app.additionalSettings['versionDetection'] == 'auto' ||
+          app?.app.additionalSettings['versionDetection'] == 'standard' ||
+          app?.app.additionalSettings['versionDetection'] == 'versionCode' ||
+          app?.app.additionalSettings['versionDetection'] == true ||
+          app?.app.additionalSettings['versionDetection'] == null;
+      final bool areDownloadsRunning = appsProvider.areDownloadsRunning();
       final undeterminedTrackOnlyInstalled =
           trackOnly &&
           app?.app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] ==
@@ -2609,56 +3278,73 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         }
       }
 
-      Future<void> openFixTrackOnlyPackageIdDialog() async {
+      Future<void> openFixTrackOnlyPackageIdSheet() async {
         if (app == null) return;
-        final packageIdController = TextEditingController(text: app.app.id);
-        final submittedPackageId = await _showPageDialog<String>(
-          hostContext: context,
-          builder: (dialogContext) => AlertDialog(
-            title: Text(tr('fixPackageId')),
-            contentPadding: appDialogContentPadding,
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    tr('fixPackageIdExplanation'),
-                    style: Theme.of(dialogContext).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: packageIdController,
-                    decoration: appPageOutlinedInputDecoration(
-                      dialogContext,
-                      labelText: tr('package'),
-                      isDense: true,
-                    ),
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    keyboardType: TextInputType.visiblePassword,
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: updating ? null : () => Navigator.pop(dialogContext),
-                child: Text(tr('cancel')),
-              ),
-              FilledButton(
-                onPressed: updating
-                    ? null
-                    : () => Navigator.pop(
-                        dialogContext,
-                        packageIdController.text.trim(),
+        String packageIdInput = app.app.id;
+        final ThemeData? pageTheme = _cachedPageTheme;
+        final submittedPackageId = await showAppModalSheet<String>(
+          context: context,
+          backgroundColor: pageTheme?.colorScheme.surface,
+          builder: (BuildContext sheetContext) {
+            final Widget sheet = Builder(
+              builder: (BuildContext themedContext) {
+                final ThemeData theme = Theme.of(themedContext);
+                return AppSheetContent(
+                  children: [
+                    Text(
+                      tr('fixPackageId'),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
-                child: Text(tr('ok')),
-              ),
-            ],
-          ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      tr('fixPackageIdExplanation'),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      initialValue: packageIdInput,
+                      onChanged: (String value) => packageIdInput = value,
+                      decoration: appPageOutlinedInputDecoration(
+                        themedContext,
+                        labelText: tr('package'),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: updating
+                              ? null
+                              : () => Navigator.pop(sheetContext),
+                          child: Text(tr('cancel')),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: updating
+                              ? null
+                              : () => Navigator.pop(
+                                  sheetContext,
+                                  packageIdInput.trim(),
+                                ),
+                          child: Text(tr('ok')),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            );
+            return pageTheme == null
+                ? sheet
+                : Theme(data: pageTheme, child: sheet);
+          },
         );
-        packageIdController.dispose();
         if (!context.mounted) return;
         if (submittedPackageId == null || submittedPackageId.isEmpty) return;
         if (submittedPackageId == widget.appId) return;
@@ -2858,8 +3544,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               pageThemeContext,
               tr('installed'),
               app?.app.installedVersion ?? '',
-              pseudoVersion: app != null && _isInstalledVersionPseudo(app),
-              versionCode: app != null && _usesVersionCodeAsOsVersion(app.app),
+              pseudoVersion:
+                  app != null && isInstalledVersionPseudoForDisplay(app),
+              versionCode: app != null && app.app.usesVersionCodeAsOsVersion,
               osInstalledVersion: app == null
                   ? null
                   : _realOsInstalledVersion(app),
@@ -3389,7 +4076,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                     FilledButton.tonalIcon(
                       onPressed: updating || app == null
                           ? null
-                          : openFixTrackOnlyPackageIdDialog,
+                          : openFixTrackOnlyPackageIdSheet,
                       icon: const Icon(Icons.edit_outlined, size: 20),
                       label: Text(tr('fixPackageId')),
                     ),
@@ -3663,12 +4350,28 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         detailsChildren,
       );
 
+      final bool buttonsAtTop = settingsProvider.updateButtonsAtTopOfAppPage;
+      final Widget? actionButtonsWidget = _editMode
+          ? null
+          : Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: getBottomCenterActions(
+                pageThemeContext,
+                app,
+                source: source,
+                trackOnly: trackOnly,
+                isVersionDetectionStandard: isVersionDetectionStandard,
+                areDownloadsRunning: areDownloadsRunning,
+              ),
+            );
+
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: 12),
           ?trackOnlyInstalledErrorCard,
+          if (buttonsAtTop && actionButtonsWidget != null) actionButtonsWidget,
           versionCard,
           ?securityCard,
           detailsCard,
@@ -3677,6 +4380,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             _materialAppPageSectionCard(pageThemeContext, tr('notes'), [
               buildAboutBlock(pageThemeContext),
             ]),
+          if (!buttonsAtTop && actionButtonsWidget != null) actionButtonsWidget,
         ],
       );
     }
@@ -3796,7 +4500,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    Column getFullInfoColumn(BuildContext themeContext, {bool small = false}) {
+    Column getFullInfoColumn(
+      BuildContext themeContext,
+      AppInMemory? app, {
+      bool small = false,
+    }) {
       final ThemeData dialogColumnTheme = Theme.of(themeContext);
       const heroIconSize = 48.0;
       final double dialogIconSize = small ? 70 : heroIconSize;
@@ -3906,7 +4614,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               ],
             ),
             SizedBox(height: settingsProvider.highlightTouchTargets ? 2 : 8),
-            getInfoColumn(themeContext, small: true),
+            getInfoColumn(themeContext, app, small: true),
             const SizedBox(height: 24),
           ],
         );
@@ -3959,7 +4667,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          getInfoColumn(themeContext, small: false),
+          getInfoColumn(themeContext, app, small: false),
           const SizedBox(height: 24),
         ],
       );
@@ -3980,410 +4688,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return WebViewWidget(
         key: ObjectKey(_webViewController),
         controller: _webViewController,
-      );
-    }
-
-    Future<dynamic> showMarkUpdatedDialog() {
-      return _showPageDialog(
-        hostContext: context,
-        builder: (BuildContext ctx) {
-          return AlertDialog(
-            title: Text(tr('alreadyUpToDateQuestion')),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: Text(tr('no')),
-              ),
-              TextButton(
-                onPressed: () {
-                  hapticSelection();
-                  App? updatedApp = app?.app.deepCopy();
-                  if (updatedApp != null) {
-                    updatedApp = updatedApp.copyWith(
-                      installedVersion: updatedApp.latestVersion,
-                    );
-                    updatedApp.additionalSettings.remove(
-                      'skippedLatestVersion',
-                    );
-                    appsProvider.saveApps(
-                      [updatedApp],
-                      attemptToCorrectInstallStatus: false,
-                      updateInstalledInfo: false,
-                    );
-                  }
-                  Navigator.of(context).pop();
-                },
-                child: Text(tr('yesMarkUpdated')),
-              ),
-            ],
-          );
-        },
-      );
-    }
-
-    Widget getBottomCenterActions(BuildContext themeContext) {
-      final ThemeData actionTheme = Theme.of(themeContext);
-      const double expressiveRadius = 26;
-      const EdgeInsets expressivePadding = EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 14,
-      );
-      const Size expressiveMinimumSize = Size(48, 52);
-      final RoundedRectangleBorder expressiveShape = RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(expressiveRadius),
-      );
-      const Size expressiveMaximumSize = Size(double.infinity, 52);
-      final ButtonStyle expressiveFilled = FilledButton.styleFrom(
-        minimumSize: expressiveMinimumSize,
-        maximumSize: expressiveMaximumSize,
-        padding: expressivePadding,
-        shape: expressiveShape,
-        elevation: 1,
-        shadowColor: actionTheme.colorScheme.shadow,
-        backgroundColor: actionTheme.colorScheme.primary,
-        foregroundColor: actionTheme.colorScheme.onPrimary,
-        disabledBackgroundColor: actionTheme.colorScheme.onSurface.withAlpha(
-          31,
-        ),
-        disabledForegroundColor: actionTheme.colorScheme.onSurface.withAlpha(
-          97,
-        ),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      );
-
-      if (_editMode) {
-        return const SizedBox.shrink();
-      }
-
-      // Update label shows size when known from the source metadata.
-      final int? knownApkSizeBytes = app?.app.apkSizeBytes;
-      // Appends "· 43 MB" to install/update labels when size is known.
-      String sizeAnnotated(String base) {
-        if (knownApkSizeBytes == null) {
-          return base;
-        }
-        return '$base · ${formatBytesForDisplay(knownApkSizeBytes)}';
-      }
-
-      final String updateLabel = sizeAnnotated(tr('update'));
-      final String installLabel = sizeAnnotated(tr('install'));
-      final String markInstalledLabel = sizeAnnotated(tr('markInstalled'));
-      final String markUpdatedLabel = sizeAnnotated(tr('markUpdated'));
-
-      // #2 — inline progress button replaces the action button while
-      // downloading/installing. The live bar is its own widget so the ~4 Hz
-      // progress ticks don't rebuild the whole page (see [_DownloadProgressAction]
-      // and the note in [appPageAppsRebuildToken]).
-      if (app?.downloadProgress != null) {
-        return _DownloadProgressAction(
-          appId: app!.app.id,
-          actionTheme: actionTheme,
-          expressiveRadius: expressiveRadius,
-        );
-      }
-
-      final bool actionBlocked = updating || areDownloadsRunning;
-      final bool buildVerificationBlocked =
-          app != null &&
-          source != null &&
-          buildVerificationEnforcementBlocksInstall(
-            app.app,
-            source,
-            settingsProvider,
-          );
-      final String? buildVerificationBlockedMessage = buildVerificationBlocked
-          ? buildVerificationEnforcedBlockedMessage(
-              app.app,
-              source,
-              settingsProvider,
-            )
-          : null;
-      final bool installActionBlocked =
-          actionBlocked || buildVerificationBlocked;
-      final installedVersion = app?.app.installedVersion;
-      final bool installedVersionIsNull = installedVersion == null;
-      final bool actionableUpdate =
-          app != null && appHasActionableUpdate(app.app);
-      final bool uncertainUpdate =
-          app != null && versionOrderUncertainUpdate(app.app);
-      final bool skipActive =
-          app != null && isSkipActiveForCurrentLatest(app.app);
-      final bool trackOnlyHasVersionUpdate =
-          trackOnly && (actionableUpdate || uncertainUpdate);
-      final bool nonStandardVersionBehind =
-          !trackOnly &&
-          !isVersionDetectionStandard &&
-          (actionableUpdate || uncertainUpdate);
-      // Version order unclear: user should use Update and/or Skip only; no manual
-      // "mark as latest" second button (mutually exclusive with actionableUpdate).
-      final bool uncertainOnly = uncertainUpdate;
-      final bool primaryActionEnabled =
-          !installActionBlocked &&
-          (installedVersionIsNull ||
-              ((actionableUpdate || uncertainUpdate) && !skipActive));
-      final bool trackedFromApkMirror =
-          Uri.tryParse(app?.app.url ?? '')?.host.contains('apkmirror.com') ==
-          true;
-      if (trackedFromApkMirror) {
-        _logApkMirrorSizeDebugFromAppPage(
-          'button id=${app?.app.id ?? "<null>"} url=${app?.app.url ?? "<null>"} size=${knownApkSizeBytes?.toString() ?? "<null>"} trackOnly=$trackOnly installed=${installedVersion ?? "<null>"} latest=${app?.app.latestVersion ?? "<null>"} actionable=$actionableUpdate uncertain=$uncertainUpdate skip=$skipActive trackOnlyHasVersionUpdate=$trackOnlyHasVersionUpdate installedVersionIsNull=$installedVersionIsNull primaryActionEnabled=$primaryActionEnabled updateLabel="$updateLabel" markUpdatedLabel="$markUpdatedLabel"',
-        );
-      }
-
-      Widget wrapPrimaryBarWithSkip(Widget primaryBar) {
-        final App? appForSkip = app?.app;
-        if (appForSkip == null || appForSkip.installedVersion == null) {
-          return primaryBar;
-        }
-        final bool showSkipToggle =
-            appHasActionableUpdate(appForSkip) ||
-            versionOrderUncertainUpdate(appForSkip) ||
-            isSkipActiveForCurrentLatest(appForSkip);
-        if (!showSkipToggle) {
-          return primaryBar;
-        }
-        Future<void> toggleSkipVersion() async {
-          if (app == null) return;
-          final App copy = app.app.deepCopy();
-          if (isSkipActiveForCurrentLatest(copy)) {
-            copy.additionalSettings.remove('skippedLatestVersion');
-          } else {
-            copy.additionalSettings['skippedLatestVersion'] =
-                copy.latestVersion;
-          }
-          await appsProvider.saveApps([copy], updateInstalledInfo: false);
-          if (mounted) {
-            setState(() {});
-          }
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            primaryBar,
-            Center(
-              child: TextButton(
-                onPressed: actionBlocked ? null : () => toggleSkipVersion(),
-                child: Text(
-                  isSkipActiveForCurrentLatest(appForSkip)
-                      ? tr('unskipVersion')
-                      : tr('skipVersion'),
-                ),
-              ),
-            ),
-          ],
-        );
-      }
-
-      Future<void> runInstallOrMarkUpdated() async {
-        if (buildVerificationBlocked) {
-          _showPageError(
-            ObtainiumError(buildVerificationBlockedMessage!),
-            title: tr('errorInstallingUpdate'),
-          );
-          return;
-        }
-        try {
-          final successMessage = installedVersionIsNull
-              ? tr('installed')
-              : tr('appsUpdated');
-          hapticHeavyImpact();
-          final res = await appsProvider.downloadAndInstallLatestApps(
-            app?.app.id != null ? [app!.app.id] : [],
-            themeContext,
-            dialogTheme: _cachedPageTheme,
-          );
-          if (res.isNotEmpty && !trackOnly && themeContext.mounted) {
-            _showPageMessage(successMessage);
-          }
-        } catch (e) {
-          if (themeContext.mounted) {
-            _showPageError(e, title: tr('errorInstallingUpdate'));
-          }
-        }
-      }
-
-      void openTrackOnlyReleasePage() {
-        if (app == null) return;
-        launchUrlString(
-          trackOnlyDownloadPageUrl(app.app),
-          mode: LaunchMode.externalApplication,
-        );
-      }
-
-      if (trackOnlyHasVersionUpdate && !uncertainOnly) {
-        // Outer Row is in a Column with unbounded max height. A nested Row of
-        // two horizontal Expanded children + stretch can get infinite cross-axis
-        // extent and break layout (blank page). Fixed height bounds the inner Row.
-        const double dualButtonBarHeight = 52;
-        return wrapPrimaryBarWithSkip(
-          SizedBox(
-            height: dualButtonBarHeight,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: FilledButton(
-                    style: expressiveFilled,
-                    onPressed: installActionBlocked || skipActive
-                        ? null
-                        : openTrackOnlyReleasePage,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.center,
-                      child: Text(
-                        updateLabel,
-                        maxLines: 1,
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    style: expressiveFilled,
-                    onPressed: installActionBlocked
-                        ? null
-                        : runInstallOrMarkUpdated,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.center,
-                      child: Text(
-                        tr('markUpdated'),
-                        maxLines: 1,
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-
-      if (trackOnlyHasVersionUpdate && uncertainOnly) {
-        return wrapPrimaryBarWithSkip(
-          FilledButton(
-            style: expressiveFilled,
-            onPressed: installActionBlocked || skipActive
-                ? null
-                : openTrackOnlyReleasePage,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.center,
-              child: Text(
-                updateLabel,
-                maxLines: 1,
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-        );
-      }
-
-      if (nonStandardVersionBehind && !uncertainOnly) {
-        const double dualButtonBarHeight = 52;
-        final bool markUpdatedActionBlocked =
-            updating || app.downloadProgress != null;
-        return wrapPrimaryBarWithSkip(
-          SizedBox(
-            height: dualButtonBarHeight,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: FilledButton(
-                    style: expressiveFilled,
-                    onPressed: installActionBlocked || skipActive
-                        ? null
-                        : runInstallOrMarkUpdated,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.center,
-                      child: Text(
-                        updateLabel,
-                        maxLines: 1,
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    style: expressiveFilled,
-                    onPressed: markUpdatedActionBlocked
-                        ? null
-                        : showMarkUpdatedDialog,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.center,
-                      child: Text(
-                        tr('markUpdated'),
-                        maxLines: 1,
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-
-      if (nonStandardVersionBehind && uncertainOnly) {
-        return wrapPrimaryBarWithSkip(
-          FilledButton(
-            style: expressiveFilled,
-            onPressed: installActionBlocked || skipActive
-                ? null
-                : runInstallOrMarkUpdated,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.center,
-              child: Text(
-                updateLabel,
-                maxLines: 1,
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ),
-        );
-      }
-
-      final Widget singlePrimaryButton = FilledButton(
-        style: expressiveFilled,
-        onPressed: primaryActionEnabled ? runInstallOrMarkUpdated : null,
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.center,
-          child: Text(
-            installedVersionIsNull
-                ? (!trackOnly ? installLabel : markInstalledLabel)
-                : (!trackOnly ? updateLabel : markUpdatedLabel),
-            maxLines: 1,
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
-      return wrapPrimaryBarWithSkip(
-        buildVerificationBlocked
-            ? Tooltip(
-                message: buildVerificationBlockedMessage!,
-                child: singlePrimaryButton,
-              )
-            : skipActive
-            ? Tooltip(
-                message: tr('updateDisabledWhileVersionSkipped'),
-                child: singlePrimaryButton,
-              )
-            : singlePrimaryButton,
       );
     }
 
@@ -4469,26 +4773,39 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                           fullWidth: true,
                           backgroundColor: pageThemeForPage.colorScheme.surface,
                           builder: (BuildContext sheetRouteContext) {
-                            return Theme(
-                              data: pageThemeForPage,
-                              child: Builder(
-                                builder: (BuildContext sheetThemedContext) {
-                                  return AppSheetContent(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      0,
-                                      0,
-                                      0,
-                                      16,
-                                    ),
-                                    children: [
-                                      getFullInfoColumn(
-                                        sheetThemedContext,
-                                        small: true,
+                            return Selector<AppsProvider, int>(
+                              selector:
+                                  (BuildContext _, AppsProvider provider) =>
+                                      appPageAppsRebuildToken(
+                                        provider,
+                                        widget.appId,
                                       ),
-                                    ],
-                                  );
-                                },
-                              ),
+                              builder: (BuildContext _, int _, Widget? _) {
+                                final AppInMemory? sheetApp =
+                                    appsProvider.apps[widget.appId];
+                                return Theme(
+                                  data: pageThemeForPage,
+                                  child: Builder(
+                                    builder: (BuildContext sheetThemedContext) {
+                                      return AppSheetContent(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          0,
+                                          0,
+                                          0,
+                                          16,
+                                        ),
+                                        children: [
+                                          getFullInfoColumn(
+                                            sheetThemedContext,
+                                            sheetApp,
+                                            small: true,
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                );
+                              },
                             );
                           },
                         );
@@ -4516,8 +4833,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                             ? null
                             : () {
                                 appsProvider.saveApps([
-                                  app.app.copyWith(installedVersion: null),
-                                ]);
+                                  resetInstallStatusToDeviceVersion(
+                                    app.app,
+                                    app.installedInfo,
+                                  ),
+                                ], attemptToCorrectInstallStatus: false);
                               },
                         icon: const Icon(Icons.restore_rounded),
                         tooltip: actionBarTooltip(tr('resetInstallStatus')),
@@ -4599,7 +4919,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           child: actionBarContent,
         );
       }
-      if (gestureNavigationActive && !widget.isEmbedded) {
+      if (gestureNavigationActive || widget.isEmbedded) {
         actionBarContent = SafeArea(top: false, child: actionBarContent);
       }
       final Widget actionBarSurface = Container(
@@ -4746,6 +5066,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               ),
               floatingActionButtonLocation:
                   FloatingActionButtonLocation.endFloat,
+              floatingActionButtonAnimator:
+                  FloatingActionButtonAnimator.noAnimation,
               body: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -4872,28 +5194,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                                               ),
                                               getInfoColumn(
                                                 themedPageContext,
+                                                app,
                                                 small: false,
                                               ),
                                             ],
-                                            Padding(
-                                              padding:
-                                                  const EdgeInsets.fromLTRB(
-                                                    16,
-                                                    0,
-                                                    16,
-                                                    16,
-                                                  ),
-                                              child: Row(
-                                                children: [
-                                                  Expanded(
-                                                    child:
-                                                        getBottomCenterActions(
-                                                          themedPageContext,
-                                                        ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
                                             if (_editMode)
                                               SizedBox(
                                                 height:

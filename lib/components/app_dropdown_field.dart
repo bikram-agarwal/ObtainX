@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 
@@ -22,9 +24,14 @@ double appDropdownMenuWidth(
       maxTextWidth = textPainter.width;
     }
   }
-  return (maxTextWidth + horizontalPadding).clamp(
-    minWidth,
+  final double availableWidth = math.max(
+    0.0,
     MediaQuery.sizeOf(context).width - maxWidthInset,
+  );
+  final double effectiveMinWidth = math.min(minWidth, availableWidth);
+  return (maxTextWidth + horizontalPadding).clamp(
+    effectiveMinWidth,
+    availableWidth,
   );
 }
 
@@ -39,6 +46,7 @@ Widget appDropdownField<T>({
   double borderRadius = 12,
   double? menuWidth,
   bool isDense = true,
+  bool updateInternalValueOnChange = true,
   InputDecoration? decoration,
 }) {
   final ThemeData theme = Theme.of(context);
@@ -77,7 +85,9 @@ Widget appDropdownField<T>({
               items: items,
               onChanged: enabled
                   ? (T? newValue) {
-                      fieldState.didChange(newValue);
+                      if (updateInternalValueOnChange) {
+                        fieldState.didChange(newValue);
+                      }
                       onChanged(newValue);
                     }
                   : null,

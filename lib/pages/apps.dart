@@ -24,6 +24,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/bulk_category_editor.dart';
@@ -31,15 +33,18 @@ import 'package:obtainium/components/bulk_update_sheet.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
+import 'package:obtainium/components/empty_state_illustration.dart';
 import 'package:obtainium/components/rippling_wavy_progress/circular.dart';
 import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
-import 'package:obtainium/components/ui_widgets.dart' show ActionListTile;
+import 'package:obtainium/components/ui_widgets.dart'
+    show ActionListTile, AppSwitch, AppSwitchListTile;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
+import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -54,6 +59,7 @@ import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -65,6 +71,20 @@ enum CategoryFilterIntent { neutral, include, exclude }
 enum CategoryFilterMatchMode { any, all }
 
 const int _maxFolderNameLength = 20;
+
+class _HideWhileKeyboardOpen extends StatelessWidget {
+  const _HideWhileKeyboardOpen({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+      return const SizedBox.shrink();
+    }
+    return child;
+  }
+}
 
 CategoryFilterIntent nextCategoryFilterIntent(CategoryFilterIntent intent) =>
     switch (intent) {
@@ -93,6 +113,33 @@ bool appCategoriesMatchFilter(
     };
   }
   return true;
+}
+
+/// Host whose logo represents [app] in the Apps list source column.
+///
+/// The hostless catch-all sources (HTML, Direct APK link) declare no
+/// [AppSource.hosts], which used to leave the column blank. They fall back to
+/// the tracked URL's own host, so an app added from e.g. mozilla.org shows that
+/// site's favicon - matching what the app page's Sources row already resolves.
+String? sourceBadgeHostForApp(App app) {
+  // Resolved first because [SourceProvider.getSourceTemplate] throws
+  // [UnsupportedURLError] on a URL this malformed, and this runs per row.
+  final String? urlHost = Uri.tryParse(app.url)?.host;
+  if (urlHost == null || urlHost.isEmpty) {
+    return null;
+  }
+  final List<String> declaredHosts = SourceProvider()
+      .getSourceTemplate(app.url, overrideSource: app.overrideSource)
+      .hosts;
+  if (declaredHosts.isEmpty) {
+    return urlHost;
+  }
+  for (final String declaredHost in declaredHosts) {
+    if (urlHost == declaredHost || urlHost == 'www.$declaredHost') {
+      return declaredHost;
+    }
+  }
+  return declaredHosts.first;
 }
 
 bool appIsTrackOnlyForFilter(App app) =>
@@ -598,6 +645,54 @@ int _appsPageAppsRebuildToken(AppsProvider provider) {
   );
 }
 
+/// Companion of [_appsPageAppsRebuildToken] for [SettingsProvider]: a hash of
+/// only the settings this page actually reads, so unrelated setting changes
+/// don't rebuild the whole apps tree. [viewSettingsId] is the per-view override
+/// bucket (a folder id, or the synthetic on-demand id); null on the main page.
+int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
+  return Object.hashAll([
+    s.showFolderedAppsOnMainPage,
+    s.pinUpdates,
+    s.buryNonInstalled,
+    s.sortColumn,
+    s.sortOrder,
+    s.appsListGroupBy,
+    s.groupNonInstalledSeparately,
+    s.groupTrackOnlySeparately,
+    s.groupUpdatesSeparately,
+    // categories is a Map<String?, int>; hash by length + sorted entries.
+    Object.hashAll(s.categories.entries.map((e) => '${e.key}=${e.value}')),
+    s.showAppTypeBadge,
+    s.showTrackedStoreBadge,
+    s.showCategoriesBadge,
+    s.showAuthorBadge,
+    s.showVersionBadge,
+    s.highlightTouchTargets,
+    s.progressiveBlurEnabled,
+    s.reduceVisualEffects,
+    s.useGradientBackground,
+    s.cardCornerScale,
+    s.leftSwipeAction,
+    s.rightSwipeAction,
+    s.alwaysUsePhoneLayout,
+    s.appFolders.length,
+    // Per-view overrides: relevant for real folders and the synthetic
+    // On-Demand Only view; a hash-as-zero collapse for the main page.
+    viewSettingsId == null
+        ? 0
+        : Object.hash(
+            s.folderPinUpdates(viewSettingsId),
+            s.folderBuryNonInstalled(viewSettingsId),
+            s.folderSortColumn(viewSettingsId).index,
+            s.folderSortOrder(viewSettingsId).index,
+            s.folderGroupBy(viewSettingsId).index,
+            s.folderGroupNonInstalledSeparately(viewSettingsId),
+            s.folderGroupTrackOnlySeparately(viewSettingsId),
+            s.folderGroupUpdatesSeparately(viewSettingsId),
+          ),
+  ]);
+}
+
 /// Progress bar shown during pull-to-refresh and initial app-load.
 ///
 /// Subscribes to [AppsProvider] via a narrow [context.select] that returns
@@ -713,6 +808,8 @@ class _AppListItem extends StatelessWidget {
     required this.showAppTypeBadge,
     required this.showTrackedStoreBadge,
     required this.showCategoriesBadge,
+    required this.showAuthorBadge,
+    required this.showVersionBadge,
     required this.showCheckmark,
     this.sourceHost,
     this.itemBorderRadius,
@@ -730,6 +827,8 @@ class _AppListItem extends StatelessWidget {
   final bool showAppTypeBadge;
   final bool showTrackedStoreBadge;
   final bool showCategoriesBadge;
+  final bool showAuthorBadge;
+  final bool showVersionBadge;
   final String? sourceHost;
   final BorderRadius? itemBorderRadius;
   final bool showCheckmark;
@@ -872,7 +971,9 @@ class _AppListItem extends StatelessWidget {
         (!skipActive && hasUpdate) ||
         (!skipActive && !hasUpdate && hasUncertainUpdate);
 
-    final Widget? trailingRow = (hideVersionAndChangelog && !hasTrailingWidgets)
+    final bool showVersionColumn = !hideVersionAndChangelog && showVersionBadge;
+
+    final Widget? trailingRow = (!showVersionColumn && !hasTrailingWidgets)
         ? null
         : ConstrainedBox(
             // ListTile measures trailing before title/subtitle. Bound the
@@ -883,7 +984,7 @@ class _AppListItem extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                if (!hideVersionAndChangelog)
+                if (showVersionColumn)
                   Flexible(
                     child: GestureDetector(
                       onTap: showChangesFn,
@@ -934,7 +1035,7 @@ class _AppListItem extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (!hideVersionAndChangelog && hasTrailingWidgets)
+                if (showVersionColumn && hasTrailingWidgets)
                   const SizedBox(width: 5),
                 if (skipActive) buildSkippedVersionIcon(),
                 if (!skipActive && hasUpdate) buildUpdateButton(),
@@ -1214,14 +1315,18 @@ class _AppListItem extends StatelessWidget {
                       ),
                     ],
                   ),
-                  subtitle: Text(
-                    tr('byX', args: [app.author]),
-                    maxLines: 1,
-                    style: TextStyle(
-                      overflow: TextOverflow.ellipsis,
-                      fontWeight: pinned ? FontWeight.w600 : FontWeight.normal,
-                    ),
-                  ),
+                  subtitle: showAuthorBadge
+                      ? Text(
+                          tr('byX', args: [app.author]),
+                          maxLines: 1,
+                          style: TextStyle(
+                            overflow: TextOverflow.ellipsis,
+                            fontWeight: pinned
+                                ? FontWeight.w600
+                                : FontWeight.normal,
+                          ),
+                        )
+                      : null,
                   trailing: downloadProgress != null
                       ? buildDownloadProgressControl()
                       : trailingRow,
@@ -1522,23 +1627,21 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
               .removeAppsWithModal(context, [app]);
           if (removeResult.shouldShowSnackBar) {
             final Set<String> undoAppIds = removeResult.deferredUndoAppIds;
-            messenger
-              ?..clearSnackBars()
-              ..showSnackBar(
-                SnackBar(
-                  content: Text(tr('xAppsRemoved', args: ['1'])),
+            if (messenger != null && messenger.mounted) {
+              messenger.clearSnackBars();
+              messenger.showSnackBar(
+                buildAppSnackBar(
+                  messenger.context,
+                  tr('xAppsRemoved', args: ['1']),
                   persist: false,
                   duration: const Duration(seconds: 5),
-                  behavior: SnackBarBehavior.floating,
-                  action: undoAppIds.isNotEmpty
-                      ? SnackBarAction(
-                          label: tr('undo'),
-                          onPressed: () => provider
-                              .undoDeferredObtainiumRemovals(undoAppIds),
-                        )
+                  actionLabel: undoAppIds.isNotEmpty ? tr('undo') : null,
+                  onAction: undoAppIds.isNotEmpty
+                      ? () => provider.undoDeferredObtainiumRemovals(undoAppIds)
                       : null,
                 ),
               );
+            }
           }
         }
       case SwipeAction.open:
@@ -1746,14 +1849,60 @@ String? _rawFileUrlFromRepositoryPageUrl(String url) {
   return null;
 }
 
+String? _gitlabReleaseApiUrlFromUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return null;
+  final path = uri.path;
+  if (path.contains('/api/v4/projects/')) {
+    return url;
+  }
+  final segments = uri.pathSegments;
+  final dashIndex = segments.indexOf('-');
+  if (dashIndex > 0 &&
+      segments.length > dashIndex + 1 &&
+      segments[dashIndex + 1] == 'releases') {
+    final projectPathEncoded = segments
+        .sublist(0, dashIndex)
+        .map(Uri.encodeComponent)
+        .join('%2F');
+    final String apiBasePath = '/api/v4/projects/$projectPathEncoded/releases';
+    if (segments.length > dashIndex + 2) {
+      final tagName = segments.sublist(dashIndex + 2).join('/');
+      return uri
+          .replace(
+            path: '$apiBasePath/${Uri.encodeComponent(tagName)}',
+            queryParameters: null,
+          )
+          .toString();
+    }
+    return uri.replace(path: apiBasePath, queryParameters: null).toString();
+  }
+  return null;
+}
+
 Future<String?> _loadLinkedChangeLog(
   AppSource appSource,
   App app,
   String changesUrl,
 ) async {
   final githubReleaseApiUrl = _githubReleaseApiUrlFromUrl(changesUrl);
+  var gitlabReleaseApiUrl = _gitlabReleaseApiUrlFromUrl(changesUrl);
+
+  if (gitlabReleaseApiUrl != null && appSource is GitLab) {
+    final String? pat = await appSource.getPATIfAny(app.additionalSettings);
+    if (pat != null && pat.isNotEmpty) {
+      final uri = Uri.parse(gitlabReleaseApiUrl);
+      final newQueryParams = Map<String, String>.from(uri.queryParameters);
+      newQueryParams['private_token'] = pat;
+      gitlabReleaseApiUrl = uri
+          .replace(queryParameters: newQueryParams)
+          .toString();
+    }
+  }
+
   final requestUrl =
       githubReleaseApiUrl ??
+      gitlabReleaseApiUrl ??
       _rawFileUrlFromRepositoryPageUrl(changesUrl) ??
       changesUrl;
   final response = await appSource.sourceRequest(
@@ -1769,6 +1918,21 @@ Future<String?> _loadLinkedChangeLog(
       return (decoded['body'] ?? '').toString();
     }
   }
+  if (gitlabReleaseApiUrl != null) {
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is List && decoded.isNotEmpty) {
+        final first = decoded.first;
+        if (first is Map<String, dynamic>) {
+          return (first['description'] ?? first['message'] ?? '').toString();
+        }
+      } else if (decoded is Map<String, dynamic>) {
+        return (decoded['description'] ?? decoded['message'] ?? '').toString();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
   if (appSource is APKMirror) {
     // APKMirror URLs can point at an app listing with no "What's new"
     // section (for example Markup). Never fall through to the generic raw-body
@@ -1776,6 +1940,41 @@ Future<String?> _loadLinkedChangeLog(
     return apkMirrorChangeLogFromReleasePageHtml(response.body);
   }
   return response.body;
+}
+
+/// Turns a relative changelog image path into an absolute URL for the forge
+/// that published [appUrl]. Absolute http(s) URLs are returned unchanged.
+String resolveChangeLogImageSrc({
+  required String src,
+  required String appUrl,
+  required AppSource appSource,
+}) {
+  if (src.startsWith('http://') || src.startsWith('https://')) {
+    return src;
+  }
+  try {
+    final Uri uri = Uri.parse(appUrl);
+    final List<String> segments = uri.pathSegments;
+    String cleanPath = src;
+    if (cleanPath.startsWith('./')) {
+      cleanPath = cleanPath.substring(2);
+    } else if (cleanPath.startsWith('/')) {
+      cleanPath = cleanPath.substring(1);
+    }
+
+    if (uri.host.contains('github.com') && segments.length >= 2) {
+      return 'https://raw.githubusercontent.com/${segments[0]}/${segments[1]}/HEAD/$cleanPath';
+    }
+    if (uri.host.contains('gitlab.com') && segments.length >= 2) {
+      return 'https://gitlab.com/${segments[0]}/${segments[1]}/-/raw/HEAD/$cleanPath';
+    }
+    if (appSource is Codeberg && segments.length >= 2) {
+      return '${uri.origin}/${segments[0]}/${segments[1]}/raw/branch/HEAD/$cleanPath';
+    }
+    return '${uri.origin}/$cleanPath';
+  } catch (_) {
+    return src;
+  }
 }
 
 void showChangeLogDialog(
@@ -1799,33 +1998,11 @@ void showChangeLogDialog(
     final srcRegex = RegExp("src=[\"']([^\"']+)[\"']", caseSensitive: false);
     final altRegex = RegExp("alt=[\"']([^\"']+)[\"']", caseSensitive: false);
 
-    String resolveUrl(String src) {
-      if (src.startsWith('http://') || src.startsWith('https://')) {
-        return src;
-      }
-      try {
-        final uri = Uri.parse(app.url);
-        final segments = uri.pathSegments;
-        var cleanPath = src;
-        if (cleanPath.startsWith('./')) {
-          cleanPath = cleanPath.substring(2);
-        } else if (cleanPath.startsWith('/')) {
-          cleanPath = cleanPath.substring(1);
-        }
-
-        if (uri.host.contains('github.com') && segments.length >= 2) {
-          return 'https://raw.githubusercontent.com/${segments[0]}/${segments[1]}/HEAD/$cleanPath';
-        } else if (uri.host.contains('gitlab.com') && segments.length >= 2) {
-          return 'https://gitlab.com/${segments[0]}/${segments[1]}/-/raw/HEAD/$cleanPath';
-        } else if (uri.host.contains('codeberg.org') && segments.length >= 2) {
-          return 'https://codeberg.org/${segments[0]}/${segments[1]}/raw/branch/HEAD/$cleanPath';
-        } else {
-          return '${uri.origin}/$cleanPath';
-        }
-      } catch (_) {
-        return src;
-      }
-    }
+    String resolveUrl(String src) => resolveChangeLogImageSrc(
+      src: src,
+      appUrl: app.url,
+      appSource: appSource,
+    );
 
     processedChangeLog = processedChangeLog.replaceAllMapped(htmlImgRegex, (
       match,
@@ -2149,7 +2326,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  sectionLabel(tr('showBadges')),
+                  sectionLabel(tr('showInfo')),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -2181,6 +2358,26 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         selected: settingsProvider.showCategoriesBadge,
                         onSelected: (value) {
                           settingsProvider.showCategoriesBadge = value;
+                          setSheetState(() {});
+                        },
+                      ),
+                      FilterChip(
+                        avatar: const Icon(Icons.badge_rounded, size: 16),
+                        showCheckmark: false,
+                        label: Text(tr('showAuthorBadge')),
+                        selected: settingsProvider.showAuthorBadge,
+                        onSelected: (value) {
+                          settingsProvider.showAuthorBadge = value;
+                          setSheetState(() {});
+                        },
+                      ),
+                      FilterChip(
+                        avatar: const Icon(Icons.sell_rounded, size: 16),
+                        showCheckmark: false,
+                        label: Text(tr('showVersionBadge')),
+                        selected: settingsProvider.showVersionBadge,
+                        onSelected: (value) {
+                          settingsProvider.showVersionBadge = value;
                           setSheetState(() {});
                         },
                       ),
@@ -2339,7 +2536,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
               ),
               Divider(color: colorScheme.outlineVariant),
               const SizedBox(height: 4),
-              SwitchListTile(
+              AppSwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(tr('pinUpdates')),
                 value: effectivePinUpdates,
@@ -2348,7 +2545,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                   setSheetState(() {});
                 },
               ),
-              SwitchListTile(
+              AppSwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(tr('moveNonInstalledAppsToBottom')),
                 value: effectiveBuryNonInstalled,
@@ -2373,7 +2570,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         message: tr('showFolderedAppsOnMainPageTooltip'),
                         padding: EdgeInsets.zero,
                       ),
-                      Switch(
+                      AppSwitch(
                         value: settingsProvider.showFolderedAppsOnMainPage,
                         onChanged: (value) {
                           settingsProvider.showFolderedAppsOnMainPage = value;
@@ -2566,91 +2763,101 @@ class AppsPageState extends State<AppsPage> {
   Widget _buildAppsPageSideFabOverlay(
     BuildContext context, {
     required String heroScope,
+    bool matchHomeNavigationPosition = false,
   }) {
     return Positioned(
       left: 16,
       right: 16,
-      bottom: MediaQuery.paddingOf(context).bottom,
-      child: AnimatedSlide(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeInOutCubicEmphasized,
-        offset: MediaQuery.of(context).viewInsets.bottom > 0
-            ? const Offset(0, 1.5)
-            : Offset.zero,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: MediaQuery.of(context).viewInsets.bottom > 0 ? 0.0 : 1.0,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              if (hasMassObtainOperations)
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    FloatingActionButton.small(
-                      heroTag: '${heroScope}_update_all_fab',
-                      elevation: 6,
-                      highlightElevation: 8,
-                      backgroundColor: Theme.of(
-                        context,
-                      ).colorScheme.primaryContainer,
-                      foregroundColor: Theme.of(
-                        context,
-                      ).colorScheme.onPrimaryContainer,
-                      onPressed: () {
-                        hapticSelection();
-                        runMassObtain();
-                      },
-                      tooltip: null,
-                      child: const Icon(Icons.file_download_outlined, size: 20),
-                    ),
-                    if (pageUpdateCount > 0)
-                      Positioned(
-                        left: -4,
-                        bottom: -4,
-                        child: Badge(
-                          label: Text(pageUpdateCount.toString()),
-                          backgroundColor: Theme.of(context).colorScheme.error,
-                          textColor: Theme.of(context).colorScheme.onError,
+      bottom:
+          MediaQuery.paddingOf(context).bottom +
+          (matchHomeNavigationPosition ? 10.0 : 0.0),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          // On compact folder routes there is no navigation pill between the
+          // FABs, but they should retain the same centered positions as the
+          // main Apps tab instead of stretching to the screen edges.
+          constraints: BoxConstraints(
+            maxWidth: matchHomeNavigationPosition ? 336 : double.infinity,
+          ),
+          child: _HideWhileKeyboardOpen(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (hasMassObtainOperations)
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      FloatingActionButton.small(
+                        heroTag: '${heroScope}_update_all_fab',
+                        elevation: 6,
+                        highlightElevation: 8,
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer,
+                        foregroundColor: Theme.of(
+                          context,
+                        ).colorScheme.onPrimaryContainer,
+                        onPressed: () {
+                          hapticSelection();
+                          runMassObtain();
+                        },
+                        tooltip: null,
+                        child: const Icon(
+                          Icons.file_download_outlined,
+                          size: 20,
                         ),
                       ),
-                  ],
-                )
-              else
-                const SizedBox.shrink(),
-              if (isSelectionActive)
-                FloatingActionButton.small(
-                  heroTag: '${heroScope}_actions_fab',
-                  elevation: 6,
-                  highlightElevation: 8,
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                  onPressed: () {
-                    hapticSelection();
-                    openSelectionActionsSheet();
-                  },
-                  tooltip: null,
-                  child: const Icon(Icons.checklist, size: 20),
-                )
-              else
-                FloatingActionButton.small(
-                  heroTag: '${heroScope}_view_options_fab',
-                  elevation: 6,
-                  highlightElevation: 8,
-                  backgroundColor: Theme.of(
-                    context,
-                  ).colorScheme.surfaceContainerHighest,
-                  foregroundColor: Theme.of(
-                    context,
-                  ).colorScheme.onSurfaceVariant,
-                  onPressed: () {
-                    hapticSelection();
-                    openViewOptionsSheet();
-                  },
-                  tooltip: null,
-                  child: const Icon(Icons.tune, size: 20),
-                ),
-            ],
+                      if (pageUpdateCount > 0)
+                        Positioned(
+                          left: -4,
+                          bottom: -4,
+                          child: Badge(
+                            label: Text(pageUpdateCount.toString()),
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.error,
+                            textColor: Theme.of(context).colorScheme.onError,
+                          ),
+                        ),
+                    ],
+                  )
+                else
+                  const SizedBox.shrink(),
+                if (isSelectionActive)
+                  FloatingActionButton.small(
+                    heroTag: '${heroScope}_actions_fab',
+                    elevation: 6,
+                    highlightElevation: 8,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                    onPressed: () {
+                      hapticSelection();
+                      openSelectionActionsSheet();
+                    },
+                    tooltip: null,
+                    child: const Icon(Icons.checklist, size: 20),
+                  )
+                else
+                  FloatingActionButton.small(
+                    heroTag: '${heroScope}_view_options_fab',
+                    elevation: 6,
+                    highlightElevation: 8,
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                    foregroundColor: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant,
+                    onPressed: () {
+                      hapticSelection();
+                      openViewOptionsSheet();
+                    },
+                    tooltip: null,
+                    child: const Icon(Icons.tune, size: 20),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2767,6 +2974,33 @@ class AppsPageState extends State<AppsPage> {
   int _onDemandOnlyAppCountCache = 0;
   Map<String, int> _folderAppCountsCache = const {};
   Map<String, int> _folderUpdateCountsCache = const {};
+
+  // ── Covered-page rebuild suppression ──────────────────────────────────────
+  // A folder list, the On-Demand list and an app's detail page are all opaque
+  // routes pushed over this one, and Flutter's Overlay marks the covered entry
+  // offstage: never laid out, never painted — but still BUILT, because it is
+  // still an [AppsProvider] dependent. Pull-to-refresh inside a folder notifies
+  // the provider on every batched save, which used to rebuild the invisible
+  // main page too (re-running its whole filter/sort/group pass, its
+  // O(apps × folders) folder-count pass, and — via [onStateChanged] — the entire
+  // home shell). That doubled the UI-thread work per refresh tick and was what
+  // made the refresh animation stutter inside a folder but not on the main list.
+  //
+  // provider's [context.select] only marks a dependent dirty when the selector's
+  // RESULT changes, so while covered we return the last-known token instead of a
+  // fresh one and the rebuild never happens. (Skipping the select() call
+  // outright would NOT work: Element._dependencies is only cleared on
+  // deactivate, so the subscription would survive.)
+  //
+  // [TickerMode.valuesOf] is the signal: the Overlay disables it for covered
+  // entries (via _OverlayEntryWidget's `tickerEnabled: false`), and
+  // [_DirectionalIndexedStack] does the same for inactive home tabs — so this
+  // also stops the apps tab rebuilding while another tab is showing. Modal
+  // sheets and dialogs are *non-opaque* routes, so they leave TickerMode alone
+  // and the list behind them keeps live-updating as before.
+  bool _coveredByOpaqueRoute = false;
+  int _lastAppsToken = 0;
+  int _lastSettingsToken = 0;
 
   /// Pushes FAB badge / mass-obtain / selection state to [HomePage] without
   /// calling [setState] on the home shell.
@@ -3212,12 +3446,21 @@ class AppsPageState extends State<AppsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Is this page currently visible, or is it sitting under an opaque pushed
+    // route / an inactive home tab? See [_coveredByOpaqueRoute]. Read (and
+    // cached into the field) before the select()s below, because their selectors
+    // run later, on provider notifications, and read the field.
+    final bool pageVisible = TickerMode.valuesOf(context).enabled;
+    _coveredByOpaqueRoute = !pageVisible;
+
     // select() prevents rebuilds for notifications that don't affect list data
     // (download-progress ticks, icon-load completions). The returned token is
     // also used as part of the list-computation cache key below.
     final int appsToken = context.select<AppsProvider, int>(
-      _appsPageAppsRebuildToken,
+      (p) =>
+          _coveredByOpaqueRoute ? _lastAppsToken : _appsPageAppsRebuildToken(p),
     );
+    _lastAppsToken = appsToken;
     final appsProvider = context.read<AppsProvider>();
     // Narrow the SettingsProvider dependency to a hash of just the settings
     // that actually affect this page's build. The previous
@@ -3236,46 +3479,10 @@ class AppsPageState extends State<AppsPage> {
     // every other setting the page references (folder rule lookups,
     // setter calls, etc.).
     final String? watchedViewSettingsId = _viewSettingsId;
-    context.select<SettingsProvider, int>(
-      (s) => Object.hashAll([
-        s.showFolderedAppsOnMainPage,
-        s.pinUpdates,
-        s.buryNonInstalled,
-        s.sortColumn,
-        s.sortOrder,
-        s.appsListGroupBy,
-        s.groupNonInstalledSeparately,
-        s.groupTrackOnlySeparately,
-        s.groupUpdatesSeparately,
-        // categories is a Map<String?, int>; hash by length + sorted entries.
-        Object.hashAll(s.categories.entries.map((e) => '${e.key}=${e.value}')),
-        s.showAppTypeBadge,
-        s.showTrackedStoreBadge,
-        s.showCategoriesBadge,
-        s.highlightTouchTargets,
-        s.progressiveBlurEnabled,
-        s.reduceVisualEffects,
-        s.useGradientBackground,
-        s.cardCornerScale,
-        s.leftSwipeAction,
-        s.rightSwipeAction,
-        s.alwaysUsePhoneLayout,
-        s.appFolders.length,
-        // Per-view overrides: relevant for real folders and the synthetic
-        // On-Demand Only view; a hash-as-zero collapse for the main page.
-        watchedViewSettingsId == null
-            ? 0
-            : Object.hash(
-                s.folderPinUpdates(watchedViewSettingsId),
-                s.folderBuryNonInstalled(watchedViewSettingsId),
-                s.folderSortColumn(watchedViewSettingsId).index,
-                s.folderSortOrder(watchedViewSettingsId).index,
-                s.folderGroupBy(watchedViewSettingsId).index,
-                s.folderGroupNonInstalledSeparately(watchedViewSettingsId),
-                s.folderGroupTrackOnlySeparately(watchedViewSettingsId),
-                s.folderGroupUpdatesSeparately(watchedViewSettingsId),
-              ),
-      ]),
+    _lastSettingsToken = context.select<SettingsProvider, int>(
+      (s) => _coveredByOpaqueRoute
+          ? _lastSettingsToken
+          : _appsPageSettingsRebuildToken(s, watchedViewSettingsId),
     );
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
     final existingFolderIds = settingsProvider.appFolders
@@ -3387,7 +3594,11 @@ class AppsPageState extends State<AppsPage> {
           });
     }
 
-    if (!widget.onDemandOnlyList &&
+    // `pageVisible` guard: [checkJustStarted] is a one-shot latch, so a covered
+    // page must not consume it — otherwise the startup auto-refresh would run on
+    // an offstage list (with no visible indicator) instead of the one on screen.
+    if (pageVisible &&
+        !widget.onDemandOnlyList &&
         !appsProvider.loadingApps &&
         appsProvider.apps.isNotEmpty &&
         settingsProvider.checkJustStarted() &&
@@ -4168,10 +4379,11 @@ class AppsPageState extends State<AppsPage> {
     // [listedApps], so scoping to it would yield an empty set for those (which
     // made bulk actions no-op and made `apps.every(...)` checks vacuously true
     // — e.g. every folder pre-checked in the add-to-folder dialog).
-    final Set<App> selectedApps = {
+    Set<App> getSelectedApps() => {
       for (final id in selectedAppIds)
         if (appsProvider.apps[id] != null) appsProvider.apps[id]!.app,
     };
+    final Set<App> selectedApps = getSelectedApps();
 
     List<Widget> getLoadingWidgets() {
       if (appsProvider.loadingApps && appsProvider.apps.isEmpty) {
@@ -4189,15 +4401,61 @@ class AppsPageState extends State<AppsPage> {
       }
       final bool isMainAppsPage =
           !widget.onDemandOnlyList && widget.folderId == null;
-      final Widget emptyStateText = Text(
-        isMainAppsPage || appsProvider.apps.isEmpty
-            ? tr('noApps')
-            : widget.onDemandOnlyList && onDemandOnlyAppCount == 0
-            ? tr('onDemandOnlyEmpty')
-            : tr('noAppsForFilter'),
-        style: Theme.of(context).textTheme.headlineMedium,
-        textAlign: TextAlign.center,
+      final bool filterActive = !filter.isIdenticalTo(
+        neutralFilter,
+        settingsProvider,
       );
+      final Widget emptyStateContent;
+      if (filterActive && appsProvider.apps.isNotEmpty) {
+        // A filter / search matched nothing — anywhere it's applied (main
+        // page, a folder, or the on-demand list). Offer an escape hatch.
+        emptyStateContent = AppEmptyState(
+          illustration: const AppFilterEmptyIllustration(),
+          title: tr('noAppsForFilter'),
+          subtitle: tr('noAppsForFilterSubtitle'),
+          action: FilledButton.tonalIcon(
+            onPressed: () => setState(() {
+              filter = AppsFilter();
+              _searchController.clear();
+            }),
+            icon: const Icon(Icons.filter_alt_off_rounded),
+            label: Text(tr('clearFilters')),
+          ),
+        );
+      } else if (widget.onDemandOnlyList && onDemandOnlyAppCount == 0) {
+        emptyStateContent = AppEmptyState(
+          illustration: const AppArchiveEmptyIllustration(),
+          title: tr('onDemandOnlyEmptyTitle'),
+          subtitle: tr('onDemandOnlyEmpty'),
+        );
+      } else {
+        // Pristine library, or an emptied folder (no active filter): nudge the
+        // user toward adding an app. Folders use this same state — not the
+        // "clear filters" one — when they simply have no apps.
+        emptyStateContent = AppEmptyState(
+          illustration: const AppLibraryEmptyIllustration(),
+          title: tr('noApps'),
+          subtitle: tr('noAppsSubtitle'),
+          action: FilledButton.icon(
+            onPressed: () async {
+              // A folder list is a route pushed on top of the shell (HomePage
+              // is a sibling route under the root navigator, not an ancestor),
+              // so reach the shell via its global key rather than
+              // findAncestorState — which returns null from a pushed route.
+              // Pop the folder first so the tab switch isn't hidden behind it.
+              if (widget.folderId != null) {
+                await Navigator.of(context).maybePop();
+              }
+              final HomePageState? home = homePageKey.currentState;
+              if (home != null) {
+                unawaited(home.switchToPage(1));
+              }
+            },
+            icon: const Icon(Icons.add_rounded),
+            label: Text(tr('addApp')),
+          ),
+        );
+      }
       return [
         // Don't show the empty-state message when the only matches live in
         // folders — the "Found in your folders" section below carries them.
@@ -4205,30 +4463,62 @@ class AppsPageState extends State<AppsPage> {
           isMainAppsPage
               ? SliverLayoutBuilder(
                   builder: (context, constraints) {
-                    // Account for the app bar so the message itself lands at
-                    // the viewport center without reserving the lower half.
-                    final double spaceBeforeViewportCenter = math.max(
+                    // Centre the empty state in the space *above* the
+                    // bottom-pinned "Manage folders" footer (a trailing
+                    // SliverFillRemaining) + the nav pill. Reserving that room
+                    // here keeps the taller illustration from shoving the
+                    // footer down behind the pill.
+                    final double available =
+                        constraints.viewportMainAxisExtent -
+                        constraints.precedingScrollExtent;
+                    // Reserve room for whatever the bottom footer will actually
+                    // render (Manage folders + one button per folder + the
+                    // On-Demand entry, each shown conditionally) plus the nav
+                    // pill, so centring the illustration never pushes those
+                    // buttons behind the pill. Scales with folder count and the
+                    // user's font size.
+                    final double btn =
+                        48 * MediaQuery.textScalerOf(context).scale(1.0);
+                    final bool showManage =
+                        appsProvider.apps.isNotEmpty || appFolders.isNotEmpty;
+                    double footer = 0;
+                    if (showManage) footer += btn;
+                    if (appFolders.isNotEmpty) {
+                      footer += 8 + appFolders.length * (btn + 8);
+                    }
+                    if (onDemandOnlyAppCount > 0) footer += btn + 8;
+                    if (footer > 0) footer += 20; // footer's own top padding
+                    final double navClear = isLargeScreen ? 52.0 : 80.0;
+                    final double footerReserve =
+                        MediaQuery.paddingOf(context).bottom +
+                        navClear +
+                        footer;
+                    final double boxHeight = math.max(
                       0.0,
-                      constraints.viewportMainAxisExtent / 2 -
-                          constraints.precedingScrollExtent,
+                      available - footerReserve,
                     );
                     return SliverToBoxAdapter(
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          16,
-                          spaceBeforeViewportCenter,
-                          16,
-                          0,
-                        ),
-                        child: FractionalTranslation(
-                          translation: const Offset(0, -0.5),
-                          child: emptyStateText,
-                        ),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: boxHeight),
+                        child: Center(child: emptyStateContent),
                       ),
                     );
                   },
                 )
-              : SliverFillRemaining(child: Center(child: emptyStateText)),
+              : SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Padding(
+                    // Exclude the floating nav pill from the centring region so
+                    // the whole block sits at the visible optical centre, not
+                    // biased low toward the screen edge.
+                    padding: EdgeInsets.only(
+                      bottom:
+                          MediaQuery.paddingOf(context).bottom +
+                          (isLargeScreen ? 52.0 : 80.0),
+                    ),
+                    child: Center(child: emptyStateContent),
+                  ),
+                ),
         // Initial empty-library loading uses the centered M3E indicator above.
         // Keep this compact bar for explicit user-initiated refreshes only.
         if (refreshingSince != null)
@@ -4293,13 +4583,7 @@ class AppsPageState extends State<AppsPage> {
       final hasUpdate = installed != null && appHasActionableUpdate(app.app);
       final hasUncertainUpdate =
           installed != null && versionOrderUncertainUpdate(app.app);
-      final sourceHost = sourceProvider
-          .getSourceTemplate(
-            app.app.url,
-            overrideSource: app.app.overrideSource,
-          )
-          .hosts
-          .firstOrNull;
+      final sourceHost = sourceBadgeHostForApp(app.app);
       // M3 Container Transform: tapping the row morphs the row's container
       // into the AppPage's container. Replaces the previous
       // `Navigator.push(heroFriendlyAppPageRoute(...))` flow plus the
@@ -4356,6 +4640,8 @@ class AppsPageState extends State<AppsPage> {
           showAppTypeBadge: settingsProvider.showAppTypeBadge,
           showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
           showCategoriesBadge: settingsProvider.showCategoriesBadge,
+          showAuthorBadge: settingsProvider.showAuthorBadge,
+          showVersionBadge: settingsProvider.showVersionBadge,
           onTap: selectedAppIds.isNotEmpty
               ? () => toggleAppSelected(app.app)
               : navigateToAppPage,
@@ -4708,10 +4994,12 @@ class AppsPageState extends State<AppsPage> {
             };
     }
 
-    Future<Null> Function() launchCategorizeDialog() {
+    Future<Null> Function() launchCategorizeDialog([
+      Iterable<App>? targetApps,
+    ]) {
       return () async {
         try {
-          final appsToCategorize = selectedApps.toList();
+          final appsToCategorize = (targetApps ?? getSelectedApps()).toList();
           await showAppModalSheet<void>(
             context: context,
             builder: (BuildContext sheetContext) {
@@ -4754,7 +5042,8 @@ class AppsPageState extends State<AppsPage> {
       };
     }
 
-    Future<dynamic> showMassMarkDialog() {
+    Future<dynamic> showMassMarkDialog([Iterable<App>? targetApps]) {
+      final appsToMark = (targetApps ?? getSelectedApps()).toList();
       return showDialog(
         context: context,
         builder: (BuildContext ctx) {
@@ -4762,7 +5051,7 @@ class AppsPageState extends State<AppsPage> {
             title: Text(
               tr(
                 'markXSelectedAppsAsUpdated',
-                args: [selectedAppIds.length.toString()],
+                args: [appsToMark.length.toString()],
               ),
             ),
             contentPadding: appDialogContentPadding,
@@ -4784,14 +5073,27 @@ class AppsPageState extends State<AppsPage> {
                 onPressed: () {
                   hapticSelection();
                   appsProvider.saveApps(
-                    selectedApps.map((a) {
-                      if (a.installedVersion != null &&
+                    appsToMark.map((appToUpdate) {
+                      final bool hasLegacyReset = appToUpdate.additionalSettings
+                          .containsKey(installStatusResetKey);
+                      App appToMark = appToUpdate;
+                      if ((appToUpdate.installedVersion != null ||
+                              hasLegacyReset) &&
                           !appsProvider.isVersionDetectionPossible(
-                            appsProvider.apps[a.id],
+                            appsProvider.apps[appToUpdate.id],
                           )) {
-                        return a.copyWith(installedVersion: a.latestVersion);
+                        appToMark = appToUpdate.copyWith(
+                          installedVersion: appToUpdate.latestVersion,
+                        );
                       }
-                      return a;
+                      if (hasLegacyReset) {
+                        appToMark = appToMark.copyWith(
+                          additionalSettings: Map<String, dynamic>.from(
+                            appToMark.additionalSettings,
+                          )..remove(installStatusResetKey),
+                        );
+                      }
+                      return appToMark;
                     }).toList(),
                     attemptToCorrectInstallStatus: false,
                     updateInstalledInfo: false,
@@ -4807,10 +5109,11 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    void pinSelectedApps() {
-      final pinStatus = selectedApps.where((element) => element.pinned).isEmpty;
+    void pinSelectedApps([Iterable<App>? targetApps]) {
+      final appsToPin = targetApps ?? getSelectedApps();
+      final pinStatus = appsToPin.where((element) => element.pinned).isEmpty;
       appsProvider.saveApps(
-        selectedApps.map((e) => e.copyWith(pinned: pinStatus)).toList(),
+        appsToPin.map((e) => e.copyWith(pinned: pinStatus)).toList(),
         updateInstalledInfo: false,
       );
     }
@@ -4818,29 +5121,34 @@ class AppsPageState extends State<AppsPage> {
     // Shared bulk-action bodies, used by both the phone "more options" sheet
     // and the large-screen action pane. They intentionally do not dismiss any
     // surface - the phone sheet pops at its own call sites; the pane stays.
-    void downloadSelectedAppAssets() {
+    void downloadSelectedAppAssets([Iterable<App>? targetApps]) {
+      final appsToDownload = targetApps ?? getSelectedApps();
       appsProvider
-          .downloadAppAssets(selectedApps.map((e) => e.id).toList())
+          .downloadAppAssets(appsToDownload.map((e) => e.id).toList())
           .catchError((e) {
             showError(e);
             return <String>[];
           });
     }
 
-    void shareSelectedAppUrls() {
+    void shareSelectedAppUrls([Iterable<App>? targetApps]) {
+      final appsToShare = targetApps ?? getSelectedApps();
       String urls = '';
-      for (var a in selectedApps) {
+      for (var a in appsToShare) {
         urls += '${a.url}\n';
       }
-      urls = urls.substring(0, urls.length - 1);
+      if (urls.isNotEmpty) {
+        urls = urls.substring(0, urls.length - 1);
+      }
       SharePlus.instance.share(
         ShareParams(text: urls, subject: 'ObtainX - ${tr('appsString')}'),
       );
     }
 
-    void shareSelectedAppConfigLinks() {
+    void shareSelectedAppConfigLinks([Iterable<App>? targetApps]) {
+      final appsToShare = targetApps ?? getSelectedApps();
       String urls = '';
-      for (var a in selectedApps) {
+      for (var a in appsToShare) {
         urls +=
             'https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/${Uri.encodeComponent(jsonEncode({'id': a.id, 'url': a.url, 'author': a.author, 'name': a.name, 'preferredApkIndex': a.preferredApkIndex, 'additionalSettings': jsonEncode(a.additionalSettings), 'overrideSource': a.overrideSource}))}\n\n';
       }
@@ -4849,16 +5157,17 @@ class AppsPageState extends State<AppsPage> {
       );
     }
 
-    void exportSelectedApps() {
+    void exportSelectedApps([Iterable<App>? targetApps]) {
+      final appsToExport = (targetApps ?? getSelectedApps()).toList();
       const encoder = JsonEncoder.withIndent('    ');
       final exportJSON = encoder.convert(
         appsProvider.generateExportJSON(
-          appIds: selectedApps.map((e) => e.id).toList(),
+          appIds: appsToExport.map((e) => e.id).toList(),
           overrideExportSettings: 0,
         ),
       );
       final String fn =
-          '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}-count-${selectedApps.length}';
+          '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}-count-${appsToExport.length}';
       final XFile f = XFile.fromData(
         Uint8List.fromList(utf8.encode(exportJSON)),
         mimeType: 'application/json',
@@ -4871,15 +5180,17 @@ class AppsPageState extends State<AppsPage> {
 
     void showCombinedSelectionActionsSheet() {
       final ColorScheme scheme = Theme.of(context).colorScheme;
-      final bool selectedAppsArePinned = selectedApps.any(
-        (selectedApp) => selectedApp.pinned,
-      );
 
       showAppModalSheet<void>(
         context: context,
         builder: (sheetCtx) {
           return StatefulBuilder(
             builder: (sheetCtx, setSheetState) {
+              final Set<App> currentSelectedApps = getSelectedApps();
+              final bool selectedAppsArePinned = currentSelectedApps.any(
+                (selectedApp) => selectedApp.pinned,
+              );
+
               return AppSheetContent(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: [
@@ -4945,14 +5256,15 @@ class AppsPageState extends State<AppsPage> {
                   ActionListTile(
                     icon: Icons.category_outlined,
                     label: tr('categorize'),
-                    onTap: launchCategorizeDialog(),
+                    onTap: launchCategorizeDialog(currentSelectedApps),
                     autoPop: true,
                   ),
                   // Add to Folder
                   ActionListTile(
                     icon: Icons.folder_copy_outlined,
                     label: tr('addToFolder'),
-                    onTap: () => _showFolderAssignDialog(context, selectedApps),
+                    onTap: () =>
+                        _showFolderAssignDialog(context, currentSelectedApps),
                     autoPop: true,
                   ),
                   // Pin / Unpin
@@ -4963,14 +5275,14 @@ class AppsPageState extends State<AppsPage> {
                     label: selectedAppsArePinned
                         ? tr('unpinFromTop')
                         : tr('pinToTop'),
-                    onTap: pinSelectedApps,
+                    onTap: () => pinSelectedApps(currentSelectedApps),
                     autoPop: true,
                   ),
                   // Share URLs
                   ActionListTile(
                     icon: Icons.share_outlined,
                     label: tr('shareSelectedAppURLs'),
-                    onTap: shareSelectedAppUrls,
+                    onTap: () => shareSelectedAppUrls(currentSelectedApps),
                     autoPop: true,
                   ),
                   // Share Config Links
@@ -4979,14 +5291,17 @@ class AppsPageState extends State<AppsPage> {
                     label: tr('shareAppConfigLinks'),
                     onTap: selectedAppIds.isEmpty
                         ? null
-                        : shareSelectedAppConfigLinks,
+                        : () =>
+                              shareSelectedAppConfigLinks(currentSelectedApps),
                     autoPop: true,
                   ),
                   // Export JSON
                   ActionListTile(
                     icon: Icons.file_download_outlined,
                     label: '${tr('share')} - ${tr('obtainiumExport')}',
-                    onTap: selectedAppIds.isEmpty ? null : exportSelectedApps,
+                    onTap: selectedAppIds.isEmpty
+                        ? null
+                        : () => exportSelectedApps(currentSelectedApps),
                     autoPop: true,
                   ),
                   // Download Release Assets
@@ -4996,7 +5311,7 @@ class AppsPageState extends State<AppsPage> {
                       'downloadX',
                       args: [lowerCaseIfEnglish(tr('releaseAsset'))],
                     ),
-                    onTap: downloadSelectedAppAssets,
+                    onTap: () => downloadSelectedAppAssets(currentSelectedApps),
                     autoPop: true,
                   ),
                   // Mark as Updated
@@ -5005,7 +5320,7 @@ class AppsPageState extends State<AppsPage> {
                     label: tr('markSelectedAppsUpdated'),
                     onTap: appsProvider.areDownloadsRunning()
                         ? null
-                        : showMassMarkDialog,
+                        : () => showMassMarkDialog(currentSelectedApps),
                     autoPop: true,
                   ),
                   const Divider(height: 16),
@@ -5021,7 +5336,7 @@ class AppsPageState extends State<AppsPage> {
                       final RemoveAppsWithModalResult removeResult =
                           await appsProviderRef.removeAppsWithModal(
                             context,
-                            selectedApps.toList(),
+                            currentSelectedApps.toList(),
                           );
                       if (removeResult.shouldShowSnackBar) {
                         final Set<String> undoAppIds =
@@ -5029,28 +5344,27 @@ class AppsPageState extends State<AppsPage> {
                         final int removedCount =
                             removeResult.deferredUndoAppIds.isNotEmpty
                             ? removeResult.deferredUndoAppIds.length
-                            : selectedApps.length;
-                        messenger
-                          ?..clearSnackBars()
-                          ..showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                tr('xAppsRemoved', args: ['$removedCount']),
-                              ),
+                            : currentSelectedApps.length;
+                        if (messenger != null && messenger.mounted) {
+                          messenger.clearSnackBars();
+                          messenger.showSnackBar(
+                            buildAppSnackBar(
+                              messenger.context,
+                              tr('xAppsRemoved', args: ['$removedCount']),
                               persist: false,
                               duration: const Duration(seconds: 5),
-                              behavior: SnackBarBehavior.floating,
-                              action: undoAppIds.isNotEmpty
-                                  ? SnackBarAction(
-                                      label: tr('undo'),
-                                      onPressed: () => appsProviderRef
-                                          .undoDeferredObtainiumRemovals(
-                                            undoAppIds,
-                                          ),
-                                    )
+                              actionLabel: undoAppIds.isNotEmpty
+                                  ? tr('undo')
+                                  : null,
+                              onAction: undoAppIds.isNotEmpty
+                                  ? () => appsProviderRef
+                                        .undoDeferredObtainiumRemovals(
+                                          undoAppIds,
+                                        )
                                   : null,
                             ),
                           );
+                        }
                       }
                     },
                     autoPop: true,
@@ -5741,148 +6055,171 @@ class AppsPageState extends State<AppsPage> {
                             ...getLoadingWidgets(),
                             ...getDisplayedList(),
                             ...getCrossFolderMatchesSlivers(),
-                            // Extra bottom space for folder / on-demand pages so the
-                            // last item isn't clipped by the phone's rounded corners.
-                            if (widget.onDemandOnlyList ||
-                                widget.folderId != null)
-                              const SliverToBoxAdapter(
-                                child: SizedBox(height: 80),
-                              ),
                             if (!widget.onDemandOnlyList &&
                                 widget.folderId == null)
-                              SliverToBoxAdapter(
+                              SliverFillRemaining(
+                                hasScrollBody: false,
                                 child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    20,
-                                    16,
-                                    0,
+                                  padding: EdgeInsets.only(
+                                    bottom:
+                                        MediaQuery.paddingOf(context).bottom +
+                                        (!isLargeScreen
+                                            ? 80.0
+                                            : ((showSplitPaneListFabs ||
+                                                      showFolderListFabs)
+                                                  ? 52.0
+                                                  : 0.0)),
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      // Manage Folders button
-                                      TextButton.icon(
-                                        onPressed: () {
-                                          unawaited(
-                                            _showFolderManageSheet(context),
-                                          );
-                                        },
-                                        icon: const Icon(
-                                          Icons.folder_copy_outlined,
-                                          size: 18,
-                                        ),
-                                        label: Text(tr('manageFolders')),
+                                  child: Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        20,
+                                        16,
+                                        0,
                                       ),
-                                      // User-defined folder buttons
-                                      if (appFolders.isNotEmpty) ...[
-                                        const SizedBox(height: 8),
-                                        ...appFolders.map(
-                                          (folder) => Padding(
-                                            padding: const EdgeInsets.only(
-                                              bottom: 8,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          // Manage Folders button — hidden on the
+                                          // empty first-run page; nothing to
+                                          // organize into folders yet.
+                                          if (appsProvider.apps.isNotEmpty ||
+                                              appFolders.isNotEmpty)
+                                            TextButton.icon(
+                                              onPressed: () {
+                                                unawaited(
+                                                  _showFolderManageSheet(
+                                                    context,
+                                                  ),
+                                                );
+                                              },
+                                              icon: const Icon(
+                                                Icons.folder_copy_outlined,
+                                                size: 18,
+                                              ),
+                                              label: Text(tr('manageFolders')),
                                             ),
-                                            child: FilledButton.icon(
+                                          // User-defined folder buttons
+                                          if (appFolders.isNotEmpty) ...[
+                                            const SizedBox(height: 8),
+                                            ...appFolders.map(
+                                              (folder) => Padding(
+                                                padding: const EdgeInsets.only(
+                                                  bottom: 8,
+                                                ),
+                                                child: FilledButton.icon(
+                                                  onPressed: () {
+                                                    Navigator.push(
+                                                      context,
+                                                      slideUpPageRoute(
+                                                        (_) => AppsPage(
+                                                          folderId: folder.id,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  icon: () {
+                                                    final int upd =
+                                                        folderUpdateCounts[folder
+                                                            .id] ??
+                                                        0;
+                                                    if (upd > 0) {
+                                                      return Stack(
+                                                        clipBehavior: Clip.none,
+                                                        alignment:
+                                                            AlignmentDirectional
+                                                                .centerStart,
+                                                        children: [
+                                                          const Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              SizedBox(
+                                                                width: 4,
+                                                                height: 16,
+                                                              ),
+                                                              SizedBox(
+                                                                width: 6,
+                                                              ),
+                                                              Icon(
+                                                                Icons
+                                                                    .folder_outlined,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          Badge(
+                                                            label: Text('$upd'),
+                                                            child:
+                                                                const SizedBox(
+                                                                  width: 4,
+                                                                  height: 16,
+                                                                ),
+                                                          ),
+                                                        ],
+                                                      );
+                                                    }
+                                                    return const Icon(
+                                                      Icons.folder_outlined,
+                                                    );
+                                                  }(),
+                                                  label: Text(
+                                                    '${folder.name} '
+                                                    '(${folderAppCounts[folder.id] ?? 0})',
+                                                    textAlign: TextAlign.center,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                          ],
+                                          // On-Demand Only button (always last) —
+                                          // only when it actually holds apps.
+                                          if (onDemandOnlyAppCount > 0)
+                                            FilledButton.icon(
                                               onPressed: () {
                                                 Navigator.push(
                                                   context,
                                                   slideUpPageRoute(
-                                                    (_) => AppsPage(
-                                                      folderId: folder.id,
+                                                    (_) => const AppsPage(
+                                                      onDemandOnlyList: true,
                                                     ),
                                                   ),
                                                 );
                                               },
-                                              icon: () {
-                                                final int upd =
-                                                    folderUpdateCounts[folder
-                                                        .id] ??
-                                                    0;
-                                                if (upd > 0) {
-                                                  return Stack(
-                                                    clipBehavior: Clip.none,
-                                                    alignment:
-                                                        AlignmentDirectional
-                                                            .centerStart,
-                                                    children: [
-                                                      const Row(
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        children: [
-                                                          SizedBox(
-                                                            width: 4,
-                                                            height: 16,
-                                                          ),
-                                                          SizedBox(width: 6),
-                                                          Icon(
-                                                            Icons
-                                                                .folder_outlined,
-                                                          ),
-                                                        ],
-                                                      ),
-                                                      Badge(
-                                                        label: Text('$upd'),
-                                                        child: const SizedBox(
-                                                          width: 4,
-                                                          height: 16,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  );
-                                                }
-                                                return const Icon(
-                                                  Icons.folder_outlined,
-                                                );
-                                              }(),
+                                              icon: const Icon(
+                                                Icons.folder_special_outlined,
+                                              ),
                                               label: Text(
-                                                '${folder.name} '
-                                                '(${folderAppCounts[folder.id] ?? 0})',
+                                                '${tr('onDemandOnly')} '
+                                                '($onDemandOnlyAppCount)',
                                                 textAlign: TextAlign.center,
                                               ),
                                             ),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                      ],
-                                      // On-Demand Only button (always last)
-                                      FilledButton.icon(
-                                        onPressed: () {
-                                          Navigator.push(
-                                            context,
-                                            slideUpPageRoute(
-                                              (_) => const AppsPage(
-                                                onDemandOnlyList: true,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        icon: const Icon(
-                                          Icons.folder_special_outlined,
-                                        ),
-                                        label: Text(
-                                          '${tr('onDemandOnly')} '
-                                          '($onDemandOnlyAppCount)',
-                                          textAlign: TextAlign.center,
-                                        ),
+                                        ],
                                       ),
-                                      const SizedBox(height: 20),
-                                    ],
+                                    ),
                                   ),
                                 ),
                               ),
-                            SliverToBoxAdapter(
-                              child: SizedBox(
-                                height:
-                                    MediaQuery.paddingOf(context).bottom +
-                                    (!isLargeScreen
-                                        ? 80.0
-                                        : ((showSplitPaneListFabs ||
-                                                  showFolderListFabs)
-                                              ? 52.0
-                                              : 0.0)),
+                            if (widget.onDemandOnlyList ||
+                                widget.folderId != null)
+                              SliverToBoxAdapter(
+                                child: SizedBox(
+                                  height:
+                                      MediaQuery.paddingOf(context).bottom +
+                                      (!isLargeScreen
+                                          ? 80.0
+                                          : ((showSplitPaneListFabs ||
+                                                    showFolderListFabs)
+                                                ? 52.0
+                                                : 0.0)),
+                                ),
                               ),
-                            ),
                           ],
                         ),
                         if (!isLargeScreen &&
@@ -5891,6 +6228,7 @@ class AppsPageState extends State<AppsPage> {
                           _buildAppsPageSideFabOverlay(
                             context,
                             heroScope: widget.folderId ?? 'ondemand',
+                            matchHomeNavigationPosition: true,
                           ),
                         if (showSplitPaneListFabs)
                           _buildAppsPageSideFabOverlay(
@@ -6288,41 +6626,40 @@ class AppsPageState extends State<AppsPage> {
                                                                   .length
                                                             : selectedApps
                                                                   .length;
-                                                        messenger
-                                                          ?..clearSnackBars()
-                                                          ..showSnackBar(
-                                                            SnackBar(
-                                                              content: Text(
-                                                                tr(
-                                                                  'xAppsRemoved',
-                                                                  args: [
-                                                                    '$removedCount',
-                                                                  ],
-                                                                ),
+                                                        if (messenger != null &&
+                                                            messenger.mounted) {
+                                                          messenger
+                                                              .clearSnackBars();
+                                                          messenger.showSnackBar(
+                                                            buildAppSnackBar(
+                                                              messenger.context,
+                                                              tr(
+                                                                'xAppsRemoved',
+                                                                args: [
+                                                                  '$removedCount',
+                                                                ],
                                                               ),
                                                               persist: false,
                                                               duration:
                                                                   const Duration(
                                                                     seconds: 5,
                                                                   ),
-                                                              behavior:
-                                                                  SnackBarBehavior
-                                                                      .floating,
-                                                              action:
+                                                              actionLabel:
                                                                   undoAppIds
                                                                       .isNotEmpty
-                                                                  ? SnackBarAction(
-                                                                      label: tr(
-                                                                        'undo',
-                                                                      ),
-                                                                      onPressed: () =>
-                                                                          appsProviderRef.undoDeferredObtainiumRemovals(
-                                                                            undoAppIds,
-                                                                          ),
-                                                                    )
+                                                                  ? tr('undo')
+                                                                  : null,
+                                                              onAction:
+                                                                  undoAppIds
+                                                                      .isNotEmpty
+                                                                  ? () => appsProviderRef
+                                                                        .undoDeferredObtainiumRemovals(
+                                                                          undoAppIds,
+                                                                        )
                                                                   : null,
                                                             ),
                                                           );
+                                                        }
                                                       }
                                                     },
                                                     icon: const Icon(

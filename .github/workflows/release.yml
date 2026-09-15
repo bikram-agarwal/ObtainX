@@ -13,13 +13,13 @@ jobs:
 
     steps:
       
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin' # See 'Supported distributions' for available options
           java-version: '21'
@@ -59,12 +59,12 @@ jobs:
           ls -l ./build/app/outputs/flutter-apk/
 
       - name: Save Unsigned APKs as Action Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: build/app/outputs/flutter-apk/*
 
       - name: Create Tag
-        uses: mathieudutour/github-tag-action@v6.1
+        uses: mathieudutour/github-tag-action@v6
         with:
           github_token: ${{ secrets.GH_ACCESS_TOKEN }}
           custom_tag: "${{ steps.extract_version.outputs.tag }}"

@@ -105,7 +105,7 @@ class DownloadForegroundService : Service() {
             NotificationChannel(
                 channelCode,
                 channelName,
-                NotificationManager.IMPORTANCE_LOW,
+                NotificationManager.IMPORTANCE_MIN,
             ).apply {
                 description = channelDescription
             },

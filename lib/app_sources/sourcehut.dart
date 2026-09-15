@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:http/http.dart';
 import 'package:intl/intl.dart';
+import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/providers/logs_provider.dart';
@@ -13,6 +14,32 @@ class SourceHut extends AppSource {
     hosts = ['git.sr.ht'];
     changeLogPageIsStandardUrl = true;
     showReleaseDateAsVersionToggle = true;
+    // Same deal as GitHub: read the app id out of the repo rather than making
+    // the user download an APK first. Optional because it is a guess — see
+    // [tryInferringAppId].
+    appIdInferIsOptional = true;
+  }
+
+  /// SourceHut serves file contents straight from `/blob/HEAD/<path>` as plain
+  /// text — no API, no decoding.
+  @override
+  Future<String?> tryInferringAppId(
+    String standardUrl, {
+    Map<String, dynamic> additionalSettings = const {},
+  }) async {
+    // getLatestAPKDetails accepts a '/refs' URL; strip it so the blob path is
+    // rooted at the repo either way.
+    final String repoUrl = standardUrl.endsWith('/refs')
+        ? standardUrl.substring(0, standardUrl.length - '/refs'.length)
+        : standardUrl;
+    return inferAppIdFromGradleFiles((String path) async {
+      final res = await sourceRequest(
+        '$repoUrl/blob/HEAD/$path',
+        additionalSettings,
+      );
+      if (res.statusCode != 200) return null;
+      return res.body;
+    }, onError: (String message) => unawaited(LogsProvider().add(message)));
   }
 
   @override

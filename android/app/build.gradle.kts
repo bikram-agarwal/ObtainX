@@ -31,7 +31,16 @@ if (keystorePropertiesExists) {
 
 android {
     namespace = "dev.imranr.obtainium"
-    compileSdk = flutter.compileSdkVersion
+    val sdkVersion = maxOf(37, flutter.compileSdkVersion)
+    if (sdkVersion == 37) {
+        compileSdk {
+            version = release(37) {
+                minorApiLevel = 0
+            }
+        }
+    } else {
+        compileSdk = sdkVersion
+    }
     ndkVersion = "28.2.13676358"
 
     dependenciesInfo {

@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -37,6 +38,7 @@ import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
 
+export 'apps_provider_icon_backup.dart';
 export 'apps_provider_import_export.dart';
 export 'apps_provider_install.dart';
 export 'apps_provider_lifecycle.dart';
@@ -50,16 +52,35 @@ const int _partialHashCheckLowerLimit = 128;
 const int _partialHashCheckDecrement = 256;
 const int _maxDownloadPolls = 43;
 const int _downloadPollIntervalSeconds = 7;
-const int _progressUpdateIntervalMs = 500;
+const int _progressUpdateIntervalMs = 1000;
 const int _downloadBufferSize = 32 * 1024;
 const int _downloadProgressFallback = 30;
 const int _bgUpdateMaxAttempts = 4;
 const int _bgUpdateMaxRetryWaitSeconds = 30;
 const int _bgClientExceptionRetryWaitSeconds = 15 * 60;
 
+/// Legacy key written by ObtainX 2.9.7's reset-install-status action.
+///
+/// Reconciliation removes it and restores the actual device version so affected
+/// apps are not pinned to "not installed" until their next reinstall.
+const String installStatusResetKey = 'installStatusResetAtInstallTime';
+
 final packageManager = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
 final packageInfoFlagsLight = PackageInfoFlags({});
+
+App resetInstallStatusToDeviceVersion(App app, PackageInfo? installedInfo) {
+  final Map<String, dynamic> additionalSettings = Map<String, dynamic>.from(
+    app.additionalSettings,
+  )..remove(installStatusResetKey);
+  final String? installedVersion = app.usesVersionCodeAsOsVersion
+      ? installedInfo?.versionCode?.toString()
+      : installedInfo?.versionName;
+  return app.copyWith(
+    installedVersion: installedVersion,
+    additionalSettings: additionalSettings,
+  );
+}
 
 List<String> certificateHashesFromSignatures(Iterable<List<int>> signatures) {
   return signatures
@@ -172,87 +193,6 @@ class DownloadedDir {
   DownloadedDir(this.appId, this.file, this.extracted, this.type);
 }
 
-/// Delegates to [VersionService.findStandardFormatsForVersion].
-Set<String> findStandardFormatsForVersion(String version, bool strict) =>
-    VersionService().findStandardFormatsForVersion(version, strict);
-
-// Version reconciliation helpers (fork feature) used by additional_options and
-// pseudo-version handling. [doStringsMatchUnderRegEx] already lives elsewhere.
-MapEntry<bool, String>? reconcileVersionDifferences(
-  String templateVersion,
-  String comparisonVersion,
-) {
-  // Returns null if the versions don't share a common standard format
-  // Returns <true, comparisonVersion> if they share a common format and are equal
-  // Returns <false, templateVersion> if they share a common format but are not equal
-  final templateVersionFormats = findStandardFormatsForVersion(
-    templateVersion,
-    true,
-  );
-  var comparisonVersionFormats = findStandardFormatsForVersion(
-    comparisonVersion,
-    true,
-  );
-  if (comparisonVersionFormats.isEmpty) {
-    comparisonVersionFormats = findStandardFormatsForVersion(
-      comparisonVersion,
-      false,
-    );
-  }
-  final commonStandardFormats = templateVersionFormats.intersection(
-    comparisonVersionFormats,
-  );
-  if (commonStandardFormats.isEmpty) {
-    return reconcileVersionDifferencesByShape(
-      templateVersion,
-      comparisonVersion,
-    );
-  }
-  for (String pattern in commonStandardFormats) {
-    if (VersionService().doStringsMatchUnderRegEx(
-      pattern,
-      comparisonVersion,
-      templateVersion,
-    )) {
-      return MapEntry(true, comparisonVersion);
-    }
-  }
-  return MapEntry(false, templateVersion);
-}
-
-MapEntry<bool, String>? reconcileVersionDifferencesByShape(
-  String templateVersion,
-  String comparisonVersion,
-) {
-  final String templateShape = versionShapeForReconciliation(templateVersion);
-  final String comparisonShape = versionShapeForReconciliation(
-    comparisonVersion,
-  );
-  if (templateShape.isEmpty || templateShape != comparisonShape) {
-    return null;
-  }
-  final templateTokens = numericVersionTokens(templateVersion);
-  final comparisonTokens = numericVersionTokens(comparisonVersion);
-  if (templateTokens.isEmpty ||
-      templateTokens.length != comparisonTokens.length) {
-    return null;
-  }
-  if (listEquals(templateTokens, comparisonTokens)) {
-    return MapEntry(true, comparisonVersion);
-  }
-  return MapEntry(false, templateVersion);
-}
-
-String versionShapeForReconciliation(String version) {
-  return version.trim().toLowerCase().replaceAll(RegExp(r'\d+'), '#');
-}
-
-List<int> numericVersionTokens(String version) {
-  return RegExp(
-    r'\d+',
-  ).allMatches(version).map((m) => int.tryParse(m.group(0)!) ?? 0).toList();
-}
-
 /// Removes all matching elements and appends the last match to the end.
 /// This is intentionally deduplicating — only one instance is re-added.
 List<T> _moveToEnd<T extends Object>(List<T> arr, bool Function(T) match) {
@@ -333,6 +273,113 @@ Future<File> downloadFileWithRetry(
   }
 }
 
+class DownloadResponseMetadata {
+  const DownloadResponseMetadata({
+    required this.finalUri,
+    required this.headers,
+  });
+
+  final Uri finalUri;
+  final Map<String, String> headers;
+
+  String? get suggestedFileName =>
+      extractDownloadFileNameFromContentDisposition(
+        headers['content-disposition'],
+      );
+}
+
+Uri _finalResponseUri(StreamedResponse response, Uri originalUri) {
+  if (response case BaseResponseWithUrl(:final Uri url)) {
+    return url;
+  }
+  return response.request?.url ?? originalUri;
+}
+
+String? sanitizeDownloadFileName(String? rawFileName) {
+  if (rawFileName == null) {
+    return null;
+  }
+  String fileName = rawFileName.trim();
+  if (fileName.length >= 2 &&
+      ((fileName.startsWith('"') && fileName.endsWith('"')) ||
+          (fileName.startsWith("'") && fileName.endsWith("'")))) {
+    fileName = fileName.substring(1, fileName.length - 1);
+  }
+  try {
+    fileName = Uri.decodeComponent(fileName);
+  } on FormatException {
+    // Keep the server-provided text when percent encoding is malformed.
+  }
+  fileName = fileName.replaceAll(r'\', '/').split('/').last.trim();
+  fileName = fileName
+      .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
+      .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+      .replaceAll(RegExp(r'[. ]+$'), '');
+  return fileName.isEmpty || fileName == '.' || fileName == '..'
+      ? null
+      : fileName;
+}
+
+/// Extracts and sanitizes an RFC 6266/RFC 5987 response filename.
+String? extractDownloadFileNameFromContentDisposition(
+  String? contentDisposition,
+) {
+  if (contentDisposition == null || contentDisposition.trim().isEmpty) {
+    return null;
+  }
+  final RegExpMatch? encodedMatch = RegExp(
+    r'(?:^|;)\s*filename\*\s*=\s*([^;]+)',
+    caseSensitive: false,
+  ).firstMatch(contentDisposition);
+  if (encodedMatch != null) {
+    String encodedFileName = encodedMatch.group(1)!.trim();
+    encodedFileName = encodedFileName.replaceFirst(
+      RegExp(r"^[^']*'[^']*'"),
+      '',
+    );
+    final String? normalized = sanitizeDownloadFileName(encodedFileName);
+    if (normalized != null) {
+      return normalized;
+    }
+  }
+
+  final RegExpMatch? plainMatch = RegExp(
+    r'(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]*))',
+    caseSensitive: false,
+  ).firstMatch(contentDisposition);
+  return sanitizeDownloadFileName(plainMatch?.group(1) ?? plainMatch?.group(2));
+}
+
+DownloadResponseMetadata _downloadResponseMetadata(
+  StreamedResponse response,
+  Uri originalUri,
+) => DownloadResponseMetadata(
+  finalUri: _finalResponseUri(response, originalUri),
+  headers: response.headers,
+);
+
+/// Fetches only enough of a download response to inspect headers and redirects.
+Future<DownloadResponseMetadata?> probeDownloadResponseMetadata(
+  String url, {
+  Map<String, String>? headers,
+  bool allowInsecure = false,
+}) async {
+  final Uri originalUri = Uri.parse(url);
+  final Request request = Request('GET', originalUri);
+  request.headers.addAll(withDefaultObtainXUserAgent(headers));
+  request.headers[HttpHeaders.rangeHeader] = 'bytes=0-0';
+  final IOClient client = IOClient(createHttpClient(allowInsecure));
+  try {
+    final StreamedResponse response = await client.send(request);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
+    }
+    return _downloadResponseMetadata(response, originalUri);
+  } finally {
+    client.close();
+  }
+}
+
 String hashListOfLists(List<List<int>> data) {
   final bytes = utf8.encode(jsonEncode(data));
   return sha256.convert(bytes).toString().substring(0, 8);
@@ -344,7 +391,16 @@ Future<String> checkPartialDownloadHashDynamic(
   int lowerLimit = _partialHashCheckLowerLimit,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
+  bool metadataReported = false;
+  void reportMetadata(DownloadResponseMetadata metadata) {
+    if (!metadataReported) {
+      metadataReported = true;
+      onResponseMetadata?.call(metadata);
+    }
+  }
+
   for (int i = startingSize; i >= lowerLimit; i -= _partialHashCheckDecrement) {
     // Both requests fetch the same byte range to confirm the hash is
     // stable. The loop decrements on mismatch; when two consecutive
@@ -355,12 +411,14 @@ Future<String> checkPartialDownloadHashDynamic(
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        onResponseMetadata: reportMetadata,
       ),
       checkPartialDownloadHash(
         url,
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        onResponseMetadata: reportMetadata,
       ),
     ]);
     if (ab[0] == ab[1]) {
@@ -375,11 +433,11 @@ Future<String> checkPartialDownloadHash(
   int bytesToGrab, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final req = Request('GET', Uri.parse(url));
-  if (headers != null) {
-    req.headers.addAll(headers);
-  }
+  final Uri originalUri = Uri.parse(url);
+  final req = Request('GET', originalUri);
+  req.headers.addAll(withDefaultObtainXUserAgent(headers));
   req.headers[HttpHeaders.rangeHeader] = 'bytes=0-$bytesToGrab';
   final client = IOClient(createHttpClient(allowInsecure));
   try {
@@ -388,6 +446,7 @@ Future<String> checkPartialDownloadHash(
       throw ObtainiumError(response.reasonPhrase ?? tr('unexpectedError'))
         ..url = url;
     }
+    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
     final List<List<int>> bytes = await response.stream
         .take(bytesToGrab)
         .toList();
@@ -401,9 +460,11 @@ Future<String?> checkETagHeader(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final reqHeaders = headers ?? {};
-  final req = Request('GET', Uri.parse(url));
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
+  final Uri originalUri = Uri.parse(url);
+  final req = Request('GET', originalUri);
   req.headers.addAll(reqHeaders);
   final client = IOClient(createHttpClient(allowInsecure));
   try {
@@ -411,6 +472,7 @@ Future<String?> checkETagHeader(
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
+    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
     final etag = response.headers[HttpHeaders.etagHeader]?.replaceAll('"', '');
     return etag != null
         ? sha256.convert(utf8.encode(etag)).toString().substring(0, 12)
@@ -536,7 +598,7 @@ Future<File> _downloadFile(
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
-  final reqHeaders = headers ?? {};
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
   final headersClient = IOClient(createHttpClient(allowInsecure));
 
   final getReq = Request('GET', Uri.parse(url));
@@ -548,7 +610,19 @@ Future<File> _downloadFile(
   // Use the headers to decide what the file extension is, and
   // whether it supports partial downloads (range request), and
   // what the total size of the file is (if provided)
-  String ext = resHeaders['content-disposition']?.split('.').last ?? 'apk';
+  final String? suggestedFileName =
+      extractDownloadFileNameFromContentDisposition(
+        resHeaders['content-disposition'],
+      );
+  String ext =
+      suggestedFileName != null &&
+          AppSource.isApkOrContainerFile(
+            suggestedFileName,
+            includeArchives: true,
+            includeTarballs: true,
+          )
+      ? suggestedFileName.split('.').last
+      : 'apk';
   if (ext.endsWith('"')) {
     ext = ext.substring(0, ext.length - 1);
   }
@@ -687,6 +761,8 @@ Future<File> _downloadFile(
                 'errorWithHttpStatusCode',
                 args: [response.statusCode.toString()],
               ),
+        code: 'HTTP_ERROR',
+        data: <String, dynamic>{'statusCode': response.statusCode},
       )..url = url;
     }
 
@@ -739,7 +815,7 @@ Future<File> _downloadFile(
       // a file/socket error caused by the abort) so callers handle it silently.
       if (e is CancellationException ||
           (cancellationToken?.isCancelled ?? false)) {
-        throw CancellationException();
+        throw const CancellationException();
       }
       rethrow;
     }
@@ -799,7 +875,7 @@ Future<int?> getDownloadSize(
   Map<String, String>? headers,
   bool allowInsecure = false,
 }) async {
-  final reqHeaders = headers ?? {};
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
   final client = IOClient(createHttpClient(allowInsecure));
   try {
     final getReq = Request('GET', Uri.parse(url));
@@ -1028,6 +1104,7 @@ class AppsProvider with ChangeNotifier {
   Directory? _apkDir;
   Directory? _iconsCacheDir;
   Directory? _userAppIconsDir;
+  Directory? _deducedAppIconsDir;
   Directory? cachedAppsDir;
 
   // Per-app-detail-page transient error banners, keyed by app ID. Populated by
@@ -1075,6 +1152,19 @@ class AppsProvider with ChangeNotifier {
       );
     }
     return _userAppIconsDir!;
+  }
+
+  /// Icons deduced for apps whose source publishes none: extracted from a
+  /// downloaded APK, or fetched from another store's listing. Lives under app
+  /// storage (not [iconsCacheDir]) because re-deriving one costs a download or
+  /// a network round-trip, so Android "clear cache" must not wipe it.
+  Directory get deducedAppIconsDir {
+    if (_deducedAppIconsDir == null) {
+      throw StateError(
+        'deducedAppIconsDir not initialized - wait for async init to complete',
+      );
+    }
+    return _deducedAppIconsDir!;
   }
 
   /// Count of installed apps with an actionable or attention-needed update.
@@ -1217,6 +1307,13 @@ class AppsProvider with ChangeNotifier {
       NativeFeatures.registerDownloadCancelHandler(cancelDownload);
       NotificationsProvider.onDownloadCancelRequested = cancelDownload;
       NotificationsProvider.listenForDownloadCancelFromMain();
+      // Let the download-complete notification's Install action hand the
+      // release asset it just downloaded off to the system installer.
+      NotificationsProvider.onInstallDownloadedFileRequested =
+          installDownloadedAssetFile;
+      // Record third-party installs as soon as the system confirms them, instead
+      // of only when the handoff session manages to report success (#222).
+      listenForThirdPartyInstallResults();
     }
     () async {
       await this.settingsProvider.initializeSettings();
@@ -1247,6 +1344,12 @@ class AppsProvider with ChangeNotifier {
       );
       if (!_userAppIconsDir!.existsSync()) {
         _userAppIconsDir!.createSync(recursive: true);
+      }
+      _deducedAppIconsDir = Directory(
+        '${(await getAppStorageDir()).path}/deduced_icons',
+      );
+      if (!_deducedAppIconsDir!.existsSync()) {
+        _deducedAppIconsDir!.createSync(recursive: true);
       }
       if (!isBg) {
         await loadApps();
@@ -1281,6 +1384,9 @@ class AppsProvider with ChangeNotifier {
     foregroundSubscription?.cancel();
     _autoExportDebounce?.cancel();
     _eventSubscription?.cancel();
+    if (!_isBg) {
+      stopListeningForThirdPartyInstallResults();
+    }
     for (final Timer timer in deferredObtainiumTimers.values) {
       timer.cancel();
     }
@@ -1431,15 +1537,9 @@ Future<void> bgUpdateCheck(
     return;
   }
 
-  if (!appsProvider.settingsProvider.enableBackgroundUpdates ||
-      appsProvider.settingsProvider.updateInterval == 0) {
+  if (appsProvider.settingsProvider.updateInterval == 0) {
     if (!forceAll) {
-      unawaited(
-        bgLogs.add(
-          'BG update task: Skipped (enabled=${appsProvider.settingsProvider.enableBackgroundUpdates}, '
-          'interval=${appsProvider.settingsProvider.updateInterval})',
-        ),
-      );
+      unawaited(bgLogs.add('BG update task: Skipped (interval=0)'));
       return;
     }
     unawaited(
@@ -1500,23 +1600,46 @@ Future<void> bgUpdateCheck(
     final List<App> trackOnlyToNotify = [];
     final List<App> toNotify = [];
     for (var i = 0; i < result.updates.length; i++) {
-      final willInstallInBackground = await appsProvider
-          .canInstallSilentlyInBackground(result.updates[i]);
+      // checkUpdates reports "the source's version string changed", not "the
+      // device is behind". Re-read the post-save app so the verdict is computed
+      // from the same state the app list renders, then apply the shared update
+      // predicate: without it a version reformat notifies (and silently
+      // installs) an update the UI itself does not show.
+      final App update =
+          appsProvider.apps[result.updates[i].id]?.app ?? result.updates[i];
+      final bool installable = appUpdateIsUserVisible(update);
+      final bool notifiable = appUpdateIsUserVisible(
+        update,
+        includeVersionOrderUncertain: true,
+      );
+      if (!installable && !notifiable) {
+        unawaited(
+          bgLogs.add(
+            'BG update task: ${update.id} version string changed '
+            '(${update.installedVersion} → ${update.latestVersion}) but no update '
+            'is available for the installed build; not notifying or installing.',
+          ),
+        );
+        continue;
+      }
+      final willInstallInBackground =
+          installable &&
+          await appsProvider.canInstallSilentlyInBackground(update);
       if (!canInstall || !willInstallInBackground) {
-        if (!result.updates[i].settings.getBool('skipUpdateNotifications')) {
+        if (notifiable && !update.settings.getBool('skipUpdateNotifications')) {
           unawaited(
             bgLogs.add(
-              'BG update task notifying for ${result.updates[i].id} (canInstall $canInstall, canInstallSilentlyInBackground $willInstallInBackground).',
+              'BG update task notifying for ${update.id} (canInstall $canInstall, canInstallSilentlyInBackground $willInstallInBackground).',
             ),
           );
-          if (result.updates[i].settings.getBool('trackOnly')) {
-            trackOnlyToNotify.add(result.updates[i]);
+          if (update.settings.getBool('trackOnly')) {
+            trackOnlyToNotify.add(update);
           } else {
-            toNotify.add(result.updates[i]);
+            toNotify.add(update);
           }
         }
       } else {
-        silentlyInstallable.add(result.updates[i].id);
+        silentlyInstallable.add(update.id);
       }
     }
 
@@ -1694,8 +1817,6 @@ _bgRunUpdateCheck(
   return (updates: updates, errors: errors, toThrow: toThrow);
 }
 
-class CancellationException implements Exception {}
-
 class CancellationToken {
   bool _cancelled = false;
   bool get isCancelled => _cancelled;
@@ -1703,7 +1824,7 @@ class CancellationToken {
   void cancel() => _cancelled = true;
 
   void throwIfCancelled() {
-    if (_cancelled) throw CancellationException();
+    if (_cancelled) throw const CancellationException();
   }
 }
 
@@ -1799,6 +1920,23 @@ class NativeFeatures {
       // Notification actions remain best-effort on older native runners.
     } on MissingPluginException {
       // Non-Android builds and older native runners do not expose this method.
+    }
+  }
+
+  /// Launcher icon of a downloaded, not-yet-installed APK, as PNG bytes.
+  ///
+  /// Rendered natively from the archive (adaptive icons composited, size-capped)
+  /// so an app from a source that publishes no icon still gets one.
+  static Future<Uint8List?> getApkArchiveIcon(String archiveFilePath) async {
+    try {
+      return await _deviceAppsChannel.invokeMethod<Uint8List>(
+        'getApkArchiveIcon',
+        {'archiveFilePath': archiveFilePath},
+      );
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
     }
   }
 

@@ -89,7 +89,7 @@ class DirectAPKLink extends AppSource {
       // versionDetection is a string enum ('auto'/'standard'/'pseudo'/
       // 'versionCode'); use the enum value, not the legacy bool.
       additionalSettingsNew['versionDetection'] = 'pseudo';
-      return html.getLatestAPKDetails(standardUrl, additionalSettingsNew);
+      return await html.getLatestAPKDetails(standardUrl, additionalSettingsNew);
     } catch (e) {
       rethrowOrWrapError(e);
     }

@@ -8,9 +8,29 @@ ObtainX is a modern and supercharged fork of Obtainium. Re-engineered with a stu
 > Curious how ObtainX stacks up against Obtainium? Check out my side-by-side [ObtainX vs Obtainium comparison](docs/Difference_with_Obtainium.md) featuring full interface screenshots.
 
 <p align="center">
-<strong>Featured by HowToMen: Best Android Apps - May 2026! 🎊</strong>
+  <!-- Stack / Technical Chips -->
+  <img alt="Android API" src="https://img.shields.io/badge/Api%2021+-50f270?logo=android&logoColor=black&style=for-the-badge"/>
+  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-02569B?logo=flutter&logoColor=white&style=for-the-badge"/>
+  <img alt="Dart" src="https://img.shields.io/badge/Dart-0175C2?logo=dart&logoColor=white&style=for-the-badge"/>
+  <img alt="Material You" src="https://custom-icon-badges.demolab.com/badge/material%20you-lightblue?style=for-the-badge&logoColor=333&logo=material-you"/>
+  <br/>
+  <!-- Dynamic Lines of Code Badge -->
+  <img alt="Lines of Code" src="https://img.shields.io/endpoint?url=https%3A%2F%2Ftokei.kojix2.net%2Fbadge%2Fgithub%2Fbikram-agarwal%2FObtainX%2Flines&style=for-the-badge&color=aeff4d&labelColor=4b731a&label=Lines%20of%20code"/>
+  <!-- Forks -->
+  <a href="https://github.com/bikram-agarwal/ObtainX/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/bikram-agarwal/ObtainX?color=DAA520&style=for-the-badge&labelColor=664D0F"/></a>
+  <!-- Stars -->
+  <a href="https://github.com/bikram-agarwal/ObtainX/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/bikram-agarwal/ObtainX?color=ffff00&style=for-the-badge&labelColor=a1a116"/></a>
+  <a href="https://github.com/bikram-agarwal/ObtainX/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/bikram-agarwal/ObtainX/total?color=00bcd4&style=for-the-badge&labelColor=006064"/></a>
+  <br/>
+  <!-- Distribution Badges -->
+  <a href="https://github.com/bikram-agarwal/ObtainX/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/bikram-agarwal/ObtainX?color=a1168e&include_prereleases&logo=github&style=for-the-badge&labelColor=700f63"/></a>
+  <a href="https://f-droid.org/packages/dev.bikram.obtainx"><img alt="F-Droid" src="https://img.shields.io/f-droid/v/dev.bikram.obtainx?color=a1168e&logo=FDROID&style=for-the-badge&labelColor=700f63"/></a>
+  <br/>
+  <a href="https://trendshift.io/repositories/38553" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/38553/daily?language=Dart" alt="bikram-agarwal%2FObtainX | Trendshift" width="250" height="55"/></a>
 </p>
+
 <p align="center">
+<strong>Featured by HowToMen: Best Android Apps - May 2026! 🎊</strong>
   <a href="https://youtu.be/B59glf2bweo?si=8rTAqBJiW9uwtpTT&t=468"><img width="50%" alt="ObtainX: Best Android Apps - May 2026!" src="docs/assets/feature_htm.webp" /></a>
 </p>
 
@@ -23,7 +43,7 @@ ObtainX is a modern and supercharged fork of Obtainium. Re-engineered with a stu
 If you want to try out **ObtainX** without losing your current setup, you can bring your existing app list over in seconds:
 
 - In Obtainium: Open **Settings** and find the **Obtainium export** section, tap Export, and save the resulting .json file. (Older Obtainium versions kept this on a dedicated *Import/Export* tab.)
-- In ObtainX: Go to the `Backup` tab, select Import, and choose that exact .json file.
+- In ObtainX: Go to the `Backup` tab, select Import (or Restore), and choose that exact .json file.
 - Continue where you left off: All your tracked apps and settings will be instantly populated.
 
 ## ✨ Exclusive features in ObtainX
@@ -32,31 +52,33 @@ These are built from the ground up and are exclusive in ObtainX.
 
 ### 🛡️ Security & Integrity
 
-- **🛡️ Build Verification Checks** — Runs automated cryptographic checks (F-Droid/Izzy reproducible builds, GitHub Release Attestations) on apps you add to flag tampered binaries before install. For total integrity, ObtainX's own updates are reproducible (F-Droid) and attested (GitHub). Learn more in the [Build Verification Guide](docs/build-verification-guide.md).
+- **🛡️ Build verification checks** — Runs automated cryptographic checks (F-Droid/Izzy reproducible builds, GitHub Release Attestations) on apps you add to flag tampered binaries before install. For total integrity, ObtainX's own updates are reproducible (F-Droid) and attested (GitHub). Learn more in the [Build Verification Guide](docs/build-verification-guide.md).
 
-- **🦠 VirusTotal APK scanning** — Optionally scan downloaded APKs with VirusTotal before installation. You are in control - flagged or failed scans ask you what to do during installs.
+- **🦠 VirusTotal APK scanning** — Optionally scan downloaded APKs with VirusTotal before installation. Flagged or failed scans ask you what to do (including Retry). You can turn scanning off for individual apps while leaving it on globally.
 
 ### 🗂️ Smart Organization
 
-- **📥 Bulk Import from Device** — Select any apps already on your phone and ObtainX automatically finds their sources on stores you choose. No URL hunting one by one.
-- **🗂️ Dynamic Folders** — Group apps into folders manually or via automatic routing rules (by name, author, category, source etc.). Each folder retains its own layouts.
+- **📥 Bulk import from fevice** — Select any apps already on your phone and ObtainX automatically finds their sources on stores you choose. No URL hunting one by one.
+- **✅ Selective import or restore** — Insteadd of blindly importing entire backup (all or nothing), pick which apps and settings to import (add to existing content), or Restore (reset ObtainX, then add from backup).
+- **🗂️ Dynamic folders** — Group apps into folders manually or via automatic routing rules (by name, author, category, source etc.). Each folder retains its own layouts.
 - **🕐 On-Demand Only mode** — Mark rarely updated apps so they're hidden from the main list and aren't checked during global update scans. Query them only on-demand.
 - **👆 Configurable two-way swipe gestures** — Left and right swipe actions are independently configurable per row. Choose from Update, Install, Pin, Edit, Delete, Open, App Info, or None.
 - **↩️ Undo after delete** — Revert accidental app removals instantly via a 5-second toast notification.
-- **🖼️ Custom app icons** — Not happy with an app's icon or a blank placeholder? Tap the icon on any app's detail page to set your own — pick from your gallery or grab one from the web.
+- **🖼️ Custom app icons** — If the app source publishes no icon, ObtainX smartly finds one: it pulls it from a downloaded APK, or from another store listing (APKMirror, F-Droid, APKPure, Play Store). Or you can set your own icon from the gallery or the web.
+- **🖼️ Backup app icons** — Backup those custom and auto-detected app icons into a folder you pick, so they can be restored after a reinstall or a move to a new device.
 - **🔍 Verified "also available on" store links** — Each app detail page shows a list of other stores (beside the one you are tracking) where the app is available. Only confirmed-present stores are shown. 
 
 ### 🚀 Advanced Update Controls
 
-- **🧩 Advanced filter / RegEx Assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required. Full details in the [Additional options guide](docs/additional-options-guide.md).
-- **⏭️ Skip Version** — Skip a specific release you don't want without marking the app as "updated." The next release will still show up normally.
+- **🧩 Advanced filter / RegEx assist** — A built-in helper walks you through building regex filters on any field that supports them. No regex knowledge required. Full details in the [Additional options guide](docs/additional-options-guide.md).
+- **⏭️ Skip version** — Skip a specific release you don't want without marking the app as "updated." The next release will still show up normally.
 - **💾 Save assets** — Option to automatically save update assets (e.g. APKs) to your chosen folder, during update process itself.
 
 ### 🎨 Interface & Experience
 
 - **🌈 Per-app color theming** — Each app's detail page derives its color scheme from the app's own icon. Deep, accurate, and dark-mode safe. Toggle *Match app page to icon colors* in Settings.
 - **🪄 Hero icon transition** — Tapping an app row animates its icon smoothly into the detail page. Swipe back and it returns the same way.
-- **🎫 Rich, customizable app rows** — See app type, tracking source, and category tags at a glance. Choose between full text badges or minimal stacked color strips to keep your list clean and uncluttered.
+- **🎫 Rich, customizable app rows** - See app type, tracking source, author, version, and category tags at a glance. Choose between full text badges or minimal stacked color strips to keep your list clean and uncluttered. Direct / HTML sources show the site they came from.
 - **✏️ Inline edit on detail page** — Edit any app's metadata directly from its detail page. An unsaved-changes guard prevents accidental data loss.
 - **⚙️ View options on Apps tab** — Grouping, sort order, and other organization controls live on the Apps tab itself (instead of separate settings page) so you can tune the list and see the result immediately.
 
@@ -97,7 +119,6 @@ Optimizations made to legacy Obtainium features.
 
 - **🗄️ Richer app list grouping** — Group by source (Obtainium adopted in July 2026), app type (user/system/privileged) etc. A separate level of intelligent grouping for "Updates", "non-installed" and "track-only" apps.
 
-
 ---
 
 ## 🖼️ Screenshots
@@ -123,19 +144,19 @@ Optimizations made to legacy Obtainium features.
 <img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/05_edit.jpg" alt="Editing App Details" width="300" /><br />
 </td>
 <td width="33%" align="center" valign="top">
-<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/06_options.jpg" alt="Additional Options with RegEx Helper" width="300" /><br />
+<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/06_import_export.jpg" alt="Backup apks, icons, and settings" width="300" /><br />
 </td>
 </tr>
 
 <tr>
 <td width="33%" align="center" valign="top">
-<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/07_settings.jpg" alt="Modern Settings Page, custom category colors" width="300" /><br />
+<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/07_add_apps.jpg" alt="Several ways to add new apps" width="300" /><br />
 </td>
 <td width="33%" align="center" valign="top">
-<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/08_installer_choice.jpg" alt="Choose your own installer" width="300" /><br />
+<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/08_bulk_add.jpg" alt="Bulk Import from Device" width="300" /><br />
 </td>
 <td width="33%" align="center" valign="top">
-<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/09_bulk_add.jpg" alt="Bulk Import from Device" width="300" /><br />
+<img src="./fastlane/metadata/android/en-US/images/phoneScreenshots/09_settings.jpg" alt="Modern Settings Page, custom category colors" width="300" /><br />
 </td>
 </tr>
 </table>

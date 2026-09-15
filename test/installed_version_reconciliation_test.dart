@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/version/version_strings.dart';
 
 // `reconciledInstalledVersionFromLatest` and
 // `reconciledInstalledVersionForDisabledVersionDetection` used to be top-level
@@ -25,7 +25,7 @@ String? reconciledInstalledVersionFromLatest(
   if (reconciled == null) {
     return null;
   }
-  return reconciled.key ? reconciled.value : installedVersion;
+  return reconciled.areEqual ? reconciled.version : installedVersion;
 }
 
 String? reconciledInstalledVersionForDisabledVersionDetection(
@@ -40,7 +40,7 @@ String? reconciledInstalledVersionForDisabledVersionDetection(
       (reconcileVersionDifferences(
                 realInstalledVersion,
                 reportedInstalledVersion,
-              )?.key ==
+              )?.areEqual ==
               false
           ? realInstalledVersion
           : null);
@@ -78,8 +78,8 @@ void main() {
         installed,
         previousInstalled,
       );
-      expect(reconciled?.key, false);
-      expect(reconciled?.value, installed);
+      expect(reconciled?.areEqual, false);
+      expect(reconciled?.version, installed);
     },
   );
 
@@ -93,8 +93,8 @@ void main() {
         installed,
         previousInstalled,
       );
-      expect(reconciled?.key, false);
-      expect(reconciled?.value, installed);
+      expect(reconciled?.areEqual, false);
+      expect(reconciled?.version, installed);
     },
   );
 

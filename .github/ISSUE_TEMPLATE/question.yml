@@ -1,0 +1,30 @@
+name: Question / Discussion
+description: Ask a question or start a general discussion (not a bug or feature request).
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!CAUTION]
+        > **Do NOT use this template for Bug Reports or Feature Requests.**
+        > Bug reports submitted through this form will be closed without notice. Please use the appropriate template instead.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I confirm this is a general question/discussion, not a bug report or feature request.
+          required: true
+        - label: I have searched existing issues and discussions to see if this was already answered.
+          required: true
+
+  - type: textarea
+    id: topic
+    attributes:
+      label: Topic / Question
+      description: Describe what you would like to discuss or ask.
+      placeholder: Type your question or thoughts here...
+    validations:
+      required: true

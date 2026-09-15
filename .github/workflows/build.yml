@@ -17,9 +17,9 @@ jobs:
       attestations: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -31,11 +31,11 @@ jobs:
           # toolchain must be fixed (a floating `channel: stable` would break it).
           # Keep this EQUAL to the .flutter submodule commit referenced by the
           # fdroiddata recipe; bump both together when upgrading Flutter.
-          flutter-version: 3.44.7
+          flutter-version: 3.47.2
           cache: true
 
       - name: Cache Gradle packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
@@ -44,7 +44,7 @@ jobs:
           restore-keys: gradle-${{ runner.os }}-
 
       - name: Cache Flutter pub packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ env.PUB_CACHE }}
@@ -93,15 +93,19 @@ jobs:
           set -e
           APK_DIR=build/app/outputs/flutter-apk
           VERSION=${{ steps.extract_version.outputs.version }}
+          BUILD_NAME="$VERSION"
+          if [[ "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != refs/heads/main ]]; then
+            BUILD_NAME="${VERSION}-Preview-${GITHUB_RUN_NUMBER}"
+          fi
 
-          flutter build apk --split-per-abi --flavor normal
+          flutter build apk --split-per-abi --flavor normal --build-name="$BUILD_NAME"
           for f in "$APK_DIR"/app-*-normal-release.apk; do
             arch=$(basename "$f" | sed -E 's/^app-(.+)-normal-release\.apk$/\1/')
             mv "$f" "$APK_DIR/ObtainX-v${VERSION}-${arch}.apk"
           done
 
           rm -f android/key.properties
-          flutter build apk --split-per-abi --flavor fdroid -t lib/main_fdroid.dart
+          flutter build apk --split-per-abi --flavor fdroid -t lib/main_fdroid.dart --build-name="$BUILD_NAME"
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
           echo "Using apksigner: $APKSIGNER"
           for f in "$APK_DIR"/app-*-fdroid-release.apk; do
@@ -121,21 +125,35 @@ jobs:
           K_ALIAS: ${{ secrets.KEY_ALIAS }}
 
       - name: Generate GitHub Artifact Attestations
-        uses: actions/attest@v4.1.0
+        uses: actions/attest@v4
         with:
           subject-path: 'build/app/outputs/flutter-apk/ObtainX-*.apk'
 
       - name: Upload APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: obtainx-apks-v${{ steps.extract_version.outputs.version }}
           path: |
             build/app/outputs/flutter-apk/ObtainX-*.apk
             build/app/outputs/flutter-apk/ObtainX-*-attestation.json
 
+      # - name: Delete Newest Preview Release
+      #   shell: bash
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     set -euo pipefail
+      #     newest_release_tag="$(gh release list \
+      #       --limit 1 \
+      #       --json tagName \
+      #       --jq '.[0].tagName // empty')"
+      #     if [[ "$newest_release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-Preview-[0-9]+$ ]]; then
+      #       gh release delete "$newest_release_tag" --yes
+      #     fi
+
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -145,3 +163,27 @@ jobs:
             build/app/outputs/flutter-apk/ObtainX-*.apk
             build/app/outputs/flutter-apk/ObtainX-*-attestation.json
           generate_release_notes: true
+
+      - name: Publish Rolling Preview Release
+        if: startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
+        uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.extract_version.outputs.version }}-Preview-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ steps.extract_version.outputs.version }}-Preview-${{ github.run_number }}
+          body: |
+            > [!WARNING]
+            > This is a preview build intended for testing. It may contain bugs, unfinished changes, or regressions. Do not install it if you want a stable experience.
+
+            Back up your ObtainX data before installing and report any problems through the issue tracker.
+
+            Built from `${{ github.ref_name }}` at commit `${{ github.sha }}`.
+          prerelease: true
+          make_latest: false
+          draft: true
+          overwrite_files: true
+          files: |
+            build/app/outputs/flutter-apk/ObtainX-*.apk
+            build/app/outputs/flutter-apk/ObtainX-*-attestation.json

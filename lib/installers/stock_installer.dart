@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:android_package_installer/android_package_installer.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -99,8 +100,11 @@ class StockInstaller extends Installer {
       settingsProvider.getInstallPermission(enforce: false);
 
   @override
-  Future<void> ensurePermission() async {
-    if (!(await settingsProvider.getInstallPermission(enforce: false))) {
+  Future<void> ensurePermission({ThemeData? toastTheme}) async {
+    if (!(await settingsProvider.getInstallPermission(
+      enforce: false,
+      toastTheme: toastTheme,
+    ))) {
       throw ObtainiumError(tr('cancelled'));
     }
   }
