@@ -324,11 +324,15 @@ extension AppsProviderLifecycle on AppsProvider {
       // App JSON may live on external storage, which is unsuitable for SQLite.
       final checks = appCheckStore ??= AppCheckStore('app_checks.db');
       stage = 'reading check timestamp database';
-      final checkStoreModifiedAtStart = await checks.modified();
-      Map<String, Map<String, Object?>> checkTimes = {};
-      try {
-        checkTimes = await checks.read(singleId: singleId);
-      } catch (error) {
+      // Both reads are optional (JSON records are durable) and independent, so
+      // they run concurrently on the store's short read budget. Awaiting them
+      // one after the other put two lock waits in series, directly in front of
+      // the app list's first paint.
+      final Future<DateTime?> checkStoreModifiedRead = checks.modified();
+      final Future<Map<String, Map<String, Object?>>>
+      checkTimesRead = checks.read(singleId: singleId).catchError((
+        Object error,
+      ) {
         // Timestamp storage is optional for loading the durable app records.
         unawaited(
           logs.add(
@@ -336,7 +340,10 @@ extension AppsProviderLifecycle on AppsProvider {
             level: LogLevel.warning,
           ),
         );
-      }
+        return <String, Map<String, Object?>>{};
+      });
+      final checkStoreModifiedAtStart = await checkStoreModifiedRead;
+      final Map<String, Map<String, Object?>> checkTimes = await checkTimesRead;
       // A single-ID load is by Android package, which can have a record per
       // store it is tracked from. Naming the known records keeps this off a
       // full directory listing.

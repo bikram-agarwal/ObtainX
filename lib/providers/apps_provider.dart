@@ -1408,6 +1408,9 @@ class AppsProvider with ChangeNotifier {
   void markAppsChanged() {
     appsListRevision++;
     _pendingUpdateCountDirty = true;
+    // Any change to the app set or its check timestamps invalidates the cached
+    // due time; the next background wake-up recomputes it from the real apps.
+    settingsProvider.bgNextCheckDue = null;
   }
 
   /// Records a transient error banner for [appId]'s detail page.
@@ -1833,8 +1836,25 @@ Future<void> bgUpdateCheck(
     settingsProvider: settings,
     logsProvider: bgLogs,
   );
-  await appsProvider.loadApps();
   await appsProvider.settingsProvider.initializeSettings();
+
+  // Android wakes this task on its own cadence, not the user's check interval,
+  // so most wake-ups have nothing due. Returning here keeps those from reading
+  // every app record and opening the check timestamp database - the contention
+  // that made a concurrent foreground load wait on a database lock. An explicit
+  // request (manual check, or a retry carrying its own list) always proceeds.
+  final DateTime? nextDue = appsProvider.settingsProvider.bgNextCheckDue;
+  if (!forceAll &&
+      params['toCheck'] == null &&
+      nextDue != null &&
+      DateTime.now().isBefore(nextDue)) {
+    unawaited(
+      bgLogs.add('BG update task: Nothing due before $nextDue; skipped load.'),
+    );
+    return;
+  }
+
+  await appsProvider.loadApps();
 
   final netResult = await (Connectivity().checkConnectivity());
   if (netResult.contains(ConnectivityResult.none) ||
@@ -2027,6 +2047,13 @@ Future<void> bgUpdateCheck(
       bgLogs,
     );
   }
+  // Recorded after every save this run has made, so the next wake-up can skip
+  // its load. Cleared by [AppsProvider.markAppsChanged] on any later change.
+  appsProvider.settingsProvider.bgNextCheckDue = appsProvider
+      .earliestNextUpdateCheckDue();
+  // This engine is about to go away. Leaving the handle open left a connection
+  // holding the file against the next engine and the UI isolate.
+  await appsProvider.appCheckStore?.close();
   unawaited(bgLogs.add('BG task completed $taskId.'));
   AppsProvider._eventsController.add(null);
 }

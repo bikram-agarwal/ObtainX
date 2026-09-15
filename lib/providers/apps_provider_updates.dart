@@ -795,6 +795,33 @@ extension AppsProviderUpdates on AppsProvider {
     return appIds;
   }
 
+  /// Earliest moment any tracked app becomes due for a check, or null when
+  /// something is due already (or checking is disabled). Applies the same
+  /// eligibility filters as [getAppsSortedByUpdateCheckTime], so a background
+  /// wake-up can trust it to decide whether loading the app records is worth
+  /// it at all.
+  DateTime? earliestNextUpdateCheckDue() {
+    final int intervalMinutes = settingsProvider.updateInterval;
+    if (intervalMinutes <= 0) return null;
+    final Duration interval = Duration(minutes: intervalMinutes);
+    DateTime? earliest;
+    for (final listing in apps.values) {
+      final App app = listing.app;
+      if (app.settings.getBool('onDemandOnly')) continue;
+      if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps &&
+          app.installedVersion == null &&
+          !app.settings.getBool('trackOnly')) {
+        continue;
+      }
+      final DateTime? checked = app.lastUpdateCheck;
+      // Never checked means due now, which leaves nothing to wait for.
+      if (checked == null) return null;
+      final DateTime due = checked.add(interval);
+      if (earliest == null || due.isBefore(earliest)) earliest = due;
+    }
+    return earliest;
+  }
+
   /// Runs update checks and returns the apps whose source [App.latestVersion]
   /// CHANGED during this run.
   ///

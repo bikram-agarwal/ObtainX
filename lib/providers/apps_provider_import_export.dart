@@ -508,6 +508,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'groupUpdatesSeparately',
   'enableLetMeDowngrade',
   'lastCompletedBGCheckTime',
+  'bgNextCheckDue',
   'showDebugOpts',
   'useFGService',
   'hideBatteryOptimizationWarning',

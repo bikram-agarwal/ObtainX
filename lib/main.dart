@@ -1,5 +1,6 @@
 import 'dart:async' show unawaited;
 import 'dart:io' show File;
+import 'dart:math' show max;
 import 'dart:ui' show PlatformDispatcher, PointerDeviceKind;
 
 import 'package:flutter/material.dart';
@@ -179,6 +180,9 @@ Future<void> loadTranslations() async {
 /// Unique task name used by WorkManager for periodic background update checks.
 const _workManagerTaskName = 'obtainiumBgUpdateCheck';
 
+/// WorkManager refuses anything shorter, and silently clamps to it.
+const int _minimumWorkManagerIntervalMinutes = 15;
+
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
@@ -293,6 +297,10 @@ class Obtainium extends StatefulWidget {
 class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   var existingUpdateInterval = -1;
 
+  /// Interval the periodic task is currently registered for, so [build] does
+  /// not re-register it on every rebuild.
+  int? _scheduledIntervalMinutes;
+
   // Guards the lazy, one-shot attempt to adopt the device's explicit system
   // font family. Kicked off from [build] off the cold-start critical path; the
   // app renders with the OS default font (fontFamily: null) until/unless it
@@ -346,22 +354,32 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _scheduleWorkManager() async {
+  Future<void> _scheduleWorkManager(int intervalMinutes) async {
+    // Wake on the user's own interval rather than every 15 minutes only to find
+    // nothing is due. Android still decides when within the period to run, and
+    // clamps anything below its floor.
+    if (_scheduledIntervalMinutes == intervalMinutes) return;
+    _scheduledIntervalMinutes = intervalMinutes;
     await Workmanager().registerPeriodicTask(
       _workManagerTaskName,
       _workManagerTaskName,
-      frequency: const Duration(minutes: 15),
+      frequency: Duration(
+        minutes: max(_minimumWorkManagerIntervalMinutes, intervalMinutes),
+      ),
       constraints: Constraints(
         networkType: NetworkType.connected,
         requiresBatteryNotLow: false,
         requiresDeviceIdle: false,
         requiresStorageNotLow: false,
       ),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      // `keep` pins the task to whatever frequency it was first registered
+      // with, so a changed interval would never reach an existing install.
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
     );
   }
 
   Future<void> _cancelWorkManager() async {
+    _scheduledIntervalMinutes = null;
     await Workmanager().cancelByUniqueName(_workManagerTaskName);
   }
 
@@ -756,7 +774,7 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
         startForegroundService(false);
       } else {
         stopForegroundService();
-        unawaited(_scheduleWorkManager());
+        unawaited(_scheduleWorkManager(settingsProvider.updateInterval));
       }
     }
     if (settingsProvider.prefs == null) {

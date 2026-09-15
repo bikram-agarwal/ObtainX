@@ -873,6 +873,8 @@ class SettingsProvider with ChangeNotifier {
 
   set updateInterval(int min) {
     prefs?.setInt('updateInterval', min);
+    // The cached due time was derived from the old interval.
+    bgNextCheckDue = null;
     notifyListeners();
   }
 
@@ -883,6 +885,31 @@ class SettingsProvider with ChangeNotifier {
   set updateIntervalSliderVal(double val) {
     prefs?.setDouble('updateIntervalSliderVal', val);
     notifyListeners();
+  }
+
+  /// Earliest moment any tracked app can become due for a background check.
+  ///
+  /// Android wakes the periodic task on its own schedule, which is not the
+  /// user's check interval, so most wake-ups have nothing to do. This lets one
+  /// of those return before loading every app record and opening the check
+  /// timestamp database. Treated as a hint only: it is cleared whenever the app
+  /// set or the interval changes, and a missing value means "load and decide".
+  /// Deliberately does not notify listeners - no UI reads it.
+  DateTime? get bgNextCheckDue {
+    final int? micros = prefs?.getInt('bgNextCheckDue');
+    return micros == null ? null : DateTime.fromMicrosecondsSinceEpoch(micros);
+  }
+
+  set bgNextCheckDue(DateTime? due) {
+    if (due == null) {
+      // Cleared from [AppsProvider.markAppsChanged], which runs on every app
+      // save, so skip the platform write when there is nothing to clear.
+      if (prefs?.containsKey('bgNextCheckDue') ?? false) {
+        prefs?.remove('bgNextCheckDue');
+      }
+    } else {
+      prefs?.setInt('bgNextCheckDue', due.microsecondsSinceEpoch);
+    }
   }
 
   bool get checkOnStart {
