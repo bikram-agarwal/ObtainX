@@ -702,6 +702,10 @@ class SettingsProvider with ChangeNotifier {
   //     so all BackdropFilter passes are skipped.
   //   - Skips the [OpenContainer] container-transform morph for the apps
   //     list -> AppPage navigation; uses a plain page-route push instead.
+  //   - Disables page gradients, section-card and detail-footer shadows, and
+  //     the details cards' full-surface offscreen clipping.
+  //   - Uses global page colors, skipping icon color extraction while keeping
+  //     the saved icon-color preference for when reduced effects is off.
   // Intended for users who report frame-rate drops on older devices, as a
   // single-switch escape hatch. Default false to preserve the visual look
   // for everyone whose hardware can handle it.
@@ -814,6 +818,8 @@ class SettingsProvider with ChangeNotifier {
   }
 
   bool get matchAppPageToIconColors {
+    // Keep the saved preference so it returns when reduced effects is off.
+    if (reduceVisualEffects) return false;
     return prefs?.getBool('matchAppPageToIconColors') ?? true;
   }
 

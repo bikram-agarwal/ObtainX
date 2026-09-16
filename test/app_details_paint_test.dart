@@ -177,18 +177,32 @@ void main() {
     },
   );
 
-  for (final reducedEffects in [false, true]) {
+  for (final (mode, reducedEffects) in [
+    for (final mode in ['light', 'dark', 'black'])
+      for (final reducedEffects in [false, true]) (mode, reducedEffects),
+  ]) {
     testWidgets(
-      'scrolling details reuses painted cards (reduced effects: $reducedEffects)',
+      '$mode details retain cards and simplify rendering (reduced effects: $reducedEffects)',
       (tester) async {
         SharedPreferences.setMockInitialValues({
           'matchAppPageToIconColors': false,
           'checkUpdateOnDetailPage': false,
           'showAppWebpage': false,
           'reduceVisualEffects': reducedEffects,
+          'useGradientBackground': false,
+          'progressiveBlurEnabled': false,
+          'cardCornerScale': 1.5,
+          'useBlackTheme': mode == 'black',
         });
         final settings = SettingsProvider()
           ..prefs = await SharedPreferences.getInstance();
+        settings.theme = mode == 'light'
+            ? ThemeSettings.light
+            : ThemeSettings.dark;
+        final colors = ColorScheme.fromSeed(
+          seedColor: const Color(0xFF66507A),
+          brightness: mode == 'light' ? Brightness.light : Brightness.dark,
+        );
         Localization.load(
           const Locale('en'),
           translations: Translations(translations),
@@ -226,7 +240,15 @@ void main() {
                 ChangeNotifierProvider<AppsProvider>.value(value: provider),
                 ChangeNotifierProvider<SettingsProvider>.value(value: settings),
               ],
-              child: MaterialApp(home: AppPage(appId: model.id)),
+              child: MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  colorScheme: mode == 'black'
+                      ? colors.copyWith(surface: Colors.black)
+                      : colors,
+                ),
+                home: AppPage(appId: model.id),
+              ),
             ),
           ),
         );
@@ -242,13 +264,36 @@ void main() {
             final png = await image.toByteData(format: ui.ImageByteFormat.png);
             await Directory(directory).create(recursive: true);
             await File(
-              '$directory/details-$reducedEffects-$label.png',
+              '$directory/details-$mode-$reducedEffects-$label.png',
             ).writeAsBytes(png!.buffer.asUint8List());
             image.dispose();
           });
         }
 
         await capture('initial');
+        void expectEffects(bool reduced) {
+          final offscreenClips = tester.layers
+              .whereType<ClipRRectLayer>()
+              .where(
+                (layer) => layer.clipBehavior == Clip.antiAliasWithSaveLayer,
+              );
+          expect(offscreenClips, reduced ? isEmpty : isNotEmpty);
+          final shadows = tester
+              .widgetList<DecoratedBox>(
+                find.descendant(
+                  of: find.byType(AppPage),
+                  matching: find.byType(DecoratedBox),
+                ),
+              )
+              .where(
+                (box) =>
+                    box.decoration is BoxDecoration &&
+                    ((box.decoration as BoxDecoration).boxShadow?.isNotEmpty ??
+                        false),
+              );
+          expect(shadows, reduced ? isEmpty : isNotEmpty);
+        }
+
         // Count real section-card paints without changing their appearance.
         final surfaces = find.byType(AppSmoothRoundedSurface);
         expect(surfaces, findsAtLeastNWidgets(3));
@@ -296,6 +341,15 @@ void main() {
           reason:
               'Scrolling must move retained cards, not repaint their shadows, clips and text.',
         );
+        expectEffects(reducedEffects);
+        // A mounted details page must update even when blur and gradients were
+        // already off before the master switch changed.
+        settings.reduceVisualEffects = !reducedEffects;
+        await tester.pumpAndSettle();
+        expectEffects(!reducedEffects);
+        settings.reduceVisualEffects = reducedEffects;
+        await tester.pumpAndSettle();
+        expectEffects(reducedEffects);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       },

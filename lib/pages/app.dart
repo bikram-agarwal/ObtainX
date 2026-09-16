@@ -397,6 +397,7 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
     settings.checkUpdateOnDetailPage,
     settings.highlightTouchTargets,
     settings.cardCornerScale,
+    settings.reduceVisualEffects,
     settings.updateButtonsAtTopOfAppPage,
     Object.hashAll(
       settings.categories.entries.map((e) => '${e.key}=${e.value}'),
@@ -1523,11 +1524,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           borderWidth: cardBorderSide.width,
           borderRadius: cardBorderRadius.topLeft.x,
           boxShadow: decoration.boxShadow ?? const [],
-          // Only these cards have a child that paints to the edge (the header
-          // stripe / corner watermark), so only they need the content clipped to
-          // the rounded corners; plain cards keep the smooth painted corner
-          // without a saveLayer.
-          clipContent: headerStripe != null || cardWatermark != null,
+          // In reduced-effects mode, the stripe's own painted top corners and
+          // the inset watermark preserve the shape without a full-card layer.
+          // Keep the existing compositing in normal mode.
+          clipContent:
+              !ctx.read<SettingsProvider>().reduceVisualEffects &&
+              (headerStripe != null || cardWatermark != null),
           child: headerStripe != null
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1933,6 +1935,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
     if (!mounted) return;
+    if (!context.read<SettingsProvider>().matchAppPageToIconColors) return;
     if (_iconSchemeCacheKey == cacheKey) return;
     if (_iconSchemeLoadingForKey == cacheKey) return;
     _iconSchemeLoadingForKey = cacheKey;
@@ -2603,12 +2606,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           )
         else if (storeName != null) ...[
           PopupMenuItem<String>(
-            value: 'track',
-            child: Text(tr('trackHereToo')),
-          ),
-          PopupMenuItem<String>(
             value: 'swap',
             child: Text(tr('swapToThisSource')),
+          ),
+          PopupMenuItem<String>(
+            value: 'track',
+            child: Text(tr('trackHereToo')),
           ),
         ],
         PopupMenuItem<String>(value: 'copy', child: Text(tr('copyLink'))),
@@ -2966,7 +2969,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     }
     AppSource? source;
     if (app != null) {
-      final String sourceKey = '${app.app.url} ${app.app.overrideSource ?? ''}';
+      final String sourceKey =
+          '${app.app.url}\x00${app.app.overrideSource ?? ''}';
       if (sourceKey != _cachedSourceKey) {
         _cachedSource = _sourceProvider.getSource(
           app.app.url,
@@ -3047,7 +3051,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     // ThemeData.copyWith() is expensive — cache it and recompute only when the
     // icon scheme, parent brightness, or active black state actually changes.
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
+        '${applyIconDerivedPageTheming ? _iconSchemeCacheKey : "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(
@@ -3879,7 +3883,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       AppSource? source;
       if (app != null) {
         final String sourceKey =
-            '${app.app.url} ${app.app.overrideSource ?? ''}';
+            '${app.app.url}\x00${app.app.overrideSource ?? ''}';
         if (sourceKey != _cachedSourceKey) {
           _cachedSource = _sourceProvider.getSource(
             app.app.url,
@@ -5480,15 +5484,18 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             ),
           ),
           boxShadow: [
-            BoxShadow(
-              color: Theme.of(themeContext).colorScheme.shadow.withAlpha(
-                Theme.of(themeContext).brightness == Brightness.dark ? 130 : 40,
+            if (!settingsProvider.reduceVisualEffects)
+              BoxShadow(
+                color: Theme.of(themeContext).colorScheme.shadow.withAlpha(
+                  Theme.of(themeContext).brightness == Brightness.dark
+                      ? 130
+                      : 40,
+                ),
+                blurRadius: Theme.of(themeContext).brightness == Brightness.dark
+                    ? 18
+                    : 12,
+                offset: const Offset(0, -3),
               ),
-              blurRadius: Theme.of(themeContext).brightness == Brightness.dark
-                  ? 18
-                  : 12,
-              offset: const Offset(0, -3),
-            ),
           ],
         ),
         child: actionBarContent,

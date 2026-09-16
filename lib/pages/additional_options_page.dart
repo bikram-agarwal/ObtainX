@@ -299,6 +299,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
     if (!mounted) return;
+    if (!context.read<SettingsProvider>().matchAppPageToIconColors) return;
     if (_iconSchemeCacheKey == cacheKey) return;
     if (_iconSchemeLoadingForKey == cacheKey) return;
     _iconSchemeLoadingForKey = cacheKey;
@@ -570,7 +571,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
 
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
+        '${applyIconDerivedPageTheming ? _iconSchemeCacheKey : "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(

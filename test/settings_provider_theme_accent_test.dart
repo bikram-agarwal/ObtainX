@@ -13,6 +13,38 @@ Future<SettingsProvider> _settingsWithPrefs(Map<String, Object> values) async {
 }
 
 void main() {
+  for (final savedPreference in <bool?>[null, true, false]) {
+    test(
+      'reduced effects preserves icon color preference $savedPreference',
+      () async {
+        final settings = await _settingsWithPrefs({
+          'matchAppPageToIconColors': ?savedPreference,
+        });
+        addTearDown(settings.dispose);
+        expect(settings.matchAppPageToIconColors, savedPreference ?? true);
+
+        settings.reduceVisualEffects = true;
+        expect(settings.matchAppPageToIconColors, isFalse);
+        expect(
+          settings.prefs!.getBool('matchAppPageToIconColors'),
+          savedPreference,
+        );
+
+        final reopened = SettingsProvider()
+          ..prefs = await SharedPreferences.getInstance();
+        addTearDown(reopened.dispose);
+        expect(reopened.reduceVisualEffects, isTrue);
+        expect(reopened.matchAppPageToIconColors, isFalse);
+        reopened.reduceVisualEffects = false;
+        expect(reopened.matchAppPageToIconColors, savedPreference ?? true);
+        expect(
+          reopened.prefs!.getBool('matchAppPageToIconColors'),
+          savedPreference,
+        );
+      },
+    );
+  }
+
   test(
     'saved custom seed hexes fall back when all stored values are invalid',
     () async {

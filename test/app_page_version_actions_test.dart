@@ -77,78 +77,87 @@ void main() {
     });
   }
 
-  for (final (installed, latest, trackOnly) in [
-    (
-      '0.release.prod_aicore_20260723.00_RC11.964081323',
-      '20260723.00_RC11.964081323',
-      true,
-    ),
-    (
-      'C.6.playstore.pixel9.961955194',
-      'B.28.playstore.oemfull.969713662',
-      true,
-    ),
-    ('1.5.5 (4D91B33C)', '1.5.5-ced5040c', false),
+  for (final (installed, latest, trackOnly, reducedEffects) in [
+    for (final reducedEffects in [false, true]) ...[
+      (
+        '0.release.prod_aicore_20260723.00_RC11.964081323',
+        '20260723.00_RC11.964081323',
+        true,
+        reducedEffects,
+      ),
+      (
+        'C.6.playstore.pixel9.961955194',
+        'B.28.playstore.oemfull.969713662',
+        true,
+        reducedEffects,
+      ),
+      ('1.5.5 (4D91B33C)', '1.5.5-ced5040c', false, reducedEffects),
+    ],
   ]) {
-    testWidgets('manual actions during another download: $installed', (
-      tester,
-    ) async {
-      final settings = SettingsProvider()..prefs = preferences;
-      Localization.load(
-        const Locale('en'),
-        translations: Translations(translations),
-      );
-      final provider = _Apps();
-      final model = _app(installed, latest, trackOnly: trackOnly);
-      provider.apps[model.id] = AppInMemory(model, null, null, icon);
-      final other = AppInMemory(
-        model.copyWith(id: 'org.example.other'),
-        null,
-        null,
-        icon,
-      );
-      provider.apps[other.app.id] = other;
-      addTearDown(provider.dispose);
-      addTearDown(settings.dispose);
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(480, 1600);
-      addTearDown(tester.view.reset);
+    testWidgets(
+      'manual actions during another download: $installed (reduced effects: $reducedEffects)',
+      (tester) async {
+        await preferences.setBool('reduceVisualEffects', reducedEffects);
+        final settings = SettingsProvider()..prefs = preferences;
+        Localization.load(
+          const Locale('en'),
+          translations: Translations(translations),
+        );
+        final provider = _Apps();
+        final model = _app(installed, latest, trackOnly: trackOnly);
+        provider.apps[model.id] = AppInMemory(model, null, null, icon);
+        final other = AppInMemory(
+          model.copyWith(id: 'org.example.other'),
+          null,
+          null,
+          icon,
+        );
+        provider.apps[other.app.id] = other;
+        addTearDown(provider.dispose);
+        addTearDown(settings.dispose);
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(480, 1600);
+        addTearDown(tester.view.reset);
 
-      await tester.pumpWidget(
-        MultiProvider(
-          providers: [
-            ChangeNotifierProvider<AppsProvider>.value(value: provider),
-            ChangeNotifierProvider<SettingsProvider>.value(value: settings),
-          ],
-          child: MaterialApp(home: AppPage(appId: model.id)),
-        ),
-      );
-      await tester.pumpAndSettle();
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider<AppsProvider>.value(value: provider),
+              ChangeNotifierProvider<SettingsProvider>.value(value: settings),
+            ],
+            child: MaterialApp(home: AppPage(appId: model.id)),
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      final updateButton = find.widgetWithText(FilledButton, 'Update · 40 MB');
-      final markButton = find.widgetWithText(FilledButton, tr('markUpdated'));
-      final skipButton = find.widgetWithText(TextButton, tr('skipVersion'));
-      expect(tester.widget<FilledButton>(updateButton).onPressed, isNotNull);
+        final updateButton = find.widgetWithText(
+          FilledButton,
+          'Update · 40 MB',
+        );
+        final markButton = find.widgetWithText(FilledButton, tr('markUpdated'));
+        final skipButton = find.widgetWithText(TextButton, tr('skipVersion'));
+        expect(tester.widget<FilledButton>(updateButton).onPressed, isNotNull);
 
-      other.downloadProgress = 0.3;
-      provider.notifyListeners();
-      await tester.pumpAndSettle();
-      expect(
-        tester.widget<FilledButton>(updateButton).onPressed,
-        trackOnly ? isNotNull : isNull,
-      );
-      expect(tester.widget<TextButton>(skipButton).onPressed, isNotNull);
-      if (trackOnly) {
-        expect(tester.widget<FilledButton>(markButton).onPressed, isNotNull);
-      }
+        other.downloadProgress = 0.3;
+        provider.notifyListeners();
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<FilledButton>(updateButton).onPressed,
+          trackOnly ? isNotNull : isNull,
+        );
+        expect(tester.widget<TextButton>(skipButton).onPressed, isNotNull);
+        if (trackOnly) {
+          expect(tester.widget<FilledButton>(markButton).onPressed, isNotNull);
+        }
 
-      other.downloadProgress = null;
-      provider.notifyListeners();
-      await tester.pumpAndSettle();
-      expect(tester.widget<FilledButton>(updateButton).onPressed, isNotNull);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
+        other.downloadProgress = null;
+        provider.notifyListeners();
+        await tester.pumpAndSettle();
+        expect(tester.widget<FilledButton>(updateButton).onPressed, isNotNull);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   }
 
   testWidgets('alternate F-Droid icon long-press offers swap menu', (
