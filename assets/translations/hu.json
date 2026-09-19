@@ -223,7 +223,7 @@
     "noCategory": "Nincs kategória",
     "noCategories": "Nincsenek kategóriák",
     "deleteCategoriesQuestion": "Biztosan törli a kategóriákat?",
-    "categoryDeleteWarning": "A törölt kategóriákban lévő összes alkalmazás kategorizálatlanná válik.",
+    "categoryDeleteWarning": "A kijelölt kategóriák eltávolításra kerülnek az összes hozzájuk rendelt alkalmazásból",
     "addCategory": "Kategória hozzáadása",
     "label": "Címke",
     "language": "Nyelv",

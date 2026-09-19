@@ -223,7 +223,7 @@
     "noCategory": "بدون دسته بندی",
     "noCategories": "بدون دسته بندی ها",
     "deleteCategoriesQuestion": "دسته بندی ها حذف شوند؟",
-    "categoryDeleteWarning": "همه برنامه‌ها در دسته‌های حذف شده روی دسته‌بندی نشده تنظیم می‌شوند.",
+    "categoryDeleteWarning": "دسته‌های انتخاب‌شده از همه برنامه‌های اختصاص‌یافته حذف خواهند شد",
     "addCategory": "اضافه کردن دسته",
     "label": "برچسب",
     "language": "زبان",

@@ -2,8 +2,19 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+// setCategories only reaches into the apps provider to sweep orphaned category
+// tags, which an empty library has none of.
+class _NoApps implements AppsProvider {
+  @override
+  Iterable<AppInMemory> getAppValues() => const <AppInMemory>[];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 Future<SettingsProvider> _settingsWithPrefs(Map<String, Object> values) async {
   SharedPreferences.setMockInitialValues(values);
@@ -180,7 +191,11 @@ void main() {
     final SettingsProvider settings = await _settingsWithPrefs(
       <String, Object>{},
     );
-    settings.setCategories(<String, int>{'zulu': 1, 'Alpha': 2, 'Beta': 3});
+    settings.setCategories(<String, int>{
+      'zulu': 1,
+      'Alpha': 2,
+      'Beta': 3,
+    }, appsProvider: _NoApps());
 
     expect(settings.categories.keys.toList(), <String>[
       'Alpha',

@@ -223,7 +223,7 @@
     "noCategory": "بدون تصنيف",
     "noCategories": "لا توجد تصنيفات",
     "deleteCategoriesQuestion": "حذف التصنيفات؟",
-    "categoryDeleteWarning": "سيتم تعيين جميع التطبيقات في التصنيفات المحذوفة كغير مصنفة.",
+    "categoryDeleteWarning": "ستتم إزالة التصنيفات المحددة من جميع التطبيقات المعيّنة لها",
     "addCategory": "أضف تصنيف",
     "label": "تسمية",
     "language": "اللغة",

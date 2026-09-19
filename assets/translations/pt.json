@@ -223,7 +223,7 @@
     "noCategory": "Sem categoria",
     "noCategories": "Sem categorias",
     "deleteCategoriesQuestion": "Deletar  categorias?",
-    "categoryDeleteWarning": "Todas as aplicações em categorias removidas serão descategorizadas.",
+    "categoryDeleteWarning": "As categorias selecionadas serão removidas de todas as aplicações atribuídas",
     "addCategory": "Adicionar categoria",
     "label": "Etiqueta",
     "language": "Linguagem",

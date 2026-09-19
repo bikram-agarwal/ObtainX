@@ -602,6 +602,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   // 92 + the 8px gap after the label = a 100px value-column offset, matching
   // the details card's detailRow (label width 100, no gap) so the two cards'
   // value columns line up vertically.
+  //
+  // Labels in this column must be allowed to wrap. Several locales are far
+  // longer than English here - French renders `changelog` as "Journal des
+  // modifications" - and a label pinned to one line spills out of the fixed
+  // width and paints over the value to its right.
   static const double _versionRowLabelWidth = 92;
 
   // Android's WebView never renders an attachment response; it hands it to a
@@ -3158,7 +3163,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
               width: 100,
@@ -3212,8 +3217,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+          // Centred, not baseline-aligned: a label that wraps to two lines in a
+          // longer locale would otherwise pin the value to its first line and
+          // leave it floating at the top of the row.
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
               width: _versionRowLabelWidth,
@@ -3223,8 +3230,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                   fontSize: 12,
                 ),
-                softWrap: false,
-                overflow: TextOverflow.visible,
               ),
             ),
             const SizedBox(width: 8),
@@ -3272,8 +3277,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+          // Centred, not baseline-aligned: a label that wraps to two lines in a
+          // longer locale would otherwise pin the value to its first line and
+          // leave it floating at the top of the row.
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
               width: _versionRowLabelWidth,
@@ -3283,8 +3290,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                   fontSize: 12,
                 ),
-                softWrap: false,
-                overflow: TextOverflow.visible,
               ),
             ),
             const SizedBox(width: 8),
@@ -3345,8 +3350,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+          // Centred, not baseline-aligned: a label that wraps to two lines in a
+          // longer locale would otherwise pin the value to its first line and
+          // leave it floating at the top of the row.
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
               width: _versionRowLabelWidth,
@@ -3356,8 +3363,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                   fontSize: 12,
                 ),
-                softWrap: false,
-                overflow: TextOverflow.visible,
               ),
             ),
             const SizedBox(width: 8),
@@ -3388,9 +3393,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         onLongPress: () {
           Clipboard.setData(ClipboardData(text: aboutRaw));
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(tr('copiedToClipboard')),
-              duration: const Duration(seconds: 4),
+            buildAppSnackBar(
+              context,
+              tr('copiedToClipboard'),
+              scaffoldHasBottomBar: !widget.isEmbedded,
             ),
           );
         },
@@ -4575,7 +4581,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           await Clipboard.setData(ClipboardData(text: hash));
           if (!pageThemeContext.mounted) return;
           ScaffoldMessenger.of(pageThemeContext).showSnackBar(
-            SnackBar(content: Text(tr('certificateHashCopiedToClipboard'))),
+            buildAppSnackBar(
+              pageThemeContext,
+              tr('certificateHashCopiedToClipboard'),
+              scaffoldHasBottomBar: !widget.isEmbedded,
+            ),
           );
         }
 
@@ -4632,7 +4642,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             ) ??
             const TextStyle(fontFamily: 'monospace', fontSize: 12);
         return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
               width: 100,
@@ -4649,7 +4659,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 spacing: 4,
                 children: certificateHashes.map((hash) {
                   return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
                         child: GestureDetector(
@@ -4859,23 +4869,23 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               AppTypeGroup.user => (
                 Icons.person_rounded,
                 Colors.green,
-                tr('appTypeUser'),
+                tr('appTypeUserSingular'),
               ),
               AppTypeGroup.system => (
                 Icons.android_rounded,
                 Colors.grey,
-                tr('appTypeSystem'),
+                tr('appTypeSystemSingular'),
               ),
               AppTypeGroup.privileged => (
                 Icons.security_rounded,
                 Colors.grey.shade600,
-                tr('appTypePrivileged'),
+                tr('appTypePrivilegedSingular'),
               ),
             };
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   SizedBox(
                     width: 100,
@@ -5404,27 +5414,26 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                                   [appRow.app],
                                 );
                             if (removeResult.shouldShowSnackBar &&
-                                messenger != null) {
+                                messenger != null &&
+                                messenger.mounted) {
                               final Set<String> undoAppIds =
                                   removeResult.deferredUndoAppIds;
                               messenger
                                 ..clearSnackBars()
                                 ..showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      tr('xAppsRemoved', args: ['1']),
-                                    ),
+                                  buildAppSnackBar(
+                                    messenger.context,
+                                    tr('xAppsRemoved', args: ['1']),
                                     persist: false,
                                     duration: const Duration(seconds: 5),
-                                    behavior: SnackBarBehavior.floating,
-                                    action: undoAppIds.isNotEmpty
-                                        ? SnackBarAction(
-                                            label: tr('undo'),
-                                            onPressed: () => appsProvider
-                                                .undoDeferredObtainiumRemovals(
-                                                  undoAppIds,
-                                                ),
-                                          )
+                                    actionLabel: undoAppIds.isNotEmpty
+                                        ? tr('undo')
+                                        : null,
+                                    onAction: undoAppIds.isNotEmpty
+                                        ? () => appsProvider
+                                              .undoDeferredObtainiumRemovals(
+                                                undoAppIds,
+                                              )
                                         : null,
                                   ),
                                 );

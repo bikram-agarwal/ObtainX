@@ -223,7 +223,7 @@
     "noCategory": "Без категорії",
     "noCategories": "Немає категорій",
     "deleteCategoriesQuestion": "Видалити категорії?",
-    "categoryDeleteWarning": "Усі застосунки у видалених категоріях будуть переведені у некатегоризовані.",
+    "categoryDeleteWarning": "Вибрані категорії буде видалено з усіх призначених застосунків",
     "addCategory": "Додати категорію",
     "label": "Мітка",
     "language": "Мова",

@@ -223,7 +223,7 @@
     "noCategory": "Tidak ada kategori",
     "noCategories": "Tidak ada kategori",
     "deleteCategoriesQuestion": "Hapus kategori?",
-    "categoryDeleteWarning": "Semua aplikasi dalam kategori yang dihapus akan diatur sebagai tidak terkategori.",
+    "categoryDeleteWarning": "Kategori yang dipilih akan dihapus dari semua aplikasi yang ditetapkan",
     "addCategory": "Tambah kategori",
     "label": "Label",
     "language": "Bahasa",

@@ -223,7 +223,7 @@
     "noCategory": "No hi ha la categoria",
     "noCategories": "No hi ha les categories",
     "deleteCategoriesQuestion": "Suprimeixo les categories?",
-    "categoryDeleteWarning": "Totes les aplicacions de les categories suprimides es marcaran com a no categoritzades.",
+    "categoryDeleteWarning": "Les categories seleccionades s'eliminaran de totes les aplicacions assignades",
     "addCategory": "Afegeix una categoria",
     "label": "Nom",
     "language": "Idioma",

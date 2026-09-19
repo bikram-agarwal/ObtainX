@@ -223,7 +223,7 @@
     "noCategory": "Geen categorie",
     "noCategories": "Geen categorieën",
     "deleteCategoriesQuestion": "Categorieën verwijderen?",
-    "categoryDeleteWarning": "Alle apps in verwijderde categorieën worden teruggezet naar 'ongecategoriseerd'.",
+    "categoryDeleteWarning": "Geselecteerde categorieën worden verwijderd uit alle toegewezen apps",
     "addCategory": "Categorie toevoegen",
     "label": "Label",
     "language": "Taal",

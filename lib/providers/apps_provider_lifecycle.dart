@@ -1714,6 +1714,111 @@ extension AppsProviderLifecycle on AppsProvider {
     settingsProvider.setCategories(cats, appsProvider: this);
   }
 
+  /// Strips every category outside [knownCategories] from every saved app, and
+  /// rewrites [renamedFrom] to [renamedTo] where a deletion was really a rename.
+  ///
+  /// `categoryDeleteWarning` promises the user that deleting a category strips
+  /// it from every app assigned to it, so this sweeps the durable records in
+  /// [getAppsDir] rather than only the listings this isolate happens to hold.
+  /// A record written by the background isolate, or one that arrived after the
+  /// last load, would otherwise keep a tag that no longer exists anywhere in
+  /// [SettingsProvider.categories] - and an orphaned tag is unreachable from
+  /// the UI, because the category editor builds its chip list from the saved
+  /// category map, so the user has no way to clear it by hand.
+  ///
+  /// The sweep is a reconcile against the whole map, not a diff against the
+  /// names deleted in this one call, so tags orphaned by an earlier delete that
+  /// did not reach every record are cleaned up on the next category write.
+  ///
+  /// Never throws: a failed sweep must not take down the settings write that
+  /// triggered it.
+  Future<void> reconcileAppCategories(
+    Set<String> knownCategories, {
+    String? renamedFrom,
+    String? renamedTo,
+  }) async {
+    final bool isRename = renamedFrom != null && renamedTo != null;
+    try {
+      await waitForAppsToLoad();
+      final Map<String, App> savedApps = {
+        for (final AppInMemory listing in apps.values)
+          listing.listingKey: listing.app,
+      };
+      final Directory appsDirectory = await getAppsDir();
+      List<FileSystemEntity> appFiles = const [];
+      try {
+        appFiles = await appsDirectory.list().toList();
+      } catch (err) {
+        unawaited(
+          logs.add(
+            'Could not list app records while removing categories: $err',
+            level: LogLevel.warning,
+          ),
+        );
+      }
+      for (final FileSystemEntity item in appFiles) {
+        final String fileName = _fileBasename(item.path);
+        if (!fileName.toLowerCase().endsWith('.json')) continue;
+        final String listingKey = fileName.substring(
+          0,
+          fileName.length - '.json'.length,
+        );
+        if (savedApps.containsKey(listingKey)) continue;
+        try {
+          final json =
+              jsonDecode(await File(item.path).readAsString())
+                  as Map<String, dynamic>;
+          savedApps[listingKey] = App.fromJson(json);
+        } catch (err) {
+          // A record this sweep cannot parse is left alone; loadApps owns
+          // quarantining corrupt JSON.
+          unawaited(
+            logs.add(
+              'Could not read $fileName while removing categories: $err',
+              level: LogLevel.warning,
+            ),
+          );
+        }
+      }
+
+      final List<App> changedApps = [];
+      for (final App app in savedApps.values) {
+        final List<String> nextCategories = [];
+        bool changed = false;
+        for (final String category in app.categories) {
+          final String mapped = isRename && category == renamedFrom
+              ? renamedTo
+              : category;
+          // A rename onto an existing category, or a duplicate already in the
+          // record, collapses to one entry.
+          final bool dropped =
+              !knownCategories.contains(mapped) ||
+              nextCategories.contains(mapped);
+          if (dropped || mapped != category) changed = true;
+          if (dropped) continue;
+          nextCategories.add(mapped);
+        }
+        if (changed) changedApps.add(app.copyWith(categories: nextCategories));
+      }
+      if (changedApps.isEmpty) return;
+      // [onlyIfExists] is false because the sweep deliberately reaches records
+      // that are not in the in-memory map yet; they exist on disk, so the save
+      // is an update, not a stray insert.
+      await saveApps(
+        changedApps,
+        updateInstalledInfo: false,
+        onlyIfExists: false,
+      );
+    } catch (err) {
+      unawaited(
+        logs.add(
+          'Could not remove deleted categories from saved apps: $err',
+          level: LogLevel.error,
+        ),
+      );
+    }
+  }
+
   String _fileBasename(String rawPath) {
     final int unix = rawPath.lastIndexOf('/');
     final int win = rawPath.lastIndexOf('\\');

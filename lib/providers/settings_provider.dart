@@ -1144,7 +1144,13 @@ class SettingsProvider with ChangeNotifier {
     return Map<String, int>.from(_categoriesMemory!);
   }
 
-  void setCategories(Map<String, int> cats, {AppsProvider? appsProvider}) {
+  /// [appsProvider] is required, not optional: every write to the category map
+  /// is also the only chance to strip deleted categories from the apps that
+  /// carry them, and a call that skipped it used to leave orphaned tags behind.
+  void setCategories(
+    Map<String, int> cats, {
+    required AppsProvider appsProvider,
+  }) {
     final List<MapEntry<String, int>> sortedEntries = cats.entries.toList()
       ..sort((a, b) {
         final int cmp = a.key.toLowerCase().compareTo(b.key.toLowerCase());
@@ -1155,50 +1161,41 @@ class SettingsProvider with ChangeNotifier {
       sortedEntries,
     );
 
-    if (appsProvider != null) {
-      // Detect a rename: one key removed from old map, one key added to new map.
-      // Each UI action (rename, delete) fires a separate call, so at most one
-      // rename is in flight per call.
-      final Map<String, int> oldCats = categories;
-      final Set<String> removed = oldCats.keys.toSet().difference(
-        sortedCats.keys.toSet(),
-      );
-      final Set<String> added = sortedCats.keys.toSet().difference(
-        oldCats.keys.toSet(),
-      );
-      final String? renamedFrom = (removed.length == 1 && added.length == 1)
-          ? removed.first
-          : null;
-      final String? renamedTo = (removed.length == 1 && added.length == 1)
-          ? added.first
-          : null;
+    // Detect a rename: one key removed from old map, one key added to new map.
+    // Each UI action (rename, delete) fires a separate call, so at most one
+    // rename is in flight per call.
+    final Map<String, int> oldCats = categories;
+    final Set<String> removed = oldCats.keys.toSet().difference(
+      sortedCats.keys.toSet(),
+    );
+    final Set<String> added = sortedCats.keys.toSet().difference(
+      oldCats.keys.toSet(),
+    );
+    final bool isRename = removed.length == 1 && added.length == 1;
+    // Walking the loaded listings is cheap and catches tags orphaned by an
+    // earlier delete that never reached every record. Without it, a library
+    // that already holds orphans would only be repaired by another delete -
+    // and once the last category is gone there is nothing left to delete.
+    final bool hasOrphanedCategory = appsProvider.getAppValues().any(
+      (a) => a.app.categories.any((c) => !sortedCats.containsKey(c)),
+    );
 
-      final List<App> changedApps = appsProvider
-          .getAppValues()
-          .map((a) {
-            bool changed = false;
-            if (renamedFrom != null && renamedTo != null) {
-              final idx = a.app.categories.indexOf(renamedFrom);
-              if (idx >= 0) {
-                a.app.categories[idx] = renamedTo;
-                changed = true;
-              }
-            }
-            final n1 = a.app.categories.length;
-            a.app.categories.removeWhere((c) => !sortedCats.keys.contains(c));
-            if (a.app.categories.length < n1) changed = true;
-            return changed ? a.app : null;
-          })
-          .where((element) => element != null)
-          .map((e) => e as App)
-          .toList();
-      if (changedApps.isNotEmpty) {
-        appsProvider.saveApps(changedApps, updateInstalledInfo: false);
-      }
-    }
     _categoriesMemory = Map<String, int>.from(sortedCats);
     prefs?.setString('categories', jsonEncode(sortedCats));
     notifyListeners();
+
+    // The new map is committed before the sweep so the save it performs
+    // notifies listeners against the already-updated category list. The sweep
+    // reaches every saved app, loaded or not, and swallows its own errors.
+    if (removed.isNotEmpty || hasOrphanedCategory) {
+      unawaited(
+        appsProvider.reconcileAppCategories(
+          sortedCats.keys.toSet(),
+          renamedFrom: isRename ? removed.first : null,
+          renamedTo: isRename ? added.first : null,
+        ),
+      );
+    }
   }
 
   List<AppFolder> get appFolders {

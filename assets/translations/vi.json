@@ -223,7 +223,7 @@
     "noCategory": "Không danh mục",
     "noCategories": "Không danh mục",
     "deleteCategoriesQuestion": "Xóa danh mục?",
-    "categoryDeleteWarning": "Tất cả ứng dụng trong danh mục đã xóa sẽ được đặt thành chưa được phân loại.",
+    "categoryDeleteWarning": "Các danh mục đã chọn sẽ bị xóa khỏi tất cả ứng dụng được gán",
     "addCategory": "Thêm thể loại",
     "label": "Nhãn",
     "language": "Ngôn ngữ",

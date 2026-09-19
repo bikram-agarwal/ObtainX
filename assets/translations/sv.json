@@ -223,7 +223,7 @@
     "noCategory": "Ingen Kategori",
     "noCategories": "Inga Kategorier",
     "deleteCategoriesQuestion": "Ta Bort Kategorier?",
-    "categoryDeleteWarning": "Alla Appar i de borttagna kategorierna kommer att märkas som okategoriserade.",
+    "categoryDeleteWarning": "Valda kategorier tas bort från alla tilldelade appar",
     "addCategory": "Lägg till Kategori",
     "label": "Märka",
     "language": "Språk",

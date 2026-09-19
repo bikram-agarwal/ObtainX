@@ -4141,6 +4141,14 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
       storedValues,
       widget.preselected,
     );
+    // The labels below go through context.tr rather than the top-level tr()
+    // because that is what subscribes this element to Localizations. The
+    // top-level tr() reads a global singleton, so it leaves nothing to mark
+    // dirty when the language changes, and nothing else here rebuilds on a
+    // locale switch: the category map is unchanged, so the select() above does
+    // not fire, and every ancestor between this widget and the settings page is
+    // a const instance that the framework reuses without rebuilding. Together
+    // that froze these labels at whichever language the app launched in.
     return GeneratedForm(
       key: ValueKey<String>(
         'categories_${_stableCategoriesMapJson(fromPrefs)}',
@@ -4149,13 +4157,13 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
         [
           GeneratedFormTagInput(
             'categories',
-            label: tr('categories'),
-            emptyMessage: tr('noCategories'),
+            label: context.tr('categories'),
+            emptyMessage: context.tr('noCategories'),
             value: merged,
             alignment: widget.alignment,
             deleteConfirmationMessage: MapEntry(
-              tr('deleteCategoriesQuestion'),
-              tr('categoryDeleteWarning'),
+              context.tr('deleteCategoriesQuestion'),
+              context.tr('categoryDeleteWarning'),
             ),
             singleSelect: widget.singleSelect,
             showLabelWhenNotEmpty: widget.showLabelWhenNotEmpty,

@@ -223,7 +223,7 @@
     "noCategory": "Bez kategorii",
     "noCategories": "Brak kategorii",
     "deleteCategoriesQuestion": "Usunąć kategorie?",
-    "categoryDeleteWarning": "Wszystkie aplikacje w usuniętych kategoriach zostaną ustawione jako nieskategoryzowane.",
+    "categoryDeleteWarning": "Wybrane kategorie zostaną usunięte ze wszystkich przypisanych aplikacji",
     "addCategory": "Dodaj kategorię",
     "label": "Etykieta",
     "language": "Język",

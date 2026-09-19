@@ -223,7 +223,7 @@
     "noCategory": "Žádná kategorie",
     "noCategories": "Žádné kategorie",
     "deleteCategoriesQuestion": "Smazat kategorie?",
-    "categoryDeleteWarning": "Všechny aplikace v odstraněných kategoriích budou nastaveny na nekategorizované.",
+    "categoryDeleteWarning": "Vybrané kategorie budou odebrány ze všech přiřazených aplikací",
     "addCategory": "Přidat kategorii",
     "label": "Popisek",
     "language": "Jazyk",

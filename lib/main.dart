@@ -848,11 +848,27 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
               ? lightColorScheme
               : darkColorScheme;
 
+          // easy_localization's setLocale() swaps its controller's locale
+          // synchronously but loads the matching JSON afterwards, and its
+          // Localizations delegate publishes whatever translations the
+          // controller happens to hold at the instant the locale reaches the
+          // widget tree - with no later correction, because the delegate
+          // reports shouldReload == false and only reads from disk when its
+          // cache is empty. Handing MaterialApp context.locale (the live,
+          // already-swapped value) therefore freezes the *previous* language's
+          // strings under the newly selected locale whenever anything rebuilds
+          // during the load, which is exactly what writing
+          // SettingsProvider.forcedLocale does. The provider's currentLocale is
+          // captured when EasyLocalization itself rebuilds, which happens only
+          // once the new translations are in place, so it is the locale that is
+          // actually renderable right now.
+          final Locale renderableLocale =
+              EasyLocalization.of(context)?.currentLocale ?? context.locale;
           // Keep the locale-aware English detection in custom_errors.dart in
           // sync (drives lowerCaseIfEnglish / list2FriendlyString). Without
           // this, isEnglish() is stuck false and English strings never get
           // lowercased — parity with fork main.
-          setAppLocale(context.locale);
+          setAppLocale(renderableLocale);
           // Default to the OS system font (null lets Flutter resolve the
           // platform font with real weights). Once an explicit multi-weight
           // device family is loaded, switch to it so a user-picked OEM font is
@@ -879,7 +895,7 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             scrollBehavior: const AppScrollBehavior(),
             localizationsDelegates: context.localizationDelegates,
             supportedLocales: context.supportedLocales,
-            locale: context.locale,
+            locale: renderableLocale,
             navigatorKey: globalNavigatorKey,
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,

@@ -223,7 +223,7 @@
     "noCategory": "Nema kategorije",
     "noCategories": "Nema kategorija",
     "deleteCategoriesQuestion": "Želite li izbrisati kategorije?",
-    "categoryDeleteWarning": "Sve aplikacije u izbrisanim kategorijama će biti postavljene kao nekategorisane.",
+    "categoryDeleteWarning": "Odabrane kategorije bit će uklonjene iz svih dodijeljenih aplikacija",
     "addCategory": "Dodaj kategoriju",
     "label": "Oznaka",
     "language": "Jezik",

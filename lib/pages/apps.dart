@@ -613,7 +613,10 @@ const List<AppVersionDisplayVerdict> updateStatusGroupOrder = [
 ];
 
 /// Returns the [AppTypeGroup] for a given [AppInMemory] based on Android package flags.
-/// Non-installed apps (no [AppInMemory.installedInfo]) are treated as user apps.
+/// Without an installed package there are no flags to read, so the result is
+/// meaningless for a non-installed app and callers must not surface it: the
+/// badge and the details row omit it, and grouping by app type forces
+/// non-installed apps into their own separate group.
 AppTypeGroup classifyAppType(AppInMemory app) {
   final info = app.installedInfo;
   if (info == null) return AppTypeGroup.user;
@@ -1145,14 +1148,17 @@ class _AppListItem extends StatelessWidget {
         : m3eGroupedListRowFill(colorScheme);
 
     // App-type badge at bottom-right of icon — icon only, no background.
+    // Skip it when the app is not installed: there are no package flags to
+    // classify, and the details page likewise omits the App Type row.
+    final bool showKnownAppTypeBadge =
+        showAppTypeBadge && app.installedInfo != null;
     final appType = classifyAppType(app);
     final (IconData appTypeIcon, Color appTypeColor) = switch (appType) {
       AppTypeGroup.user => (Icons.person_rounded, Colors.green),
       AppTypeGroup.system => (Icons.android_rounded, Colors.grey),
       AppTypeGroup.privileged => (Icons.security_rounded, Colors.grey.shade600),
     };
-    // App type badge on icon (gated by showAppTypeBadge).
-    final Widget iconWithBadge = showAppTypeBadge
+    final Widget iconWithBadge = showKnownAppTypeBadge
         ? Stack(
             clipBehavior: Clip.none,
             children: [
@@ -2589,16 +2595,25 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         setSheetState(() {});
                       },
                     ),
+                  // Group-by app type reads the installed package's flags, so a
+                  // non-installed app has no type to group by. The chip stays
+                  // visible and on but locked there - turning it off would file
+                  // those apps under User Apps on no evidence. The stored pref
+                  // is left intact for the other grouping modes.
                   if (effectiveGroupBy != AppsListGroupBy.none &&
                       effectiveGroupBy != AppsListGroupBy.updateStatus)
                     FilterChip(
                       showCheckmark: false,
                       label: Text(tr('nonInstalledApps')),
-                      selected: effectiveGroupNonInstalledSeparately,
-                      onSelected: (value) {
-                        setEffectiveGroupNonInstalledSeparately(value);
-                        setSheetState(() {});
-                      },
+                      selected:
+                          effectiveGroupBy == AppsListGroupBy.appType ||
+                          effectiveGroupNonInstalledSeparately,
+                      onSelected: effectiveGroupBy == AppsListGroupBy.appType
+                          ? null
+                          : (value) {
+                              setEffectiveGroupNonInstalledSeparately(value);
+                              setSheetState(() {});
+                            },
                     ),
                   if (effectiveGroupBy != AppsListGroupBy.none)
                     FilterChip(
@@ -3188,6 +3203,10 @@ class AppsPageState extends State<AppsPage> {
     // section would empty that group and show two competing Not installed
     // treatments.
     if (_effectiveGroupBy(sp) == AppsListGroupBy.updateStatus) return false;
+    // Group-by app type is the mirror case: an app type comes from the
+    // installed package's flags, so a non-installed app has no type to group
+    // by and would otherwise be filed under User Apps on no evidence.
+    if (_effectiveGroupBy(sp) == AppsListGroupBy.appType) return true;
     final id = _viewSettingsId;
     return id != null
         ? sp.folderGroupNonInstalledSeparately(id)
@@ -5091,7 +5110,7 @@ class AppsPageState extends State<AppsPage> {
           : '';
       return buildCollapsibleTile(
         groupKey: '${folderPrefix}__trackOnly__',
-        title: tr('trackOnly'),
+        title: tr('trackOnlyGroup'),
         matchingIndices: _trackOnlyListedIndices,
       );
     }
@@ -5245,7 +5264,10 @@ class AppsPageState extends State<AppsPage> {
                     settingsProvider.categories,
                   )..addAll(actions.newCategoryColors);
                   if (actions.newCategoryColors.isNotEmpty) {
-                    settingsProvider.setCategories(nextCategoryColors);
+                    settingsProvider.setCategories(
+                      nextCategoryColors,
+                      appsProvider: appsProvider,
+                    );
                   }
                   final updatedCategoryLists =
                       applyBulkCategoryActionsToCategoryLists(

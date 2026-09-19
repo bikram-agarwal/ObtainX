@@ -223,7 +223,7 @@
     "noCategory": "Ingen kategori",
     "noCategories": "Ingen kategorier",
     "deleteCategoriesQuestion": "Slet kategorier?",
-    "categoryDeleteWarning": "Alle apps i slettede kategorier indstilles til ukategoriseret.",
+    "categoryDeleteWarning": "Valgte kategorier fjernes fra alle tildelte apps",
     "addCategory": "Tilføj kategori",
     "label": "Etiket",
     "language": "Sprog",
