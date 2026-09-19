@@ -1,0 +1,74 @@
+name: PR base guard
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+
+concurrency:
+  group: pr-base-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify-base:
+    name: Verify PR base branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce working branch as pull request target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          set -euo pipefail
+
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "Author association is $AUTHOR_ASSOCIATION, any base branch is allowed."
+              exit 0
+              ;;
+          esac
+
+          candidates=()
+          while read -r branch; do
+            case "$branch" in
+              main|gh-pages|dependabot/*|renovate/*|l10n_*|weblate*) continue ;;
+            esac
+            candidates+=("$branch")
+          done < <(gh api --paginate "repos/$REPO/branches" --jq '.[].name')
+
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            if [ "$PR_BASE" = "main" ]; then
+              echo "main is the only branch, base is correct."
+              exit 0
+            fi
+            allowed=main
+          else
+            for branch in "${candidates[@]}"; do
+              if [ "$PR_BASE" = "$branch" ]; then
+                echo "Base branch '$PR_BASE' is a working branch, base is correct."
+                exit 0
+              fi
+            done
+
+            # A working branch exists, so main is not a valid target. Normally there
+            # is exactly one; if more than one is pushed, take the newest commit.
+            allowed=""
+            newest=""
+            for branch in "${candidates[@]}"; do
+              committed=$(gh api "repos/$REPO/branches/$branch" --jq '.commit.commit.committer.date')
+              if [ -z "$newest" ] || [[ "$committed" > "$newest" ]]; then
+                newest="$committed"
+                allowed="$branch"
+              fi
+            done
+          fi
+
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Thanks for the contribution. Pull requests from outside the repository must target the current working branch \`$allowed\`, not \`$PR_BASE\`. I have retargeted this pull request for you, so there is nothing for you to do."
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --base "$allowed"
+          echo "Retargeted pull request #$PR_NUMBER from '$PR_BASE' to '$allowed'."

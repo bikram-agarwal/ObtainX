@@ -1401,10 +1401,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                             child: TextButton.icon(
                               onPressed: onAddPressed,
                               icon: const Icon(Icons.add),
-                              label: Text(
-                                (widget.items[r][e] as GeneratedFormTagInput)
-                                    .label,
-                              ),
+                              label: Text(tr('addCategory')),
                             ),
                           )
                         : Padding(
