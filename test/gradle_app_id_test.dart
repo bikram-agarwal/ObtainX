@@ -108,6 +108,34 @@ const val pkg = "com.kotlin.app"
     );
   });
 
+  // Real shape of Remember's app/build.gradle.kts (checked 2026-09-20): one
+  // local keeps applicationId and namespace in sync, so neither is a quoted
+  // literal and the scrape used to find nothing here at all.
+  test('an unquoted variable assignment resolves', () {
+    expect(
+      appIdFromGradleFileContents('''
+android {
+    val rememberApplicationId = "dev.bikram.remember"
+    namespace = rememberApplicationId
+    defaultConfig {
+        applicationId = rememberApplicationId
+        applicationIdSuffix = ".gh"
+    }
+}
+'''),
+      'dev.bikram.remember',
+    );
+  });
+
+  test('an unquoted expression that is not a variable yields null', () {
+    expect(
+      appIdFromGradleFileContents(
+        '        applicationId = libs.versions.appId.get()',
+      ),
+      isNull,
+    );
+  });
+
   test(
     'unresolvable interpolation yields null, never a literal placeholder',
     () {
@@ -226,6 +254,161 @@ plugins {
 }
 android {
     namespace = "com.example.lib"
+}
+'''),
+      isNull,
+    );
+  });
+
+  group('the distributing flavour decides the id', () {
+    // Remember and FilePipe both build one flavour per distribution channel and
+    // rename the non-Play ones, so the APK in GitHub Releases installs as
+    // dev.bikram.remember.gh while the bare id is the Play Store build's.
+    const String perChannelFlavors = '''
+android {
+    val rememberApplicationId = "dev.bikram.remember"
+    namespace = rememberApplicationId
+    defaultConfig {
+        applicationId = rememberApplicationId
+    }
+    buildTypes {
+        create("devRelease") {
+            applicationIdSuffix = ".dev"
+        }
+    }
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            applicationIdSuffix = ".gh"
+        }
+        create("playstore") {
+            dimension = "distribution"
+        }
+    }
+}
+''';
+
+    test('a suffix on the matching flavour is applied', () {
+      expect(
+        appIdFromGradleFileContents(
+          perChannelFlavors,
+          preferredFlavorNames: const <String>{'github', 'gh'},
+        ),
+        'dev.bikram.remember.gh',
+      );
+    });
+
+    test('a build-type suffix is still ignored', () {
+      expect(
+        appIdFromGradleFileContents(
+          perChannelFlavors,
+          preferredFlavorNames: const <String>{'playstore'},
+        ),
+        'dev.bikram.remember',
+      );
+    });
+
+    test('an unmatched flavour leaves the default id alone', () {
+      expect(
+        appIdFromGradleFileContents(
+          perChannelFlavors,
+          preferredFlavorNames: const <String>{'gitlab'},
+        ),
+        'dev.bikram.remember',
+      );
+      expect(
+        appIdFromGradleFileContents(perChannelFlavors),
+        'dev.bikram.remember',
+      );
+    });
+
+    test('an outright applicationId on the matching flavour wins', () {
+      expect(
+        appIdFromGradleFileContents(
+          '''
+android {
+    namespace = "com.example.app"
+    productFlavors {
+        github { applicationId "com.example.app.github" }
+        play { applicationId "com.example.app" }
+    }
+}
+''',
+          preferredFlavorNames: const <String>{'github'},
+        ),
+        'com.example.app.github',
+      );
+    });
+
+    // Two dimensions multiply into one id per combination, so the `github`
+    // flavour's suffix is only part of the answer and guessing the rest would
+    // be worse than falling back to the default variant.
+    test('flavours spanning two dimensions are left alone', () {
+      expect(
+        appIdFromGradleFileContents(
+          '''
+android {
+    defaultConfig { applicationId = "com.example.app" }
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            applicationIdSuffix = ".gh"
+        }
+        create("demo") {
+            dimension = "tier"
+            applicationIdSuffix = ".demo"
+        }
+    }
+}
+''',
+          preferredFlavorNames: const <String>{'github'},
+        ),
+        'com.example.app',
+      );
+    });
+
+    test('a same-named build type is not mistaken for a flavour', () {
+      expect(
+        appIdFromGradleFileContents(
+          '''
+android {
+    defaultConfig { applicationId = "com.example.app" }
+    buildTypes {
+        create("github") { applicationIdSuffix = ".wrong" }
+    }
+}
+''',
+          preferredFlavorNames: const <String>{'github'},
+        ),
+        'com.example.app',
+      );
+    });
+  });
+
+  // A baseline-profile producer is a `com.android.test` module whose namespace
+  // (Remember's dev.bikram.remember.baselineprofile) is nobody's package id,
+  // and it sorts right after app/ once the walk widens to the whole repo.
+  test("a test module's namespace is not an app id", () {
+    expect(
+      appIdFromGradleFileContents('''
+plugins {
+    alias(libs.plugins.android.test)
+    alias(libs.plugins.androidx.baselineprofile)
+}
+android {
+    namespace = "dev.bikram.remember.baselineprofile"
+}
+'''),
+      isNull,
+    );
+    expect(
+      appIdFromGradleFileContents('''
+plugins {
+    id("com.android.dynamic-feature")
+}
+android {
+    namespace = "com.example.app.feature"
 }
 '''),
       isNull,

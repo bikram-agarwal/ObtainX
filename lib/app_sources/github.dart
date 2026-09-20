@@ -393,6 +393,10 @@ class GitHub extends AppSource {
         return repoFilePathsFromTreeApiBody(res.body);
       },
       onError: (String message) => unawaited(LogsProvider().add(message)),
+      // A repo that builds a flavour per distribution channel names the one it
+      // publishes here after this host, and that flavour can carry its own
+      // applicationId or suffix.
+      preferredFlavorNames: const <String>{'github', 'gh'},
     );
   }
 

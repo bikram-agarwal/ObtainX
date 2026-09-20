@@ -32,14 +32,20 @@ class SourceHut extends AppSource {
     final String repoUrl = standardUrl.endsWith('/refs')
         ? standardUrl.substring(0, standardUrl.length - '/refs'.length)
         : standardUrl;
-    return inferAppIdFromGradleFiles((String path) async {
-      final res = await sourceRequest(
-        '$repoUrl/blob/HEAD/$path',
-        additionalSettings,
-      );
-      if (res.statusCode != 200) return null;
-      return res.body;
-    }, onError: (String message) => unawaited(LogsProvider().add(message)));
+    return inferAppIdFromGradleFiles(
+      (String path) async {
+        final res = await sourceRequest(
+          '$repoUrl/blob/HEAD/$path',
+          additionalSettings,
+        );
+        if (res.statusCode != 200) return null;
+        return res.body;
+      },
+      onError: (String message) => unawaited(LogsProvider().add(message)),
+      // See the note on GitHub's call: a per-channel flavour named after this
+      // host decides the id its build installs as.
+      preferredFlavorNames: const <String>{'sourcehut', 'srht'},
+    );
   }
 
   @override
