@@ -29,11 +29,18 @@ const List<String> gradleAppIdCandidatePaths = <String>[
   'src/app/build.gradle',
 ];
 
-/// The Android *library* plugin, in both the `id("com.android.library")` and
-/// version-catalog `alias(libs.plugins.android.library)` spellings - the
-/// `android.library` tail is what the two have in common.
-final RegExp _androidLibraryPlugin = RegExp(
-  r'(?<![A-Za-z0-9_])android\.library(?![A-Za-z0-9_])',
+/// Plugins that make a module something other than an installable application,
+/// in both the `id("com.android.library")` and version-catalog
+/// `alias(libs.plugins.android.library)` spellings - the `android.<plugin>` tail
+/// is what the two have in common.
+///
+/// `android.test` is the standalone test module (`com.android.test`) that a
+/// baseline-profile producer uses. Real example (Remember, checked 2026-09-20):
+/// a `baselineprofile` module beside the app declares namespace
+/// dev.bikram.remember.baselineprofile, which is never installed as the app.
+final RegExp _nonApplicationModulePlugin = RegExp(
+  r'(?<![A-Za-z0-9_])android\.(?:library|test|dynamic[-.]feature)'
+  r'(?![A-Za-z0-9_])',
 );
 
 /// Matches a package id: at least two dot-separated identifier segments.
@@ -42,19 +49,25 @@ final RegExp _packageIdPattern = RegExp(
 );
 
 /// `applicationId` / `namespace`, optionally followed by `=` (Kotlin DSL) then a
-/// single- or double-quoted value.
+/// single- or double-quoted value, or a bare variable name.
 ///
 /// Deliberately not anchored to the start of the line: single-line blocks like
 /// `debug { applicationId = "com.x" }` are legal and common. Both boundaries are
 /// guarded instead, which is what keeps the neighbours out.
 /// `applicationIdSuffix ".debug"` is blocked by the trailing lookahead, and
 /// `testApplicationId "com.x.test"` (a real Gradle property, naming the *test*
-/// package) by the leading lookbehind. An interpolation such as
-/// `appAuthRedirectScheme: "${applicationId}"` never matches because a quote has
-/// to follow the keyword.
+/// package) by the leading lookbehind.
+///
+/// The unquoted third form is `applicationId = appId`, where the value is a
+/// local declared elsewhere in the same file - common when a project keeps
+/// `applicationId` and `namespace` in sync through one variable. It resolves
+/// through the same lookup as an interpolated `"$appId"`, and an expression that
+/// is not a plain variable (`libs.versions.x.get()`) is dropped rather than
+/// guessed at. `appAuthRedirectScheme: "${applicationId}"` still never matches,
+/// because the closing brace is not a quote or an identifier.
 RegExp _declarationPattern(String keyword) => RegExp(
   '(?<![A-Za-z0-9_])$keyword(?![A-Za-z0-9_])\\s*=?\\s*'
-  '(?:"([^"]*)"|\'([^\']*)\')',
+  '(?:"([^"]*)"|\'([^\']*)\'|([A-Za-z_][A-Za-z0-9_]*))',
 );
 
 /// `def x = "y"` (Groovy) or `val`/`var`/`const val`/`private val x = "y"`
@@ -67,6 +80,20 @@ RegExp _variablePattern(String name) => RegExp(
 
 bool _isComment(String line) =>
     line.startsWith('//') || line.startsWith('*') || line.startsWith('/*');
+
+/// The string a `def`/`val`/`var` in the same file assigns to [name], or null
+/// when there is no such declaration.
+String? _declaredVariableValue(String name, List<String> trimmedLines) {
+  final RegExp declaration = _variablePattern(name);
+  for (final String line in trimmedLines) {
+    if (_isComment(line)) continue;
+    final RegExpMatch? match = declaration.firstMatch(line);
+    if (match != null) {
+      return match.group(1) ?? match.group(2);
+    }
+  }
+  return null;
+}
 
 /// Resolves `${name}` / `$name` against a `def`/`val`/`var` declaration in the
 /// same file. Returns null when the reference cannot be resolved, so an
@@ -83,32 +110,147 @@ String? _resolveInterpolation(String rawValue, List<String> trimmedLines) {
     // call, `${rootProject.foo}`): not worth guessing at.
     return null;
   }
-  final RegExp declaration = _variablePattern(reference.group(1)!);
-  for (final String line in trimmedLines) {
-    if (_isComment(line)) continue;
-    final RegExpMatch? match = declaration.firstMatch(line);
-    if (match != null) {
-      return match.group(1) ?? match.group(2);
-    }
+  return _declaredVariableValue(reference.group(1)!, trimmedLines);
+}
+
+/// The value [keyword] is assigned on [line], with variables and interpolation
+/// resolved against the rest of the file. Not filtered to package-shaped values
+/// - `applicationIdSuffix` is a fragment like `.gh`.
+String? _valueOnLine(String keyword, String line, List<String> trimmedLines) {
+  final RegExpMatch? match = _declarationPattern(keyword).firstMatch(line);
+  if (match == null) return null;
+  final String? quoted = match.group(1) ?? match.group(2);
+  final String? variableName = match.group(3);
+  if (quoted != null) {
+    return quoted.isEmpty ? null : _resolveInterpolation(quoted, trimmedLines);
   }
-  return null;
+  return variableName == null
+      ? null
+      : _declaredVariableValue(variableName, trimmedLines);
 }
 
 Set<String> _collectDeclaredValues(String keyword, List<String> trimmedLines) {
-  final RegExp pattern = _declarationPattern(keyword);
   final Set<String> found = <String>{};
   for (final String line in trimmedLines) {
     if (_isComment(line)) continue;
-    final RegExpMatch? match = pattern.firstMatch(line);
-    if (match == null) continue;
-    final String? raw = match.group(1) ?? match.group(2);
-    if (raw == null || raw.isEmpty) continue;
-    final String? resolved = _resolveInterpolation(raw, trimmedLines);
-    if (resolved != null && _packageIdPattern.hasMatch(resolved)) {
-      found.add(resolved);
+    final String? value = _valueOnLine(keyword, line, trimmedLines);
+    if (value != null && _packageIdPattern.hasMatch(value)) {
+      found.add(value);
     }
   }
   return found;
+}
+
+/// String literals and trailing line comments, removed before braces are
+/// counted so that `"-${suffix}"` or a commented `}` cannot skew the nesting.
+final RegExp _stringLiteralOrComment = RegExp(
+  r'"(?:[^"\\]|\\.)*"'
+  "|'(?:[^'\\\\]|\\\\.)*'"
+  r'|//.*$',
+);
+
+final RegExp _productFlavorsHeader = RegExp(
+  r'(?<![A-Za-z0-9_])productFlavors(?![A-Za-z0-9_])[^{]*\{',
+);
+
+/// A flavour block header: `create("github") {` / `register("github") {` in the
+/// Kotlin DSL, or a bare `github {` in Groovy.
+final RegExp _flavorHeader = RegExp(
+  '^(?:create|register|maybeCreate|getByName)\\s*\\(\\s*'
+  '["\'](\\w+)["\']\\s*\\)\\s*\\{'
+  r'|^(\w+)\s*\{',
+);
+
+/// One `productFlavors` entry, holding the two properties that move the
+/// installed id plus the dimension it belongs to.
+class _ProductFlavor {
+  _ProductFlavor(this.name);
+
+  final String name;
+  String? dimension;
+  String? applicationId;
+  String? applicationIdSuffix;
+}
+
+/// The flavours declared in a build file, in declaration order.
+///
+/// Brace depth is tracked line by line, so only direct children of
+/// `productFlavors` are treated as flavours and a `buildTypes` block with the
+/// same-looking entries is not confused for one.
+List<_ProductFlavor> _parseProductFlavors(List<String> trimmedLines) {
+  final List<_ProductFlavor> flavors = <_ProductFlavor>[];
+  int depth = 0;
+  int? flavorsBodyDepth;
+  int? currentBodyDepth;
+  _ProductFlavor? current;
+  for (final String line in trimmedLines) {
+    if (_isComment(line)) continue;
+    if (current == null &&
+        flavorsBodyDepth != null &&
+        depth == flavorsBodyDepth) {
+      final RegExpMatch? header = _flavorHeader.firstMatch(line);
+      if (header != null) {
+        current = _ProductFlavor(header.group(1) ?? header.group(2)!);
+        currentBodyDepth = depth + 1;
+      }
+    } else if (current == null && _productFlavorsHeader.hasMatch(line)) {
+      flavorsBodyDepth = depth + 1;
+    }
+    if (current != null) {
+      // Also reads a one-line block: `create("playstore") { dimension = "x" }`.
+      current.dimension ??= _valueOnLine('dimension', line, trimmedLines);
+      current.applicationId ??= _valueOnLine(
+        'applicationId',
+        line,
+        trimmedLines,
+      );
+      current.applicationIdSuffix ??= _valueOnLine(
+        'applicationIdSuffix',
+        line,
+        trimmedLines,
+      );
+    }
+    final String structure = line.replaceAll(_stringLiteralOrComment, '');
+    depth +=
+        '{'.allMatches(structure).length - '}'.allMatches(structure).length;
+    if (current != null && depth < currentBodyDepth!) {
+      flavors.add(current);
+      current = null;
+      currentBodyDepth = null;
+    }
+    if (flavorsBodyDepth != null && depth < flavorsBodyDepth) {
+      flavorsBodyDepth = null;
+    }
+  }
+  if (current != null) flavors.add(current);
+  return flavors;
+}
+
+/// The flavour among [flavors] that [preferredNames] asks for, or null when
+/// there is no single obvious match.
+///
+/// Bails out when the id-changing flavours span more than one flavour dimension:
+/// the installed id is then a combination of one flavour per dimension, and
+/// answering with a single flavour's contribution would drop the others.
+_ProductFlavor? _preferredFlavor(
+  List<_ProductFlavor> flavors,
+  Set<String> preferredNames,
+) {
+  final Set<String?> idChangingDimensions = flavors
+      .where(
+        (_ProductFlavor flavor) =>
+            flavor.applicationId != null || flavor.applicationIdSuffix != null,
+      )
+      .map((_ProductFlavor flavor) => flavor.dimension)
+      .toSet();
+  if (idChangingDimensions.length > 1) return null;
+  final List<_ProductFlavor> matches = flavors
+      .where(
+        (_ProductFlavor flavor) =>
+            preferredNames.contains(flavor.name.toLowerCase()),
+      )
+      .toList();
+  return matches.length == 1 ? matches.first : null;
 }
 
 /// Extracts one unambiguous application id from the text of a Gradle build
@@ -123,11 +265,44 @@ Set<String> _collectDeclaredValues(String keyword, List<String> trimmedLines) {
 /// `namespace` is consulted in two cases: when no `applicationId` is declared at
 /// all (the id then defaults to the namespace), and as the sole tie-break when
 /// flavours declare several ids and the namespace matches one of them.
-String? appIdFromGradleFileContents(String contents) {
+///
+/// [preferredFlavorNames] names the product flavour whose build the caller
+/// distributes, lower-cased. It matters because a flavour can rename the
+/// package it installs as, and the file alone cannot say which flavour a given
+/// host ships - but the host can. Real example (Remember and FilePipe, checked
+/// 2026-09-20): the `github` flavour adds `applicationIdSuffix = ".gh"` so the
+/// APK in GitHub Releases installs as dev.bikram.remember.gh, while the bare id
+/// belongs to the Play Store build. Without a match the flavour layer is
+/// ignored and the default variant's id is returned, as before.
+String? appIdFromGradleFileContents(
+  String contents, {
+  Set<String> preferredFlavorNames = const <String>{},
+}) {
   final List<String> trimmedLines = contents
       .split('\n')
       .map((String line) => line.trim())
       .toList();
+  final _ProductFlavor? preferred = preferredFlavorNames.isEmpty
+      ? null
+      : _preferredFlavor(
+          _parseProductFlavors(trimmedLines),
+          preferredFlavorNames,
+        );
+  final String? flavorAppId = preferred?.applicationId;
+  if (flavorAppId != null && _packageIdPattern.hasMatch(flavorAppId)) {
+    return flavorAppId;
+  }
+  final String? defaultAppId = _defaultVariantAppId(trimmedLines);
+  final String? suffix = preferred?.applicationIdSuffix;
+  if (defaultAppId == null || suffix == null) {
+    return defaultAppId;
+  }
+  final String suffixed = '$defaultAppId$suffix';
+  return _packageIdPattern.hasMatch(suffixed) ? suffixed : defaultAppId;
+}
+
+/// The id the default variant installs as, ignoring any flavour overrides.
+String? _defaultVariantAppId(List<String> trimmedLines) {
   final Set<String> applicationIds = _collectDeclaredValues(
     'applicationId',
     trimmedLines,
@@ -167,7 +342,7 @@ String? appIdFromGradleFileContents(String contents) {
     // `apply false` in a root build file declares a plugin for the subprojects
     // to apply; it does not make the root itself a library.
     if (_isComment(line) || line.contains('apply false')) continue;
-    if (_androidLibraryPlugin.hasMatch(line)) return null;
+    if (_nonApplicationModulePlugin.hasMatch(line)) return null;
   }
   return namespaces.first;
 }
@@ -253,19 +428,26 @@ String? decodeRepoContentsApiBody(String responseBody) {
 /// `mobile_clients/Android/composeApp`. That listing costs an extra request,
 /// so it is only fetched once the cheap paths have all missed, and at most
 /// [maxDiscoveredFilesToRead] of the files it turns up are read.
+///
+/// [preferredFlavorNames] is passed straight to [appIdFromGradleFileContents];
+/// each source names the flavour whose build that host distributes.
 Future<String?> inferAppIdFromGradleFiles(
   Future<String?> Function(String path) fetchFileContents, {
   void Function(String message)? onError,
   List<String> candidatePaths = gradleAppIdCandidatePaths,
   Future<List<String>?> Function()? listRepoFilePaths,
   int maxDiscoveredFilesToRead = 5,
+  Set<String> preferredFlavorNames = const <String>{},
 }) async {
   Future<String?> firstAppIdAmong(Iterable<String> paths) async {
     for (final String path in paths) {
       try {
         final String? contents = await fetchFileContents(path);
         if (contents == null || contents.isEmpty) continue;
-        final String? appId = appIdFromGradleFileContents(contents);
+        final String? appId = appIdFromGradleFileContents(
+          contents,
+          preferredFlavorNames: preferredFlavorNames,
+        );
         if (appId != null) return appId;
       } catch (err) {
         onError?.call('Could not read $path while inferring app ID: $err');

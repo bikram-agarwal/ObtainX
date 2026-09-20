@@ -207,6 +207,9 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
       }
       return AppSource.isApkOrContainerFile(
         Uri.parse((filterLinkByText ? element.value : link).trim()).path,
+        // Off by default because most pages link a source zip next to the APK;
+        // on, it reaches the CI-artifact hosts that only ever serve zips.
+        includeArchives: additionalSettings['includeZips'] == true,
       );
     }).toList();
   }
@@ -374,6 +377,11 @@ class HTML extends AppSource {
   HTML() {
     name = 'HTML';
     suppressStandardVersionExtraction = true;
+    // A zip is the only way some hosts can serve a build: GitHub Actions
+    // artifacts are auth-walled, so re-hosters like nightly.link hand out
+    // `<artifact>.zip`. The download side already unpacks one and installs the
+    // APK inside, so only the link filter and these options were missing.
+    allowIncludeZips = true;
   }
 
   @override

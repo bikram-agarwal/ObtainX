@@ -1407,6 +1407,52 @@ void main() {
     });
   });
 
+  // GitHub Actions artifacts are auth-walled, so re-hosters like nightly.link
+  // only ever serve `<artifact>.zip`. Scraping one used to drop every link on
+  // the page.
+  group('HTML zip assets', () {
+    const String page = '''
+<a href="https://nightly.link/owner/repo/workflows/android/main/app-release.zip">app-release.zip</a>
+<a href="https://example.com/downloads/app-1.2.apk">app-1.2.apk</a>
+<a href="https://example.com/downloads/source.tar.gz">source.tar.gz</a>
+''';
+
+    test('a zip link is skipped until the app opts in', () async {
+      final List<MapEntry<String, String>> links = await grabLinksCommon(
+        page,
+        Uri.parse('https://example.com/'),
+        <String, dynamic>{},
+      );
+      expect(links.map((MapEntry<String, String> link) => link.key), <String>[
+        'https://example.com/downloads/app-1.2.apk',
+      ]);
+    });
+
+    test('opting in keeps the zip alongside real APKs', () async {
+      final List<MapEntry<String, String>> links = await grabLinksCommon(
+        page,
+        Uri.parse('https://example.com/'),
+        <String, dynamic>{'includeZips': true},
+      );
+      expect(
+        links.map((MapEntry<String, String> link) => link.key),
+        unorderedEquals(<String>[
+          'https://nightly.link/owner/repo/workflows/android/main/app-release.zip',
+          'https://example.com/downloads/app-1.2.apk',
+        ]),
+      );
+    });
+
+    test('the HTML source offers both zip options', () {
+      expect(
+        HTML().combinedAppSpecificSettingFormItems
+            .expand((List<GeneratedFormItem> row) => row)
+            .map((GeneratedFormItem item) => item.key),
+        containsAll(<String>['includeZips', 'zippedApkFilterRegEx']),
+      );
+    });
+  });
+
   test(
     'getDefaultValuesFromFormItems inflates subform items with full defaults',
     () {
