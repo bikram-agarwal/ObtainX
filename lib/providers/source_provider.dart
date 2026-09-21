@@ -369,9 +369,10 @@ const String appListingKeySeparator = '@';
 /// Store identity for [app] (the AppSource runtime type, e.g. `GitHub`).
 ///
 /// This is derived from the app's *current* URL, so it changes whenever the
-/// tracked source is swapped. It decides whether adding an app would duplicate
-/// an existing listing - never which record on disk a listing belongs to (see
-/// [App.listingId]).
+/// tracked source is swapped. It names the store for display and for the label
+/// a second listing is minted under - never which record on disk a listing
+/// belongs to (see [App.listingId]), and never whether two listings duplicate
+/// each other (see [storeIdentityForApp]).
 String sourceIdentifierForApp(App app) {
   try {
     return SourceProvider()
@@ -380,6 +381,29 @@ String sourceIdentifierForApp(App app) {
   } catch (_) {
     return app.overrideSource ?? 'Unknown';
   }
+}
+
+/// Which store a listing tracks [app] from, for deciding whether two listings
+/// of one package are duplicates.
+///
+/// The source type alone is too coarse: `FDroidRepo` covers every third-party
+/// repo and `HTML` every website, so two listings pointing at unrelated hosts
+/// would otherwise count as the same store and one of them would be refused.
+/// The host is therefore part of the identity, at host granularity - two repos
+/// on one host are one store.
+///
+/// Comparison-only, and deliberately never used as (or embedded in) a record
+/// name: it is derived from the mutable [App.url], so a source swap changes it,
+/// while a listing's record must keep its identity across that swap.
+String storeIdentityForApp(App app) {
+  final String sourceIdentifier = sourceIdentifierForApp(app);
+  String host = Uri.tryParse(app.url)?.host.toLowerCase() ?? '';
+  // Source matching treats a leading 'www.' as equivalent, and stored URLs keep
+  // whatever the user pasted, so the two spellings must be one store.
+  if (host.startsWith('www.')) {
+    host = host.substring('www.'.length);
+  }
+  return host.isEmpty ? sourceIdentifier : '$sourceIdentifier:$host';
 }
 
 /// Candidate listing ID for a package tracked from a second store.

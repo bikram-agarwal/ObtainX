@@ -6,7 +6,11 @@ const String _packageId = 'com.example.app';
 const String _githubUrl = 'https://github.com/example/app';
 const String _fdroidUrl = 'https://f-droid.org/packages/com.example.app/';
 
-App _listing({String? listingId, required String url}) {
+App _listing({
+  String? listingId,
+  required String url,
+  String? overrideSource,
+}) {
   return App(
     id: _packageId,
     listingId: listingId,
@@ -16,7 +20,16 @@ App _listing({String? listingId, required String url}) {
     latestVersion: '1.0',
     preferredApkIndex: 0,
     additionalSettings: {},
+    overrideSource: overrideSource,
   );
+}
+
+AppListings _listingsOf(List<App> apps) {
+  final AppListings listings = AppListings();
+  for (final App app in apps) {
+    listings[app.listingKey] = AppInMemory(app, null, null, null);
+  }
+  return listings;
 }
 
 void main() {
@@ -73,35 +86,128 @@ void main() {
       listingId: appListingKey(_packageId, 'FDroid'),
       url: _fdroidUrl,
     );
-    final AppListings listings = AppListings();
-    listings[github.listingKey] = AppInMemory(github, null, null, null);
-    listings[fdroid.listingKey] = AppInMemory(fdroid, null, null, null);
+    final AppListings listings = _listingsOf([github, fdroid]);
 
     // What swapTrackedSource checks: the GitHub listing rewritten to the
     // F-Droid URL collides with the existing F-Droid listing, while the
     // F-Droid listing keeping its own URL does not collide with itself.
-    final App githubSwappedToFdroid = github.copyWith(url: _fdroidUrl);
     expect(
-      listings
-          .listingsForPackage(_packageId)
-          .where(
-            (listing) =>
-                listing.listingKey != github.listingKey &&
-                listing.sourceIdentifier ==
-                    sourceIdentifierForApp(githubSwappedToFdroid),
-          )
-          .map((listing) => listing.listingKey),
-      [fdroid.listingKey],
+      sameStoreListingIn(
+        listings,
+        github.copyWith(url: _fdroidUrl),
+        ignoreKey: github.listingKey,
+      )?.listingKey,
+      fdroid.listingKey,
     );
     expect(
-      listings
-          .listingsForPackage(_packageId)
-          .where(
-            (listing) =>
-                listing.listingKey != fdroid.listingKey &&
-                listing.sourceIdentifier == sourceIdentifierForApp(fdroid),
-          ),
-      isEmpty,
+      sameStoreListingIn(listings, fdroid, ignoreKey: fdroid.listingKey),
+      isNull,
+    );
+  });
+
+  test('re-adding the store a package is already tracked from collides', () {
+    // The listing being added has no listing ID yet, so its key is the bare
+    // package ID - the same key as the package's first listing. That must not
+    // excuse the listing it duplicates, or the add creates a second record.
+    final App github = _listing(url: _githubUrl);
+    final AppListings listings = _listingsOf([github]);
+
+    expect(
+      sameStoreListingIn(listings, _listing(url: _githubUrl))?.listingKey,
+      github.listingKey,
+    );
+  });
+
+  test('re-adding a store whose record carries a listing ID collides', () {
+    // A swap leaves the GitHub listing keyed '...@FDroid'. Re-adding GitHub has
+    // to find it there.
+    final App fdroidKeyedGithub = _listing(
+      listingId: appListingKey(_packageId, 'FDroid'),
+      url: _githubUrl,
+    );
+    final AppListings listings = _listingsOf([
+      _listing(url: _fdroidUrl),
+      fdroidKeyedGithub,
+    ]);
+
+    expect(
+      sameStoreListingIn(listings, _listing(url: _githubUrl))?.listingKey,
+      fdroidKeyedGithub.listingKey,
+    );
+  });
+
+  test('a package may still be added from a second store', () {
+    final AppListings listings = _listingsOf([_listing(url: _githubUrl)]);
+
+    expect(sameStoreListingIn(listings, _listing(url: _fdroidUrl)), isNull);
+  });
+
+  test('third-party repos on different hosts are different stores', () {
+    // Both listings resolve to the FDroidRepo source, so source type alone
+    // would call them one store and refuse the second.
+    final App firstRepo = _listing(
+      url: 'https://repo.example.com/fdroid/repo',
+      overrideSource: 'FDroidRepo',
+    );
+    final AppListings listings = _listingsOf([firstRepo]);
+
+    expect(
+      sameStoreListingIn(
+        listings,
+        _listing(
+          url: 'https://other.example.org/fdroid/repo',
+          overrideSource: 'FDroidRepo',
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      sameStoreListingIn(
+        listings,
+        _listing(
+          url: 'https://repo.example.com/fdroid/repo',
+          overrideSource: 'FDroidRepo',
+        ),
+      )?.listingKey,
+      firstRepo.listingKey,
+    );
+  });
+
+  test('a www. host is the same store as its bare spelling', () {
+    final App withWww = _listing(
+      url: 'https://www.example.com/fdroid/repo',
+      overrideSource: 'FDroidRepo',
+    );
+    final AppListings listings = _listingsOf([withWww]);
+
+    expect(
+      sameStoreListingIn(
+        listings,
+        _listing(
+          url: 'https://example.com/fdroid/repo',
+          overrideSource: 'FDroidRepo',
+        ),
+      )?.listingKey,
+      withWww.listingKey,
+    );
+  });
+
+  test('two repos on one host are one store', () {
+    final App firstRepo = _listing(
+      url: 'https://repo.example.com/fdroid/repo',
+      overrideSource: 'FDroidRepo',
+    );
+    final AppListings listings = _listingsOf([firstRepo]);
+
+    expect(
+      sameStoreListingIn(
+        listings,
+        _listing(
+          url: 'https://repo.example.com/other/fdroid/repo',
+          overrideSource: 'FDroidRepo',
+        ),
+      )?.listingKey,
+      firstRepo.listingKey,
     );
   });
 

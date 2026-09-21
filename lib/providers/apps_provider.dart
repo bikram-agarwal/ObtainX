@@ -1225,15 +1225,21 @@ Future<Directory> getAppStorageDir() async {
 /// app would duplicate a listing. [ignoreKey] drops one listing from the
 /// comparison, for when an existing listing is being edited and so must not
 /// collide with itself.
+///
+/// Only [ignoreKey] excuses a listing: an app being *added* carries no listing
+/// ID yet, so its key is the bare package ID, which is also the key of the
+/// package's first listing. Excusing that key implicitly (rather than only when
+/// a caller asks for it) hid the one listing every duplicate add collides with,
+/// so re-adding an already tracked store silently created a second record.
 AppInMemory? sameStoreListingIn(
   AppListings listings,
   App app, {
   String? ignoreKey,
 }) {
-  final String sourceIdentifier = sourceIdentifierForApp(app);
+  final String storeIdentity = storeIdentityForApp(app);
   for (final AppInMemory listing in listings.listingsForPackage(app.id)) {
-    if (listing.listingKey == (ignoreKey ?? app.listingKey)) continue;
-    if (listing.sourceIdentifier == sourceIdentifier) return listing;
+    if (ignoreKey != null && listing.listingKey == ignoreKey) continue;
+    if (storeIdentityForApp(listing.app) == storeIdentity) return listing;
   }
   return null;
 }
