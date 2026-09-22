@@ -268,6 +268,70 @@ void main() {
     });
   });
 
+  group('an expanded sheet whose body is shorter than the sheet', () {
+    /// The app logs sheet's shape when little has been logged: a full-height
+    /// sheet, a handful of lines of body, and a pinned action row.
+    Future<void> openShortBodiedSheet(WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(useMaterial3: true),
+          home: Scaffold(
+            body: Builder(
+              builder: (BuildContext context) => Center(
+                child: TextButton(
+                  onPressed: () => showAppModalSheet<void>(
+                    context: context,
+                    builder: (_) => AppSheetScaffold(
+                      expand: true,
+                      header: const Text('App logs'),
+                      bodyChildren: const <Widget>[Text('one short log line')],
+                      footer: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: <Widget>[
+                          TextButton(
+                            onPressed: () {},
+                            child: const Text('Close'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('keeps its action row pinned to the bottom', (
+      WidgetTester tester,
+    ) async {
+      useViewport(
+        tester,
+        physicalSize: const Size(1080, 2400),
+        keyboardPhysical: 0,
+      );
+      await openShortBodiedSheet(tester);
+
+      final Rect sheet = tester.getRect(find.byType(AppSheetScaffold));
+      final Rect close = tester.getRect(find.text('Close'));
+      final Rect body = tester.getRect(find.text('one short log line'));
+
+      expect(tester.takeException(), isNull);
+      // Pinned means the action row sits at the bottom, clear of the nav bar -
+      // not directly beneath a body that only filled part of the sheet.
+      expect(
+        sheet.bottom - close.bottom,
+        lessThanOrEqualTo(toLogical(navBarPhysical) + 24),
+      );
+      expect(close.top, greaterThan(body.bottom + 100));
+    });
+  });
+
   group('no keyboard', () {
     testWidgets('footer still clears the system nav bar', (
       WidgetTester tester,

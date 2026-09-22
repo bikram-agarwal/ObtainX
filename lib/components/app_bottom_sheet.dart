@@ -301,6 +301,14 @@ class _AppSheetScaffoldState extends State<AppSheetScaffold> {
                 ],
               ),
             );
+            final Widget bodySurface = widget.bodyScrollController == null
+                ? bodyScrollView
+                : Scrollbar(
+                    controller: widget.bodyScrollController,
+                    thumbVisibility: true,
+                    interactive: true,
+                    child: bodyScrollView,
+                  );
             return ConstrainedBox(
               constraints: BoxConstraints(maxHeight: maxHeight),
               child: SizedBox(
@@ -311,16 +319,14 @@ class _AppSheetScaffoldState extends State<AppSheetScaffold> {
                       : MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    Flexible(
-                      child: widget.bodyScrollController == null
-                          ? bodyScrollView
-                          : Scrollbar(
-                              controller: widget.bodyScrollController,
-                              thumbVisibility: true,
-                              interactive: true,
-                              child: bodyScrollView,
-                            ),
-                    ),
+                    // Tight when expanded, matching the call-site-owned body
+                    // below: a loose fit lets a body shorter than the sheet
+                    // shrink to its content, which leaves the action row
+                    // floating mid-sheet instead of pinned to the bottom.
+                    if (widget.expand)
+                      Expanded(child: bodySurface)
+                    else
+                      Flexible(child: bodySurface),
                     ?footerSection,
                   ],
                 ),

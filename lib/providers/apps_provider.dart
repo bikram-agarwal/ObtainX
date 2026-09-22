@@ -2365,6 +2365,23 @@ class NativeFeatures {
     }
   }
 
+  /// Raw display densities from the platform, or null when unavailable.
+  ///
+  /// Keys: stableDensityDpi, systemDensityDpi, effectiveDensityDpi,
+  /// isInMultiWindowMode. See MainActivity.displayDiagnostics().
+  static Future<Map<String, Object?>?> getDisplayDiagnostics() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return (await _diagnosticsChannel.invokeMapMethod<String, Object?>(
+        'getDisplayDiagnostics',
+      ));
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   static Future<bool> acquireDownloadKeepAwake() async {
     try {
       return await _powerChannel.invokeMethod<bool>(

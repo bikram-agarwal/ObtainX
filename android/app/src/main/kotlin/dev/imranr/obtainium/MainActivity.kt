@@ -589,6 +589,9 @@ class MainActivity : FlutterActivity() {
                 "consumeNativeCrashLog" -> {
                     result.success(consumeNativeCrashLog(this))
                 }
+                "getDisplayDiagnostics" -> {
+                    result.success(displayDiagnostics())
+                }
                 else -> result.notImplemented()
             }
         }
@@ -619,6 +622,19 @@ class MainActivity : FlutterActivity() {
         resetNotificationChannel(null)
         super.cleanUpFlutterEngine(flutterEngine)
     }
+
+    /// Densities behind the user's Display size setting, for shared diagnostic logs.
+    ///
+    /// The activity renders at [withCappedDisplayScale]'s capped density, so a
+    /// Flutter-side devicePixelRatio alone cannot tell whether the user picked a
+    /// large Display size or the cap silently overrode it. The application
+    /// context keeps the uncapped system configuration, so both are reported.
+    private fun displayDiagnostics(): Map<String, Any> = mapOf(
+        "stableDensityDpi" to DisplayMetrics.DENSITY_DEVICE_STABLE,
+        "systemDensityDpi" to applicationContext.resources.configuration.densityDpi,
+        "effectiveDensityDpi" to resources.configuration.densityDpi,
+        "isInMultiWindowMode" to isInMultiWindowMode,
+    )
 
     private fun enqueueSharedText(sharedText: String) {
         pendingSharedText = sharedText

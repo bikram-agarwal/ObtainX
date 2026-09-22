@@ -11,7 +11,6 @@ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
@@ -35,6 +34,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/diagnostic_snapshot.dart';
 import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/theme.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
@@ -3161,6 +3161,51 @@ class _CategoriesSection extends StatelessWidget {
   }
 }
 
+const int aboutHeadlineMaxLines = 2;
+
+/// Largest font size, at or below [style]'s own, that renders [text] in full
+/// within [maxWidth] and [aboutHeadlineMaxLines].
+///
+/// Version names carry a build suffix ("ObtainX v2.20.0-Preview-277"), which at
+/// this headline's display size ellipsizes on narrow screens and at large system
+/// font scales - hiding the very part that identifies the build. Shrinking to
+/// fit keeps the whole version readable.
+double aboutHeadlineFontSize({
+  required BuildContext context,
+  required String text,
+  required TextStyle style,
+  required double maxWidth,
+}) {
+  final double baseFontSize = style.fontSize ?? 36;
+  if (!maxWidth.isFinite || maxWidth <= 0) return baseFontSize;
+  const double minimumFontSize = 20;
+  final TextScaler textScaler = MediaQuery.textScalerOf(context);
+  final TextDirection textDirection = Directionality.of(context);
+  for (
+    double fontSize = baseFontSize;
+    fontSize > minimumFontSize;
+    fontSize -= 1
+  ) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: style.copyWith(fontSize: fontSize),
+      ),
+      maxLines: aboutHeadlineMaxLines,
+      textAlign: TextAlign.center,
+      textDirection: textDirection,
+      textScaler: textScaler,
+    )..layout(maxWidth: maxWidth);
+    // A word too long to wrap (a build suffix) overflows its line without ever
+    // exceeding the line count, so width has to be checked as well.
+    final bool aLineOverflows = painter.computeLineMetrics().any(
+      (line) => line.width > maxWidth + 0.5,
+    );
+    if (!painter.didExceedMaxLines && !aLineOverflows) return fontSize;
+  }
+  return minimumFontSize;
+}
+
 class AboutSectionContent extends StatelessWidget {
   const AboutSectionContent({super.key, required this.colorScheme});
 
@@ -3188,16 +3233,34 @@ class AboutSectionContent extends StatelessWidget {
                   includeOwnDebugBuild: true,
                 ),
                 builder: (context, snapshot) {
-                  final String versionName =
-                      snapshot.data?.versionName ?? tr('unknown');
-                  return Text(
-                    tr('aboutAppVersion', args: [versionName]),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.displaySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: colorScheme.onSurface,
+                  // TEMPORARY, REVERT BEFORE COMMITTING: a deliberately long
+                  // version name for testing the headline's shrink-to-fit.
+                  // Real value: snapshot.data?.versionName ?? tr('unknown')
+                  const String versionName = '2.20.0-debug-Preview-277';
+                  final String headline = tr(
+                    'aboutAppVersion',
+                    args: [versionName],
+                  );
+                  final TextStyle headlineStyle =
+                      (textTheme.displaySmall ?? const TextStyle(fontSize: 36))
+                          .copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: colorScheme.onSurface,
+                          );
+                  return LayoutBuilder(
+                    builder: (context, constraints) => Text(
+                      headline,
+                      textAlign: TextAlign.center,
+                      maxLines: aboutHeadlineMaxLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: headlineStyle.copyWith(
+                        fontSize: aboutHeadlineFontSize(
+                          context: context,
+                          text: headline,
+                          style: headlineStyle,
+                          maxWidth: constraints.maxWidth,
+                        ),
+                      ),
                     ),
                   );
                 },
@@ -3754,143 +3817,25 @@ class _LogsSheetState extends State<LogsSheet> {
         widget.performanceRecorder ?? PerformanceRecorder.instance;
 
     Future<String> getDiagnosticsText(String logsToShare) async {
-      final buffer = StringBuffer();
-      buffer.writeln('=== ObtainX Diagnostic Log ===');
-      // Captured before the first async gap below so context isn't used across
-      // an await.
-      final settingsProvider = context.read<SettingsProvider>();
-      final appsProvider = context.read<AppsProvider>();
-
-      buffer.write(await performanceRecorder.reportForExport(logsToShare));
-
-      try {
-        final packageInfo = await getInstalledInfo(
-          obtainiumId,
-          printErr: false,
-          includeOwnDebugBuild: true,
-        );
-        buffer.writeln(
-          'App Version: ${packageInfo?.versionName ?? 'Unknown'} (code ${packageInfo?.versionCode ?? 'unknown'})',
-        );
-        buffer.writeln(
-          'Package ID: ${packageInfo?.packageName ?? obtainiumId}',
-        );
-      } catch (exception) {
-        buffer.writeln('App Version: Unknown (Error fetching package info)');
-      }
-
-      try {
-        final androidInfo = await DeviceInfoPlugin().androidInfo;
-        buffer.writeln(
-          'Device: ${androidInfo.manufacturer} ${androidInfo.model} (${androidInfo.device})',
-        );
-        buffer.writeln(
-          'Android Version: ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt})',
-        );
-        buffer.writeln(
-          'Supported ABIs: ${androidInfo.supportedAbis.join(', ')}',
-        );
-      } catch (exception) {
-        buffer.writeln('Device Info: Unknown (Error fetching device info)');
-      }
-
-      buffer.writeln('Installer Mode: ${settingsProvider.installerMode}');
-      buffer.writeln('Use Shizuku: ${settingsProvider.useShizuku}');
-      buffer.writeln('Use Dhizuku: ${settingsProvider.useDhizuku}');
-      buffer.writeln(
-        'Background Updates: ${settingsProvider.enableBackgroundUpdates}',
+      // Captured before the first async gap so context isn't used across an await.
+      final SettingsProvider settingsProvider = context
+          .read<SettingsProvider>();
+      final AppsProvider appsProvider = context.read<AppsProvider>();
+      final DiagnosticDisplayInfo display = DiagnosticDisplayInfo.fromContext(
+        context,
       );
-      buffer.writeln(
-        'Parallel Downloads: ${settingsProvider.parallelDownloads}',
+      final String appLocale = context.locale.toLanguageTag();
+      final String deviceLocale = context.deviceLocale.toLanguageTag();
+      final String performanceReport = await performanceRecorder
+          .reportForExport(logsToShare);
+      return buildObtainxDiagnosticLog(
+        settings: settingsProvider,
+        trackedAppCount: appsProvider.apps.length,
+        display: display,
+        appLocale: appLocale,
+        deviceLocale: deviceLocale,
+        performanceReport: performanceReport,
       );
-      buffer.writeln('Tracked Apps: ${appsProvider.apps.length}');
-
-      try {
-        final notificationGranted = await Permission.notification.isGranted;
-        buffer.writeln('Notifications Enabled: $notificationGranted');
-      } catch (exception) {
-        buffer.writeln(
-          'Notifications Enabled: Unknown (Error checking permission)',
-        );
-      }
-
-      final autoExportEnabled = settingsProvider.autoExportOnChanges;
-      buffer.writeln('Auto-Export on Changes: $autoExportEnabled');
-      if (autoExportEnabled) {
-        try {
-          final exportDir = await settingsProvider.getExportDir(
-            requireAccess: false,
-          );
-          if (exportDir == null) {
-            buffer.writeln('Export Directory: Not configured');
-          } else {
-            final accessGranted =
-                await settingsProvider.getExportDir(
-                  warnIfInaccessible: false,
-                ) !=
-                null;
-            buffer.writeln(
-              'Export Directory Configured: true (Access Present: $accessGranted)',
-            );
-          }
-        } catch (exception) {
-          buffer.writeln('Export Directory: Unknown (Error checking path)');
-        }
-      }
-
-      final saveApkCopies = settingsProvider.saveDownloadedApkCopies;
-      buffer.writeln('Save APK Copies: $saveApkCopies');
-      if (saveApkCopies) {
-        try {
-          final apkSaveDir = await settingsProvider.getApkSaveDir(
-            requireAccess: false,
-          );
-          if (apkSaveDir == null) {
-            buffer.writeln('APK Save Directory: Not configured');
-          } else {
-            final accessGranted =
-                await settingsProvider.getApkSaveDir(
-                  warnIfInaccessible: false,
-                ) !=
-                null;
-            buffer.writeln(
-              'APK Save Directory Configured: true (Access Present: $accessGranted)',
-            );
-          }
-        } catch (exception) {
-          buffer.writeln('APK Save Directory: Unknown (Error checking path)');
-        }
-      }
-
-      final githubPat = settingsProvider.getSettingString(
-        GitHub.githubCredsKey,
-      );
-      final hasGithubPat = githubPat != null && githubPat.isNotEmpty;
-      final githubPatValid =
-          hasGithubPat && GitHub.hasValidatedPAT(githubPat, settingsProvider);
-      buffer.writeln(
-        'GitHub PAT: ${hasGithubPat ? "Saved" : "Not Saved"}${hasGithubPat ? " (Validated: $githubPatValid)" : ""}',
-      );
-
-      final gitlabPat = settingsProvider.getSettingString('gitlab-creds');
-      final hasGitlabPat = gitlabPat != null && gitlabPat.isNotEmpty;
-      final gitlabPatValid =
-          hasGitlabPat && GitLab.hasValidatedPAT(gitlabPat, settingsProvider);
-      buffer.writeln(
-        'GitLab PAT: ${hasGitlabPat ? "Saved" : "Not Saved"}${hasGitlabPat ? " (Validated: $gitlabPatValid)" : ""}',
-      );
-
-      final vtApiKey = settingsProvider.getSettingString(virusTotalApiKeyKey);
-      final hasVtApiKey = vtApiKey != null && vtApiKey.isNotEmpty;
-      final vtApiKeyValid =
-          hasVtApiKey && hasValidatedApiKey(vtApiKey, settingsProvider);
-      buffer.writeln(
-        'VirusTotal API Key: ${hasVtApiKey ? "Saved" : "Not Saved"}${hasVtApiKey ? " (Validated: $vtApiKeyValid)" : ""}',
-      );
-
-      buffer.writeln('===============================\n');
-
-      return buffer.toString();
     }
 
     return AppSheetScaffold(
