@@ -30,8 +30,8 @@ ObtainX is a modern and supercharged fork of Obtainium. Re-engineered with a stu
 </p>
 
 <p align="center">
-<strong>Featured by HowToMen: Best Android Apps - May 2026! 🎊</strong>
-  <a href="https://youtu.be/B59glf2bweo?si=8rTAqBJiW9uwtpTT&t=468"><img width="50%" alt="ObtainX: Best Android Apps - May 2026!" src="docs/assets/feature_htm.webp" /></a>
+<strong>Featured by HowToMen: Best Android Apps - May 2026! 🎊</strong><br/>
+  <a href="https://youtu.be/B59glf2bweo?t=468"><img width="50%" alt="ObtainX: Best Android Apps - May 2026!" src="docs/assets/feature_htm.webp" /></a>
 </p>
 
 ## 📦 Installation

@@ -6,11 +6,7 @@ const String _packageId = 'com.example.app';
 const String _githubUrl = 'https://github.com/example/app';
 const String _fdroidUrl = 'https://f-droid.org/packages/com.example.app/';
 
-App _listing({
-  String? listingId,
-  required String url,
-  String? overrideSource,
-}) {
+App _listing({String? listingId, required String url, String? overrideSource}) {
   return App(
     id: _packageId,
     listingId: listingId,

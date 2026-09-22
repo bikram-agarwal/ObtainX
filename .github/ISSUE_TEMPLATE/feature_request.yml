@@ -2,15 +2,6 @@ name: "Feature request"
 description: "Suggest a new Source, setting, or other feature."
 labels: ["enhancement", "to check"]
 body:
-  - type: checkboxes
-    id: prerequisites
-    attributes:
-      label: Prerequisites
-      options:
-        - label: I confirm this request is not part of an existing issue.
-          required: true
-        - label: I have checked the [Obtainium Wiki](https://wiki.obtainium.imranr.dev/).
-          required: true
   - type: textarea
     id: feature-description
     attributes:
@@ -45,3 +36,13 @@ body:
       description: Add any other context or screenshots about the feature request here.
     validations:
       required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: "Checklist"
+      description: "Please confirm the following before submitting"
+      options:
+        - label: I confirm this request is not part of an existing issue.
+          required: true
+        - label: I have checked the [Obtainium Wiki](https://wiki.obtainium.imranr.dev/).
+          required: true

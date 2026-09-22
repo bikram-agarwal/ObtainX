@@ -50,6 +50,14 @@ const int _androidApiLevelR = 30;
 const double _installingProgressSentinel = -1;
 const double _scanningProgressSentinel = -2;
 const double _flaggedProgressSentinel = -3;
+// -4 "Installing", but for a third-party installer that accepted the APK without
+// reporting a result. Rendered exactly like -1; kept distinct because it must not
+// count as work in flight (see [AppsProviderInstall.areDownloadsRunning]).
+const double _awaitingThirdPartyInstallSentinel = -4;
+// How long that indicator survives without a confirming package broadcast. Purely
+// cosmetic - the install is confirmed independently and never waits on this - so
+// it only stops a dismissed installer from leaving the row spinning forever.
+const Duration _awaitingThirdPartyInstallTimeout = Duration(seconds: 60);
 const int _downloadCompleteProgress = 100;
 const int _remainingStepsProgress = 90;
 
@@ -284,8 +292,11 @@ extension AppsProviderInstall on AppsProvider {
   /// (#222). The broadcast is itself proof that the install landed, so persist it
   /// as soon as it arrives rather than relying only on the session result.
   ///
-  /// The native side only forwards broadcasts for the package of the install it
-  /// launched, so this cannot be triggered by unrelated package changes.
+  /// The native side forwards every PACKAGE_ADDED/PACKAGE_REPLACED, not just the
+  /// package of the handoff in flight, because an installer told to "run in
+  /// background" finishes after its handoff session has already ended (#301).
+  /// [recordThirdPartyInstallBroadcast] ignores packages this install does not
+  /// track, so unrelated package changes are a no-op.
   void listenForThirdPartyInstallResults() =>
       registerThirdPartyInstallPackageChangedCallback(
         recordThirdPartyInstallBroadcast,
@@ -294,11 +305,58 @@ extension AppsProviderInstall on AppsProvider {
   void stopListeningForThirdPartyInstallResults() =>
       registerThirdPartyInstallPackageChangedCallback(null);
 
+  /// Shows the installing indicator for an app whose APK a third-party installer
+  /// accepted without reporting a result, until [recordThirdPartyInstallBroadcast]
+  /// confirms it or [_awaitingThirdPartyInstallTimeout] elapses.
+  void _awaitThirdPartyInstallConfirmation(String appId) {
+    thirdPartyInstallIndicatorTimers.remove(appId)?.cancel();
+    final entry = apps[appId];
+    if (entry == null) return;
+    entry.downloadProgress = _awaitingThirdPartyInstallSentinel;
+    thirdPartyInstallIndicatorTimers[appId] = Timer(
+      _awaitingThirdPartyInstallTimeout,
+      () {
+        thirdPartyInstallIndicatorTimers.remove(appId);
+        final timedOutEntry = apps[appId];
+        if (timedOutEntry?.downloadProgress ==
+            _awaitingThirdPartyInstallSentinel) {
+          timedOutEntry!.downloadProgress = null;
+        }
+        notify();
+      },
+    );
+    notify();
+  }
+
+  /// Clears the awaiting-third-party indicator for [appId] on the user's say-so.
+  /// ObtainX cannot tell a background install from a dismissed installer, so the
+  /// indicator is offered as dismissible rather than left to run out its timer on
+  /// a row where nothing is happening. The install itself is untouched: if it is
+  /// still running, [recordThirdPartyInstallBroadcast] records it either way.
+  void dismissThirdPartyInstallIndicator(String appId) {
+    thirdPartyInstallIndicatorTimers.remove(appId)?.cancel();
+    final entry = apps[appId];
+    if (entry?.downloadProgress != _awaitingThirdPartyInstallSentinel) return;
+    entry!.downloadProgress = null;
+    notify();
+  }
+
+  /// Whether [appId] is showing the awaiting-third-party indicator.
+  bool isAwaitingThirdPartyInstall(String appId) =>
+      apps[appId]?.downloadProgress == _awaitingThirdPartyInstallSentinel;
+
   /// See [listenForThirdPartyInstallResults].
   Future<void> recordThirdPartyInstallBroadcast(String packageName) async {
-    final installedInfo = await getInstalledInfo(packageName);
+    // Checked before the platform query: this now runs for every package change
+    // on the device, and most of them are for apps ObtainX does not track.
     final entry = apps[packageName];
-    if (entry == null || installedInfo == null) return;
+    if (entry == null) return;
+    final installedInfo = await getInstalledInfo(packageName);
+    if (installedInfo == null) return;
+    thirdPartyInstallIndicatorTimers.remove(packageName)?.cancel();
+    if (entry.downloadProgress == _awaitingThirdPartyInstallSentinel) {
+      entry.downloadProgress = null;
+    }
     final pending =
         InstallReleaseSnapshot.fromJson(
           entry.app.additionalSettings[pendingInstallReleaseKey],
@@ -766,8 +824,16 @@ extension AppsProviderInstall on AppsProvider {
     }
   }
 
+  // Gates every update action in the app, so the awaiting-third-party indicator
+  // is deliberately excluded: that row is waiting on another app's installer, not
+  // occupying ObtainX, and counting it would disable "update all" and every row's
+  // update button for the life of the indicator.
   bool areDownloadsRunning() => apps.values
-      .where((element) => element.downloadProgress != null)
+      .where(
+        (element) =>
+            element.downloadProgress != null &&
+            element.downloadProgress != _awaitingThirdPartyInstallSentinel,
+      )
       .isNotEmpty;
 
   /// Whether [app] can be installed without a user prompt, based only on
@@ -916,6 +982,9 @@ extension AppsProviderInstall on AppsProvider {
           );
           if (result.isError || result.isCancelled) {
             await _clearPendingInstall(dir.appId, release);
+          }
+          if (result.isHandedOff) {
+            _awaitThirdPartyInstallConfirmation(dir.appId);
           }
           if (result.isError) {
             throw InstallError(result.errorCode ?? -1);
@@ -1113,6 +1182,9 @@ extension AppsProviderInstall on AppsProvider {
     final bool installed = result.isSuccess;
     if (result.isError || result.isCancelled) {
       await _clearPendingInstall(file.appId, installedRelease);
+    }
+    if (result.isHandedOff) {
+      _awaitThirdPartyInstallConfirmation(file.appId);
     }
     if (installed) {
       apps[file.appId]!.app = recordConfirmedInstall(
@@ -1556,7 +1628,9 @@ extension AppsProviderInstall on AppsProvider {
       // Clear any remaining progress in case the flow was interrupted
       // (e.g. unhandled error in a download, app backgrounded/killed, etc.)
       for (var id in appsToInstall) {
-        apps[id]?.downloadProgress = null;
+        if (apps[id]?.downloadProgress != _awaitingThirdPartyInstallSentinel) {
+          apps[id]?.downloadProgress = null;
+        }
       }
       notify();
     }
@@ -1878,7 +1952,11 @@ extension AppsProviderInstall on AppsProvider {
         unawaited(notificationsProvider?.cancel(updateNotificationId));
       }
     } finally {
-      appEntry.downloadProgress = null;
+      // Leave the awaiting-third-party indicator alone; it outlives the handoff
+      // on purpose and clears itself on the package broadcast or its own timer.
+      if (appEntry.downloadProgress != _awaitingThirdPartyInstallSentinel) {
+        appEntry.downloadProgress = null;
+      }
       notify();
     }
   }

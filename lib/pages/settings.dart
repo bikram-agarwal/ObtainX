@@ -3233,10 +3233,8 @@ class AboutSectionContent extends StatelessWidget {
                   includeOwnDebugBuild: true,
                 ),
                 builder: (context, snapshot) {
-                  // TEMPORARY, REVERT BEFORE COMMITTING: a deliberately long
-                  // version name for testing the headline's shrink-to-fit.
-                  // Real value: snapshot.data?.versionName ?? tr('unknown')
-                  const String versionName = '2.20.0-debug-Preview-277';
+                  final String versionName =
+                      snapshot.data?.versionName ?? tr('unknown');
                   final String headline = tr(
                     'aboutAppVersion',
                     args: [versionName],
