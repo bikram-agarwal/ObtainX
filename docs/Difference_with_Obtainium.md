@@ -15,6 +15,7 @@
   - [Settings](#settings)
   - [Tablets, foldables, and landscape layout](#tablets-foldables-and-landscape-layout)
 - [ObtainX Exclusives](#obtainx-exclusives)
+  - [One app, many stores](#one-app-many-stores)
   - [Security features](#security-features)
   - [Backup, import, restore](#backup-import-restore)
   - [Bulk import device apps](#bulk-import-device-apps)
@@ -121,6 +122,11 @@ ObtainX puts all sorting, grouping and view options in a sheet on the Apps tab i
         <td>Group by app type (user / system / privileged)</td>
         <td>✗</td>
         <td>✓</td>
+    </tr>
+    <tr>
+        <td>Group by update status</td>
+        <td>✗</td>
+        <td>✓ Update available, version order unclear, newer on device, same version, not installed</td>
     </tr>
     <tr>
         <td>Group updates separately</td>
@@ -264,7 +270,17 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
     <tr>
         <td>Verified other-store links</td>
         <td>✗</td>
-        <td>✓ Play Store / F-Droid / APKPure / APKMirror</td>
+        <td>✓ Play Store / GitHub / F-Droid / APKPure / APKMirror</td>
+    </tr>
+    <tr>
+        <td>Hot-swap the tracked store</td>
+        <td>✗ To change source, delete existing entry and add the app again from scratch from the new source.</td>
+        <td>✓ Long-press a store icon on the details page to swap tracking to that store in one move. Same app, same folders, different source.</td>
+    </tr>
+    <tr>
+        <td>Track the same app from multiple stores</td>
+        <td>✗ Each app can be tracked from only one source. Adding the same app from another source reports "app already added."</td>
+        <td>✓ Track the same app from as many sources as you want. Each source gets its own independent entry, version, update state, and settings.</td>
     </tr>
     <tr>
         <td>Categories shown</td>
@@ -680,6 +696,16 @@ ObtainX pioneered the large-screen layout (v2.9.0, June 2026); Obtainium added a
 
 ---
 ## ObtainX Exclusives
+
+### 🏪 One app, many sources
+
+The same apps can be tracked from multiple stores — independently, simultaneously, and interchangeably.
+
+- **🔄 Swap tracked source** — Tracking an app on GitHub, but want to switch to F-Droid or APKPure? Change sources in-place in two taps. The app keeps its folders, categories, and history — only where the updates come from changes.
+
+- **📚 Track multiple stores at once** — Track the same app across different stores simultaneously. Follow GitHub for nightlies, F-Droid for reproducible builds, and APKPure as a fallback — all simultaneously. Each listing with its own independent version tracking and settings.
+
+---
 
 ### 🛡️ Security features
 

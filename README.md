@@ -50,6 +50,14 @@ If you want to try out **ObtainX** without losing your current setup, you can br
 
 These are built from the ground up and are exclusive in ObtainX.
 
+### 🏪 One app, many sources
+
+The same apps can be tracked from multiple stores — independently, simultaneously, and interchangeably.
+
+- **🔄 Swap tracked source** — Tracking an app on GitHub, but want to switch to F-Droid or APKPure? Change sources in-place in two taps. The app keeps its folders, categories, and history — only where the updates come from changes.
+
+- **📚 Track multiple stores at once** — Track the same app across different stores simultaneously. Follow GitHub for nightlies, F-Droid for reproducible builds, and APKPure as a fallback — all simultaneously. Each listing with its own independent version tracking and settings.
+
 ### 🛡️ Security & Integrity
 
 - **🛡️ Build verification checks** — Runs automated cryptographic checks (F-Droid/Izzy reproducible builds, GitHub Release Attestations) on apps you add to flag tampered binaries before install. For total integrity, ObtainX's own updates are reproducible (F-Droid) and attested (GitHub). Learn more in the [Build Verification Guide](docs/build-verification-guide.md).
@@ -66,7 +74,7 @@ These are built from the ground up and are exclusive in ObtainX.
 - **↩️ Undo after delete** — Revert accidental app removals instantly via a 5-second toast notification.
 - **🖼️ Custom app icons** — If the app source publishes no icon, ObtainX smartly finds one: it pulls it from a downloaded APK, or from another store listing (APKMirror, F-Droid, APKPure, Play Store). Or you can set your own icon from the gallery or the web.
 - **🖼️ Backup app icons** — Backup those custom and auto-detected app icons into a folder you pick, so they can be restored after a reinstall or a move to a new device.
-- **🔍 Verified "also available on" store links** — Each app detail page shows a list of other stores (beside the one you are tracking) where the app is available. Only confirmed-present stores are shown. 
+- **🔍 Verified "also available on" store links** — Each app detail page shows other stores where the app is available. Long-press a store icon to swap tracking there, add it as a second listing, jump to an existing listing, or copy the link. 
 
 ### 🚀 Advanced Update Controls
 
@@ -117,7 +125,7 @@ Optimizations made to legacy Obtainium features.
 
 - **🎛️ Total theme customization** — You control the theme (system, light, dark, AMOLED), color (Material You, presets or any HEX), palette, color shading intensity, gradient, progressive blur, roundness of UI corners, UI scale, and more. It's not just an afterthought - it's a full blown theme engine. Make it yours. 
 
-- **🗄️ Richer app list grouping** — Group by source (Obtainium adopted in July 2026), app type (user/system/privileged) etc. A separate level of intelligent grouping for "Updates", "non-installed" and "track-only" apps.
+- **🗄️ Richer app list grouping** — Group by source (Obtainium adopted in July 2026), app type (user/system/privileged), or **update status** (update available, newer on device, same version, not installed  etc.) A separate level of intelligent grouping for "Updates", "non-installed" and "track-only" apps.
 
 ---
 
