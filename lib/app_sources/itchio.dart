@@ -94,49 +94,31 @@ class ItchIO extends AppSource {
   ///
   /// There is no standard on itch.io for declaring asset versions, so this
   /// falls back through info table data, upload names, then 'Updated' date.
-  String? _parseVersion(Document document) {
+  String? parseVersion(Document document) {
     // Limit our search to the main game info section.
     final pageWidget = document.querySelector('div.page_widget');
     if (pageWidget == null) return null;
 
     final String searchArea = pageWidget.innerHtml;
 
-    final List<String> supportedVersionStrings = [
-      r'[vV](\d+\.\d+(?:\.\d+)*)',
-      r'Version (\d+\.\d+(?:\.\d+)*)',
-    ];
     final Set<String> matches = {};
-
-    for (var versionRegexString in supportedVersionStrings) {
-      final RegExp versionRegex = RegExp(versionRegexString);
-      final regexMatches = versionRegex.allMatches(searchArea);
-      for (var regexMatch in regexMatches) {
-        matches.add(regexMatch.group(1)!);
+    final hints = RegExp(r'\b(?:version\s+|v(?=\d))', caseSensitive: false);
+    for (final hint in hints.allMatches(searchArea)) {
+      final candidate = releaseVersionPattern.matchAsPrefix(
+        searchArea.substring(hint.end),
+      );
+      if (candidate != null) {
+        matches.add(candidate.group(0)!);
       }
     }
 
     if (matches.isEmpty) return null;
 
-    int compareVersions(String v1, String v2) {
-      final List<int> c1 = v1
-          .split('.')
-          .map((s) => int.tryParse(s) ?? 0)
-          .toList();
-      final List<int> c2 = v2
-          .split('.')
-          .map((s) => int.tryParse(s) ?? 0)
-          .toList();
-      final int maxLen = c1.length > c2.length ? c1.length : c2.length;
-      for (int i = 0; i < maxLen; i++) {
-        final int p1 = i < c1.length ? c1[i] : 0;
-        final int p2 = i < c2.length ? c2[i] : 0;
-        if (p1 != p2) return p1.compareTo(p2);
-      }
-      return 0;
-    }
-
     final String bestMatch = matches.reduce(
-      (a, b) => compareVersions(a, b) > 0 ? a : b,
+      (first, second) =>
+          compareVersionStrings(first, second).relation == VersionRelation.newer
+          ? first
+          : second,
     );
 
     return bestMatch;
@@ -291,7 +273,7 @@ class ItchIO extends AppSource {
       final String title = _parseTitle(storePage);
       final String author = _parseAuthor(storePage, standardUrl);
       String? dateVersion = _getDateVersion(storePage);
-      String? version = _parseVersion(storePage);
+      String? version = parseVersion(storePage);
 
       final String downloadPageBody = await _getDownloadPageBody(
         standardUrl,
@@ -304,7 +286,7 @@ class ItchIO extends AppSource {
       // Fetch better version from the download page, if any
       final Document downloadPage = await parseHtmlOffIsolate(downloadPageBody);
       dateVersion ??= _getDateVersion(downloadPage);
-      version ??= _parseVersion(downloadPage);
+      version ??= parseVersion(downloadPage);
 
       // Rules for defaulting the version
       // 1. Nice version, if found

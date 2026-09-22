@@ -77,6 +77,7 @@ class APKPure extends AppSource {
     Map<String, dynamic> additionalSettings,
   ) async {
     final Map<String, int> sizeByName = {};
+    final Map<String, int> codesByName = {};
     var apkUrls = versionVariants
         .map((e) {
           final String? appId = e['package_name']?.toString();
@@ -112,6 +113,8 @@ class APKPure extends AppSource {
               : '';
           final apkName =
               '$appId-$versionCode$archSuffix.${type.toLowerCase()}';
+          final parsedCode = int.tryParse(versionCode);
+          if (parsedCode != null) codesByName[apkName] = parsedCode;
           final rawSize = asset is Map ? asset['size'] : null;
           final int? parsedSize = rawSize is num
               ? rawSize.toInt()
@@ -177,6 +180,8 @@ class APKPure extends AppSource {
       version,
       apkUrls,
       AppNames(author, appName),
+      versionCode: codesByName[apkUrls.last.key],
+      versionCodesByAsset: codesByName,
       releaseDate: releaseDate,
       changeLog: changeLog,
       apkSizeBytes: apkSizeBytes,

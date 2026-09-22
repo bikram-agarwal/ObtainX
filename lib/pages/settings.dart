@@ -11,13 +11,13 @@ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
+import 'package:obtainium/components/performance_recording_control.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
@@ -34,6 +34,8 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/diagnostic_snapshot.dart';
+import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/theme.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -471,7 +473,7 @@ class SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 IconButton(
-                  onPressed: () => _openLogsDialog(context),
+                  onPressed: () => _openLogsSheet(context),
                   icon: const Icon(Icons.bug_report_outlined),
                   tooltip: tr('appLogs'),
                   color: cs.primary,
@@ -3159,6 +3161,51 @@ class _CategoriesSection extends StatelessWidget {
   }
 }
 
+const int aboutHeadlineMaxLines = 2;
+
+/// Largest font size, at or below [style]'s own, that renders [text] in full
+/// within [maxWidth] and [aboutHeadlineMaxLines].
+///
+/// Version names carry a build suffix ("ObtainX v2.20.0-Preview-277"), which at
+/// this headline's display size ellipsizes on narrow screens and at large system
+/// font scales - hiding the very part that identifies the build. Shrinking to
+/// fit keeps the whole version readable.
+double aboutHeadlineFontSize({
+  required BuildContext context,
+  required String text,
+  required TextStyle style,
+  required double maxWidth,
+}) {
+  final double baseFontSize = style.fontSize ?? 36;
+  if (!maxWidth.isFinite || maxWidth <= 0) return baseFontSize;
+  const double minimumFontSize = 20;
+  final TextScaler textScaler = MediaQuery.textScalerOf(context);
+  final TextDirection textDirection = Directionality.of(context);
+  for (
+    double fontSize = baseFontSize;
+    fontSize > minimumFontSize;
+    fontSize -= 1
+  ) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: style.copyWith(fontSize: fontSize),
+      ),
+      maxLines: aboutHeadlineMaxLines,
+      textAlign: TextAlign.center,
+      textDirection: textDirection,
+      textScaler: textScaler,
+    )..layout(maxWidth: maxWidth);
+    // A word too long to wrap (a build suffix) overflows its line without ever
+    // exceeding the line count, so width has to be checked as well.
+    final bool aLineOverflows = painter.computeLineMetrics().any(
+      (line) => line.width > maxWidth + 0.5,
+    );
+    if (!painter.didExceedMaxLines && !aLineOverflows) return fontSize;
+  }
+  return minimumFontSize;
+}
+
 class AboutSectionContent extends StatelessWidget {
   const AboutSectionContent({super.key, required this.colorScheme});
 
@@ -3188,14 +3235,30 @@ class AboutSectionContent extends StatelessWidget {
                 builder: (context, snapshot) {
                   final String versionName =
                       snapshot.data?.versionName ?? tr('unknown');
-                  return Text(
-                    tr('aboutAppVersion', args: [versionName]),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.displaySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: colorScheme.onSurface,
+                  final String headline = tr(
+                    'aboutAppVersion',
+                    args: [versionName],
+                  );
+                  final TextStyle headlineStyle =
+                      (textTheme.displaySmall ?? const TextStyle(fontSize: 36))
+                          .copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: colorScheme.onSurface,
+                          );
+                  return LayoutBuilder(
+                    builder: (context, constraints) => Text(
+                      headline,
+                      textAlign: TextAlign.center,
+                      maxLines: aboutHeadlineMaxLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: headlineStyle.copyWith(
+                        fontSize: aboutHeadlineFontSize(
+                          context: context,
+                          text: headline,
+                          style: headlineStyle,
+                          maxWidth: constraints.maxWidth,
+                        ),
+                      ),
                     ),
                   );
                 },
@@ -3329,7 +3392,7 @@ class AboutSectionContent extends StatelessWidget {
             top: 8,
             right: 8,
             child: IconButton(
-              onPressed: () => _openLogsDialog(context),
+              onPressed: () => _openLogsSheet(context),
               icon: Icon(Icons.bug_report_outlined, color: colorScheme.primary),
               tooltip: tr('appLogs'),
               padding: EdgeInsets.zero,
@@ -3670,34 +3733,48 @@ Future<void> _shareAboutUrl(String url, String subject) async {
   );
 }
 
-void _openLogsDialog(BuildContext context) {
-  showDialog(
-    context: context,
-    builder: (BuildContext dialogContext) {
-      return const LogsDialog(initialDays: 7);
-    },
+void _openLogsSheet(BuildContext context) {
+  unawaited(
+    showAppModalSheet<void>(
+      context: context,
+      builder: (BuildContext _) {
+        return const LogsSheet(initialDays: 7);
+      },
+    ),
   );
 }
 
-class LogsDialog extends StatefulWidget {
+class LogsSheet extends StatefulWidget {
   final int initialDays;
-  const LogsDialog({super.key, required this.initialDays});
+  final PerformanceRecorder? performanceRecorder;
+  const LogsSheet({
+    super.key,
+    required this.initialDays,
+    this.performanceRecorder,
+  });
 
   @override
-  State<LogsDialog> createState() => _LogsDialogState();
+  State<LogsSheet> createState() => _LogsSheetState();
 }
 
-class _LogsDialogState extends State<LogsDialog> {
+class _LogsSheetState extends State<LogsSheet> {
   String? logString;
   bool isLoading = true;
   late int selectedDays;
   List<int> days = [7, 5, 4, 3, 2, 1];
+  final ScrollController logScrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     selectedDays = widget.initialDays;
     fetchLogs(selectedDays);
+  }
+
+  @override
+  void dispose() {
+    logScrollController.dispose();
+    super.dispose();
   }
 
   void fetchLogs(int daysLimit) {
@@ -3734,287 +3811,193 @@ class _LogsDialogState extends State<LogsDialog> {
   @override
   Widget build(BuildContext context) {
     final logsProvider = context.read<LogsProvider>();
+    final performanceRecorder =
+        widget.performanceRecorder ?? PerformanceRecorder.instance;
 
-    Future<String> getDiagnosticsText() async {
-      final buffer = StringBuffer();
-      buffer.writeln('=== ObtainX Diagnostic Log ===');
-      // Captured before the first async gap below so context isn't used across
-      // an await.
-      final settingsProvider = context.read<SettingsProvider>();
-      final appsProvider = context.read<AppsProvider>();
-
-      try {
-        final packageInfo = await getInstalledInfo(
-          obtainiumId,
-          printErr: false,
-          includeOwnDebugBuild: true,
-        );
-        buffer.writeln(
-          'App Version: ${packageInfo?.versionName ?? 'Unknown'} (code ${packageInfo?.versionCode ?? 'unknown'})',
-        );
-        buffer.writeln(
-          'Package ID: ${packageInfo?.packageName ?? obtainiumId}',
-        );
-      } catch (exception) {
-        buffer.writeln('App Version: Unknown (Error fetching package info)');
-      }
-
-      try {
-        final androidInfo = await DeviceInfoPlugin().androidInfo;
-        buffer.writeln(
-          'Device: ${androidInfo.manufacturer} ${androidInfo.model} (${androidInfo.device})',
-        );
-        buffer.writeln(
-          'Android Version: ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt})',
-        );
-        buffer.writeln(
-          'Supported ABIs: ${androidInfo.supportedAbis.join(', ')}',
-        );
-      } catch (exception) {
-        buffer.writeln('Device Info: Unknown (Error fetching device info)');
-      }
-
-      buffer.writeln('Installer Mode: ${settingsProvider.installerMode}');
-      buffer.writeln('Use Shizuku: ${settingsProvider.useShizuku}');
-      buffer.writeln('Use Dhizuku: ${settingsProvider.useDhizuku}');
-      buffer.writeln(
-        'Background Updates: ${settingsProvider.enableBackgroundUpdates}',
+    Future<String> getDiagnosticsText(String logsToShare) async {
+      // Captured before the first async gap so context isn't used across an await.
+      final SettingsProvider settingsProvider = context
+          .read<SettingsProvider>();
+      final AppsProvider appsProvider = context.read<AppsProvider>();
+      final DiagnosticDisplayInfo display = DiagnosticDisplayInfo.fromContext(
+        context,
       );
-      buffer.writeln(
-        'Parallel Downloads: ${settingsProvider.parallelDownloads}',
+      final String appLocale = context.locale.toLanguageTag();
+      final String deviceLocale = context.deviceLocale.toLanguageTag();
+      final String performanceReport = await performanceRecorder
+          .reportForExport(logsToShare);
+      return buildObtainxDiagnosticLog(
+        settings: settingsProvider,
+        trackedAppCount: appsProvider.apps.length,
+        display: display,
+        appLocale: appLocale,
+        deviceLocale: deviceLocale,
+        performanceReport: performanceReport,
       );
-      buffer.writeln('Tracked Apps: ${appsProvider.apps.length}');
-
-      try {
-        final notificationGranted = await Permission.notification.isGranted;
-        buffer.writeln('Notifications Enabled: $notificationGranted');
-      } catch (exception) {
-        buffer.writeln(
-          'Notifications Enabled: Unknown (Error checking permission)',
-        );
-      }
-
-      final autoExportEnabled = settingsProvider.autoExportOnChanges;
-      buffer.writeln('Auto-Export on Changes: $autoExportEnabled');
-      if (autoExportEnabled) {
-        try {
-          final exportDir = await settingsProvider.getExportDir(
-            requireAccess: false,
-          );
-          if (exportDir == null) {
-            buffer.writeln('Export Directory: Not configured');
-          } else {
-            final accessGranted =
-                await settingsProvider.getExportDir(
-                  warnIfInaccessible: false,
-                ) !=
-                null;
-            buffer.writeln(
-              'Export Directory Configured: true (Access Present: $accessGranted)',
-            );
-          }
-        } catch (exception) {
-          buffer.writeln('Export Directory: Unknown (Error checking path)');
-        }
-      }
-
-      final saveApkCopies = settingsProvider.saveDownloadedApkCopies;
-      buffer.writeln('Save APK Copies: $saveApkCopies');
-      if (saveApkCopies) {
-        try {
-          final apkSaveDir = await settingsProvider.getApkSaveDir(
-            requireAccess: false,
-          );
-          if (apkSaveDir == null) {
-            buffer.writeln('APK Save Directory: Not configured');
-          } else {
-            final accessGranted =
-                await settingsProvider.getApkSaveDir(
-                  warnIfInaccessible: false,
-                ) !=
-                null;
-            buffer.writeln(
-              'APK Save Directory Configured: true (Access Present: $accessGranted)',
-            );
-          }
-        } catch (exception) {
-          buffer.writeln('APK Save Directory: Unknown (Error checking path)');
-        }
-      }
-
-      final githubPat = settingsProvider.getSettingString(
-        GitHub.githubCredsKey,
-      );
-      final hasGithubPat = githubPat != null && githubPat.isNotEmpty;
-      final githubPatValid =
-          hasGithubPat && GitHub.hasValidatedPAT(githubPat, settingsProvider);
-      buffer.writeln(
-        'GitHub PAT: ${hasGithubPat ? "Saved" : "Not Saved"}${hasGithubPat ? " (Validated: $githubPatValid)" : ""}',
-      );
-
-      final gitlabPat = settingsProvider.getSettingString('gitlab-creds');
-      final hasGitlabPat = gitlabPat != null && gitlabPat.isNotEmpty;
-      final gitlabPatValid =
-          hasGitlabPat && GitLab.hasValidatedPAT(gitlabPat, settingsProvider);
-      buffer.writeln(
-        'GitLab PAT: ${hasGitlabPat ? "Saved" : "Not Saved"}${hasGitlabPat ? " (Validated: $gitlabPatValid)" : ""}',
-      );
-
-      final vtApiKey = settingsProvider.getSettingString(virusTotalApiKeyKey);
-      final hasVtApiKey = vtApiKey != null && vtApiKey.isNotEmpty;
-      final vtApiKeyValid =
-          hasVtApiKey && hasValidatedApiKey(vtApiKey, settingsProvider);
-      buffer.writeln(
-        'VirusTotal API Key: ${hasVtApiKey ? "Saved" : "Not Saved"}${hasVtApiKey ? " (Validated: $vtApiKeyValid)" : ""}',
-      );
-
-      buffer.writeln('===============================\n');
-
-      return buffer.toString();
     }
 
-    return AlertDialog(
-      title: Text(tr('appLogs')),
-      contentPadding: appDialogContentPadding,
-      content: SizedBox(
-        width: double.maxFinite,
-        height: MediaQuery.of(context).size.height * 0.6,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            appDropdownField<int>(
-              key: ValueKey(selectedDays),
-              context: context,
-              value: selectedDays,
-              enabled: !isLoading,
-              menuWidth: appDropdownMenuWidth(
+    return AppSheetScaffold(
+      expand: true,
+      header: Row(
+        children: [
+          Expanded(
+            child: Text(
+              tr('appLogs'),
+              style: Theme.of(
                 context,
-                days.map((int dayValue) => plural('day', dayValue)),
-                style: Theme.of(context).textTheme.bodyLarge,
-              ),
-              items: days
-                  .map(
-                    (int dayValue) => DropdownMenuItem<int>(
-                      value: dayValue,
-                      child: Text(plural('day', dayValue)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (int? selectedValue) {
-                if (selectedValue != null) {
-                  selectedDays = selectedValue;
-                  fetchLogs(selectedValue);
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: isLoading
-                  ? const Center(child: ExpressiveLoadingIndicator())
-                  : Scrollbar(
-                      child: SingleChildScrollView(
-                        child: SelectableText(logString ?? ''),
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        SizedBox(
-          width: double.maxFinite,
-          child: Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextButton(
-                    onPressed: () async {
-                      final cont =
-                          (await showDialog<Map<String, dynamic>?>(
-                            context: context,
-                            builder: (BuildContext modalContext) {
-                              return GeneratedFormModal(
-                                title: tr('appLogs'),
-                                items: const [],
-                                initValid: true,
-                                message: tr('removeFromObtainX'),
-                                primaryActionColour: Theme.of(
-                                  modalContext,
-                                ).colorScheme.error,
-                              );
-                            },
-                          )) !=
-                          null;
-                      if (cont) {
-                        unawaited(logsProvider.clear());
-                        if (!context.mounted) return;
-                        Navigator.of(context).pop();
-                      }
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                    ),
-                    child: Text(tr('remove')),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
-                    child: Text(tr('close')),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      final diagnostics = await getDiagnosticsText();
-                      final logs = logString ?? '';
-                      const int maxLogChars = 100000;
-                      final String safeLogs = logs.length > maxLogChars
-                          ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
-                          : logs;
-                      unawaited(
-                        SharePlus.instance.share(
-                          ShareParams(
-                            text: '$diagnostics$safeLogs',
-                            subject: tr('appLogs'),
-                          ),
-                        ),
-                      );
-                    },
-                    child: Text(tr('share')),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      final diagnostics = await getDiagnosticsText();
-                      final timestampForFilename = DateTime.now()
-                          .toIso8601String()
-                          .replaceAll(':', '-');
-                      final logFileName =
-                          'obtainx-logs-$timestampForFilename.txt';
-                      final logFile = XFile.fromData(
-                        Uint8List.fromList(
-                          utf8.encode('$diagnostics${logString ?? ''}'),
-                        ),
-                        mimeType: 'text/plain',
-                        name: logFileName,
-                      );
-                      await SharePlus.instance.share(
-                        ShareParams(
-                          files: [logFile],
-                          fileNameOverrides: [logFileName],
-                          subject: tr('appLogs'),
-                        ),
-                      );
-                    },
-                    child: Text(tr('shareAsFile')),
-                  ),
-                ],
-              ),
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
+          HelpHintIcon(
+            message: tr('performanceRecordingHelp'),
+            padding: EdgeInsets.zero,
+          ),
+        ],
+      ),
+      bodyPadding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      // Title, controls and log text share one scroll view: a landscape sheet
+      // is short enough that a pinned header would leave the log itself about
+      // three lines tall.
+      bodyScrollController: logScrollController,
+      bodyChildren: [
+        Builder(
+          builder: (BuildContext controlContext) {
+            final SettingsProvider settings = controlContext
+                .read<SettingsProvider>();
+            final AppsProvider apps = controlContext.read<AppsProvider>();
+            final view = View.of(controlContext);
+            return PerformanceRecordingControl(
+              recorder: performanceRecorder,
+              readEnvironment: () => PerformanceEnvironment(
+                refreshRate: view.display.refreshRate,
+                blur: settings.progressiveBlurEnabled,
+                reducedEffects: settings.reduceVisualEffects,
+                gradients: settings.useGradientBackground,
+                appCount: apps.apps.length,
+              ),
+              onStarted: () => Navigator.of(controlContext).pop(),
+            );
+          },
         ),
+        const SizedBox(height: 16),
+        appDropdownField<int>(
+          key: ValueKey<int>(selectedDays),
+          context: context,
+          value: selectedDays,
+          enabled: !isLoading,
+          menuWidth: appDropdownMenuWidth(
+            context,
+            days.map((int dayValue) => plural('day', dayValue)),
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
+          items: days
+              .map(
+                (int dayValue) => DropdownMenuItem<int>(
+                  value: dayValue,
+                  child: Text(plural('day', dayValue)),
+                ),
+              )
+              .toList(),
+          onChanged: (int? selectedValue) {
+            if (selectedValue != null) {
+              selectedDays = selectedValue;
+              fetchLogs(selectedValue);
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+        if (isLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: ExpressiveLoadingIndicator()),
+          )
+        else
+          SelectableText(logString ?? ''),
       ],
+      footer: OverflowBar(
+        alignment: MainAxisAlignment.end,
+        spacing: 8,
+        overflowSpacing: 4,
+        children: [
+          TextButton(
+            onPressed: () async {
+              final bool confirmed =
+                  (await showDialog<Map<String, dynamic>?>(
+                    context: context,
+                    builder: (BuildContext modalContext) {
+                      return GeneratedFormModal(
+                        title: tr('appLogs'),
+                        items: const [],
+                        initValid: true,
+                        message: tr('removeFromObtainX'),
+                        primaryActionColour: Theme.of(
+                          modalContext,
+                        ).colorScheme.error,
+                      );
+                    },
+                  )) !=
+                  null;
+              if (confirmed) {
+                await performanceRecorder.discard();
+                unawaited(logsProvider.clear());
+                if (!context.mounted) return;
+                Navigator.of(context).pop();
+              }
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(tr('remove')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(tr('close')),
+          ),
+          TextButton(
+            onPressed: () async {
+              final String logs = logString ?? '';
+              const int maxLogChars = 100000;
+              final String safeLogs = logs.length > maxLogChars
+                  ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
+                  : logs;
+              final String diagnostics = await getDiagnosticsText(safeLogs);
+              unawaited(
+                SharePlus.instance.share(
+                  ShareParams(
+                    text: '$diagnostics$safeLogs',
+                    subject: tr('appLogs'),
+                  ),
+                ),
+              );
+            },
+            child: Text(tr('share')),
+          ),
+          TextButton(
+            onPressed: () async {
+              final String logs = logString ?? '';
+              final String diagnostics = await getDiagnosticsText(logs);
+              final String timestampForFilename = DateTime.now()
+                  .toIso8601String()
+                  .replaceAll(':', '-');
+              final String logFileName =
+                  'obtainx-logs-$timestampForFilename.txt';
+              final XFile logFile = XFile.fromData(
+                Uint8List.fromList(utf8.encode('$diagnostics$logs')),
+                mimeType: 'text/plain',
+                name: logFileName,
+              );
+              await SharePlus.instance.share(
+                ShareParams(
+                  files: [logFile],
+                  fileNameOverrides: [logFileName],
+                  subject: tr('appLogs'),
+                ),
+              );
+            },
+            child: Text(tr('shareAsFile')),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -4101,6 +4084,14 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
       storedValues,
       widget.preselected,
     );
+    // The labels below go through context.tr rather than the top-level tr()
+    // because that is what subscribes this element to Localizations. The
+    // top-level tr() reads a global singleton, so it leaves nothing to mark
+    // dirty when the language changes, and nothing else here rebuilds on a
+    // locale switch: the category map is unchanged, so the select() above does
+    // not fire, and every ancestor between this widget and the settings page is
+    // a const instance that the framework reuses without rebuilding. Together
+    // that froze these labels at whichever language the app launched in.
     return GeneratedForm(
       key: ValueKey<String>(
         'categories_${_stableCategoriesMapJson(fromPrefs)}',
@@ -4109,13 +4100,13 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
         [
           GeneratedFormTagInput(
             'categories',
-            label: tr('categories'),
-            emptyMessage: tr('noCategories'),
+            label: context.tr('categories'),
+            emptyMessage: context.tr('noCategories'),
             value: merged,
             alignment: widget.alignment,
             deleteConfirmationMessage: MapEntry(
-              tr('deleteCategoriesQuestion'),
-              tr('categoryDeleteWarning'),
+              context.tr('deleteCategoriesQuestion'),
+              context.tr('categoryDeleteWarning'),
             ),
             singleSelect: widget.singleSelect,
             showLabelWhenNotEmpty: widget.showLabelWhenNotEmpty,

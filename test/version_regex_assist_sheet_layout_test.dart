@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
@@ -8,8 +9,9 @@ import 'package:obtainium/components/version_regex_assist_dialog.dart';
 /// and radio tiles. These assertions drive the real sheet widget, so they also
 /// cover its own header/footer contents — not just [AppSheetScaffold].
 ///
-/// Labels resolve to raw translation keys here (easy_localization is not
-/// initialised in tests), which does not change the chrome's height.
+/// The label text itself is irrelevant to these assertions - only the chrome's
+/// height and hit-testability matter - so the action row is located through
+/// `tr()` rather than hardcoded copy.
 void main() {
   const double dpr = 2.625;
   const double epsilon = 0.5;
@@ -90,8 +92,8 @@ void main() {
     expect(sheet.bottom, lessThanOrEqualTo(keyboardTop + epsilon));
 
     for (final Finder action in <Finder>[
-      find.text('cancel'),
-      find.text('versionRegexAssistApply'),
+      find.text(tr('cancel')),
+      find.text(tr('versionRegexAssistApply')),
     ]) {
       final Rect actionRect = tester.getRect(action);
       expect(actionRect.bottom, lessThanOrEqualTo(keyboardTop + epsilon));

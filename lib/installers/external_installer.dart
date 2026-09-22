@@ -67,6 +67,10 @@ class ExternalInstaller extends Installer {
       targetActivity: targetActivity,
       expectedPackageName: appId,
     );
-    return ok ? InstallResult.success() : InstallResult.cancelled();
+    // A false here only means "not confirmed yet" - the installer never reports
+    // its own result, and it may still be installing in the background. Treating
+    // that as cancelled would drop the pending receipt the package broadcast
+    // needs to match against later (#301).
+    return ok ? InstallResult.success() : InstallResult.handedOff();
   }
 }

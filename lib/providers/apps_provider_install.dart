@@ -5,8 +5,6 @@ import 'dart:typed_data';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_intent_plus/flag.dart';
 import 'package:android_package_manager/android_package_manager.dart';
-import 'package:archive/archive.dart' as archive;
-import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
@@ -32,6 +30,7 @@ import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/artifact_file_work.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -51,6 +50,14 @@ const int _androidApiLevelR = 30;
 const double _installingProgressSentinel = -1;
 const double _scanningProgressSentinel = -2;
 const double _flaggedProgressSentinel = -3;
+// -4 "Installing", but for a third-party installer that accepted the APK without
+// reporting a result. Rendered exactly like -1; kept distinct because it must not
+// count as work in flight (see [AppsProviderInstall.areDownloadsRunning]).
+const double _awaitingThirdPartyInstallSentinel = -4;
+// How long that indicator survives without a confirming package broadcast. Purely
+// cosmetic - the install is confirmed independently and never waits on this - so
+// it only stops a dismissed installer from leaving the row spinning forever.
+const Duration _awaitingThirdPartyInstallTimeout = Duration(seconds: 60);
 const int _downloadCompleteProgress = 100;
 const int _remainingStepsProgress = 90;
 
@@ -224,7 +231,16 @@ String sanitizeApkSaveDisplayName(String raw) {
 
 /// Same label as the release asset (e.g. GitHub attachment filename) when
 /// possible, for the user-facing saved-APK copy.
-String storeFacingDownloadDisplayNameForApp(App app) {
+String storeFacingDownloadDisplayNameForApp(
+  App app, {
+  InstallReleaseSnapshot? release,
+}) {
+  if (release != null) {
+    app = app.copyWith(
+      apkUrls: [MapEntry(release.assetName, release.assetUrl)],
+      preferredApkIndex: 0,
+    );
+  }
   if (app.apkUrls.isEmpty) {
     return 'download.apk';
   }
@@ -276,8 +292,11 @@ extension AppsProviderInstall on AppsProvider {
   /// (#222). The broadcast is itself proof that the install landed, so persist it
   /// as soon as it arrives rather than relying only on the session result.
   ///
-  /// The native side only forwards broadcasts for the package of the install it
-  /// launched, so this cannot be triggered by unrelated package changes.
+  /// The native side forwards every PACKAGE_ADDED/PACKAGE_REPLACED, not just the
+  /// package of the handoff in flight, because an installer told to "run in
+  /// background" finishes after its handoff session has already ended (#301).
+  /// [recordThirdPartyInstallBroadcast] ignores packages this install does not
+  /// track, so unrelated package changes are a no-op.
   void listenForThirdPartyInstallResults() =>
       registerThirdPartyInstallPackageChangedCallback(
         recordThirdPartyInstallBroadcast,
@@ -286,26 +305,91 @@ extension AppsProviderInstall on AppsProvider {
   void stopListeningForThirdPartyInstallResults() =>
       registerThirdPartyInstallPackageChangedCallback(null);
 
+  /// Shows the installing indicator for an app whose APK a third-party installer
+  /// accepted without reporting a result, until [recordThirdPartyInstallBroadcast]
+  /// confirms it or [_awaitingThirdPartyInstallTimeout] elapses.
+  void _awaitThirdPartyInstallConfirmation(String appId) {
+    thirdPartyInstallIndicatorTimers.remove(appId)?.cancel();
+    final entry = apps[appId];
+    if (entry == null) return;
+    entry.downloadProgress = _awaitingThirdPartyInstallSentinel;
+    thirdPartyInstallIndicatorTimers[appId] = Timer(
+      _awaitingThirdPartyInstallTimeout,
+      () {
+        thirdPartyInstallIndicatorTimers.remove(appId);
+        final timedOutEntry = apps[appId];
+        if (timedOutEntry?.downloadProgress ==
+            _awaitingThirdPartyInstallSentinel) {
+          timedOutEntry!.downloadProgress = null;
+        }
+        notify();
+      },
+    );
+    notify();
+  }
+
+  /// Clears the awaiting-third-party indicator for [appId] on the user's say-so.
+  /// ObtainX cannot tell a background install from a dismissed installer, so the
+  /// indicator is offered as dismissible rather than left to run out its timer on
+  /// a row where nothing is happening. The install itself is untouched: if it is
+  /// still running, [recordThirdPartyInstallBroadcast] records it either way.
+  void dismissThirdPartyInstallIndicator(String appId) {
+    thirdPartyInstallIndicatorTimers.remove(appId)?.cancel();
+    final entry = apps[appId];
+    if (entry?.downloadProgress != _awaitingThirdPartyInstallSentinel) return;
+    entry!.downloadProgress = null;
+    notify();
+  }
+
+  /// Whether [appId] is showing the awaiting-third-party indicator.
+  bool isAwaitingThirdPartyInstall(String appId) =>
+      apps[appId]?.downloadProgress == _awaitingThirdPartyInstallSentinel;
+
   /// See [listenForThirdPartyInstallResults].
   Future<void> recordThirdPartyInstallBroadcast(String packageName) async {
-    final AppInMemory? entry = apps[packageName];
+    // Checked before the platform query: this now runs for every package change
+    // on the device, and most of them are for apps ObtainX does not track.
+    final entry = apps[packageName];
     if (entry == null) return;
-    final App app = entry.app;
-    if (app.latestVersion.isEmpty ||
-        app.installedVersion == app.latestVersion) {
+    final installedInfo = await getInstalledInfo(packageName);
+    if (installedInfo == null) return;
+    thirdPartyInstallIndicatorTimers.remove(packageName)?.cancel();
+    if (entry.downloadProgress == _awaitingThirdPartyInstallSentinel) {
+      entry.downloadProgress = null;
+    }
+    final pending =
+        InstallReleaseSnapshot.fromJson(
+          entry.app.additionalSettings[pendingInstallReleaseKey],
+        ) ??
+        InstallReleaseSnapshot.fromJson(
+          entry.app.additionalSettings[confirmedInstallReleaseKey],
+        );
+    entry.app = recordConfirmedInstall(entry.app, pending, installedInfo);
+    await saveApps([entry.app], attemptToCorrectInstallStatus: false);
+  }
+
+  Future<void> _recordPendingInstall(
+    String appId,
+    InstallReleaseSnapshot? release,
+  ) async {
+    final entry = apps[appId];
+    if (entry == null || release == null || !release.belongsTo(entry.app)) {
       return;
     }
-    entry.app = app.copyWith(installedVersion: app.latestVersion);
-    // Install-status correction is skipped on purpose: the manifest version of
-    // what was just installed can be unrelatable to the source's version string,
-    // and this broadcast is the authoritative signal about what landed.
+    entry.app = recordPendingInstall(entry.app, release);
     await saveApps([entry.app], attemptToCorrectInstallStatus: false);
-    unawaited(
-      logs.add(
-        'Recorded third-party install of $packageName as version '
-        '"${app.latestVersion}" (system broadcast)',
-      ),
-    );
+  }
+
+  Future<void> _clearPendingInstall(
+    String appId,
+    InstallReleaseSnapshot? release,
+  ) async {
+    final entry = apps[appId];
+    if (entry == null || release == null) return;
+    final corrected = discardPendingInstall(entry.app, release);
+    if (identical(corrected, entry.app)) return;
+    entry.app = corrected;
+    await saveApps([entry.app], attemptToCorrectInstallStatus: false);
   }
 
   /// Returns the [Installer] strategy for the current installer mode setting.
@@ -340,17 +424,17 @@ extension AppsProviderInstall on AppsProvider {
       if (actualPackageName == null) {
         throw ObtainiumError(tr('couldNotGetIdFromApk'))..url = app.url;
       }
-      if (apps[app.id] != null && !isTempIdBool && !app.allowIdChange) {
+      if (apps[app.listingKey] != null && !isTempIdBool && !app.allowIdChange) {
         throw IDChangedError(actualPackageName)..url = app.url;
       }
       final idChangeWasAllowed = app.allowIdChange;
-      final originalAppId = app.id;
+      final originalListingKey = app.listingKey;
       app = app.copyWith(id: actualPackageName, allowIdChange: false);
       downloadedFile = downloadedFile.renameSync(
-        '${downloadedFile.parent.path}/${app.id}-${downloadUrl.hashCode}.${downloadedFile.path.split('.').last}',
+        '${downloadedFile.parent.path}/${app.listingKey}-${downloadReleaseCacheKey(InstallReleaseSnapshot.fromApp(app))}.${downloadedFile.path.split('.').last}',
       );
-      if (apps[originalAppId] != null) {
-        await removeApps([originalAppId]);
+      if (apps[originalListingKey] != null) {
+        await removeApps([originalListingKey]);
         await saveApps([
           app,
         ], onlyIfExists: !isTempIdBool && !idChangeWasAllowed);
@@ -360,24 +444,19 @@ extension AppsProviderInstall on AppsProvider {
   }
 
   Future<void> updatePendingRepoRename(String appId, String? newUrl) async {
-    if (apps.containsKey(appId)) {
-      apps[appId]!.app = apps[appId]!.app.copyWith(
-        pendingRepoRenameUrl: newUrl,
-      );
-      await saveApps([apps[appId]!.app]);
-    }
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return;
+    listing.app = listing.app.copyWith(pendingRepoRenameUrl: newUrl);
+    await saveApps([listing.app]);
   }
 
   /// Applies a detected repository rename: adopts [newUrl] and clears the
   /// pending-rename flag so update checks resume.
   Future<void> acceptRepoRename(String appId, String newUrl) async {
-    if (apps.containsKey(appId)) {
-      apps[appId]!.app = apps[appId]!.app.copyWith(
-        url: newUrl,
-        pendingRepoRenameUrl: null,
-      );
-      await saveApps([apps[appId]!.app]);
-    }
+    final AppInMemory? listing = apps[appId];
+    if (listing == null) return;
+    listing.app = listing.app.copyWith(url: newUrl, pendingRepoRenameUrl: null);
+    await saveApps([listing.app]);
   }
 
   /// Downloads the preferred APK for [app], returning a [DownloadedApk] or [DownloadedDir].
@@ -391,16 +470,16 @@ extension AppsProviderInstall on AppsProvider {
     final initialNotification = DownloadNotification(
       app.finalName,
       0,
-      appId: app.id,
+      appId: app.listingKey,
     );
     final notifId = initialNotification.id;
     var nativeDownloadServiceStarted = false;
-    final cancellationToken = registerDownloadCancellation(app.id);
+    final cancellationToken = registerDownloadCancellation(app.listingKey);
     try {
-      if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = 0;
-        apps[app.id]!.downloadReceivedBytes = null;
-        apps[app.id]!.downloadTotalBytes = null;
+      if (apps[app.listingKey] != null) {
+        apps[app.listingKey]!.downloadProgress = 0;
+        apps[app.listingKey]!.downloadReceivedBytes = null;
+        apps[app.listingKey]!.downloadTotalBytes = null;
         notify();
       }
       if (app.apkUrls.isEmpty) throw NoAPKError();
@@ -408,7 +487,8 @@ extension AppsProviderInstall on AppsProvider {
         app = app.copyWith(preferredApkIndex: app.apkUrls.length - 1);
       }
       if (app.preferredApkIndex < 0) app = app.copyWith(preferredApkIndex: 0);
-      if (apps[app.id] != null) apps[app.id]!.app = app;
+      final downloadRelease = InstallReleaseSnapshot.fromApp(app);
+      if (apps[app.listingKey] != null) apps[app.listingKey]!.app = app;
       final AppSource source = SourceProvider().getSource(
         app.url,
         overrideSource: app.overrideSource,
@@ -457,7 +537,7 @@ extension AppsProviderInstall on AppsProvider {
       nativeDownloadServiceStarted =
           await NativeFeatures.startDownloadForegroundService(
             id: initialNotification.id,
-            appId: app.id,
+            appId: app.listingKey,
             title: initialNotification.title,
             message: initialNotification.message,
             channelCode: initialNotification.channelCode,
@@ -470,7 +550,8 @@ extension AppsProviderInstall on AppsProvider {
         unawaited(notificationsProvider?.notify(notif));
       }
       int? prevProg;
-      var fileNameNoExt = '${app.id}-${downloadUrl.hashCode}';
+      var fileNameNoExt =
+          '${app.listingKey}-${downloadReleaseCacheKey(downloadRelease)}';
       if (source.urlsAlwaysHaveExtension) {
         fileNameNoExt =
             '$fileNameNoExt.${app.apkUrls[app.preferredApkIndex].key.split('.').last}';
@@ -487,10 +568,10 @@ extension AppsProviderInstall on AppsProvider {
       ]) {
         onProgress?.call(progress, received, total);
         final int? prog = progress?.ceil();
-        if (apps[app.id] != null) {
-          apps[app.id]!.downloadReceivedBytes = received;
-          apps[app.id]!.downloadTotalBytes = total;
-          apps[app.id]!.downloadProgress = progress;
+        if (apps[app.listingKey] != null) {
+          apps[app.listingKey]!.downloadReceivedBytes = received;
+          apps[app.listingKey]!.downloadTotalBytes = total;
+          apps[app.listingKey]!.downloadProgress = progress;
           // Only rebuild listeners when the displayed (integer) percent
           // actually changes, to avoid redundant whole-page rebuilds on
           // every sub-percent download tick.
@@ -504,7 +585,7 @@ extension AppsProviderInstall on AppsProvider {
           // Only foreground downloads are cancellable from the notification;
           // the background isolate's token isn't reachable from the main
           // isolate that handles the action tap.
-          appId: isBg ? null : app.id,
+          appId: isBg ? null : app.listingKey,
           receivedBytes: received,
           totalBytes: total,
         );
@@ -516,7 +597,7 @@ extension AppsProviderInstall on AppsProvider {
             unawaited(
               NativeFeatures.showDownloadProgressNotification(
                 id: notif.id,
-                appId: app.id,
+                appId: app.listingKey,
                 title: notif.title,
                 message: notif.message,
                 channelCode: notif.channelCode,
@@ -570,15 +651,16 @@ extension AppsProviderInstall on AppsProvider {
         );
         downloadedFile = await runDownload(unauthenticatedHeaders);
       }
-      if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = _remainingStepsProgress.toDouble();
+      if (apps[app.listingKey] != null) {
+        apps[app.listingKey]!.downloadProgress = _remainingStepsProgress
+            .toDouble();
         notify();
         notif = DownloadNotification(app.finalName, _remainingStepsProgress);
         if (nativeDownloadServiceStarted) {
           unawaited(
             NativeFeatures.showDownloadProgressNotification(
               id: notif.id,
-              appId: app.id,
+              appId: app.listingKey,
               title: notif.title,
               message: notif.message,
               channelCode: notif.channelCode,
@@ -705,7 +787,11 @@ extension AppsProviderInstall on AppsProvider {
         }
       }
       if (isAPK) {
-        return DownloadedApk(resolvedAppId, downloadedFile);
+        return DownloadedApk(
+          resolvedAppId,
+          downloadedFile,
+          release: downloadRelease.withPackage(newInfo),
+        );
       } else {
         DownloadedDirType dirType;
         if (isXAPK) {
@@ -715,25 +801,39 @@ extension AppsProviderInstall on AppsProvider {
         } else {
           dirType = DownloadedDirType.zip;
         }
-        return DownloadedDir(resolvedAppId, downloadedFile, apkDir!, dirType);
+        return DownloadedDir(
+          resolvedAppId,
+          downloadedFile,
+          apkDir!,
+          dirType,
+          release: downloadRelease.withPackage(newInfo),
+        );
       }
     } finally {
-      clearDownloadCancellation(app.id);
+      clearDownloadCancellation(app.listingKey);
       if (nativeDownloadServiceStarted) {
         await NativeFeatures.stopDownloadForegroundService();
       }
       unawaited(notificationsProvider?.cancel(notifId));
-      if (apps[app.id] != null) {
-        apps[app.id]!.downloadProgress = null;
-        apps[app.id]!.downloadReceivedBytes = null;
-        apps[app.id]!.downloadTotalBytes = null;
+      if (apps[app.listingKey] != null) {
+        apps[app.listingKey]!.downloadProgress = null;
+        apps[app.listingKey]!.downloadReceivedBytes = null;
+        apps[app.listingKey]!.downloadTotalBytes = null;
         notify();
       }
     }
   }
 
+  // Gates every update action in the app, so the awaiting-third-party indicator
+  // is deliberately excluded: that row is waiting on another app's installer, not
+  // occupying ObtainX, and counting it would disable "update all" and every row's
+  // update button for the life of the indicator.
   bool areDownloadsRunning() => apps.values
-      .where((element) => element.downloadProgress != null)
+      .where(
+        (element) =>
+            element.downloadProgress != null &&
+            element.downloadProgress != _awaitingThirdPartyInstallSentinel,
+      )
       .isNotEmpty;
 
   /// Whether [app] can be installed without a user prompt, based only on
@@ -808,43 +908,7 @@ extension AppsProviderInstall on AppsProvider {
     String filePath,
     String destinationPath,
   ) async {
-    final File tarballFile = File(filePath);
-    final bytes = await tarballFile.readAsBytes();
-    List<int> decompressed;
-
-    if (bytes.length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
-      decompressed = const archive.GZipDecoder().decodeBytes(bytes);
-    } else if (bytes.length >= 3 &&
-        bytes[0] == 0x42 &&
-        bytes[1] == 0x5a &&
-        bytes[2] == 0x68) {
-      decompressed = archive.BZip2Decoder().decodeBytes(bytes);
-    } else if (bytes.length >= 6 &&
-        bytes[0] == 0xfd &&
-        bytes[1] == 0x37 &&
-        bytes[2] == 0x7a &&
-        bytes[3] == 0x58 &&
-        bytes[4] == 0x5a &&
-        bytes[5] == 0x00) {
-      decompressed = archive.XZDecoder().decodeBytes(bytes);
-    } else {
-      decompressed = bytes;
-    }
-
-    final tarArchive = archive.TarDecoder().decodeBytes(decompressed);
-    final destDir = Directory(destinationPath);
-    if (!destDir.existsSync()) {
-      destDir.createSync(recursive: true);
-    }
-    for (final file in tarArchive.files) {
-      if (file.isFile) {
-        final content = file.content;
-        final outPath = '${destDir.path}/${file.name}';
-        final outFile = File(outPath);
-        outFile.createSync(recursive: true);
-        outFile.writeAsBytesSync(content);
-      }
-    }
+    await extractTarballOffIsolate(filePath, destinationPath);
   }
 
   Future<bool> installApkDir(
@@ -898,24 +962,47 @@ extension AppsProviderInstall on AppsProvider {
       if (installer.wantsContainerHandoff) {
         // Hand off the original bundle file (XAPK/ZIP/tarball) to the
         // third-party installer rather than the extracted split APKs.
+        InstallReleaseSnapshot? release;
         try {
+          final candidates = _preferMatchingApk(
+            apkFiles,
+            dir.appId,
+          ).cast<File>().toList();
+          if (candidates.isEmpty) throw NoAPKError();
+          final packageInfo = await packageManager.getPackageArchiveInfo(
+            archiveFilePath: candidates.first.path,
+          );
+          if (packageInfo == null) throw NoAPKError();
+          release = dir.release?.withPackage(packageInfo);
+          await _recordPendingInstall(dir.appId, release);
           final result = await installer.installApk(
             [dir.file.path],
             appId: dir.appId,
             installOptions: installOptions,
           );
+          if (result.isError || result.isCancelled) {
+            await _clearPendingInstall(dir.appId, release);
+          }
+          if (result.isHandedOff) {
+            _awaitThirdPartyInstallConfirmation(dir.appId);
+          }
           if (result.isError) {
             throw InstallError(result.errorCode ?? -1);
           }
           if (result.isSuccess) {
             somethingInstalled = true;
-            apps[dir.appId]!.app = apps[dir.appId]!.app.copyWith(
-              installedVersion: apps[dir.appId]!.app.latestVersion,
+            apps[dir.appId]!.app = recordConfirmedInstall(
+              apps[dir.appId]!.app,
+              release,
+              packageInfo,
             );
-            await saveApps([apps[dir.appId]!.app]);
+            await saveApps([
+              apps[dir.appId]!.app,
+            ], attemptToCorrectInstallStatus: false);
           }
           unawaited(_disposeDownloadedBundle(dir, somethingInstalled));
         } catch (e) {
+          await _clearPendingInstall(dir.appId, release);
           unawaited(
             logs.add(
               'Could not install container from ${dir.type}: ${e.toString()}',
@@ -937,13 +1024,13 @@ extension AppsProviderInstall on AppsProvider {
 
       try {
         final wasInstalled = await installApk(
-          DownloadedApk(dir.appId, apkFiles[0]),
+          DownloadedApk(dir.appId, apkFiles[0], release: dir.release),
           firstInstallNotificationsProvider,
           needsBGWorkaround: needsBGWorkaround,
           installOptions: installOptions,
           additionalAPKs: apkFiles
               .sublist(1)
-              .map((a) => DownloadedApk(dir.appId, a))
+              .map((a) => DownloadedApk(dir.appId, a, release: dir.release))
               .toList(),
           // Container already verified/scanned above.
           skipMalwareScan: true,
@@ -1075,28 +1162,35 @@ extension AppsProviderInstall on AppsProvider {
       }
       throw DowngradeError(oldVersionCode!, newVersionCode!);
     }
-    if (needsBGWorkaround) {
-      // Background process workaround (#896): the `await installApk` below
-      // will never return in BG, so pre-update the installed version.
-      // TODO(#896): Remove this when platform install API supports BG completion.
-      apps[file.appId]!.app = apps[file.appId]!.app.copyWith(
-        installedVersion: apps[file.appId]!.app.latestVersion,
-      );
-      await saveApps([
-        apps[file.appId]!.app,
-      ], attemptToCorrectInstallStatus: false);
-    }
+    // Persist intent before handoff. A broadcast or later device observation can
+    // confirm it even if this background isolate never resumes after install.
+    final installedRelease = file.release?.withPackage(newInfo);
+    await _recordPendingInstall(file.appId, installedRelease);
     final allAPKs = [file.file.path];
     allAPKs.addAll(additionalAPKs.map((a) => a.file.path));
-    final InstallResult result = await getInstaller().installApk(
-      allAPKs,
-      appId: file.appId,
-      installOptions: installOptions,
-    );
+    final InstallResult result;
+    try {
+      result = await getInstaller().installApk(
+        allAPKs,
+        appId: file.appId,
+        installOptions: installOptions,
+      );
+    } catch (_) {
+      await _clearPendingInstall(file.appId, installedRelease);
+      rethrow;
+    }
     final bool installed = result.isSuccess;
+    if (result.isError || result.isCancelled) {
+      await _clearPendingInstall(file.appId, installedRelease);
+    }
+    if (result.isHandedOff) {
+      _awaitThirdPartyInstallConfirmation(file.appId);
+    }
     if (installed) {
-      apps[file.appId]!.app = apps[file.appId]!.app.copyWith(
-        installedVersion: apps[file.appId]!.app.latestVersion,
+      apps[file.appId]!.app = recordConfirmedInstall(
+        apps[file.appId]!.app,
+        installedRelease,
+        newInfo,
       );
     }
     // Dispose the downloaded APK for EVERY outcome (parity with main's
@@ -1111,6 +1205,7 @@ extension AppsProviderInstall on AppsProvider {
         primaryFile: file.file,
         installReportedOk: installed,
         apkSaveTreeUri: apkSaveTreeUri,
+        release: file.release,
       );
     } else {
       final App? appRef = apps[file.appId]?.app;
@@ -1137,11 +1232,15 @@ extension AppsProviderInstall on AppsProvider {
       // loadApps(silent: true), which rebuilds every entry from the (still stale)
       // JSON on disk — that can land inside the file/SAF work above and drop the
       // version this install just recorded (#222).
-      entryToSave.app = entryToSave.app.copyWith(
-        installedVersion: entryToSave.app.latestVersion,
+      entryToSave.app = recordConfirmedInstall(
+        entryToSave.app,
+        installedRelease,
+        newInfo,
       );
     }
-    await saveApps([apps[file.appId]!.app]);
+    await saveApps([
+      apps[file.appId]!.app,
+    ], attemptToCorrectInstallStatus: !installed);
     return installed;
   }
 
@@ -1349,7 +1448,7 @@ extension AppsProviderInstall on AppsProvider {
       final trackOnly = apps[id]!.app.settings.getBool('trackOnly');
       final refreshBeforeDownload = apps[id]!.needsRefreshBeforeDownload;
       if (refreshBeforeDownload) {
-        await checkUpdate(apps[id]!.app.id);
+        await checkUpdate(id);
       }
       if (!trackOnly) {
         apkUrl = await confirmAppFileUrl(
@@ -1405,13 +1504,25 @@ extension AppsProviderInstall on AppsProvider {
       dialogTheme: dialogTheme,
     );
 
-    // Mark all specified track-only apps as latest
+    // Mark all specified track-only apps as latest. Recorded as an explicit user
+    // mark and saved without install-status correction: the user asked for this,
+    // and correction would otherwise wipe the version right back out within this
+    // same save for any track-only app whose package is absent from the device.
     await saveApps(
       trackOnlyAppsToUpdate.map((e) {
-        var a = apps[e]!.app;
-        a = a.copyWith(installedVersion: a.latestVersion);
+        var a = acknowledgeSourceRelease(apps[e]!.app);
+        a = a.copyWith(
+          additionalSettings: Map<String, dynamic>.from(a.additionalSettings)
+            ..[trackOnlyUserMarkedInstalledKey] = true
+            ..['trackOnlyUndeterminedInstalledVersion'] = false
+            // Retire the legacy 2.9.7 reset sentinel, as the mass-mark action
+            // does: its migration restores the device version (null here) and
+            // would undo this mark on the next reconcile.
+            ..remove(installStatusResetKey),
+        );
         return a;
       }).toList(),
+      attemptToCorrectInstallStatus: false,
     );
 
     final MultiAppMultiError errors = MultiAppMultiError();
@@ -1427,6 +1538,22 @@ extension AppsProviderInstall on AppsProvider {
     );
     appsToInstall = moveStrToEnd(appsToInstall, '$obtainiumId.fdroid');
     appsToInstall = moveStrToEnd(appsToInstall, '$obtainiumId.debug');
+
+    // Acquire install privileges once for the whole batch. This used to run per
+    // app inside the download step, which with parallel downloads meant one
+    // check per app racing all the others (and, for Shizuku, racing the first
+    // install) as soon as the APKs were ready - the batch stalled with nothing
+    // in the logs (ObtainX#283). One prompt up front is also less intrusive.
+    if (appsToInstall.isNotEmpty) {
+      try {
+        await getInstaller().ensurePermission(toastTheme: dialogTheme);
+      } catch (error) {
+        for (final id in appsToInstall) {
+          errors.add(id, error, appName: apps[id]?.name);
+        }
+        throw errors;
+      }
+    }
 
     Future<void> installDownloadResult(_InstallResult result) async {
       if ((result.downloadedFile == null && result.downloadedDir == null) ||
@@ -1501,7 +1628,9 @@ extension AppsProviderInstall on AppsProvider {
       // Clear any remaining progress in case the flow was interrupted
       // (e.g. unhandled error in a download, app backgrounded/killed, etc.)
       for (var id in appsToInstall) {
-        apps[id]?.downloadProgress = null;
+        if (apps[id]?.downloadProgress != _awaitingThirdPartyInstallSentinel) {
+          apps[id]?.downloadProgress = null;
+        }
       }
       notify();
     }
@@ -1540,7 +1669,7 @@ extension AppsProviderInstall on AppsProvider {
       MapEntry<String, String>? fileUrl;
       final refreshBeforeDownload = apps[id]!.needsRefreshBeforeDownload;
       if (refreshBeforeDownload) {
-        await checkUpdate(apps[id]!.app.id);
+        await checkUpdate(id);
       }
       if (apps[id]!.app.apkUrls.isNotEmpty ||
           apps[id]!.app.otherAssetUrls.isNotEmpty) {
@@ -1823,7 +1952,11 @@ extension AppsProviderInstall on AppsProvider {
         unawaited(notificationsProvider?.cancel(updateNotificationId));
       }
     } finally {
-      appEntry.downloadProgress = null;
+      // Leave the awaiting-third-party indicator alone; it outlives the handoff
+      // on purpose and clears itself on the package broadcast or its own timer.
+      if (appEntry.downloadProgress != _awaitingThirdPartyInstallSentinel) {
+        appEntry.downloadProgress = null;
+      }
       notify();
     }
   }
@@ -1861,7 +1994,6 @@ extension AppsProviderInstall on AppsProvider {
       notify();
       willBeSilent = await canInstallSilently(apps[id]!.app);
       final installer = getInstaller();
-      await installer.ensurePermission(toastTheme: toastTheme);
       // Only the stock installer surfaces a system install prompt that pulls the
       // user away; wait for them to return before proceeding.
       if (!willBeSilent &&
@@ -1977,7 +2109,11 @@ extension AppsProviderInstall on AppsProvider {
   /// Verifies a downloaded GitHub artifact's SHA-256 against its build
   /// attestation. Returns a [githubAttestationStatus*] value, or null when the
   /// app's source is not GitHub.
-  Future<String?> verifyGitHubAttestation(App app, File file) async {
+  Future<String?> verifyGitHubAttestation(
+    App app,
+    File file, {
+    Future<String> Function()? calculateDigest,
+  }) async {
     final AppSource source = SourceProvider().getSource(
       app.url,
       overrideSource: app.overrideSource,
@@ -1987,8 +2123,8 @@ extension AppsProviderInstall on AppsProvider {
     }
     try {
       final String standardizedUrl = source.standardizeUrl(app.url);
-      final hash = await sha256.bind(file.openRead()).first;
-      final String sha256Digest = hash.toString();
+      final String sha256Digest =
+          await (calculateDigest?.call() ?? sha256FileOffIsolate(file.path));
       return await source.getAttestationStatusForSha256Digest(
         standardizedUrl,
         sha256Digest,
@@ -2031,12 +2167,17 @@ extension AppsProviderInstall on AppsProvider {
   /// longer mutates [app]; the caller applies the returned detail/reportUrl via
   /// copyWith.
   Future<({String? status, String? detail, String? reportUrl})>
-  scanApkWithVirusTotal(App app, File file) async {
+  scanApkWithVirusTotal(
+    App app,
+    File file, {
+    Future<String> Function()? calculateDigest,
+  }) async {
     if (!willScanApkWithVirusTotal(app)) {
       return (status: null, detail: null, reportUrl: null);
     }
     if (kDebugMode && debugForceFlaggedMalwareScan) {
-      final hash = await sha256.bind(file.openRead()).first;
+      final hash =
+          await (calculateDigest?.call() ?? sha256FileOffIsolate(file.path));
       return (
         status: malwareScanStatusFlagged,
         detail:
@@ -2049,7 +2190,8 @@ extension AppsProviderInstall on AppsProvider {
       virusTotalApiKeyKey,
     )!;
     try {
-      final hash = await sha256.bind(file.openRead()).first;
+      final hash =
+          await (calculateDigest?.call() ?? sha256FileOffIsolate(file.path));
       final result = await VirusTotalScanner().scan(
         file,
         hash.toString(),
@@ -2079,13 +2221,18 @@ extension AppsProviderInstall on AppsProvider {
   _scanApkWithVirusTotalShowingProgress(
     String appId,
     App app,
-    File primaryFile,
-  ) async {
+    File primaryFile, {
+    Future<String> Function()? calculateDigest,
+  }) async {
     if (willScanApkWithVirusTotal(app)) {
       apps[appId]?.downloadProgress = _scanningProgressSentinel;
       notify();
     }
-    return scanApkWithVirusTotal(app, primaryFile);
+    return scanApkWithVirusTotal(
+      app,
+      primaryFile,
+      calculateDigest: calculateDigest,
+    );
   }
 
   /// Acts on a [scanApkWithVirusTotal] result: `clean` never interrupts;
@@ -2272,7 +2419,10 @@ extension AppsProviderInstall on AppsProvider {
           bundleCopiedOk = await _chunkedCopyApkToSafTree(
             dir.file,
             resolvedApkSaveUri,
-            storeFacingDownloadDisplayNameForApp(appForSave),
+            storeFacingDownloadDisplayNameForApp(
+              appForSave,
+              release: dir.release,
+            ),
           );
         } catch (exception, stackTrace) {
           unawaited(
@@ -2326,6 +2476,7 @@ extension AppsProviderInstall on AppsProvider {
     required File primaryFile,
     required bool installReportedOk,
     required Uri apkSaveTreeUri,
+    InstallReleaseSnapshot? release,
   }) async {
     try {
       final App? appRef = apps[appId]?.app;
@@ -2337,7 +2488,7 @@ extension AppsProviderInstall on AppsProvider {
           copiedOk = await _chunkedCopyApkToSafTree(
             primaryFile,
             apkSaveTreeUri,
-            storeFacingDownloadDisplayNameForApp(appRef),
+            storeFacingDownloadDisplayNameForApp(appRef, release: release),
           );
         } catch (exception, stackTrace) {
           unawaited(
@@ -2383,6 +2534,13 @@ extension AppsProviderInstall on AppsProvider {
     final AppInMemory? appInMemory = apps[appId];
     if (appInMemory == null) return true;
     App app = appInMemory.app;
+    // Both checks verify the same artifact. Keep this cache local to this
+    // verification attempt; a user-requested retry computes a fresh digest.
+    Future<String>? pendingDigest;
+    Future<String> calculateDigest() {
+      return pendingDigest ??= sha256FileOffIsolate(primaryFile.path);
+    }
+
     final AppSource source = SourceProvider().getSource(
       app.url,
       overrideSource: app.overrideSource,
@@ -2403,6 +2561,7 @@ extension AppsProviderInstall on AppsProvider {
       final String? attestationStatus = await verifyGitHubAttestation(
         app,
         primaryFile,
+        calculateDigest: calculateDigest,
       );
       app = app.copyWith(latestAttestationStatus: attestationStatus);
       if (apps[appId] != null) {
@@ -2432,6 +2591,7 @@ extension AppsProviderInstall on AppsProvider {
       appId,
       app,
       primaryFile,
+      calculateDigest: calculateDigest,
     );
     while (scan.status != null) {
       app = app.copyWith(

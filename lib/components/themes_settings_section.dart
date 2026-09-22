@@ -101,28 +101,17 @@ List<Widget> buildThemesSettingsCardItems(
       ),
     ...buildThemeAccentSettingsCardItems(androidInfoFuture),
     _ShadingIntensityTile(settings: settings),
-    ListTile(
+    AppSwitchListTile(
       title: Text(tr('settingsGradientBackground')),
-      trailing: IgnorePointer(
-        ignoring: settings.blackThemeActive,
-        child: AppSwitch(
-          value: settings.useGradientBackground,
-          onChanged: settings.blackThemeActive
-              ? null
-              : (bool value) {
-                  settings.useGradientBackground = value;
-                },
-        ),
-      ),
-      onTap: () {
-        if (settings.blackThemeActive) {
-          _showBlackThemeSurfaceSettingDisabledSnackbar(context);
-          return;
-        }
-        settings.useGradientBackground = !settings.useGradientBackground;
-      },
+      value: settings.useGradientBackground,
+      onChanged: settings.reduceVisualEffects || settings.blackThemeActive
+          ? null
+          : (bool value) {
+              settings.useGradientBackground = value;
+            },
     ),
     ListTile(
+      enabled: !settings.reduceVisualEffects,
       title: Text(tr('settingsProgressiveBlur')),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -154,9 +143,11 @@ List<Widget> buildThemesSettingsCardItems(
     AppSwitchListTile(
       title: Text(tr('matchAppPageToIconColors')),
       value: settings.matchAppPageToIconColors,
-      onChanged: (bool value) {
-        settings.matchAppPageToIconColors = value;
-      },
+      onChanged: settings.reduceVisualEffects
+          ? null
+          : (bool value) {
+              settings.matchAppPageToIconColors = value;
+            },
     ),
     // Master "low-fidelity mode" toggle. Forces blur off and skips the
     // OpenContainer container-transform morph for apps-list -> AppPage

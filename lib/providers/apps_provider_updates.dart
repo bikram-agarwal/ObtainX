@@ -3,11 +3,19 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:easy_localization/easy_localization.dart';
+import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
+import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/services/bulk_import_service.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/store_icon_resolver.dart';
+import 'package:obtainium/version/partial_download_version.dart';
 
 // ── Bounded update-check parallelism (device-tuned) ─────────────────────────
 // Start fast on capable devices, but keep a bounded worker pool so a large app
@@ -24,176 +32,90 @@ const int _modestRamThresholdMb = 6144;
 // App-level update verdicts. The pure string primitives they build on (equality,
 // ordering, reconciliation) live in lib/version/version_strings.dart.
 
-/// True when the app compares against the device's version *code* but the
-/// source's latest version is not a version code — e.g. a stored installed
-/// version of `123` against a latest of `1.2.4`.
-///
-/// The two values live in different namespaces, so digit-wise ordering is
-/// meaningless: `123 > 1` reads as "installed is newer" and silently hides every
-/// future update, and [VersionDetectionMode.versionCode] is excluded from
-/// install-status auto-disable, so nothing heals it. Report such a pair as
-/// unorderable — the user gets the "version order unclear" affordance and can fix
-/// the mode, instead of an app that is quietly never updated again.
-bool versionCodeModeCannotCompare(App app) {
-  if (!app.usesVersionCodeAsOsVersion) return false;
-  final String? installed = app.installedVersion;
-  if (installed == null || installed.isEmpty || app.latestVersion.isEmpty) {
-    return false;
-  }
-  // Installed is the device's version code (a bare integer); the comparison is
-  // only sound when the source's version is a bare integer too.
-  if (!isBareIntegerVersion(installed)) return false;
-  return !isBareIntegerVersion(app.latestVersion);
+// Kept for reading older records; new decisions are derived from observations.
+const unreconciledVersionComparisonKey = 'unreconciledVersionComparison';
+
+bool appHasUnreconciledVersionComparison(App app) {
+  return app.installedVersion != null &&
+      app.latestVersion.isNotEmpty &&
+      app.versionDetectionMode == VersionDetectionMode.auto &&
+      !app.usesVersionCodeAsOsVersion &&
+      !app.settings.getBool('trackOnly') &&
+      versionDecisionForApp(app).relation == VersionRelation.unknown;
 }
 
-/// User skipped the current [App.latestVersion]; nagging and update badges are
-/// suppressed.
+bool versionCodeModeCannotCompare(App app) {
+  return versionDecisionForApp(app).reason == 'codeNameMismatch';
+}
+
 bool isSkipActiveForCurrentLatest(App app) {
-  final dynamic skipped = app.additionalSettings['skippedLatestVersion'];
-  if (skipped is! String || skipped.isEmpty) return false;
-  return skipped == app.latestVersion;
+  final skipped = app.additionalSettings['skippedLatestVersion'];
+  return skipped is String &&
+      skipped.isNotEmpty &&
+      (skipped == app.latestVersion ||
+          compareVersionStrings(skipped, app.latestVersion).relation ==
+              VersionRelation.same);
 }
 
 bool appIsUpToDateForFiltering(App app) {
-  final installed = app.installedVersion;
-  final latest = app.latestVersion;
-  if (installed == null) return false;
-  return isSkipActiveForCurrentLatest(app) ||
-      installed == latest ||
-      versionsEffectivelyEqual(installed, latest) ||
-      (installedVersionIsNewerOrEqual(installed, latest) &&
-          !versionOrderIsUnclear(installed, latest) &&
-          // A version code compared against a version string is not "newer".
-          !versionCodeModeCannotCompare(app));
+  if (app.installedVersion == null) return false;
+  if (isSkipActiveForCurrentLatest(app)) return true;
+  final decision = versionDecisionForApp(app);
+  return decision.relation == VersionRelation.same ||
+      decision.relation == VersionRelation.newer;
 }
 
-/// Removes a saved skip once it is stale or the installed app is already at
-/// or ahead of the skipped release.
 App normalizeSkippedLatestVersion(App app) {
-  final dynamic skipped = app.additionalSettings['skippedLatestVersion'];
+  final skipped = app.additionalSettings['skippedLatestVersion'];
   if (skipped is! String || skipped.isEmpty) return app;
-
-  var shouldRemove = skipped != app.latestVersion;
-  final String? installed = app.installedVersion;
-  if (!shouldRemove && installed != null && installed.isNotEmpty) {
-    // Same threshold as appIsUpToDateForFiltering: this used to demand a
-    // strictly newer installed version while filtering accepted newer-or-equal.
-    shouldRemove =
-        installedVersionIsNewerOrEqual(installed, app.latestVersion) &&
-        !versionOrderIsUnclear(installed, app.latestVersion);
+  final decision = versionDecisionForApp(app);
+  if (isSkipActiveForCurrentLatest(app) &&
+      (app.installedVersion == null ||
+          (decision.relation != VersionRelation.same &&
+              decision.relation != VersionRelation.newer))) {
+    return app;
   }
-  if (!shouldRemove) return app;
-
   return app.copyWith(
     additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
       ..remove('skippedLatestVersion'),
   );
 }
 
-/// Installed app should show update affordances and count in update lists
-/// (unless skipped).
 bool appHasActionableUpdate(App app) {
-  final String? installed = app.installedVersion;
-  final String latest = app.latestVersion;
-  if (installed == null || latest.isEmpty) return false;
-  if (isSkipActiveForCurrentLatest(app)) return false;
-  if (installed == latest) return false;
-  if (versionsEffectivelyEqual(installed, latest)) return false;
-  // Unorderable: surfaced by versionOrderUncertainUpdate instead, so it is never
-  // swept into "update all" or a background install.
-  if (versionCodeModeCannotCompare(app)) return false;
-
-  if (versionOrderIsUnclear(installed, latest)) {
-    final dynamic lastInstalledTimeRaw =
-        app.additionalSettings['lastInstalledTime'];
-    if (lastInstalledTimeRaw is int && app.releaseDate != null) {
-      final DateTime installedTime = DateTime.fromMillisecondsSinceEpoch(
-        lastInstalledTimeRaw,
-      );
-      return app.releaseDate!.isAfter(installedTime);
-    }
-    // Pseudo-mode apps can't reliably compare versions; any difference is a
-    // potential update regardless of ordering ambiguity.
-    return !app.usesStandardVersionDetection;
-  }
-
-  // A numeric tie (cmp == 0) cannot reach here: that is exactly what
-  // versionOrderIsUnclear reports, and that branch returned above.
-  return compareVersionsByNumericSegments(installed, latest) != 1;
-}
-
-/// Installed app where installed vs latest differs but ordering is ambiguous
-/// (user must decide). Mutually exclusive with [appHasActionableUpdate] for
-/// normal version strings.
-bool versionOrderUncertainUpdate(App app) {
-  final String? installed = app.installedVersion;
-  final String latest = app.latestVersion;
-  if (installed == null || latest.isEmpty) return false;
-  if (isSkipActiveForCurrentLatest(app)) return false;
-  if (installed == latest) return false;
-  if (versionsEffectivelyEqual(installed, latest)) return false;
-
-  // Pseudo-mode apps cannot reliably order version strings; any version difference
-  // is an update rather than "version order unclear" (parity with appHasActionableUpdate).
-  if (!app.usesStandardVersionDetection) {
+  if (app.installedVersion == null ||
+      app.latestVersion.isEmpty ||
+      isSkipActiveForCurrentLatest(app)) {
     return false;
   }
-  // A stored version code against a source version string genuinely cannot be
-  // ordered — this is the case, not a guess about which is newer.
-  if (versionCodeModeCannotCompare(app)) return true;
-
-  if (versionOrderIsUnclear(installed, latest)) {
-    final dynamic lastInstalledTimeRaw =
-        app.additionalSettings['lastInstalledTime'];
-    if (lastInstalledTimeRaw is int && app.releaseDate != null) {
-      final DateTime installedTime = DateTime.fromMillisecondsSinceEpoch(
-        lastInstalledTimeRaw,
-      );
-      // Suppress the uncertain indicator only when timestamps confirm the
-      // release IS newer than the last install (appHasActionableUpdate already
-      // covers that case). Otherwise the order is still ambiguous.
-      return !app.releaseDate!.isAfter(installedTime);
-    }
-    return true;
-  }
-  return false;
+  return versionDecisionForApp(app).relation == VersionRelation.older;
 }
 
-/// Whether a freshly-checked [app] should be surfaced to the user as an update.
-///
-/// [AppsProviderUpdates.checkUpdates] reports every app whose *source version
-/// string* changed, which is a different question from the one the app list
-/// answers. A source that reformats its version (`1.2.3` → `1.2.3-2`), re-tags an
-/// already installed build, or publishes an older release all change the string
-/// without putting the device behind. Background notifications and background
-/// installs must agree with what the list UI shows, so they go through this
-/// predicate instead of comparing version strings.
-///
-/// [includeVersionOrderUncertain] mirrors [AppsProviderUpdates.findExistingUpdates]:
-/// notifications want ambiguous ordering surfaced so the user can decide,
-/// background install must never treat "can't tell" as "behind".
+bool versionOrderUncertainUpdate(App app) {
+  if (app.installedVersion == null ||
+      app.latestVersion.isEmpty ||
+      isSkipActiveForCurrentLatest(app)) {
+    return false;
+  }
+  final relation = versionDecisionForApp(app).relation;
+  return relation == VersionRelation.unknown ||
+      relation == VersionRelation.sourceChanged;
+}
+
 bool appUpdateIsUserVisible(
   App app, {
   bool includeVersionOrderUncertain = false,
 }) {
   if (isSkipActiveForCurrentLatest(app)) return false;
-  if (app.installedVersion == null) {
-    // Never-installed apps are always installable, as in findExistingUpdates.
-    return app.latestVersion.isNotEmpty;
-  }
+  if (app.installedVersion == null) return app.latestVersion.isNotEmpty;
   return appHasActionableUpdate(app) ||
       (includeVersionOrderUncertain && versionOrderUncertainUpdate(app));
 }
 
-/// True if we should not show "update available" because installed is newer than
-/// or equal to latest by version math.
 bool installedVersionIsNewerOrEqual(String? installed, String latest) {
-  if (installed == null || installed.isEmpty || latest.isEmpty) return false;
-  if (installed == latest || versionsEffectivelyEqual(installed, latest)) {
-    return true;
-  }
-  final cmp = compareVersionsByNumericSegments(installed, latest);
-  return cmp == null ? false : cmp >= 0;
+  if (installed == null) return false;
+  final decision = compareVersionStrings(installed, latest);
+  return decision.relation == VersionRelation.same ||
+      decision.relation == VersionRelation.newer;
 }
 
 /// Track-only open URL: RSS release page when [App.changeLog] is http(s), else
@@ -246,7 +168,7 @@ List<String> appIdsForManualRefresh({
         }
         return folderIdsForApp(app).where(existingFolderIds.contains).isEmpty;
       })
-      .map((App app) => app.id)
+      .map((App app) => app.listingKey)
       .toList();
 }
 
@@ -271,35 +193,331 @@ App? mergeFetchedUpdateWithLiveState({
       : fetchedApp.preferredApkIndex;
   final bool malwareScanStillMatchesRelease =
       liveApp.latestVersion == fetchedApp.latestVersion;
-  return liveApp.copyWith(
-    author: fetchedApp.author,
-    name: fetchedApp.name,
-    latestVersion: fetchedApp.latestVersion,
-    apkUrls: fetchedApp.apkUrls,
-    otherAssetUrls: fetchedApp.otherAssetUrls,
-    preferredApkIndex: preferredApkIndex,
-    lastUpdateCheck: fetchedApp.lastUpdateCheck,
-    releaseDate: fetchedApp.releaseDate,
-    changeLog: fetchedApp.changeLog,
-    pendingRepoRenameUrl: fetchedApp.pendingRepoRenameUrl,
-    iconUrl: fetchedApp.iconUrl,
-    apkSizeBytes: fetchedApp.apkSizeBytes,
-    rawLatestVersionFromSource: fetchedApp.rawLatestVersionFromSource,
-    rawApkNamesFromSource: fetchedApp.rawApkNamesFromSource,
-    rawReleaseTitlesFromSource: fetchedApp.rawReleaseTitlesFromSource,
-    latestIsReproducible: fetchedApp.latestIsReproducible,
-    latestReproducibleStatus: fetchedApp.latestReproducibleStatus,
-    latestReproducibleVersionCode: fetchedApp.latestReproducibleVersionCode,
-    latestAttestationStatus: fetchedApp.latestAttestationStatus,
-    latestMalwareScanStatus: malwareScanStillMatchesRelease
-        ? liveApp.latestMalwareScanStatus
-        : null,
-    latestMalwareScanDetail: malwareScanStillMatchesRelease
-        ? liveApp.latestMalwareScanDetail
-        : null,
-    latestMalwareScanReportUrl: malwareScanStillMatchesRelease
-        ? liveApp.latestMalwareScanReportUrl
-        : null,
+  final settings = Map<String, dynamic>.from(liveApp.additionalSettings)
+    ..remove(sourceVersionCodesKey);
+  if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
+    settings[sourceVersionCodesKey] =
+        fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  settings.remove(sourceBuildComparisonKey);
+  if (fetchedApp.additionalSettings[sourceBuildComparisonKey] != null) {
+    settings[sourceBuildComparisonKey] =
+        fetchedApp.additionalSettings[sourceBuildComparisonKey];
+  }
+  settings.remove('rawSelectedReleaseTitle');
+  if (fetchedApp.additionalSettings['rawSelectedReleaseTitle'] != null) {
+    settings['rawSelectedReleaseTitle'] =
+        fetchedApp.additionalSettings['rawSelectedReleaseTitle'];
+  }
+  settings.remove(partialDownloadFingerprintKey);
+  if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {
+    settings[partialDownloadFingerprintKey] =
+        fetchedApp.additionalSettings[partialDownloadFingerprintKey];
+  }
+  return normalizeSelectedSourceVersion(
+    liveApp.copyWith(
+      additionalSettings: settings,
+      author: fetchedApp.author,
+      name: fetchedApp.name,
+      latestVersion: fetchedApp.latestVersion,
+      apkUrls: fetchedApp.apkUrls,
+      otherAssetUrls: fetchedApp.otherAssetUrls,
+      preferredApkIndex: preferredApkIndex,
+      lastUpdateCheck: fetchedApp.lastUpdateCheck,
+      releaseDate: fetchedApp.releaseDate,
+      changeLog: fetchedApp.changeLog,
+      pendingRepoRenameUrl: fetchedApp.pendingRepoRenameUrl,
+      iconUrl: fetchedApp.iconUrl,
+      apkSizeBytes: fetchedApp.apkSizeBytes,
+      rawLatestVersionFromSource: fetchedApp.rawLatestVersionFromSource,
+      rawApkNamesFromSource: fetchedApp.rawApkNamesFromSource,
+      rawReleaseTitlesFromSource: fetchedApp.rawReleaseTitlesFromSource,
+      latestIsReproducible: fetchedApp.latestIsReproducible,
+      latestReproducibleStatus: fetchedApp.latestReproducibleStatus,
+      latestReproducibleVersionCode: fetchedApp.latestReproducibleVersionCode,
+      latestAttestationStatus: fetchedApp.latestAttestationStatus,
+      latestMalwareScanStatus: malwareScanStillMatchesRelease
+          ? liveApp.latestMalwareScanStatus
+          : null,
+      latestMalwareScanDetail: malwareScanStillMatchesRelease
+          ? liveApp.latestMalwareScanDetail
+          : null,
+      latestMalwareScanReportUrl: malwareScanStillMatchesRelease
+          ? liveApp.latestMalwareScanReportUrl
+          : null,
+    ),
+  );
+}
+
+/// Alternate store names from [BulkScanCache] that may become the tracked source.
+/// Play Store is intentionally excluded.
+const Set<String> swappableAlternateStoreNames = {
+  'F-Droid',
+  'APKPure',
+  'APKMirror',
+  'GitHub',
+};
+
+bool isSwappableGitHubRepoUrl(String url) {
+  final Uri? parsed = Uri.tryParse(url.trim());
+  if (parsed == null) return false;
+  final String host = parsed.host.toLowerCase();
+  if (host != 'github.com' && !host.endsWith('.github.com')) {
+    return false;
+  }
+  final List<String> segments = parsed.pathSegments
+      .where((String segment) => segment.isNotEmpty)
+      .toList();
+  if (segments.length < 2) return false;
+  return segments[0].isNotEmpty && segments[1].isNotEmpty;
+}
+
+/// Persists a known GitHub repository URL as an alternate source without
+/// running GitHub code search.
+Future<void> preserveAlternateGitHubSourceInCache({
+  required String packageId,
+  required String githubUrl,
+}) async {
+  if (!isSwappableGitHubRepoUrl(githubUrl)) return;
+  final String standardizedUrl = GitHub().standardizeUrl(githubUrl);
+  await BulkScanCache.mergeStoreAndSave(
+    <String, Map<String, String>>{},
+    'GitHub',
+    <String, String?>{packageId: standardizedUrl},
+  );
+}
+
+bool isApkMirrorStoreSearchUrl(String url) {
+  final Uri? parsed = Uri.tryParse(url);
+  if (parsed == null) return false;
+  return parsed.host.toLowerCase().contains('apkmirror.com') &&
+      parsed.queryParameters['searchtype'] == 'apk';
+}
+
+/// Resolves a concrete listing URL for a store swap. Returns null when the app
+/// cannot be found on that store.
+Future<String?> resolveSwappableStoreListingUrl({
+  required String storeName,
+  required String packageId,
+  String? candidateUrl,
+}) async {
+  if (!swappableAlternateStoreNames.contains(storeName)) {
+    return null;
+  }
+  switch (storeName) {
+    case 'APKMirror':
+      if (candidateUrl != null &&
+          candidateUrl.isNotEmpty &&
+          !isApkMirrorStoreSearchUrl(candidateUrl)) {
+        return candidateUrl;
+      }
+      return (await BulkImportService.checkApkMirror([packageId]))[packageId];
+    case 'APKPure':
+      if (candidateUrl != null &&
+          candidateUrl.isNotEmpty &&
+          isWellFormedApkPureUrl(candidateUrl)) {
+        return candidateUrl;
+      }
+      return (await BulkImportService.checkApkPure([packageId]))[packageId];
+    case 'F-Droid':
+      if (candidateUrl != null && candidateUrl.isNotEmpty) {
+        return candidateUrl;
+      }
+      return (await BulkImportService.checkFDroid([packageId]))[packageId] ??
+          'https://f-droid.org/packages/$packageId/';
+    case 'GitHub':
+      if (candidateUrl != null &&
+          candidateUrl.isNotEmpty &&
+          isSwappableGitHubRepoUrl(candidateUrl)) {
+        return GitHub().standardizeUrl(candidateUrl);
+      }
+      final Map<String, String>? cachedStores = await BulkScanCache.loadForApp(
+        packageId,
+      );
+      final String? cachedGitHubUrl = cachedStores?['GitHub'];
+      if (cachedGitHubUrl != null &&
+          cachedGitHubUrl.isNotEmpty &&
+          isSwappableGitHubRepoUrl(cachedGitHubUrl)) {
+        return GitHub().standardizeUrl(cachedGitHubUrl);
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+/// Settings whose values are written against one store's file and release
+/// names, so they cannot survive a move to another store.
+///
+/// A filter like `foss` picks the right asset out of a GitHub release and
+/// matches nothing at all among APKPure's `<package>-<versionCode>-<arch>.apk`
+/// names. An empty APK list after filtering is not a fallback - it is the
+/// "no APK found" failure the user sees - so these are dropped and the
+/// destination's defaults apply, exactly as when adding the app from that
+/// store by hand.
+const Set<String> storeShapedAppSettingKeys = {
+  'apkFilterRegEx',
+  'invertAPKFilter',
+  'zippedApkFilterRegEx',
+  'tarballedApkFilterRegEx',
+  'versionExtractionRegEx',
+  'matchGroupToUse',
+};
+
+App prepareAppForTrackedSourceSwap({
+  required App app,
+  required AppSource previousSource,
+  required AppSource destinationSource,
+  required String standardizedDestinationUrl,
+}) {
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    app.additionalSettings,
+  );
+  for (final String metadataKey in <String>[
+    sourceVersionCodesKey,
+    sourceBuildComparisonKey,
+    acknowledgedSourceReleaseKey,
+    'rawSelectedReleaseTitle',
+    partialDownloadFingerprintKey,
+    'skippedLatestVersion',
+    unreconciledVersionComparisonKey,
+    ...storeShapedAppSettingKeys,
+  ]) {
+    settings.remove(metadataKey);
+  }
+  // Options the previous store owns are meaningless at the destination, and one
+  // store's key can mean something different at another. Keys both stores offer
+  // stay (same option, same semantics), as do keys that belong to neither form
+  // - notably 'appId', which identifies the package rather than the store.
+  final Set<String> destinationSettingKeys = destinationSource
+      .flatCombinedFormItemsReadOnly
+      .map((GeneratedFormItem item) => item.key)
+      .toSet();
+  for (final GeneratedFormItem previousSourceItem
+      in previousSource.additionalSourceAppSpecificSettingFormItems.expand(
+        (List<GeneratedFormItem> row) => row,
+      )) {
+    if (!destinationSettingKeys.contains(previousSourceItem.key)) {
+      settings.remove(previousSourceItem.key);
+    }
+  }
+  // Whatever the destination offers and the previous store never set has to
+  // arrive at its default, not absent: APKPure's 'useFirstApkOfVersion'
+  // defaults to on, and reading a missing key as off makes a swapped listing
+  // behave unlike the same app added directly from APKPure.
+  getDefaultValuesFromFormItems(
+    destinationSource.combinedAppSpecificSettingFormItems,
+  ).forEach((String key, dynamic defaultValue) {
+    settings.putIfAbsent(key, () => defaultValue);
+  });
+  if (destinationSource.enforceTrackOnly) {
+    settings['trackOnly'] = true;
+  } else if (previousSource.enforceTrackOnly) {
+    settings.remove('trackOnly');
+  }
+  syncVersionStringSourceSettings(settings);
+  final List<MapEntry<String, String>> versionSourceOptions =
+      destinationSource.versionStringSourceOptions;
+  final String? selectedVersionSource = settings['versionStringSource']
+      ?.toString();
+  if (versionSourceOptions.length <= 1 ||
+      selectedVersionSource == null ||
+      !versionSourceOptions.any(
+        (MapEntry<String, String> option) =>
+            option.key == selectedVersionSource,
+      )) {
+    settings.remove('versionStringSource');
+    syncVersionStringSourceSettings(settings);
+  }
+  return app.copyWith(
+    url: standardizedDestinationUrl,
+    overrideSource: null,
+    pendingRepoRenameUrl: null,
+    iconUrl: null,
+    apkSizeBytes: null,
+    rawLatestVersionFromSource: null,
+    rawApkNamesFromSource: null,
+    rawReleaseTitlesFromSource: null,
+    latestIsReproducible: null,
+    latestReproducibleStatus: null,
+    latestReproducibleVersionCode: null,
+    latestAttestationStatus: null,
+    latestMalwareScanStatus: null,
+    latestMalwareScanDetail: null,
+    latestMalwareScanReportUrl: null,
+    additionalSettings: settings,
+  );
+}
+
+/// Merges a fetched release after a tracked-source swap. Unlike
+/// [mergeFetchedUpdateWithLiveState], the live row still points at the previous
+/// source until this merge commits the new URL and override.
+App? mergeTrackedSourceSwap({
+  required String originalUrl,
+  required String? originalOverrideSource,
+  required App? liveApp,
+  required App requestedApp,
+  required App fetchedApp,
+}) {
+  if (liveApp == null ||
+      liveApp.url != originalUrl ||
+      liveApp.overrideSource != originalOverrideSource) {
+    return null;
+  }
+  final int preferredApkIndex =
+      liveApp.preferredApkIndex < fetchedApp.apkUrls.length
+      ? liveApp.preferredApkIndex
+      : fetchedApp.preferredApkIndex;
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    requestedApp.additionalSettings,
+  )..remove(sourceVersionCodesKey);
+  if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
+    settings[sourceVersionCodesKey] =
+        fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  settings.remove(sourceBuildComparisonKey);
+  if (fetchedApp.additionalSettings[sourceBuildComparisonKey] != null) {
+    settings[sourceBuildComparisonKey] =
+        fetchedApp.additionalSettings[sourceBuildComparisonKey];
+  }
+  settings.remove('rawSelectedReleaseTitle');
+  if (fetchedApp.additionalSettings['rawSelectedReleaseTitle'] != null) {
+    settings['rawSelectedReleaseTitle'] =
+        fetchedApp.additionalSettings['rawSelectedReleaseTitle'];
+  }
+  settings.remove(partialDownloadFingerprintKey);
+  if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {
+    settings[partialDownloadFingerprintKey] =
+        fetchedApp.additionalSettings[partialDownloadFingerprintKey];
+  }
+  return normalizeSelectedSourceVersion(
+    liveApp.copyWith(
+      url: requestedApp.url,
+      overrideSource: requestedApp.overrideSource,
+      pendingRepoRenameUrl: null,
+      additionalSettings: settings,
+      author: fetchedApp.author,
+      name: fetchedApp.name,
+      latestVersion: fetchedApp.latestVersion,
+      apkUrls: fetchedApp.apkUrls,
+      otherAssetUrls: fetchedApp.otherAssetUrls,
+      preferredApkIndex: preferredApkIndex,
+      lastUpdateCheck: fetchedApp.lastUpdateCheck,
+      releaseDate: fetchedApp.releaseDate,
+      changeLog: fetchedApp.changeLog,
+      iconUrl: fetchedApp.iconUrl,
+      apkSizeBytes: fetchedApp.apkSizeBytes,
+      rawLatestVersionFromSource: fetchedApp.rawLatestVersionFromSource,
+      rawApkNamesFromSource: fetchedApp.rawApkNamesFromSource,
+      rawReleaseTitlesFromSource: fetchedApp.rawReleaseTitlesFromSource,
+      latestIsReproducible: fetchedApp.latestIsReproducible,
+      latestReproducibleStatus: fetchedApp.latestReproducibleStatus,
+      latestReproducibleVersionCode: fetchedApp.latestReproducibleVersionCode,
+      latestAttestationStatus: fetchedApp.latestAttestationStatus,
+      latestMalwareScanStatus: null,
+      latestMalwareScanDetail: null,
+      latestMalwareScanReportUrl: null,
+    ),
   );
 }
 
@@ -400,6 +618,10 @@ extension AppsProviderUpdates on AppsProvider {
   }
 
   Future<App?> fetchUpdate(String appId) async {
+    return SourceRequestSession.run(() => _fetchUpdateInSession(appId));
+  }
+
+  Future<App?> _fetchUpdateInSession(String appId) async {
     final _FetchedAppUpdate? update = await _fetchUpdateSnapshot(appId);
     if (update == null) return null;
     return mergeFetchedUpdateWithLiveState(
@@ -410,6 +632,10 @@ extension AppsProviderUpdates on AppsProvider {
   }
 
   Future<App?> checkUpdate(String appId) async {
+    return SourceRequestSession.run(() => _checkUpdateInSession(appId));
+  }
+
+  Future<App?> _checkUpdateInSession(String appId) async {
     final _FetchedAppUpdate? update = await _fetchUpdateSnapshot(appId);
     if (update == null) return null;
     final App? mergedApp = mergeFetchedUpdateWithLiveState(
@@ -422,6 +648,110 @@ extension AppsProviderUpdates on AppsProvider {
     return mergedApp.latestVersion != update.requestedApp.latestVersion
         ? mergedApp
         : null;
+  }
+
+  /// Moves [appId] to [storeName] using [candidateUrl] when known, refreshes
+  /// metadata from the destination source, and persists only after a successful
+  /// fetch. Returns null when the app is missing or a concurrent edit wins.
+  Future<App?> swapTrackedSource({
+    required String appId,
+    required String storeName,
+    String? candidateUrl,
+  }) {
+    return SourceRequestSession.run(
+      () => _swapTrackedSourceInSession(
+        appId: appId,
+        storeName: storeName,
+        candidateUrl: candidateUrl,
+      ),
+    );
+  }
+
+  Future<App?> _swapTrackedSourceInSession({
+    required String appId,
+    required String storeName,
+    String? candidateUrl,
+  }) async {
+    if (!swappableAlternateStoreNames.contains(storeName)) {
+      throw ObtainiumError(tr('swapTrackedSourceUnsupportedStore'));
+    }
+    final AppInMemory? entry = apps[appId];
+    if (entry == null) {
+      return null;
+    }
+    if (entry.downloadProgress != null) {
+      throw ObtainiumError(tr('unexpectedError'));
+    }
+    final App currentApp = entry.app;
+    // [appId] identifies the listing being swapped, which is not the Android
+    // package ID once a package is tracked from more than one store. The
+    // store-availability cache is keyed by package, so it needs this.
+    final String packageId = currentApp.id;
+    final String originalUrl = currentApp.url;
+    final String? originalOverrideSource = currentApp.overrideSource;
+    final SourceProvider sourceProvider = SourceProvider();
+    final AppSource previousSource = sourceProvider.getSource(
+      currentApp.url,
+      overrideSource: currentApp.overrideSource,
+    );
+    if (previousSource.sourceIdentifier == 'GitHub' ||
+        isSwappableGitHubRepoUrl(originalUrl)) {
+      await preserveAlternateGitHubSourceInCache(
+        packageId: packageId,
+        githubUrl: previousSource.standardizeUrl(originalUrl),
+      );
+    }
+    final String? resolvedUrl = await resolveSwappableStoreListingUrl(
+      storeName: storeName,
+      packageId: packageId,
+      candidateUrl: candidateUrl,
+    );
+    if (resolvedUrl == null || resolvedUrl.isEmpty) {
+      throw NoAPKError()..url = candidateUrl ?? storeName;
+    }
+    final AppSource destinationSource = sourceProvider.getSource(resolvedUrl);
+    final String standardizedUrl = destinationSource.standardizeUrl(
+      resolvedUrl,
+    );
+    final App requestedApp = prepareAppForTrackedSourceSwap(
+      app: currentApp,
+      previousSource: previousSource,
+      destinationSource: destinationSource,
+      standardizedDestinationUrl: standardizedUrl,
+    );
+    // Swapping stores must obey the same rule as adding an app: one listing per
+    // package per store. Without this, swapping a package's GitHub listing onto
+    // F-Droid while it is already tracked from F-Droid leaves it tracked twice
+    // from the same store. Checked before the fetch so it costs no request.
+    if (sameStoreListingIn(apps, requestedApp, ignoreKey: entry.listingKey) !=
+        null) {
+      throw ObtainiumError(tr('appAlreadyAdded'));
+    }
+    App fetchedApp = await sourceProvider.getApp(
+      destinationSource,
+      standardizedUrl,
+      requestedApp.additionalSettings,
+      currentApp: requestedApp,
+    );
+    fetchedApp = await _fillDownloadSizeIfUpdatePending(
+      destinationSource,
+      requestedApp,
+      fetchedApp,
+    );
+    final App? mergedApp = mergeTrackedSourceSwap(
+      originalUrl: originalUrl,
+      originalOverrideSource: originalOverrideSource,
+      liveApp: apps[appId]?.app,
+      requestedApp: requestedApp,
+      fetchedApp: fetchedApp,
+    );
+    if (mergedApp == null) {
+      return null;
+    }
+    // saveApps re-resolves the store from the app's new URL, so the listing
+    // already reports the destination store here.
+    await saveApps([mergedApp]);
+    return mergedApp;
   }
 
   /// Returns app IDs sorted by last update check time, oldest first.
@@ -451,7 +781,7 @@ extension AppsProviderUpdates on AppsProvider {
                 app.app.settings.getBool('trackOnly');
           }
         })
-        .map((e) => e.app.id)
+        .map((e) => e.listingKey)
         .toList();
     appIds.sort(
       (a, b) =>
@@ -465,6 +795,33 @@ extension AppsProviderUpdates on AppsProvider {
     return appIds;
   }
 
+  /// Earliest moment any tracked app becomes due for a check, or null when
+  /// something is due already (or checking is disabled). Applies the same
+  /// eligibility filters as [getAppsSortedByUpdateCheckTime], so a background
+  /// wake-up can trust it to decide whether loading the app records is worth
+  /// it at all.
+  DateTime? earliestNextUpdateCheckDue() {
+    final int intervalMinutes = settingsProvider.updateInterval;
+    if (intervalMinutes <= 0) return null;
+    final Duration interval = Duration(minutes: intervalMinutes);
+    DateTime? earliest;
+    for (final listing in apps.values) {
+      final App app = listing.app;
+      if (app.settings.getBool('onDemandOnly')) continue;
+      if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps &&
+          app.installedVersion == null &&
+          !app.settings.getBool('trackOnly')) {
+        continue;
+      }
+      final DateTime? checked = app.lastUpdateCheck;
+      // Never checked means due now, which leaves nothing to wait for.
+      if (checked == null) return null;
+      final DateTime due = checked.add(interval);
+      if (earliest == null || due.isBefore(earliest)) earliest = due;
+    }
+    return earliest;
+  }
+
   /// Runs update checks and returns the apps whose source [App.latestVersion]
   /// CHANGED during this run.
   ///
@@ -474,6 +831,22 @@ extension AppsProviderUpdates on AppsProvider {
   /// this to the user (notifications) or act on it (background install) must
   /// filter with [appUpdateIsUserVisible] so they agree with the app list.
   Future<List<App>> checkUpdates({
+    bool throwErrorsForRetry = false,
+    List<String>? specificIds,
+    bool forceAll = false,
+    SettingsProvider? sp,
+  }) {
+    return SourceRequestSession.run(
+      () => _checkUpdatesInSession(
+        throwErrorsForRetry: throwErrorsForRetry,
+        specificIds: specificIds,
+        forceAll: forceAll,
+        sp: sp,
+      ),
+    );
+  }
+
+  Future<List<App>> _checkUpdatesInSession({
     bool throwErrorsForRetry = false,
     List<String>? specificIds,
     bool forceAll = false,
@@ -503,7 +876,9 @@ extension AppsProviderUpdates on AppsProvider {
       final MultiAppMultiError errors = MultiAppMultiError();
       List<String> appIds;
       if (specificIds != null) {
-        appIds = specificIds.where(apps.containsKey).toSet().toList();
+        // Keep only IDs that resolve to exactly one listing, so an ambiguous
+        // package ID (tracked from two stores) can't null-crash below.
+        appIds = specificIds.where((id) => apps[id] != null).toSet().toList();
         if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps) {
           appIds.removeWhere((id) {
             final App app = apps[id]!.app;
@@ -576,7 +951,7 @@ extension AppsProviderUpdates on AppsProvider {
           for (final _FetchedAppUpdate result in batch) {
             final App? mergedApp = mergeFetchedUpdateWithLiveState(
               requestedApp: result.requestedApp,
-              liveApp: apps[result.requestedApp.id]?.app,
+              liveApp: apps[result.requestedApp.listingKey]?.app,
               fetchedApp: result.fetchedApp,
             );
             if (mergedApp == null) continue;
@@ -645,6 +1020,7 @@ extension AppsProviderUpdates on AppsProvider {
       rethrow;
     } finally {
       updateCheckCompleter = null;
+      finishPendingAutoExport();
       refreshProgress = null;
     }
   }
@@ -676,13 +1052,13 @@ extension AppsProviderUpdates on AppsProvider {
       if (installed == null) {
         if (!(nonInstalledOnly || !installedOnly)) continue;
         // Never installed → always installable.
-        updateAppIds.add(app.id);
+        updateAppIds.add(appInMemory.listingKey);
       } else {
         if (!(installedOnly || !nonInstalledOnly)) continue;
         if (appHasActionableUpdate(app) ||
             (includeVersionOrderUncertain &&
                 versionOrderUncertainUpdate(app))) {
-          updateAppIds.add(app.id);
+          updateAppIds.add(appInMemory.listingKey);
         }
       }
     }

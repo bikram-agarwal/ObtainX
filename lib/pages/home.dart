@@ -656,10 +656,13 @@ class HomePageState extends State<HomePage> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(30),
         child: BackdropFilter(
+          enabled: blurBottomNav,
           filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
             decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+              color: scheme.surfaceContainerHighest.withValues(
+                alpha: blurBottomNav ? 0.55 : 1.0,
+              ),
               borderRadius: BorderRadius.circular(30),
             ),
             child: pillContent,
@@ -843,8 +846,11 @@ class HomePageState extends State<HomePage> {
           if (currentKey.currentState?.handleBack() == true) return;
         }
         if (selectedIndexHistory.isNotEmpty) {
+          // Back leaves the tabs, it does not retrace them. Tabs are siblings,
+          // so visiting Add app → Backup → Settings should not cost three
+          // presses to get out - the Apps tab is the one place back leads to.
           setState(() {
-            selectedIndexHistory.removeLast();
+            selectedIndexHistory.clear();
           });
           return;
         }

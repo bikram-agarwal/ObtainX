@@ -12,8 +12,10 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/version/app_version.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
   try {
@@ -28,6 +30,156 @@ Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
 }
 
 class GitHub extends AppSource {
+  @override
+  Future<App> resolveVersionComparison(App app) async {
+    // GitLab/Forgejo reuse release selection but expose different compare APIs.
+    if (Uri.tryParse(app.url)?.host.toLowerCase() != 'github.com' ||
+        app.installedVersion == null ||
+        app.usesVersionCodeAsOsVersion) {
+      return app;
+    }
+    final identity = versionEvidenceIdentity(app);
+    final cached = app.additionalSettings[sourceBuildComparisonKey];
+    if (cached is Map &&
+        cached['identity'] == identity &&
+        {
+          'ahead',
+          'behind',
+          'identical',
+          'diverged',
+        }.contains(cached['status'])) {
+      return app;
+    }
+    final decision = versionDecisionForApp(app);
+    if (decision.reason == 'sourceCommitAncestry') return app;
+    final latestHash = selectedSourceBuildHash(app);
+    final direct = compareVersionStrings(
+      app.installedVersion!,
+      app.latestVersion,
+      latestBuildHash: latestHash,
+    );
+    if (direct.reason != 'differentBuildHashes') return app;
+    final installedHash = releaseBuildHash(app.installedVersion!);
+    if (installedHash == null ||
+        latestHash == null ||
+        installedHash == latestHash) {
+      return app;
+    }
+    Response? response;
+    String? requestIdentity;
+    var previousFailures = 0;
+    try {
+      final apiUrl = await convertStandardUrlToAPIUrl(
+        app.url,
+        app.additionalSettings,
+      );
+      // Only preference reads are needed here, without device/storage setup.
+      final settingsProvider = SettingsProvider()
+        ..prefs = await SharedPreferences.getInstance();
+      final requestSettings = await buildMergedSettings(
+        app.additionalSettings,
+        settingsProvider,
+      );
+      // Changing credentials or a proxy must allow an immediate retry, without
+      // persisting those credentials in the comparison evidence.
+      requestIdentity = sha256
+          .convert(
+            utf8.encode(
+              jsonEncode([
+                apiUrl,
+                requestSettings[githubCredsKey] ?? '',
+                requestSettings[githubReqPrefixKey] ?? '',
+                requestSettings[githubReqPrefixUseTokenKey] == 'true',
+                requestSettings['allowInsecure'] == true,
+              ]),
+            ),
+          )
+          .toString();
+      if (cached is Map &&
+          cached['identity'] == identity &&
+          cached['requestIdentity'] == requestIdentity &&
+          cached['status'] == 'unavailable') {
+        final retryAfter = cached['retryAfter'];
+        if (retryAfter is int &&
+            retryAfter > DateTime.now().millisecondsSinceEpoch) {
+          return app;
+        }
+        final failureCount = cached['failureCount'];
+        if (failureCount is int) previousFailures = failureCount.clamp(0, 5);
+      }
+      // GitHub includes the full changed-file list only on page 1. Page 2
+      // retains the overall status and base commit even with no commits on it.
+      response = await sourceRequest(
+        '$apiUrl/compare/$installedHash...$latestHash?per_page=1&page=2',
+        requestSettings,
+      );
+      if (response.statusCode == 200) {
+        final comparison = _jsonObjectFromResponseBody(response.body);
+        final status = comparison?['status'];
+        final base = comparison?['base_commit'];
+        if ({'ahead', 'behind', 'identical', 'diverged'}.contains(status) &&
+            base is Map &&
+            base['sha'] is String &&
+            (base['sha'] as String).toLowerCase().startsWith(installedHash)) {
+          return app.copyWith(
+            additionalSettings:
+                Map<String, dynamic>.from(app.additionalSettings)
+                  ..[sourceBuildComparisonKey] = {
+                    'identity': identity,
+                    'status': status,
+                  },
+          );
+        }
+      }
+    } catch (_) {
+      // Missing/deleted commits, rate limits and network errors leave only this
+      // build unresolved; they must not fail an otherwise valid source refresh.
+    }
+
+    // Remember failures across refreshes/restarts, but retry transient failures
+    // after 1, 2, 4, ... minutes (at most 30). Missing commits get 15 minutes.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final delayMinutes = (1 << previousFailures).clamp(
+      response?.statusCode == 404 ? 15 : 1,
+      30,
+    );
+    var retryAfter = now + Duration(minutes: delayMinutes).inMilliseconds;
+    final retryHeader = response?.headers['retry-after'];
+    if (retryHeader != null) {
+      final seconds = int.tryParse(retryHeader);
+      int? serverRetryAfter;
+      if (seconds != null && seconds >= 0) {
+        serverRetryAfter = now + Duration(seconds: seconds).inMilliseconds;
+      } else {
+        try {
+          serverRetryAfter = HttpDate.parse(retryHeader).millisecondsSinceEpoch;
+        } catch (_) {
+          // An invalid header must not discard the local backoff.
+        }
+      }
+      if (serverRetryAfter != null && serverRetryAfter > retryAfter) {
+        retryAfter = serverRetryAfter;
+      }
+    }
+    if (response?.statusCode == 429 ||
+        response?.headers['x-ratelimit-remaining'] == '0') {
+      final reset = int.tryParse(response?.headers['x-ratelimit-reset'] ?? '');
+      if (reset != null && reset * 1000 > retryAfter) {
+        retryAfter = reset * 1000;
+      }
+    }
+    return app.copyWith(
+      additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+        ..[sourceBuildComparisonKey] = {
+          'identity': identity,
+          'status': 'unavailable',
+          'requestIdentity': requestIdentity,
+          'retryAfter': retryAfter,
+          'failureCount': previousFailures + 1,
+        },
+    );
+  }
+
   static const String githubCredsKey = 'github-creds';
   static const String githubReqPrefixKey = 'GHReqPrefix';
   static const String githubReqPrefixUseTokenKey = 'GHReqPrefixUseToken';
@@ -241,6 +393,10 @@ class GitHub extends AppSource {
         return repoFilePathsFromTreeApiBody(res.body);
       },
       onError: (String message) => unawaited(LogsProvider().add(message)),
+      // A repo that builds a flavour per distribution channel names the one it
+      // publishes here after this host, and that flavour can carry its own
+      // applicationId or suffix.
+      preferredFlavorNames: const <String>{'github', 'gh'},
     );
   }
 
@@ -713,103 +869,65 @@ class GitHub extends AppSource {
       return firstDate.compareTo(secondDate);
     }
 
-    // Precompute dates and (for smartname/name sorts) per-release format
-    // sets once. Memoization in findStandardFormatsForVersion already handles
-    // the per-version cache; we still precompute here so the sort comparator
-    // only performs O(1) lookups instead of O(n) per comparison.
-    final isDateOnly = sortMethod == 'date';
     final Map<dynamic, DateTime?> dates = {};
-    final Map<dynamic, Set<String>> formats = {};
-    if (!isDateOnly) {
-      for (final release in releases) {
-        if (release == null) continue;
-        final name = (release['tag_name'] ?? release['name'])?.toString() ?? '';
-        formats[release] = findStandardFormatsForVersion(name, false);
-      }
+    DateTime? releaseDate(dynamic release) {
+      return dates.putIfAbsent(
+        release,
+        () => _getReleaseDateFromRelease(
+          release,
+          useLatestAssetDateAsReleaseDate,
+        ),
+      );
     }
 
+    // Natural-name/date ordering only selects a source release when its labels
+    // are incomparable. It never supplies evidence for a device update.
+    final useVersionOrder =
+        sortMethod != 'date' &&
+        sortMethod != 'name' &&
+        versionsHaveConsistentOrder(
+          releases
+              .where((release) => release != null)
+              .map(
+                (release) =>
+                    (release['tag_name'] ?? release['name'])?.toString() ?? '',
+              ),
+        );
     releases.sort((firstRelease, secondRelease) {
       if (firstRelease == null && secondRelease == null) return 0;
       if (firstRelease == null) return -1;
       if (secondRelease == null) return 1;
-
-      if (isDateOnly) {
-        final firstDate = dates.putIfAbsent(
-          firstRelease,
-          () => _getReleaseDateFromRelease(
-            firstRelease,
-            useLatestAssetDateAsReleaseDate,
-          ),
+      if (sortMethod == 'date' ||
+          (!useVersionOrder && sortMethod == 'smartname-datefallback')) {
+        return compareReleaseDates(
+          releaseDate(firstRelease),
+          releaseDate(secondRelease),
         );
-        final secondDate = dates.putIfAbsent(
-          secondRelease,
-          () => _getReleaseDateFromRelease(
-            secondRelease,
-            useLatestAssetDateAsReleaseDate,
-          ),
-        );
-        return compareReleaseDates(firstDate, secondDate);
       }
-
       final firstName =
           (firstRelease['tag_name'] ?? firstRelease['name'])?.toString() ?? '';
       final secondName =
           (secondRelease['tag_name'] ?? secondRelease['name'])?.toString() ??
           '';
-      final standardFormats = formats[firstRelease]!.intersection(
-        formats[secondRelease]!,
-      );
-
-      if (sortMethod == 'smartname-datefallback' && standardFormats.isEmpty) {
-        final firstDate = _getReleaseDateFromRelease(
-          firstRelease,
-          useLatestAssetDateAsReleaseDate,
-        );
-        final secondDate = _getReleaseDateFromRelease(
-          secondRelease,
-          useLatestAssetDateAsReleaseDate,
-        );
-        return compareReleaseDates(firstDate, secondDate);
-      }
-
-      if (sortMethod != 'name' && standardFormats.isNotEmpty) {
-        final sortedFormats = standardFormats.toList()
-          ..sort(
-            (firstPattern, secondPattern) =>
-                secondPattern.length.compareTo(firstPattern.length),
+      if (useVersionOrder) {
+        final ordered = compareVersionStrings(firstName, secondName).comparison;
+        if (ordered != null && ordered != 0) return ordered;
+        if (ordered == 0 || sortMethod == 'smartname-datefallback') {
+          return compareReleaseDates(
+            releaseDate(firstRelease),
+            releaseDate(secondRelease),
           );
-        final standardFormatPattern = RegExp(
-          sortedFormats.first,
-          caseSensitive: false,
-        );
-        final firstMatch = standardFormatPattern.firstMatch(firstName);
-        final secondMatch = standardFormatPattern.firstMatch(secondName);
-        if (firstMatch != null && secondMatch != null) {
-          final versionComparison = compareAlphaNumeric(
-            firstName.substring(firstMatch.start, firstMatch.end).toLowerCase(),
-            secondName
-                .substring(secondMatch.start, secondMatch.end)
-                .toLowerCase(),
-          );
-          if (versionComparison != 0) return versionComparison;
         }
       }
-
       final nameComparison = compareAlphaNumeric(
         firstName.toLowerCase(),
         secondName.toLowerCase(),
       );
       if (nameComparison != 0) return nameComparison;
-
-      final firstDate = _getReleaseDateFromRelease(
-        firstRelease,
-        useLatestAssetDateAsReleaseDate,
+      return compareReleaseDates(
+        releaseDate(firstRelease),
+        releaseDate(secondRelease),
       );
-      final secondDate = _getReleaseDateFromRelease(
-        secondRelease,
-        useLatestAssetDateAsReleaseDate,
-      );
-      return compareReleaseDates(firstDate, secondDate);
     });
   }
 

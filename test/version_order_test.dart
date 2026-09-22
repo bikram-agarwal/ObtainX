@@ -269,15 +269,12 @@ void main() {
     },
   );
 
-  test(
-    'real hex in version string still participates in versionsEffectivelyEqual',
-    () {
-      expect(
-        versionsEffectivelyEqual('1.5.3-DEV (75094D8)', 'debug-75094d8'),
-        true,
-      );
-    },
-  );
+  test('a shared hash alone cannot equate different version schemes', () {
+    expect(
+      versionsEffectivelyEqual('1.5.3-DEV (75094D8)', 'debug-75094d8'),
+      false,
+    );
+  });
 
   test(
     'dot releases like 153.0 and 153.0.2 are recognized as distinct versions',
@@ -289,13 +286,10 @@ void main() {
     },
   );
 
-  test(
-    'dot-separated hash suffixes like 26.03 and 26.03.a4d75424 are recognized as distinct versions',
-    () {
-      expect(versionsEffectivelyEqual('26.03', '26.03.a4d75424'), false);
-      expect(versionsEffectivelyEqual('26.03.a4d75424', '26.03'), false);
-    },
-  );
+  test('a one-sided dot-separated hash still identifies the same release', () {
+    expect(versionsEffectivelyEqual('26.03', '26.03.a4d75424'), true);
+    expect(versionsEffectivelyEqual('26.03.a4d75424', '26.03'), true);
+  });
 
   test(
     'zero-only trailing dot segments like 1.2 and 1.2.0 are effectively equal',
@@ -627,7 +621,7 @@ void main() {
   });
 
   test(
-    'unreconciled source tag version is preserved as installed pseudo version',
+    'unreconciled Auto source tag preserves the device version as uncertain',
     () {
       final appsProvider = AppsProvider(isBg: true);
       final app = App(
@@ -654,9 +648,10 @@ void main() {
       );
 
       expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, '106');
+      expect(correctedApp!.installedVersion, '9.18.50');
       expect(correctedApp.latestVersion, '106');
-      expect(correctedApp.additionalSettings['versionDetection'], 'pseudo');
+      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+      expect(versionOrderUncertainUpdate(correctedApp), isTrue);
     },
   );
 
@@ -687,7 +682,11 @@ void main() {
         ),
       );
 
-      expect(correctedApp, isNull);
+      expect(correctedApp!.installedVersion, '106');
+      expect(
+        correctedApp.additionalSettings[observedVersionNameKey],
+        '9.18.50',
+      );
       expect(app.installedVersion, '106');
       expect(app.latestVersion, '107');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
@@ -836,8 +835,8 @@ void main() {
     'disabled version detection preserves installed version when system version equals stored version',
     () {
       // installed == realInstalledVersion == '9.18.50', but latest == '107' (different format).
-      // The system must NOT silently coerce installedVersion → latestVersion here; that would hide
-      // the available update. The update from '9.18.50' to '107' must remain visible.
+      // Do not silently relabel the device. The changed source identifier stays
+      // visible for manual review without claiming that it is a newer APK.
       final appsProvider = AppsProvider(isBg: true);
       final app = App(
         id: 'app.revanced.android.youtube',
@@ -862,11 +861,23 @@ void main() {
         ),
       );
 
-      expect(correctedApp, isNull);
+      expect(correctedApp!.installedVersion, '9.18.50');
+      expect(
+        correctedApp.additionalSettings[observedVersionNameKey],
+        '9.18.50',
+      );
       expect(app.installedVersion, '9.18.50');
       expect(app.latestVersion, '107');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
-      expect(appHasActionableUpdate(app), true);
+      expect(appHasActionableUpdate(app), false);
+      expect(
+        versionDecisionForApp(app).relation,
+        VersionRelation.sourceChanged,
+      );
+      expect(
+        appUpdateIsUserVisible(app, includeVersionOrderUncertain: true),
+        true,
+      );
     },
   );
 
@@ -897,7 +908,8 @@ void main() {
         ),
       );
 
-      expect(correctedApp, isNull);
+      expect(correctedApp!.installedVersion, '26.06.01-de-vanced');
+      expect(correctedApp.additionalSettings[observedVersionNameKey], '4.15.0');
       expect(app.installedVersion, '26.06.01-de-vanced');
       expect(app.latestVersion, '26.06.01-de-vanced');
       expect(app.additionalSettings['versionDetection'], 'pseudo');
@@ -1310,9 +1322,10 @@ This app description should not be included.
       );
 
       expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, 'v2.19.1');
+      expect(correctedApp!.installedVersion, '2.19.1 (git 50a6b17)');
       expect(appHasActionableUpdate(correctedApp), false);
-      // The device version reconciles with latest, so detection stays on.
+      expect(versionOrderUncertainUpdate(correctedApp), false);
+      // A source omitting the hash does not rewrite the observed version.
       expect(correctedApp.additionalSettings['versionDetection'], 'auto');
     });
 
@@ -1330,7 +1343,7 @@ This app description should not be included.
       );
 
       expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, 'v7.1.1');
+      expect(correctedApp!.installedVersion, '7.1.1');
       expect(appHasActionableUpdate(correctedApp), false);
     });
 
@@ -1418,7 +1431,10 @@ This app description should not be included.
         deviceVersionName: '2.19.0 (git a77e849)',
       );
 
-      expect(correctedApp?.installedVersion ?? app.installedVersion, 'v2.19.0');
+      expect(
+        correctedApp?.installedVersion ?? app.installedVersion,
+        '2.19.0 (git a77e849)',
+      );
       expect(appHasActionableUpdate(correctedApp ?? app), true);
     });
 
@@ -1596,9 +1612,9 @@ This app description should not be included.
       ),
     );
 
-    expect(correctedApp, isNull);
-    expect(app.additionalSettings['versionDetection'], 'auto');
-    expect(app.installedVersion, 'debug-75094d8');
+    expect(correctedApp!.installedVersion, '1.5.3-DEV (75094D8)');
+    expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+    expect(versionOrderUncertainUpdate(correctedApp), isTrue);
   });
 
   test(
@@ -1631,26 +1647,26 @@ This app description should not be included.
         ),
       );
 
-      expect(correctedApp, isNull);
-      expect(app.additionalSettings['versionDetection'], 'auto');
-      expect(app.installedVersion, '75094d8');
+      expect(correctedApp!.installedVersion, '1.5.3-DEV (75094D8)');
+      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+      expect(versionOrderUncertainUpdate(correctedApp), isTrue);
     },
   );
 
   test(
-    'dot-separated hash suffix is not the same release as its numeric core',
+    'an omitted source hash does not change the release or stored device label',
     () {
       expect(
         reconcileVersionDifferences('26.06', '26.06.9df4c85')?.areEqual,
-        false,
+        isTrue,
       );
       expect(
         reconcileVersionDifferences('26.06', '26.06-9df4c85')?.areEqual,
-        true,
+        isTrue,
       );
       expect(
         reconcileVersionDifferences('2.19.1', '2.19.1 (git 50a6b17)')?.areEqual,
-        true,
+        isTrue,
       );
 
       final appsProvider = AppsProvider(isBg: true);
@@ -1720,9 +1736,9 @@ This app description should not be included.
   );
 
   test(
-    'unclear version order is resolved using lastInstalledTime and releaseDate',
+    'publication and installation dates do not resolve unclear version order',
     () {
-      // Scenario 1: releaseDate is after lastInstalledTime (update available)
+      // Scenario 1: a later publication still cannot establish version order.
       final appUpdate = App(
         id: 'app.example',
         url: 'https://github.com/example/example',
@@ -1742,8 +1758,8 @@ This app description should not be included.
         releaseDate: DateTime.utc(2026, 6, 2),
       );
 
-      expect(appHasActionableUpdate(appUpdate), true);
-      expect(versionOrderUncertainUpdate(appUpdate), false);
+      expect(appHasActionableUpdate(appUpdate), false);
+      expect(versionOrderUncertainUpdate(appUpdate), true);
 
       // Scenario 2: releaseDate is before lastInstalledTime (no update)
       final appNoUpdate = App(
@@ -1885,9 +1901,7 @@ This app description should not be included.
     // getCorrectedInstallStatusAppIfPossible is applied on every load and save, so
     // it has to settle: if pass N keeps producing a different app, the JSON is
     // rewritten forever and the recorded install state depends on how many times
-    // the app list happened to refresh. (It is not idempotent after one pass —
-    // flipping to pseudo in step 4 legitimately lets step 1b adopt the device
-    // version on the next pass — so the property is convergence, not idempotence.)
+    // the app list happened to refresh. Unreconciled Auto pairs must settle too.
     final appsProvider = AppsProvider(isBg: true);
     addTearDown(appsProvider.dispose);
 
@@ -2450,6 +2464,86 @@ This app description should not be included.
     expect(correctedApp!.installedVersion, '1.2.3');
     expect(
       correctedApp.additionalSettings['trackOnlyUndeterminedInstalledVersion'],
+      false,
+    );
+  });
+
+  // An explicit user mark outranks the device lookup: a track-only app is often
+  // tracked without ever being installed through ObtainX, so absence is not an
+  // uninstall signal once the user has said otherwise. Without this exemption
+  // the mark is wiped by the next reconcile and cannot be restored (#276).
+  test('track-only app marked installed by the user keeps its version '
+      'when absent from the device', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'com.example.trackedapp',
+      url: 'https://www.apkmirror.com/apk/vendor/tracked-app',
+      author: 'vendor',
+      name: 'Tracked App',
+      installedVersion: '1.2.4',
+      latestVersion: '1.2.4',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {
+        'trackOnly': true,
+        'trackOnlyTemporaryPackageId': false,
+        'trackOnlyUndeterminedInstalledVersion': false,
+        trackOnlyUserMarkedInstalledKey: true,
+        'versionDetection': 'auto',
+      },
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      null,
+    );
+
+    expect(correctedApp?.installedVersion ?? app.installedVersion, '1.2.4');
+  });
+
+  // The mark only stands in for an unanswerable device lookup. Once the package
+  // is really there, the device wins again and the mark is retired — otherwise
+  // a marked app would be exempt from uninstall detection forever.
+  test('track-only app marked installed by the user drops the mark '
+      'once the package appears on the device', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'com.example.trackedapp',
+      url: 'https://www.apkmirror.com/apk/vendor/tracked-app',
+      author: 'vendor',
+      name: 'Tracked App',
+      installedVersion: null,
+      latestVersion: '1.2.4',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {
+        'trackOnly': true,
+        'trackOnlyTemporaryPackageId': false,
+        'trackOnlyUndeterminedInstalledVersion': false,
+        trackOnlyUserMarkedInstalledKey: true,
+        'versionDetection': 'auto',
+      },
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'com.example.trackedapp',
+        versionName: '1.2.3',
+        versionCode: 123,
+      ),
+    );
+
+    expect(correctedApp, isNotNull);
+    expect(correctedApp!.installedVersion, '1.2.3');
+    expect(
+      correctedApp.additionalSettings.containsKey(
+        trackOnlyUserMarkedInstalledKey,
+      ),
       false,
     );
   });

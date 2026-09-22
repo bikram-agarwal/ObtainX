@@ -173,6 +173,7 @@ class AppSheetScaffold extends StatefulWidget {
     required this.header,
     this.body,
     this.bodyChildren,
+    this.bodyScrollController,
     this.footer,
     this.expand = false,
     this.headerPadding = const EdgeInsets.fromLTRB(20, 0, 20, 8),
@@ -196,6 +197,11 @@ class AppSheetScaffold extends StatefulWidget {
   /// The body as a column of widgets this scaffold scrolls itself, together
   /// with [header].
   final List<Widget>? bodyChildren;
+
+  /// Controller for the [bodyChildren] scroll view. Passing one also attaches a
+  /// draggable scrollbar, which is what long reading surfaces need: flicking
+  /// through hundreds of log lines is otherwise the only way to move.
+  final ScrollController? bodyScrollController;
 
   final Widget? footer;
 
@@ -274,6 +280,35 @@ class _AppSheetScaffoldState extends State<AppSheetScaffold> {
           // what lets a focused field keep its focus — and its scroll position —
           // while the keyboard shrinks the sheet around it.
           if (widget.bodyChildren != null) {
+            final Widget bodyScrollView = SingleChildScrollView(
+              controller: widget.bodyScrollController,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  headerSection,
+                  KeyedSubtree(
+                    key: _bodyKey,
+                    child: Padding(
+                      padding: widget.bodyPadding,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: widget.bodyChildren!,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+            final Widget bodySurface = widget.bodyScrollController == null
+                ? bodyScrollView
+                : Scrollbar(
+                    controller: widget.bodyScrollController,
+                    thumbVisibility: true,
+                    interactive: true,
+                    child: bodyScrollView,
+                  );
             return ConstrainedBox(
               constraints: BoxConstraints(maxHeight: maxHeight),
               child: SizedBox(
@@ -284,29 +319,14 @@ class _AppSheetScaffoldState extends State<AppSheetScaffold> {
                       : MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    Flexible(
-                      child: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: <Widget>[
-                            headerSection,
-                            KeyedSubtree(
-                              key: _bodyKey,
-                              child: Padding(
-                                padding: widget.bodyPadding,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: widget.bodyChildren!,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    // Tight when expanded, matching the call-site-owned body
+                    // below: a loose fit lets a body shorter than the sheet
+                    // shrink to its content, which leaves the action row
+                    // floating mid-sheet instead of pinned to the bottom.
+                    if (widget.expand)
+                      Expanded(child: bodySurface)
+                    else
+                      Flexible(child: bodySurface),
                     ?footerSection,
                   ],
                 ),

@@ -44,16 +44,22 @@ class GitLab extends AppSource {
       hostChanged ? additionalSettings : {},
     );
     final String optionalAuth = (pat != null) ? '&private_token=$pat' : '';
-    return inferAppIdFromGradleFiles((String path) async {
-      final res = await sourceRequest(
-        'https://${hosts[0]}/api/v4/projects/$projectUriComponent'
-        '/repository/files/${Uri.encodeComponent(path)}/raw'
-        '?ref=HEAD$optionalAuth',
-        additionalSettings,
-      );
-      if (res.statusCode != 200) return null;
-      return res.body;
-    }, onError: (String message) => unawaited(LogsProvider().add(message)));
+    return inferAppIdFromGradleFiles(
+      (String path) async {
+        final res = await sourceRequest(
+          'https://${hosts[0]}/api/v4/projects/$projectUriComponent'
+          '/repository/files/${Uri.encodeComponent(path)}/raw'
+          '?ref=HEAD$optionalAuth',
+          additionalSettings,
+        );
+        if (res.statusCode != 200) return null;
+        return res.body;
+      },
+      onError: (String message) => unawaited(LogsProvider().add(message)),
+      // See the note on GitHub's call: a per-channel flavour named after this
+      // host decides the id its build installs as.
+      preferredFlavorNames: const <String>{'gitlab'},
+    );
   }
 
   @override

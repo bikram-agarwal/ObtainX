@@ -163,9 +163,10 @@ Future<ColorScheme?> loadColorSchemeFromAppIcon({
 BoxDecoration appPageSectionCardDecoration(BuildContext context) {
   final bool isDark = Theme.of(context).brightness == Brightness.dark;
   final ColorScheme colorScheme = Theme.of(context).colorScheme;
+  final settings = context.read<SettingsProvider>();
   final double cardRadius = SettingsProvider.cardCornerRadiusForScale(
     SettingsProvider.baseCardRadius,
-    context.read<SettingsProvider>().cardCornerScale,
+    settings.cardCornerScale,
   );
   final double sectionDeepen = isDark ? 0.055 : 0.045;
   final Color defaultSectionFill = isDark
@@ -179,14 +180,14 @@ BoxDecoration appPageSectionCardDecoration(BuildContext context) {
     borderRadius: BorderRadius.circular(cardRadius),
     border: Border.all(color: colorScheme.outlineVariant, width: 1),
     boxShadow: [
-      if (isDark)
+      if (!settings.reduceVisualEffects && isDark)
         BoxShadow(
           color: colorScheme.shadow.withAlpha(180),
           blurRadius: 16,
           spreadRadius: 0,
           offset: const Offset(0, 4),
         )
-      else
+      else if (!settings.reduceVisualEffects)
         BoxShadow(
           color: colorScheme.shadow.withAlpha(40),
           blurRadius: 12,

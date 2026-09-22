@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 
@@ -13,6 +12,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/json_file_work.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
 /// Secret settings excluded from the "settings without secrets" backup mode.
@@ -60,27 +60,31 @@ extension AppsProviderImportExport on AppsProvider {
     // the extension getter, so the export reflects the intended settings
     // (parity with fork main).
     final SettingsProvider settingsProvider = sp ?? this.settingsProvider;
+    final selectedIds = appIds?.toSet();
+    final folderNamesById = {
+      for (final folder in settingsProvider.appFolders) folder.id: folder.name,
+    };
     final appList = apps.values
-        .where((e) => appIds == null || appIds.contains(e.app.id))
+        .where(
+          (e) =>
+              selectedIds == null ||
+              selectedIds.contains(e.listingKey) ||
+              selectedIds.contains(e.app.id),
+        )
         .map((e) {
           // Inject a folderId→name map so folder membership can be restored
           // (by name) on a device with different folder IDs. Mirrors fork main.
           final appJson = e.app.toJson();
           final Map<String, dynamic> additionalSettings =
-              Map<String, dynamic>.from(
-                jsonDecode(appJson['additionalSettings'] as String),
-              );
+              Map<String, dynamic>.from(e.app.additionalSettings);
           final List<dynamic>? folderIds =
               additionalSettings['folderIds'] as List?;
           if (folderIds != null && folderIds.isNotEmpty) {
             final Map<String, String> folderNames = {};
-            final existingFolders = settingsProvider.appFolders;
             for (final folderId in folderIds) {
-              for (final f in existingFolders) {
-                if (f.id == folderId) {
-                  folderNames[folderId as String] = f.name;
-                  break;
-                }
+              final folderName = folderNamesById[folderId];
+              if (folderName != null) {
+                folderNames[folderId as String] = folderName;
               }
             }
             additionalSettings['folderNames'] = folderNames;
@@ -162,16 +166,19 @@ extension AppsProviderImportExport on AppsProvider {
     }
     String? returnPath;
     if (!pickOnly) {
-      const encoder = JsonEncoder.withIndent('    ');
       final Map<String, dynamic> finalExport = generateExportJSON(
         sp: settingsProvider,
+      );
+      final bytes = await encodeJsonBytesOffIsolate(
+        finalExport,
+        indent: '    ',
       );
       final result = await saf.createFile(
         exportDir,
         displayName:
             '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
         mimeType: 'application/json',
-        bytes: Uint8List.fromList(utf8.encode(encoder.convert(finalExport))),
+        bytes: bytes,
       );
       if (result == null) {
         throw ObtainiumError(tr('unexpectedError'));
@@ -501,6 +508,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'groupUpdatesSeparately',
   'enableLetMeDowngrade',
   'lastCompletedBGCheckTime',
+  'bgNextCheckDue',
   'showDebugOpts',
   'useFGService',
   'hideBatteryOptimizationWarning',

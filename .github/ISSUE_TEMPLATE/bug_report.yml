@@ -54,21 +54,6 @@ body:
       required: false
 
   - type: textarea
-    id: device_info
-    attributes:
-      label: "Device information"
-      description: |
-        Please fill out the details below.
-        *Tip: Check display/font size at Android Settings -> Display -> Display size & text.*
-      value: |
-        - Device: 
-        - OS: 
-        - Display size & font size: 
-        - ObtainX Version: 
-    validations:
-      required: true
-
-  - type: textarea
     id: logs
     attributes:
       label: "ObtainX logs"

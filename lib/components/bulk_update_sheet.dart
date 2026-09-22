@@ -105,7 +105,7 @@ class _BulkUpdateSheetState extends State<BulkUpdateSheet> {
     ),
     _BulkUpdateSection(
       id: _BulkUpdateSectionId.trackOnly,
-      label: tr('trackOnly'),
+      label: tr('trackOnlyGroup'),
       appIds: widget.trackOnlyUpdateIds,
     ),
   ];

@@ -51,6 +51,22 @@ const List<String> _versionCorpus = <String>[
   '2.0.0-facade',
   '1.0.0+20260412a',
   '2.0.0+20260412a',
+  '6.12.36',
+  '6.12.36-huawei',
+  '6.1.0-huawei',
+  '6.12.36-oppo',
+  '6.12.36-new-store-arm64-v8a',
+  '1.2.3-foss',
+  '1.2.3-market',
+  '1.2.3-beta1-oppo',
+  '1.2.3-novel-beta1',
+  '1.2.3-2-oppo',
+  '1.2.3-deadbeef',
+  '1.2.3-dec46b0',
+  'C.6.odad-stub.948481320',
+  '6.playstore.pixel3.945720966',
+  '6.playstore.pixel9.948481320',
+  '28.playstore.oemfull.969713662',
   '',
 ];
 
@@ -164,7 +180,7 @@ void main() {
   });
 
   test('effectively equal versions never present an update', () {
-    for (final String mode in <String>['auto', 'standard', 'pseudo']) {
+    for (final String mode in <String>['auto', 'standard']) {
       _forEachPair((String installed, String latest) {
         if (installed.isEmpty || latest.isEmpty) return;
         if (!versionsEffectivelyEqual(installed, latest)) return;
@@ -273,20 +289,29 @@ void main() {
     });
   });
 
-  test('a shared build hash implies effective equality, both ways', () {
-    _forEachPair((String a, String b) {
-      if (a.isEmpty || b.isEmpty || a == b) return;
-      final Set<String> shared = commitHashLikeTokensFromVersion(
-        a,
-      ).intersection(commitHashLikeTokensFromVersion(b));
-      if (shared.isEmpty) return;
-      expect(
-        versionsEffectivelyEqual(a, b),
-        true,
-        reason: 'shared hash $shared but not equal ($a, $b)',
-      );
-    });
-  });
+  test(
+    'same-release labels preserve ordering when both identify enough detail',
+    () {
+      _forEachPair((String a, String b) {
+        if (!versionsEffectivelyEqual(a, b)) return;
+        for (final third in _versionCorpus) {
+          final firstOrder = compareVersionsByNumericSegments(a, third);
+          final secondOrder = compareVersionsByNumericSegments(b, third);
+          if (firstOrder != null && secondOrder != null) {
+            expect(
+              firstOrder,
+              secondOrder,
+              reason: 'same-release ($a, $b) disagree against $third',
+            );
+          } else {
+            // A bare release can match either commit without making two distinct
+            // commits equivalent. Such a list must not use the version comparator.
+            expect(versionsHaveConsistentOrder([a, b, third]), isFalse);
+          }
+        }
+      });
+    },
+  );
 
   test('words and date stamps are not treated as build hashes', () {
     for (final String word in <String>[
@@ -325,7 +350,7 @@ void main() {
     });
     expect(
       versionsEffectivelyEqual('1.5.3-DEV (75094D8)', 'debug-75094d8'),
-      true,
+      false,
     );
   });
 

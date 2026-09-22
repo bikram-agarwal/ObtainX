@@ -55,13 +55,12 @@ class ShizukuInstaller extends Installer {
         : '';
     final uris = apkFilePaths.map((p) => File(p).uri.toString()).toList();
     final ShizukuApkInstaller shizukuInstaller = ShizukuApkInstaller();
-    await shizukuInstaller.setInstallerMode(InstallerMode.shizuku);
-    int? code;
-    if (uris.length > 1) {
-      code = await shizukuInstaller.installAABSplits(uris, fakeInstallSource);
-    } else {
-      code = await shizukuInstaller.installAPK(uris.first, fakeInstallSource);
-    }
+    final int? code = await runExclusiveShizukuPluginCall(() async {
+      await shizukuInstaller.setInstallerMode(InstallerMode.shizuku);
+      return uris.length > 1
+          ? shizukuInstaller.installAABSplits(uris, fakeInstallSource)
+          : shizukuInstaller.installAPK(uris.first, fakeInstallSource);
+    });
     return InstallResult.fromPlatformCode(code);
   }
 }

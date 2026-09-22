@@ -2,8 +2,19 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+// setCategories only reaches into the apps provider to sweep orphaned category
+// tags, which an empty library has none of.
+class _NoApps implements AppsProvider {
+  @override
+  Iterable<AppInMemory> getAppValues() => const <AppInMemory>[];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 Future<SettingsProvider> _settingsWithPrefs(Map<String, Object> values) async {
   SharedPreferences.setMockInitialValues(values);
@@ -13,6 +24,38 @@ Future<SettingsProvider> _settingsWithPrefs(Map<String, Object> values) async {
 }
 
 void main() {
+  for (final savedPreference in <bool?>[null, true, false]) {
+    test(
+      'reduced effects preserves icon color preference $savedPreference',
+      () async {
+        final settings = await _settingsWithPrefs({
+          'matchAppPageToIconColors': ?savedPreference,
+        });
+        addTearDown(settings.dispose);
+        expect(settings.matchAppPageToIconColors, savedPreference ?? true);
+
+        settings.reduceVisualEffects = true;
+        expect(settings.matchAppPageToIconColors, isFalse);
+        expect(
+          settings.prefs!.getBool('matchAppPageToIconColors'),
+          savedPreference,
+        );
+
+        final reopened = SettingsProvider()
+          ..prefs = await SharedPreferences.getInstance();
+        addTearDown(reopened.dispose);
+        expect(reopened.reduceVisualEffects, isTrue);
+        expect(reopened.matchAppPageToIconColors, isFalse);
+        reopened.reduceVisualEffects = false;
+        expect(reopened.matchAppPageToIconColors, savedPreference ?? true);
+        expect(
+          reopened.prefs!.getBool('matchAppPageToIconColors'),
+          savedPreference,
+        );
+      },
+    );
+  }
+
   test(
     'saved custom seed hexes fall back when all stored values are invalid',
     () async {
@@ -148,7 +191,11 @@ void main() {
     final SettingsProvider settings = await _settingsWithPrefs(
       <String, Object>{},
     );
-    settings.setCategories(<String, int>{'zulu': 1, 'Alpha': 2, 'Beta': 3});
+    settings.setCategories(<String, int>{
+      'zulu': 1,
+      'Alpha': 2,
+      'Beta': 3,
+    }, appsProvider: _NoApps());
 
     expect(settings.categories.keys.toList(), <String>[
       'Alpha',

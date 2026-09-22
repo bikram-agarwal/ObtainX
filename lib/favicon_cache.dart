@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:obtainium/http/response_bytes.dart';
 import 'package:http/http.dart' as http;
 import 'package:obtainium/app_distribution.dart';
 import 'package:path_provider/path_provider.dart';
@@ -10,78 +11,196 @@ import 'package:path_provider/path_provider.dart';
 /// Disk layer: files under `<cacheDir>/favicons/`, survive app restarts.
 class FaviconCache {
   FaviconCache._();
+  static final _store = FaviconCacheStore(
+    directory: () async =>
+        Directory('${(await getApplicationCacheDirectory()).path}/favicons'),
+  );
 
-  static final Map<String, Uint8List> _mem = {};
+  static Future<Uint8List?> get(String host) {
+    return _store.get(host);
+  }
+}
 
-  /// Hosts for which favicon resolution already failed (all attempts exhausted).
-  /// Prevents re-running the network requests on every widget rebuild for a
-  /// host with no resolvable favicon. Lives for the process lifetime, matching
-  /// the positive [_mem] layer.
-  static final Set<String> _negative = {};
+class FaviconCacheStore {
+  static const maxIconBytes = 256 * 1024;
+  static const maxEntries = 128;
+  static const maxMemoryBytes = 4 * 1024 * 1024;
+  static const failureLifetime = Duration(minutes: 5);
+  static const diskLifetime = Duration(days: 7);
+  final Future<Directory> Function() directory;
+  final http.Client Function() clientFactory;
+  final DateTime Function() now;
+  final bool allowFallback;
+  Future<Directory>? _directory;
+  final _pending = <String, Future<Uint8List?>>{};
+  final _diskFiles = <String, DateTime>{};
+  final _negative = <String, DateTime>{};
+  final _mem = <String, Uint8List>{};
+  int _memoryBytes = 0;
+
+  FaviconCacheStore({
+    required this.directory,
+    http.Client Function()? clientFactory,
+    DateTime Function()? now,
+    bool? allowFallback,
+  }) : clientFactory = clientFactory ?? http.Client.new,
+       allowFallback = allowFallback ?? AppDistribution.allowDuckDuckGoFavicons,
+       now = now ?? DateTime.now;
 
   static String _fileName(String cacheKey) =>
       '${cacheKey.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_')}.ico';
 
-  static Future<File> _fileFor(String cacheKey) async {
-    final base = await getApplicationCacheDirectory();
-    final dir = Directory('${base.path}/favicons');
-    // Async existence/creation: this runs on the UI isolate (called from a
-    // widget's async icon load), so the blocking existsSync/createSync used
-    // before stalled the frame the first time each host scrolled in.
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return File('${dir.path}/${_fileName(cacheKey)}');
+  Future<Directory> _prepareDirectory() async {
+    final cacheDirectory = await directory();
+    await cacheDirectory.create(recursive: true);
+    await for (final entry in cacheDirectory.list()) {
+      if (entry is! File || !entry.path.endsWith('.ico')) continue;
+      final stat = await entry.stat();
+      if (stat.size > maxIconBytes ||
+          now().difference(stat.modified) > diskLifetime) {
+        await entry.delete();
+      } else {
+        _diskFiles[entry.path] = stat.modified;
+      }
+    }
+    await _trimDisk();
+    return cacheDirectory;
+  }
+
+  Future<void> _trimDisk() async {
+    if (_diskFiles.length <= maxEntries) return;
+    final oldest = _diskFiles.keys.toList()
+      ..sort(
+        (first, second) => _diskFiles[first]!.compareTo(_diskFiles[second]!),
+      );
+    for (final path in oldest.take(_diskFiles.length - maxEntries)) {
+      _diskFiles.remove(path);
+      try {
+        await File(path).delete();
+      } on FileSystemException {
+        /* Cache eviction is best effort. */
+      }
+    }
+  }
+
+  void _remember(String key, Uint8List bytes) {
+    _memoryBytes -= _mem.remove(key)?.length ?? 0;
+    _mem[key] = bytes;
+    _memoryBytes += bytes.length;
+    while (_mem.length > maxEntries || _memoryBytes > maxMemoryBytes) {
+      _memoryBytes -= _mem.remove(_mem.keys.first)!.length;
+    }
   }
 
   /// Returns favicon bytes for [host], fetching and caching on first call.
   /// Returns null if the favicon is unavailable or the network request fails.
-  static Future<Uint8List?> get(String host) async {
+  Future<Uint8List?> get(String host) async {
     final normalizedHost = host.trim().toLowerCase();
     if (normalizedHost.isEmpty) return null;
-    if (_negative.contains(normalizedHost)) return null;
-
-    final directBytes = await _getFromCacheOrFetch(
-      'direct_$normalizedHost',
-      Uri.https(normalizedHost, '/favicon.ico'),
-    );
-    if (directBytes != null) return directBytes;
-
-    if (AppDistribution.allowDuckDuckGoFavicons) {
-      final ddgBytes = await _getFromCacheOrFetch(
-        'duckduckgo_$normalizedHost',
-        Uri.parse('https://icons.duckduckgo.com/ip3/$normalizedHost.ico'),
-      );
-      if (ddgBytes != null) return ddgBytes;
+    final failedAt = _negative[normalizedHost];
+    if (failedAt != null && now().difference(failedAt) < failureLifetime) {
+      return null;
     }
+    _negative.remove(normalizedHost);
+    final pending = _pending[normalizedHost];
+    if (pending != null) return pending;
+    final future = _load(normalizedHost);
+    _pending[normalizedHost] = future;
+    try {
+      return await future;
+    } finally {
+      _pending.removeWhere((key, _) => key == normalizedHost);
+    }
+  }
 
-    // All resolution attempts failed; negative-cache the host so repeated
-    // widget builds don't re-run the (up to two) network requests.
-    _negative.add(normalizedHost);
+  Future<Uint8List?> _load(String normalizedHost) async {
+    try {
+      final directBytes = await _getFromCacheOrFetch(
+        'direct_$normalizedHost',
+        Uri.https(normalizedHost, '/favicon.ico'),
+      );
+      if (directBytes != null) return directBytes;
+
+      if (allowFallback) {
+        final ddgBytes = await _getFromCacheOrFetch(
+          'duckduckgo_$normalizedHost',
+          Uri.parse('https://icons.duckduckgo.com/ip3/$normalizedHost.ico'),
+        );
+        if (ddgBytes != null) return ddgBytes;
+      }
+
+      // All resolution attempts failed; negative-cache the host so repeated
+      // widget builds don't re-run the (up to two) network requests.
+    } catch (_) {
+      // An unavailable cache directory or malformed host must not break a row.
+      _directory = null;
+    }
+    _negative[normalizedHost] = now();
+    while (_negative.length > maxEntries) {
+      _negative.remove(_negative.keys.first);
+    }
     return null;
   }
 
-  static Future<Uint8List?> _getFromCacheOrFetch(
-    String cacheKey,
-    Uri uri,
-  ) async {
-    if (_mem.containsKey(cacheKey)) return _mem[cacheKey];
-
-    final file = await _fileFor(cacheKey);
-    // Async read (was readAsBytesSync) — see [_fileFor]; keeps the disk hit
-    // off the UI thread so scrolling in a cached-favicon row doesn't hitch.
-    if (await file.exists()) {
-      final bytes = await file.readAsBytes();
-      _mem[cacheKey] = bytes;
-      return bytes;
+  Future<Uint8List?> _getFromCacheOrFetch(String cacheKey, Uri uri) async {
+    final cached = _mem.remove(cacheKey);
+    if (cached != null) {
+      _mem[cacheKey] = cached;
+      return cached;
+    }
+    final cacheDirectory = await (_directory ??= _prepareDirectory());
+    final file = File('${cacheDirectory.path}/${_fileName(cacheKey)}');
+    // Read only a bounded prefix even if another process replaced the file.
+    final modified = _diskFiles[file.path];
+    if (modified != null && now().difference(modified) <= diskLifetime) {
+      try {
+        final bytes = await readBytePrefix(file.openRead(), maxIconBytes + 1);
+        if (bytes.isNotEmpty && bytes.length <= maxIconBytes) {
+          _remember(cacheKey, bytes);
+          return bytes;
+        }
+      } on FileSystemException {
+        /* Android may clear its cache independently. */
+      }
     }
 
+    final client = clientFactory();
     try {
-      final response = await http.get(uri).timeout(const Duration(seconds: 5));
-      if (_isValidFaviconResponse(response)) {
-        await file.writeAsBytes(response.bodyBytes);
-        _mem[cacheKey] = response.bodyBytes;
-        return response.bodyBytes;
+      final streamed = await client
+          .send(http.Request('GET', uri))
+          .timeout(const Duration(seconds: 5));
+      if (streamed.statusCode < 200 ||
+          streamed.statusCode >= 300 ||
+          (streamed.contentLength ?? 0) > maxIconBytes) {
+        return null;
       }
-    } catch (_) {}
+      final bytes = await readBytePrefix(
+        streamed.stream,
+        maxIconBytes + 1,
+        idleTimeout: const Duration(seconds: 5),
+      );
+      if (bytes.length > maxIconBytes) return null;
+      final response = http.Response.bytes(
+        bytes,
+        streamed.statusCode,
+        headers: streamed.headers,
+      );
+      if (_isValidFaviconResponse(response)) {
+        _remember(cacheKey, bytes);
+        try {
+          await file.writeAsBytes(bytes);
+          _diskFiles[file.path] = now();
+          await _trimDisk();
+        } on FileSystemException {
+          /* Memory caching still works without disk. */
+        }
+        return bytes;
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      client.close();
+    }
     return null;
   }
 

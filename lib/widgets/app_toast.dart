@@ -44,10 +44,26 @@ _ToastVisuals _resolveToastVisuals(ColorScheme colorScheme, ToastType type) {
   }
 }
 
+/// Floating insets for a SnackBar hosted by a Scaffold that has its own bottom
+/// bar. The global theme reserves 66dp at the bottom to clear the floating
+/// navigation pill, but Flutter already lifts a floating SnackBar above a
+/// Scaffold's `bottomNavigationBar`, so that clearance stacks on top of the bar
+/// and leaves the SnackBar hovering in mid-air. 8dp keeps the usual visual gap.
+const EdgeInsets _snackBarInsetsAboveBottomBar = EdgeInsets.fromLTRB(
+  15,
+  5,
+  15,
+  8,
+);
+
 /// Builds a [SnackBar] sharing [showAppToast]'s per-[ToastType] icon/color
 /// scheme, so screen-tied feedback (which must stay a SnackBar for actions,
 /// queueing, and accessibility) looks consistent with the toast pipe used by
 /// background/installer flows.
+///
+/// Set [scaffoldHasBottomBar] when the Scaffold showing this SnackBar supplies
+/// its own `bottomNavigationBar` rather than sitting under the app-wide
+/// navigation pill.
 SnackBar buildAppSnackBar(
   BuildContext context,
   String message, {
@@ -57,6 +73,7 @@ SnackBar buildAppSnackBar(
   String? actionLabel,
   VoidCallback? onAction,
   bool? persist,
+  bool scaffoldHasBottomBar = false,
   ThemeData? theme,
 }) {
   final ColorScheme colorScheme = (theme ?? Theme.of(context)).colorScheme;
@@ -71,6 +88,7 @@ SnackBar buildAppSnackBar(
     duration: duration,
     persist: persist,
     backgroundColor: backgroundColor,
+    margin: scaffoldHasBottomBar ? _snackBarInsetsAboveBottomBar : null,
     action: actionLabel == null || onAction == null
         ? null
         : SnackBarAction(

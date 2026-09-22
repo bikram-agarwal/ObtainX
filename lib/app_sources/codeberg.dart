@@ -53,6 +53,9 @@ class Codeberg extends AppSource {
         return repoFilePathsFromTreeApiBody(res.body);
       },
       onError: (String message) => unawaited(LogsProvider().add(message)),
+      // See the note on GitHub's call: a per-channel flavour named after this
+      // host decides the id its build installs as.
+      preferredFlavorNames: const <String>{'codeberg', 'forgejo'},
     );
   }
 

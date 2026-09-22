@@ -2,7 +2,6 @@ import 'dart:async' show Timer, unawaited;
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:animations/animations.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
@@ -27,6 +26,7 @@ import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
+import 'package:obtainium/components/app_details_container.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/bulk_category_editor.dart';
 import 'package:obtainium/components/bulk_update_sheet.dart';
@@ -53,6 +53,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -599,8 +600,23 @@ const int _androidFlagUpdatedSystemApp =
 /// App type groups for the "Group by App Type" feature.
 enum AppTypeGroup { user, system, privileged }
 
+/// Update-status groups for the "Group by Update status" feature, in the order
+/// they appear in the list: most actionable first. The verdict itself is the one
+/// the app details page shows in its stripe ([appVersionVerdictForDisplay]).
+const List<AppVersionDisplayVerdict> updateStatusGroupOrder = [
+  AppVersionDisplayVerdict.updateAvailable,
+  AppVersionDisplayVerdict.uncertain,
+  AppVersionDisplayVerdict.newerOnDevice,
+  AppVersionDisplayVerdict.effectivelyEqual,
+  AppVersionDisplayVerdict.sameVersion,
+  AppVersionDisplayVerdict.notInstalled,
+];
+
 /// Returns the [AppTypeGroup] for a given [AppInMemory] based on Android package flags.
-/// Non-installed apps (no [AppInMemory.installedInfo]) are treated as user apps.
+/// Without an installed package there are no flags to read, so the result is
+/// meaningless for a non-installed app and callers must not surface it: the
+/// badge and the details row omit it, and grouping by app type forces
+/// non-installed apps into their own separate group.
 AppTypeGroup classifyAppType(AppInMemory app) {
   final info = app.installedInfo;
   if (info == null) return AppTypeGroup.user;
@@ -689,6 +705,11 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
             s.folderGroupNonInstalledSeparately(viewSettingsId),
             s.folderGroupTrackOnlySeparately(viewSettingsId),
             s.folderGroupUpdatesSeparately(viewSettingsId),
+            s.folderShowAppTypeBadge(viewSettingsId),
+            s.folderShowTrackedStoreBadge(viewSettingsId),
+            s.folderShowCategoriesBadge(viewSettingsId),
+            s.folderShowAuthorBadge(viewSettingsId),
+            s.folderShowVersionBadge(viewSettingsId),
           ),
   ]);
 }
@@ -901,7 +922,7 @@ class _AppListItem extends StatelessWidget {
         context
             .read<AppsProvider>()
             .downloadAndInstallLatestApps([
-              app.app.id,
+              app.listingKey,
             ], globalNavigatorKey.currentContext)
             .catchError((e) {
               if (!context.mounted) return <String>[];
@@ -1049,8 +1070,15 @@ class _AppListItem extends StatelessWidget {
       final double activeDownloadProgress = downloadProgress ?? 0;
       final bool isScanning =
           downloadProgress != null && activeDownloadProgress == -2;
+      // -4 is an install a third-party installer accepted but hasn't confirmed;
+      // it reads as "Installing" the same as -1, but stays dismissible: a
+      // dismissed installer is indistinguishable from one still working, so the
+      // row must not be stuck spinning with no way out until the timer expires.
+      final bool isAwaitingThirdPartyInstall =
+          downloadProgress != null && activeDownloadProgress == -4;
       final bool isInstalling =
-          downloadProgress != null && activeDownloadProgress == -1;
+          isAwaitingThirdPartyInstall ||
+          (downloadProgress != null && activeDownloadProgress == -1);
       final bool isBusy = isScanning || isInstalling;
       final double? progressValue = isBusy
           ? null
@@ -1064,7 +1092,7 @@ class _AppListItem extends StatelessWidget {
                 'percentProgress',
                 args: [activeDownloadProgress.toInt().toString()],
               ),
-        button: !isBusy,
+        button: !isBusy || isAwaitingThirdPartyInstall,
         child: SizedBox.square(
           dimension: 48,
           child: Stack(
@@ -1092,8 +1120,25 @@ class _AppListItem extends StatelessWidget {
                     foregroundColor: colorScheme.onErrorContainer,
                   ),
                   icon: const Icon(Icons.stop_rounded, size: 19),
-                  onPressed: () =>
-                      context.read<AppsProvider>().cancelDownload(app.app.id),
+                  onPressed: () => context.read<AppsProvider>().cancelDownload(
+                    app.listingKey,
+                  ),
+                )
+              else if (isAwaitingThirdPartyInstall)
+                IconButton.filledTonal(
+                  tooltip: tr('dismiss'),
+                  style: IconButton.styleFrom(
+                    fixedSize: const Size.square(32),
+                    minimumSize: const Size.square(32),
+                    padding: EdgeInsets.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: colorScheme.secondaryContainer,
+                    foregroundColor: colorScheme.onSecondaryContainer,
+                  ),
+                  icon: const Icon(Icons.close_rounded, size: 19),
+                  onPressed: () => context
+                      .read<AppsProvider>()
+                      .dismissThirdPartyInstallIndicator(app.listingKey),
                 ),
             ],
           ),
@@ -1126,14 +1171,17 @@ class _AppListItem extends StatelessWidget {
         : m3eGroupedListRowFill(colorScheme);
 
     // App-type badge at bottom-right of icon — icon only, no background.
+    // Skip it when the app is not installed: there are no package flags to
+    // classify, and the details page likewise omits the App Type row.
+    final bool showKnownAppTypeBadge =
+        showAppTypeBadge && app.installedInfo != null;
     final appType = classifyAppType(app);
     final (IconData appTypeIcon, Color appTypeColor) = switch (appType) {
       AppTypeGroup.user => (Icons.person_rounded, Colors.green),
       AppTypeGroup.system => (Icons.android_rounded, Colors.grey),
       AppTypeGroup.privileged => (Icons.security_rounded, Colors.grey.shade600),
     };
-    // App type badge on icon (gated by showAppTypeBadge).
-    final Widget iconWithBadge = showAppTypeBadge
+    final Widget iconWithBadge = showKnownAppTypeBadge
         ? Stack(
             clipBehavior: Clip.none,
             children: [
@@ -1463,10 +1511,16 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
   @override
   void initState() {
     super.initState();
-    _settleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
+    _settleController =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 250),
+        )..addListener(() {
+          final nextOffset = _settleAnimation?.value;
+          if (nextOffset != null && nextOffset != _dragOffset) {
+            setState(() => _dragOffset = nextOffset);
+          }
+        });
   }
 
   @override
@@ -1477,12 +1531,13 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
 
   void _settleToZero() {
     _settleController.stop();
-    _settleAnimation =
-        Tween<double>(begin: _dragOffset, end: 0.0).animate(
-          CurvedAnimation(parent: _settleController, curve: Curves.easeOut),
-        )..addListener(() {
-          setState(() => _dragOffset = _settleAnimation!.value);
-        });
+    if (_dragOffset == 0) return;
+    // One controller listener for the lifetime of the row. Repeated swipes
+    // must not retain a new listener and CurvedAnimation after every release.
+    _settleAnimation = Tween<double>(
+      begin: _dragOffset,
+      end: 0.0,
+    ).chain(CurveTween(curve: Curves.easeOut)).animate(_settleController);
     _settleController
       ..reset()
       ..forward();
@@ -1497,11 +1552,12 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     if (oldWidget.keepAlive != widget.keepAlive) updateKeepAlive();
   }
 
-  bool _canExecute(SwipeAction action) {
+  bool _canExecute(SwipeAction action, bool isAwaitingThirdPartyInstall) {
     switch (action) {
       case SwipeAction.update:
         return (widget.hasUpdate || !widget.isInstalled) &&
-            !widget.areDownloadsRunning;
+            !widget.areDownloadsRunning &&
+            !isAwaitingThirdPartyInstall;
       case SwipeAction.open:
         return widget.isInstalled;
       case SwipeAction.none:
@@ -1645,9 +1701,15 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           }
         }
       case SwipeAction.open:
-        unawaited(packageManager.openApp(widget.appId));
+        final String? packageId = app?.id;
+        if (packageId != null) {
+          unawaited(packageManager.openApp(packageId));
+        }
       case SwipeAction.appInfo:
-        unawaited(provider.openAppSettings(widget.appId));
+        final String? packageId = app?.id;
+        if (packageId != null) {
+          unawaited(provider.openAppSettings(packageId));
+        }
       case SwipeAction.none:
         break;
     }
@@ -1659,8 +1721,21 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     const swipeThreshold = 80.0;
     const maxDrag = 120.0;
 
-    final canSwipeRight = _canExecute(widget.rightAction);
-    final canSwipeLeft = _canExecute(widget.leftAction);
+    // Watched per row rather than passed down: the awaiting-third-party
+    // indicator is deliberately absent from areDownloadsRunning(), so the list's
+    // rebuild token never moves when it arms and a value passed in from the
+    // builder would go stale.
+    final bool isAwaitingThirdPartyInstall = context.select<AppsProvider, bool>(
+      (provider) => provider.isAwaitingThirdPartyInstall(widget.appId),
+    );
+    final canSwipeRight = _canExecute(
+      widget.rightAction,
+      isAwaitingThirdPartyInstall,
+    );
+    final canSwipeLeft = _canExecute(
+      widget.leftAction,
+      isAwaitingThirdPartyInstall,
+    );
 
     Color bgColor;
     IconData bgIcon;
@@ -1730,33 +1805,34 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       child: ClipRect(
         child: Stack(
           children: [
-            Positioned.fill(
-              child: Container(
-                color: bgColor,
-                alignment: bgAlign,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Opacity(
-                  opacity: revealProgress,
-                  child: Transform.scale(
-                    scale: 0.88 + 0.12 * revealProgress,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: bgIconLeading
-                          ? [
-                              Icon(bgIcon, color: iconColor),
-                              const SizedBox(width: 8),
-                              Text(bgLabel, style: labelStyle),
-                            ]
-                          : [
-                              Text(bgLabel, style: labelStyle),
-                              const SizedBox(width: 8),
-                              Icon(bgIcon, color: iconColor),
-                            ],
+            if (revealProgress > 0)
+              Positioned.fill(
+                child: Container(
+                  color: bgColor,
+                  alignment: bgAlign,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Opacity(
+                    opacity: revealProgress,
+                    child: Transform.scale(
+                      scale: 0.88 + 0.12 * revealProgress,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: bgIconLeading
+                            ? [
+                                Icon(bgIcon, color: iconColor),
+                                const SizedBox(width: 8),
+                                Text(bgLabel, style: labelStyle),
+                              ]
+                            : [
+                                Text(bgLabel, style: labelStyle),
+                                const SizedBox(width: 8),
+                                Icon(bgIcon, color: iconColor),
+                              ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
             Transform.translate(
               offset: Offset(_dragOffset, 0),
               child: widget.child,
@@ -2297,6 +2373,41 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
               ? settingsProvider.setFolderGroupUpdatesSeparately(folderId, v)
               : (settingsProvider.groupUpdatesSeparately = v);
 
+          final effectiveShowAppTypeBadge = folderId != null
+              ? settingsProvider.folderShowAppTypeBadge(folderId)
+              : settingsProvider.showAppTypeBadge;
+          void setEffectiveShowAppTypeBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowAppTypeBadge(folderId, v)
+              : (settingsProvider.showAppTypeBadge = v);
+
+          final effectiveShowTrackedStoreBadge = folderId != null
+              ? settingsProvider.folderShowTrackedStoreBadge(folderId)
+              : settingsProvider.showTrackedStoreBadge;
+          void setEffectiveShowTrackedStoreBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowTrackedStoreBadge(folderId, v)
+              : (settingsProvider.showTrackedStoreBadge = v);
+
+          final effectiveShowCategoriesBadge = folderId != null
+              ? settingsProvider.folderShowCategoriesBadge(folderId)
+              : settingsProvider.showCategoriesBadge;
+          void setEffectiveShowCategoriesBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowCategoriesBadge(folderId, v)
+              : (settingsProvider.showCategoriesBadge = v);
+
+          final effectiveShowAuthorBadge = folderId != null
+              ? settingsProvider.folderShowAuthorBadge(folderId)
+              : settingsProvider.showAuthorBadge;
+          void setEffectiveShowAuthorBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowAuthorBadge(folderId, v)
+              : (settingsProvider.showAuthorBadge = v);
+
+          final effectiveShowVersionBadge = folderId != null
+              ? settingsProvider.folderShowVersionBadge(folderId)
+              : settingsProvider.showVersionBadge;
+          void setEffectiveShowVersionBadge(bool v) => folderId != null
+              ? settingsProvider.setFolderShowVersionBadge(folderId, v)
+              : (settingsProvider.showVersionBadge = v);
+
           final colorScheme = Theme.of(ctx).colorScheme;
           final textTheme = Theme.of(ctx).textTheme;
 
@@ -2335,9 +2446,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.person_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showAppTypeBadge')),
-                        selected: settingsProvider.showAppTypeBadge,
+                        selected: effectiveShowAppTypeBadge,
                         onSelected: (value) {
-                          settingsProvider.showAppTypeBadge = value;
+                          setEffectiveShowAppTypeBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2345,9 +2456,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.store_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showTrackedStoreBadge')),
-                        selected: settingsProvider.showTrackedStoreBadge,
+                        selected: effectiveShowTrackedStoreBadge,
                         onSelected: (value) {
-                          settingsProvider.showTrackedStoreBadge = value;
+                          setEffectiveShowTrackedStoreBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2355,9 +2466,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.category_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showCategoriesBadge')),
-                        selected: settingsProvider.showCategoriesBadge,
+                        selected: effectiveShowCategoriesBadge,
                         onSelected: (value) {
-                          settingsProvider.showCategoriesBadge = value;
+                          setEffectiveShowCategoriesBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2365,9 +2476,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.badge_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showAuthorBadge')),
-                        selected: settingsProvider.showAuthorBadge,
+                        selected: effectiveShowAuthorBadge,
                         onSelected: (value) {
-                          settingsProvider.showAuthorBadge = value;
+                          setEffectiveShowAuthorBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2375,9 +2486,9 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         avatar: const Icon(Icons.sell_rounded, size: 16),
                         showCheckmark: false,
                         label: Text(tr('showVersionBadge')),
-                        selected: settingsProvider.showVersionBadge,
+                        selected: effectiveShowVersionBadge,
                         onSelected: (value) {
-                          settingsProvider.showVersionBadge = value;
+                          setEffectiveShowVersionBadge(value);
                           setSheetState(() {});
                         },
                       ),
@@ -2459,14 +2570,19 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                 value: effectiveGroupBy,
                 menuWidth: appDropdownMenuWidth(ctx, [
                   tr('groupByNone'),
+                  tr('groupByAppType'),
                   tr('category'),
                   tr('groupByTrackedSource'),
-                  tr('groupByAppType'),
+                  tr('groupByUpdateStatus'),
                 ]),
                 items: [
                   DropdownMenuItem(
                     value: AppsListGroupBy.none,
                     child: Text(tr('groupByNone')),
+                  ),
+                  DropdownMenuItem(
+                    value: AppsListGroupBy.appType,
+                    child: Text(tr('groupByAppType')),
                   ),
                   DropdownMenuItem(
                     value: AppsListGroupBy.category,
@@ -2477,8 +2593,8 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                     child: Text(tr('groupByTrackedSource')),
                   ),
                   DropdownMenuItem(
-                    value: AppsListGroupBy.appType,
-                    child: Text(tr('groupByAppType')),
+                    value: AppsListGroupBy.updateStatus,
+                    child: Text(tr('groupByUpdateStatus')),
                   ),
                 ],
                 onChanged: (newValue) {
@@ -2503,25 +2619,40 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  FilterChip(
-                    showCheckmark: false,
-                    label: Text(tr('updates')),
-                    selected: effectiveGroupUpdatesSeparately,
-                    onSelected: (value) {
-                      setEffectiveGroupUpdatesSeparately(value);
-                      setSheetState(() {});
-                    },
-                  ),
-                  if (effectiveGroupBy != AppsListGroupBy.none) ...[
+                  // Group-by update status already owns those two buckets.
+                  // The chips override Group by, so they stay hidden here
+                  // (prefs are left intact for other grouping modes).
+                  if (effectiveGroupBy != AppsListGroupBy.updateStatus)
                     FilterChip(
                       showCheckmark: false,
-                      label: Text(tr('nonInstalledApps')),
-                      selected: effectiveGroupNonInstalledSeparately,
+                      label: Text(tr('updates')),
+                      selected: effectiveGroupUpdatesSeparately,
                       onSelected: (value) {
-                        setEffectiveGroupNonInstalledSeparately(value);
+                        setEffectiveGroupUpdatesSeparately(value);
                         setSheetState(() {});
                       },
                     ),
+                  // Group-by app type reads the installed package's flags, so a
+                  // non-installed app has no type to group by. The chip stays
+                  // visible and on but locked there - turning it off would file
+                  // those apps under User Apps on no evidence. The stored pref
+                  // is left intact for the other grouping modes.
+                  if (effectiveGroupBy != AppsListGroupBy.none &&
+                      effectiveGroupBy != AppsListGroupBy.updateStatus)
+                    FilterChip(
+                      showCheckmark: false,
+                      label: Text(tr('nonInstalledApps')),
+                      selected:
+                          effectiveGroupBy == AppsListGroupBy.appType ||
+                          effectiveGroupNonInstalledSeparately,
+                      onSelected: effectiveGroupBy == AppsListGroupBy.appType
+                          ? null
+                          : (value) {
+                              setEffectiveGroupNonInstalledSeparately(value);
+                              setSheetState(() {});
+                            },
+                    ),
+                  if (effectiveGroupBy != AppsListGroupBy.none)
                     FilterChip(
                       showCheckmark: false,
                       label: Text(tr('trackOnly')),
@@ -2531,7 +2662,6 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                         setSheetState(() {});
                       },
                     ),
-                  ],
                 ],
               ),
               Divider(color: colorScheme.outlineVariant),
@@ -2921,6 +3051,8 @@ class AppsPageState extends State<AppsPage> {
   // unimpeded scrolling during the immediate post-refresh window. Cancelled
   // on dispose and reset on each refresh.
   Timer? _deferredStoreScanTimer;
+  int _storeScanGeneration = 0;
+  bool _storeScanRunning = false;
   static const Duration _deferredStoreScanDelay = Duration(seconds: 3);
 
   late final ScrollController scrollController;
@@ -2949,6 +3081,7 @@ class AppsPageState extends State<AppsPage> {
   List<String> _listedSourcesCache = const [];
   List<String?> _listedCategoriesCache = const [];
   List<AppTypeGroup> _listedAppTypesCache = const [];
+  List<AppVersionDisplayVerdict> _listedUpdateStatusesCache = const [];
 
   /// Maps category key (`__null__` for uncategorized) → indices into [_listedAppsCache].
   Map<String, List<int>> _categoryGroupListedIndices = const {};
@@ -2958,6 +3091,10 @@ class AppsPageState extends State<AppsPage> {
 
   /// Maps [AppTypeGroup] → indices into [_listedAppsCache].
   Map<AppTypeGroup, List<int>> _appTypeGroupListedIndices = const {};
+
+  /// Maps [AppVersionDisplayVerdict] → indices into [_listedAppsCache].
+  Map<AppVersionDisplayVerdict, List<int>> _updateStatusGroupListedIndices =
+      const {};
   List<int> _nonInstalledListedIndices = const [];
   List<int> _trackOnlyListedIndices = const [];
 
@@ -3022,18 +3159,21 @@ class AppsPageState extends State<AppsPage> {
     _lastNotifiedMassObtainAvailable = massObtainAvailable;
     _lastNotifiedSelectionActive = selectionActive;
 
-    final ValueNotifier<int>? tick = widget.homeFabChromeTick;
-    if (tick != null) {
-      tick.value = tick.value + 1;
+    if (widget.homeFabChromeTick == null && widget.onStateChanged == null) {
+      return;
     }
-
-    final VoidCallback? notifyHome = widget.onStateChanged;
-    if (notifyHome == null) return;
     if (_homeFabBadgeSyncScheduled) return;
     _homeFabBadgeSyncScheduled = true;
+    // This method also runs during build. Both notifications can rebuild
+    // widgets outside this subtree, so deliver them together after the frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _homeFabBadgeSyncScheduled = false;
-      if (mounted) notifyHome();
+      if (!mounted) return;
+      final ValueNotifier<int>? tick = widget.homeFabChromeTick;
+      if (tick != null) {
+        tick.value = tick.value + 1;
+      }
+      widget.onStateChanged?.call();
     });
   }
 
@@ -3045,7 +3185,7 @@ class AppsPageState extends State<AppsPage> {
   // ── Hero keep-alive ───────────────────────────────────────────────────────
   // Removed: previously held the appId of the row whose AppPage was open so
   // the row would stay mounted (via [_SwipeableListItem.keepAlive]) for the
-  // back-pop Hero flight. With the [OpenContainer] (Container Transform)
+  // back-pop Hero flight. With the [AppDetailsContainer] transform
   // migration in [getSingleAppHorizTile], the morph manages the source-row
   // lifecycle for the duration of the open animation, so manual keep-alive
   // is no longer required.
@@ -3095,6 +3235,15 @@ class AppsPageState extends State<AppsPage> {
   }
 
   bool _effectiveGroupNonInstalledSeparately(SettingsProvider sp) {
+    // Group-by update status already has a Not installed bucket (the details
+    // stripe verdict). Pulling the same apps into the "group separately"
+    // section would empty that group and show two competing Not installed
+    // treatments.
+    if (_effectiveGroupBy(sp) == AppsListGroupBy.updateStatus) return false;
+    // Group-by app type is the mirror case: an app type comes from the
+    // installed package's flags, so a non-installed app has no type to group
+    // by and would otherwise be filed under User Apps on no evidence.
+    if (_effectiveGroupBy(sp) == AppsListGroupBy.appType) return true;
     final id = _viewSettingsId;
     return id != null
         ? sp.folderGroupNonInstalledSeparately(id)
@@ -3109,10 +3258,43 @@ class AppsPageState extends State<AppsPage> {
   }
 
   bool _effectiveGroupUpdatesSeparately(SettingsProvider sp) {
+    // The separate Updates group is coarser than the stripe: it also takes
+    // version-order-unclear apps. Leaving it on while grouping by update
+    // status would empty both "Update available" and "Version order unclear".
+    if (_effectiveGroupBy(sp) == AppsListGroupBy.updateStatus) return false;
     final id = _viewSettingsId;
     return id != null
         ? sp.folderGroupUpdatesSeparately(id)
         : sp.groupUpdatesSeparately;
+  }
+
+  bool _effectiveShowAppTypeBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderShowAppTypeBadge(id) : sp.showAppTypeBadge;
+  }
+
+  bool _effectiveShowTrackedStoreBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null
+        ? sp.folderShowTrackedStoreBadge(id)
+        : sp.showTrackedStoreBadge;
+  }
+
+  bool _effectiveShowCategoriesBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null
+        ? sp.folderShowCategoriesBadge(id)
+        : sp.showCategoriesBadge;
+  }
+
+  bool _effectiveShowAuthorBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderShowAuthorBadge(id) : sp.showAuthorBadge;
+  }
+
+  bool _effectiveShowVersionBadge(SettingsProvider sp) {
+    final id = _viewSettingsId;
+    return id != null ? sp.folderShowVersionBadge(id) : sp.showVersionBadge;
   }
 
   void _saveCollapsedGroups(List<String> keys, {required bool add}) {
@@ -3158,6 +3340,7 @@ class AppsPageState extends State<AppsPage> {
   @override
   void dispose() {
     _deferredStoreScanTimer?.cancel();
+    _storeScanGeneration++;
     scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -3450,8 +3633,13 @@ class AppsPageState extends State<AppsPage> {
     // route / an inactive home tab? See [_coveredByOpaqueRoute]. Read (and
     // cached into the field) before the select()s below, because their selectors
     // run later, on provider notifications, and read the field.
+    final buildTiming = PerformanceRecorder.instance.startOperation();
     final bool pageVisible = TickerMode.valuesOf(context).enabled;
     _coveredByOpaqueRoute = !pageVisible;
+    if (!pageVisible) {
+      _deferredStoreScanTimer?.cancel();
+      _storeScanGeneration++;
+    }
 
     // select() prevents rebuilds for notifications that don't affect list data
     // (download-progress ticks, icon-load completions). The returned token is
@@ -3500,46 +3688,73 @@ class AppsPageState extends State<AppsPage> {
       kM3eInnerRadius,
     );
     Future<void> backgroundScanStoreAvailability() async {
-      late final List<String> idsForStoreHintScan;
-      if (widget.onDemandOnlyList) {
-        idsForStoreHintScan = appsProvider.apps.values
-            .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
-            .map((a) => a.app.id)
-            .toList();
-      } else if (widget.folderId != null) {
-        final String folderId = widget.folderId!;
-        idsForStoreHintScan = appsProvider.apps.values
-            .where((a) => folderIdsForApp(a.app).contains(folderId))
-            .map((a) => a.app.id)
-            .toList();
-      } else {
-        idsForStoreHintScan = appsProvider.apps.values
-            .where((a) => a.app.additionalSettings['onDemandOnly'] != true)
-            .map((a) => a.app.id)
-            .toList();
+      if (_storeScanRunning) return;
+      final generation = _storeScanGeneration;
+      bool shouldAbort() {
+        return !mounted ||
+            _coveredByOpaqueRoute ||
+            generation != _storeScanGeneration ||
+            !appsProvider.isForeground ||
+            appsProvider.refreshProgress != null;
       }
-      if (idsForStoreHintScan.isEmpty) return;
-      final cache = await BulkScanCache.load();
-      final needsApkMirror = idsForStoreHintScan
-          .where((id) => !(cache[id]?.containsKey('APKMirror') ?? false))
-          .toList();
-      final needsFDroid = idsForStoreHintScan
-          .where((id) => !(cache[id]?.containsKey('F-Droid') ?? false))
-          .toList();
-      if (needsApkMirror.isEmpty && needsFDroid.isEmpty) return;
-      await Future.wait([
-        if (needsApkMirror.isNotEmpty)
-          BulkImportService.checkApkMirror(
-            needsApkMirror,
-          ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r)),
-        if (needsFDroid.isNotEmpty)
-          BulkImportService.checkFDroid(
-            needsFDroid,
-          ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
-      ]);
+
+      if (shouldAbort()) return;
+      _storeScanRunning = true;
+      try {
+        // Store availability is cached per Android package, so a package
+        // tracked from two stores is only worth scanning once.
+        late final List<String> idsForStoreHintScan;
+        if (widget.onDemandOnlyList) {
+          idsForStoreHintScan = appsProvider.apps.values
+              .where((a) => a.app.additionalSettings['onDemandOnly'] == true)
+              .map((a) => a.app.id)
+              .toSet()
+              .toList();
+        } else if (widget.folderId != null) {
+          final String folderId = widget.folderId!;
+          idsForStoreHintScan = appsProvider.apps.values
+              .where((a) => folderIdsForApp(a.app).contains(folderId))
+              .map((a) => a.app.id)
+              .toSet()
+              .toList();
+        } else {
+          idsForStoreHintScan = appsProvider.apps.values
+              .where((a) => a.app.additionalSettings['onDemandOnly'] != true)
+              .map((a) => a.app.id)
+              .toSet()
+              .toList();
+        }
+        if (idsForStoreHintScan.isEmpty) return;
+        final cache = await BulkScanCache.load();
+        final needsApkMirror = idsForStoreHintScan
+            .where((id) => !(cache[id]?.containsKey('APKMirror') ?? false))
+            .toList();
+        final needsFDroid = idsForStoreHintScan
+            .where((id) => !(cache[id]?.containsKey('F-Droid') ?? false))
+            .toList();
+        if (needsApkMirror.isEmpty && needsFDroid.isEmpty) return;
+        await Future.wait([
+          if (needsApkMirror.isNotEmpty)
+            BulkImportService.checkApkMirror(
+              needsApkMirror,
+              shouldAbort: shouldAbort,
+            ).then(
+              (r) => BulkScanCache.mergeStoreAndSave(cache, 'APKMirror', r),
+            ),
+          if (needsFDroid.isNotEmpty)
+            BulkImportService.checkFDroid(
+              needsFDroid,
+              shouldAbort: shouldAbort,
+            ).then((r) => BulkScanCache.mergeStoreAndSave(cache, 'F-Droid', r)),
+        ]);
+      } finally {
+        _storeScanRunning = false;
+      }
     }
 
     Future<List<App>> refresh() {
+      _storeScanGeneration++;
+      _deferredStoreScanTimer?.cancel();
       hapticLightImpact();
       setState(() {
         refreshingSince = DateTime.now();
@@ -3562,7 +3777,7 @@ class AppsPageState extends State<AppsPage> {
       // freshness interval while [checkUpdates] still applies the
       // installed/track-only preference.
       final Future<List<App>> refreshFuture = appsProvider.checkUpdates(
-        specificIds: _listedAppsCache.map((a) => a.app.id).toList(),
+        specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
       );
       return refreshFuture
           .catchError((e) {
@@ -3588,7 +3803,11 @@ class AppsPageState extends State<AppsPage> {
             _deferredStoreScanTimer?.cancel();
             _deferredStoreScanTimer = Timer(_deferredStoreScanDelay, () {
               _deferredStoreScanTimer = null;
-              if (!mounted) return;
+              if (!mounted ||
+                  _coveredByOpaqueRoute ||
+                  !appsProvider.isForeground) {
+                return;
+              }
               unawaited(backgroundScanStoreAvailability());
             });
           });
@@ -3611,12 +3830,13 @@ class AppsPageState extends State<AppsPage> {
         .where((element) => appsProvider.apps.containsKey(element))
         .toSet();
 
-    void toggleAppSelected(App app) {
+    void toggleAppSelected(AppInMemory listing) {
       setState(() {
-        if (selectedAppIds.contains(app.id)) {
-          selectedAppIds.removeWhere((a) => a == app.id);
+        final String listingKey = listing.listingKey;
+        if (selectedAppIds.contains(listingKey)) {
+          selectedAppIds.removeWhere((id) => id == listingKey);
         } else {
-          selectedAppIds.add(app.id);
+          selectedAppIds.add(listingKey);
         }
       });
       _notifyHomeFabChromeIfChanged();
@@ -3650,6 +3870,7 @@ class AppsPageState extends State<AppsPage> {
       _effectiveGroupUpdatesSeparately(settingsProvider),
     ]);
     if (listBuildToken != _lastListBuildToken) {
+      final listTiming = PerformanceRecorder.instance.startOperation();
       _lastListBuildToken = listBuildToken;
       var workingList = appsProvider.apps.values.toList();
 
@@ -3814,7 +4035,7 @@ class AppsPageState extends State<AppsPage> {
       if (_effectivePinUpdates(settingsProvider)) {
         final temp = <AppInMemory>[];
         workingList = workingList.where((sa) {
-          if (_existingUpdatesCache.contains(sa.app.id)) {
+          if (_existingUpdatesCache.contains(sa.listingKey)) {
             temp.add(sa);
             return false;
           }
@@ -3861,7 +4082,7 @@ class AppsPageState extends State<AppsPage> {
               filter.authorFilter.trim().isNotEmpty);
       if (crossFolderSearchActive) {
         final Set<String> mainListedIds = {
-          for (final a in _listedAppsCache) a.app.id,
+          for (final a in _listedAppsCache) a.listingKey,
         };
         // Folder id → its position in settings order, for picking a single
         // home folder when an app belongs to several (avoids listing — and
@@ -3873,7 +4094,7 @@ class AppsPageState extends State<AppsPage> {
         final Map<String, List<AppInMemory>> matchesByFolder = {};
         final List<AppInMemory> onDemandMatches = [];
         for (final appInMem in appsProvider.apps.values) {
-          if (mainListedIds.contains(appInMem.app.id)) {
+          if (mainListedIds.contains(appInMem.listingKey)) {
             continue; // already shown in the main results — no duplicate
           }
           if (!appMatchesFilters(appInMem)) continue;
@@ -3921,6 +4142,10 @@ class AppsPageState extends State<AppsPage> {
           _crossFolderMatchesCache = matches;
         }
       }
+      PerformanceRecorder.instance.finishOperation(
+        PerformanceOperation.appsFilterSort,
+        listTiming,
+      );
     }
     // ── Use cached results ──────────────────────────────────────────────────
     var listedApps = _listedAppsCache;
@@ -3943,16 +4168,18 @@ class AppsPageState extends State<AppsPage> {
     // though it isn't in [listedApps] — otherwise tapping one would be reset
     // to the first main-list app on the next frame.
     bool isSelectableAppId(String id) =>
-        listedApps.any((sa) => sa.app.id == id) ||
-        _crossFolderMatchesCache.any((g) => g.apps.any((a) => a.app.id == id));
+        listedApps.any((sa) => sa.listingKey == id) ||
+        _crossFolderMatchesCache.any(
+          (g) => g.apps.any((a) => a.listingKey == id),
+        );
     String? effectiveSelectedAppId = selectedAppId;
     if (isLargeScreen) {
       if (effectiveSelectedAppId == null && listedApps.isNotEmpty) {
-        effectiveSelectedAppId = listedApps.first.app.id;
+        effectiveSelectedAppId = listedApps.first.listingKey;
       } else if (effectiveSelectedAppId != null &&
           !isSelectableAppId(effectiveSelectedAppId)) {
         effectiveSelectedAppId = listedApps.isNotEmpty
-            ? listedApps.first.app.id
+            ? listedApps.first.listingKey
             : null;
       }
       if (effectiveSelectedAppId != selectedAppId) {
@@ -4025,12 +4252,12 @@ class AppsPageState extends State<AppsPage> {
     final separateUpdates = _effectiveGroupUpdatesSeparately(settingsProvider);
     bool isInUpdatesGroup(AppInMemory entry) =>
         separateUpdates &&
-        _existingUpdatesCache.contains(entry.app.id) &&
+        _existingUpdatesCache.contains(entry.listingKey) &&
         (widget.onDemandOnlyList ||
             entry.app.additionalSettings['onDemandOnly'] != true);
 
     final Set<String> listedAppIdSet = {
-      for (final AppInMemory listed in listedApps) listed.app.id,
+      for (final AppInMemory listed in listedApps) listed.listingKey,
     };
 
     List<String> filterListedMassObtainIds(Iterable<String> ids) =>
@@ -4065,7 +4292,7 @@ class AppsPageState extends State<AppsPage> {
     final Set<String> pageUpdateBadgeIds = separateUpdates
         ? {
             for (final AppInMemory listed in listedApps)
-              if (isInUpdatesGroup(listed)) listed.app.id,
+              if (isInUpdatesGroup(listed)) listed.listingKey,
           }
         : existingUpdateIdsAllOrSelected.toSet();
     if (selectedAppIds.isEmpty) {
@@ -4085,12 +4312,14 @@ class AppsPageState extends State<AppsPage> {
         _effectiveGroupNonInstalledSeparately(settingsProvider) &&
         (effectiveGroupBy == AppsListGroupBy.category ||
             effectiveGroupBy == AppsListGroupBy.source ||
-            effectiveGroupBy == AppsListGroupBy.appType);
+            effectiveGroupBy == AppsListGroupBy.appType ||
+            effectiveGroupBy == AppsListGroupBy.updateStatus);
     final segregateTrackOnly =
         _effectiveGroupTrackOnlySeparately(settingsProvider) &&
         (effectiveGroupBy == AppsListGroupBy.category ||
             effectiveGroupBy == AppsListGroupBy.source ||
-            effectiveGroupBy == AppsListGroupBy.appType);
+            effectiveGroupBy == AppsListGroupBy.appType ||
+            effectiveGroupBy == AppsListGroupBy.updateStatus);
 
     final tempRenamed = <AppInMemory>[];
     final tempPinned = <AppInMemory>[];
@@ -4106,8 +4335,9 @@ class AppsPageState extends State<AppsPage> {
     }
     listedApps = [...tempRenamed, ...tempPinned, ...tempNotPinned];
 
-    // Apps that go into normal category/source/appType groups (excluding
-    // segregated non-installed, segregated track-only, and the updates group when those features are on).
+    // Apps that go into normal category/source/appType/updateStatus groups
+    // (excluding segregated non-installed, segregated track-only, and the
+    // updates group when those features are on).
     List<AppInMemory> appsForGroups(List<AppInMemory> source) => source
         .where(
           (e) =>
@@ -4284,6 +4514,39 @@ class AppsPageState extends State<AppsPage> {
         _appTypeGroupListedIndices = const {};
       }
 
+      // 4. Update statuses
+      if (effectiveGroupBy == AppsListGroupBy.updateStatus) {
+        // Bucketed in a single pass instead of one scan per group: a verdict
+        // costs a version comparison, so the per-group scans the groupings
+        // above use would redo that work for every status.
+        final nextUpdateStatusMap = <AppVersionDisplayVerdict, List<int>>{};
+        for (
+          int listingIndex = 0;
+          listingIndex < listedApps.length;
+          listingIndex++
+        ) {
+          final AppInMemory row = listedApps[listingIndex];
+          if (segregateNonInstalled && row.app.installedVersion == null) {
+            continue;
+          }
+          if (segregateTrackOnly &&
+              row.app.additionalSettings['trackOnly'] == true) {
+            continue;
+          }
+          if (isInUpdatesGroup(row)) continue;
+          nextUpdateStatusMap
+              .putIfAbsent(appVersionVerdictForDisplay(row.app), () => <int>[])
+              .add(listingIndex);
+        }
+        _listedUpdateStatusesCache = updateStatusGroupOrder
+            .where(nextUpdateStatusMap.containsKey)
+            .toList();
+        _updateStatusGroupListedIndices = nextUpdateStatusMap;
+      } else {
+        _listedUpdateStatusesCache = const [];
+        _updateStatusGroupListedIndices = const {};
+      }
+
       // Group membership is a strict hierarchy — each app lands in at most one
       // of these groups: Updates > Track-only > Not-installed. An app with an
       // actionable update therefore never also shows under Track-only or
@@ -4338,6 +4601,7 @@ class AppsPageState extends State<AppsPage> {
     final listedCategories = _listedCategoriesCache;
     final listedSources = _listedSourcesCache;
     final listedAppTypes = _listedAppTypesCache;
+    final listedUpdateStatuses = _listedUpdateStatusesCache;
 
     List<String> getActiveGroupKeys() {
       final folderPrefix = widget.folderId != null
@@ -4355,6 +4619,10 @@ class AppsPageState extends State<AppsPage> {
       } else if (effectiveGroupBy == AppsListGroupBy.appType) {
         for (final type in listedAppTypes) {
           keys.add('${folderPrefix}appType:${type.name}');
+        }
+      } else if (effectiveGroupBy == AppsListGroupBy.updateStatus) {
+        for (final verdict in listedUpdateStatuses) {
+          keys.add('${folderPrefix}updateStatus:${verdict.name}');
         }
       }
       if (showNonInstalledGroupSection) {
@@ -4535,33 +4803,31 @@ class AppsPageState extends State<AppsPage> {
     }
 
     GestureDetector getAppIcon(int appIndex, {AppInMemory? appOverride}) {
-      final String rowAppId = (appOverride ?? listedApps[appIndex]).app.id;
-      // Kick off icon loading once; putIfAbsent prevents duplicate loads.
-      // _AppIconWidget independently watches the icon bytes via context.select,
-      // so only that widget rebuilds when the icon arrives — not the full page.
-      if (appsProvider.apps[rowAppId]?.icon == null) {
+      final String rowListingKey =
+          (appOverride ?? listedApps[appIndex]).listingKey;
+      final String rowPackageId = (appOverride ?? listedApps[appIndex]).app.id;
+      if (appsProvider.apps[rowListingKey]?.icon == null) {
         _appListIconWarmFutures.putIfAbsent(
-          rowAppId,
-          () => appsProvider.updateAppIcon(rowAppId),
+          rowPackageId,
+          () => appsProvider.updateAppIcon(rowListingKey),
         );
       }
       return GestureDetector(
         child: Hero(
           tag: widget.folderId != null
-              ? 'folder-${widget.folderId}-icon-$rowAppId'
-              : 'app-icon-$rowAppId',
-          // Preserve the ClipRRect/shape during the flight.
+              ? 'folder-${widget.folderId}-icon-$rowListingKey'
+              : 'app-icon-$rowListingKey',
           flightShuttleBuilder: (_, animation, _, _, _) =>
-              _AppIconWidget(appId: rowAppId),
-          child: _AppIconWidget(appId: rowAppId),
+              _AppIconWidget(appId: rowListingKey),
+          child: _AppIconWidget(appId: rowListingKey),
         ),
-        onDoubleTap: () => packageManager.openApp(rowAppId),
+        onDoubleTap: () => packageManager.openApp(rowPackageId),
         onLongPress: () {
           Navigator.push(
             context,
             heroFriendlyAppPageRoute(
               (_) => AppPage(
-                appId: rowAppId,
+                appId: rowListingKey,
                 showOppositeOfPreferredView: true,
                 appsListHeroFolderId: widget.folderId,
               ),
@@ -4578,7 +4844,7 @@ class AppsPageState extends State<AppsPage> {
       AppInMemory? appOverride,
     }) {
       final app = appOverride ?? listedApps[index];
-      final appId = app.app.id;
+      final listingKey = app.listingKey;
       final installed = app.app.installedVersion;
       final hasUpdate = installed != null && appHasActionableUpdate(app.app);
       final hasUncertainUpdate =
@@ -4616,8 +4882,8 @@ class AppsPageState extends State<AppsPage> {
       // (callback = openContainer) and the [reduceVisualEffects] fallback
       // path (callback = direct Navigator.push).
       Widget buildRowWith(VoidCallback navigateToAppPage) => _SwipeableListItem(
-        key: ValueKey(appId),
-        appId: appId,
+        key: ValueKey(listingKey),
+        appId: listingKey,
         hasUpdate: hasUpdate || hasUncertainUpdate,
         isPinned: app.app.pinned,
         isInstalled: installed != null,
@@ -4627,25 +4893,27 @@ class AppsPageState extends State<AppsPage> {
         leftAction: settingsProvider.leftSwipeAction,
         appsListHeroFolderId: widget.folderId,
         child: _AppListItem(
-          appId: appId,
-          isSelected: selectedAppIds.contains(appId),
+          appId: listingKey,
+          isSelected: selectedAppIds.contains(listingKey),
           isSplitPaneActive:
               isLargeScreen &&
-              effectiveSelectedAppId == appId &&
+              effectiveSelectedAppId == listingKey &&
               selectedAppIds.isEmpty,
-          showCheckmark: selectedAppIds.contains(appId),
+          showCheckmark: selectedAppIds.contains(listingKey),
           areDownloadsRunning: downloadsRunning,
           iconWidget: getAppIcon(index, appOverride: appOverride),
           sourceHost: sourceHost,
-          showAppTypeBadge: settingsProvider.showAppTypeBadge,
-          showTrackedStoreBadge: settingsProvider.showTrackedStoreBadge,
-          showCategoriesBadge: settingsProvider.showCategoriesBadge,
-          showAuthorBadge: settingsProvider.showAuthorBadge,
-          showVersionBadge: settingsProvider.showVersionBadge,
+          showAppTypeBadge: _effectiveShowAppTypeBadge(settingsProvider),
+          showTrackedStoreBadge: _effectiveShowTrackedStoreBadge(
+            settingsProvider,
+          ),
+          showCategoriesBadge: _effectiveShowCategoriesBadge(settingsProvider),
+          showAuthorBadge: _effectiveShowAuthorBadge(settingsProvider),
+          showVersionBadge: _effectiveShowVersionBadge(settingsProvider),
           onTap: selectedAppIds.isNotEmpty
-              ? () => toggleAppSelected(app.app)
+              ? () => toggleAppSelected(app)
               : navigateToAppPage,
-          onLongPress: () => toggleAppSelected(app.app),
+          onLongPress: () => toggleAppSelected(app),
           highlightTouchTargets: settingsProvider.highlightTouchTargets,
           categoryColors: settingsProvider.categories,
           itemBorderRadius: itemRadius,
@@ -4674,35 +4942,30 @@ class AppsPageState extends State<AppsPage> {
       // view) still uses the standard Navigator.push - that's a secondary
       // path and doesn't benefit from container transform.
       final Widget swipeItem = isLargeScreen
-          ? buildRowWith(() => setState(() => selectedAppId = appId))
+          ? buildRowWith(() => setState(() => selectedAppId = listingKey))
           : settingsProvider.reduceVisualEffects
           ? buildRowWith(
               () => Navigator.push(
                 context,
                 heroFriendlyAppPageRoute(
                   (_) => AppPage(
-                    appId: appId,
+                    appId: listingKey,
                     appsListHeroFolderId: widget.folderId,
                   ),
                 ),
               ),
             )
-          : OpenContainer(
-              key: ValueKey('open-$appId'),
-              closedColor: Colors.transparent,
-              openColor: Theme.of(context).scaffoldBackgroundColor,
-              closedElevation: 0,
-              openElevation: 0,
-              transitionType: ContainerTransitionType.fadeThrough,
-              transitionDuration: const Duration(milliseconds: 320),
+          : AppDetailsContainer(
+              key: ValueKey('open-$listingKey'),
               closedShape: itemRadius != null
                   ? RoundedRectangleBorder(borderRadius: itemRadius)
                   : const RoundedRectangleBorder(),
               // We drive the open trigger from [_AppListItem.onTap] ourselves
               // so selection-mode taps stay routed to [toggleAppSelected].
-              tappable: false,
-              openBuilder: (BuildContext _, VoidCallback _) =>
-                  AppPage(appId: appId, appsListHeroFolderId: widget.folderId),
+              openBuilder: (BuildContext _) => AppPage(
+                appId: listingKey,
+                appsListHeroFolderId: widget.folderId,
+              ),
               closedBuilder: (BuildContext _, VoidCallback openContainer) =>
                   buildRowWith(openContainer),
             );
@@ -4884,7 +5147,7 @@ class AppsPageState extends State<AppsPage> {
           : '';
       return buildCollapsibleTile(
         groupKey: '${folderPrefix}__trackOnly__',
-        title: tr('trackOnly'),
+        title: tr('trackOnlyGroup'),
         matchingIndices: _trackOnlyListedIndices,
       );
     }
@@ -4934,6 +5197,31 @@ class AppsPageState extends State<AppsPage> {
         AppTypeGroup.user => tr('appTypeUser'),
         AppTypeGroup.system => tr('appTypeSystem'),
         AppTypeGroup.privileged => tr('appTypePrivileged'),
+      };
+      return buildCollapsibleTile(
+        groupKey: groupKey,
+        title: title,
+        matchingIndices: matchingIndices,
+      );
+    }
+
+    Widget getUpdateStatusCollapsibleTile(AppVersionDisplayVerdict verdict) {
+      final folderPrefix = widget.folderId != null
+          ? 'folder_${widget.folderId}_'
+          : '';
+      final String groupKey = '${folderPrefix}updateStatus:${verdict.name}';
+      final matchingIndices =
+          _updateStatusGroupListedIndices[verdict] ?? const <int>[];
+      // The details-page stripe labels `effectivelyEqual` and `uncertain` from
+      // the per-app decision reason (e.g. "Different build variant"); a group
+      // header covers many apps, so it uses the verdict's general wording.
+      final String title = switch (verdict) {
+        AppVersionDisplayVerdict.updateAvailable => tr('updateAvailable'),
+        AppVersionDisplayVerdict.uncertain => tr('versionOrderUnclear'),
+        AppVersionDisplayVerdict.newerOnDevice => tr('newerOnDevice'),
+        AppVersionDisplayVerdict.effectivelyEqual => tr('effectivelyEqual'),
+        AppVersionDisplayVerdict.sameVersion => tr('sameVersion'),
+        AppVersionDisplayVerdict.notInstalled => tr('notInstalled'),
       };
       return buildCollapsibleTile(
         groupKey: groupKey,
@@ -5013,7 +5301,10 @@ class AppsPageState extends State<AppsPage> {
                     settingsProvider.categories,
                   )..addAll(actions.newCategoryColors);
                   if (actions.newCategoryColors.isNotEmpty) {
-                    settingsProvider.setCategories(nextCategoryColors);
+                    settingsProvider.setCategories(
+                      nextCategoryColors,
+                      appsProvider: appsProvider,
+                    );
                   }
                   final updatedCategoryLists =
                       applyBulkCategoryActionsToCategoryLists(
@@ -5076,15 +5367,33 @@ class AppsPageState extends State<AppsPage> {
                     appsToMark.map((appToUpdate) {
                       final bool hasLegacyReset = appToUpdate.additionalSettings
                           .containsKey(installStatusResetKey);
+                      // Track-only apps may be marked out of "Not installed",
+                      // not just bumped to latest: their package is often absent
+                      // from the device by design, which is exactly the state
+                      // reconciliation leaves them in, and requiring an existing
+                      // installedVersion here made the action inert for them
+                      // (ObtainX#276).
+                      final bool isTrackOnly =
+                          appToUpdate.additionalSettings['trackOnly'] == true;
                       App appToMark = appToUpdate;
                       if ((appToUpdate.installedVersion != null ||
-                              hasLegacyReset) &&
+                              hasLegacyReset ||
+                              isTrackOnly) &&
                           !appsProvider.isVersionDetectionPossible(
                             appsProvider.apps[appToUpdate.id],
                           )) {
-                        appToMark = appToUpdate.copyWith(
-                          installedVersion: appToUpdate.latestVersion,
-                        );
+                        appToMark = acknowledgeSourceRelease(appToUpdate);
+                        if (isTrackOnly) {
+                          appToMark = appToMark.copyWith(
+                            additionalSettings:
+                                Map<String, dynamic>.from(
+                                    appToMark.additionalSettings,
+                                  )
+                                  ..[trackOnlyUserMarkedInstalledKey] = true
+                                  ..['trackOnlyUndeterminedInstalledVersion'] =
+                                      false,
+                          );
+                        }
                       }
                       if (hasLegacyReset) {
                         appToMark = appToMark.copyWith(
@@ -5124,7 +5433,7 @@ class AppsPageState extends State<AppsPage> {
     void downloadSelectedAppAssets([Iterable<App>? targetApps]) {
       final appsToDownload = targetApps ?? getSelectedApps();
       appsProvider
-          .downloadAppAssets(appsToDownload.map((e) => e.id).toList())
+          .downloadAppAssets(appsToDownload.map((e) => e.listingKey).toList())
           .catchError((e) {
             showError(e);
             return <String>[];
@@ -5162,7 +5471,7 @@ class AppsPageState extends State<AppsPage> {
       const encoder = JsonEncoder.withIndent('    ');
       final exportJSON = encoder.convert(
         appsProvider.generateExportJSON(
-          appIds: appsToExport.map((e) => e.id).toList(),
+          appIds: appsToExport.map((e) => e.listingKey).toList(),
           overrideExportSettings: 0,
         ),
       );
@@ -5215,7 +5524,7 @@ class AppsPageState extends State<AppsPage> {
                               : () {
                                   setState(() {
                                     for (final appInMem in listedApps) {
-                                      selectedAppIds.add(appInMem.app.id);
+                                      selectedAppIds.add(appInMem.listingKey);
                                     }
                                   });
                                   _notifyHomeFabChromeIfChanged();
@@ -5716,6 +6025,19 @@ class AppsPageState extends State<AppsPage> {
         );
       }
 
+      final useUpdateStatusGroups =
+          groupBy == AppsListGroupBy.updateStatus &&
+          (listedUpdateStatuses.isNotEmpty ||
+              showNonInstalledGroupSection ||
+              showTrackOnlyGroupSection);
+      if (useUpdateStatusGroups) {
+        return buildGroupedSliverList(
+          mainChildCount: listedUpdateStatuses.length,
+          mainBuilder: (i) =>
+              getUpdateStatusCollapsibleTile(listedUpdateStatuses[i]),
+        );
+      }
+
       // Flat list — still supports the updates group.
       if (showUpdatesGroupSection) {
         // Non-updates app indices (already in _listedAppsCache order, minus those in updates).
@@ -5902,7 +6224,7 @@ class AppsPageState extends State<AppsPage> {
       showFilterSheet,
     );
 
-    return PopScope(
+    final page = PopScope(
       canPop: !shouldInterceptBack,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
@@ -6751,6 +7073,11 @@ class AppsPageState extends State<AppsPage> {
         return listScaffold;
       }(),
     );
+    PerformanceRecorder.instance.finishOperation(
+      PerformanceOperation.appsPageBuild,
+      buildTiming,
+    );
+    return page;
   }
 
   void openAppById(String appId, {bool autoScroll = true}) {
@@ -6771,7 +7098,7 @@ class AppsPageState extends State<AppsPage> {
 
     if (isLargeScreen) {
       setState(() {
-        selectedAppId = app.app.id;
+        selectedAppId = app.listingKey;
       });
       if (autoScroll) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -6782,8 +7109,10 @@ class AppsPageState extends State<AppsPage> {
       Navigator.push(
         context,
         heroFriendlyAppPageRoute(
-          (_) =>
-              AppPage(appId: app.app.id, appsListHeroFolderId: widget.folderId),
+          (_) => AppPage(
+            appId: app.listingKey,
+            appsListHeroFolderId: widget.folderId,
+          ),
         ),
       );
     }
@@ -6795,7 +7124,9 @@ class AppsPageState extends State<AppsPage> {
     final sp = context.read<SettingsProvider>();
     final groupBy = _effectiveGroupBy(sp);
 
-    final int index = _listedAppsCache.indexWhere((sa) => sa.app.id == appId);
+    final int index = _listedAppsCache.indexWhere(
+      (sa) => sa.listingKey == appId || sa.app.id == appId,
+    );
     if (index == -1) return;
 
     double offset = 120.0; // Base header height approximation
@@ -6890,6 +7221,28 @@ class AppsPageState extends State<AppsPage> {
               : '';
           final isCollapsed = _collapsedGroups.contains(
             '${folderPrefix}appType:${type.name}',
+          );
+          if (!isCollapsed) {
+            offset += indices.length * itemHeight;
+          }
+        }
+      }
+    } else if (groupBy == AppsListGroupBy.updateStatus) {
+      // Update-status group
+      for (final verdict in _listedUpdateStatusesCache) {
+        final indices = _updateStatusGroupListedIndices[verdict] ?? [];
+        if (indices.isEmpty) continue;
+        offset += headerHeight; // Group header
+        final verdictAppIndex = indices.indexOf(index);
+        if (verdictAppIndex != -1) {
+          offset += verdictAppIndex * itemHeight;
+          break;
+        } else {
+          final folderPrefix = widget.folderId != null
+              ? 'folder_${widget.folderId}_'
+              : '';
+          final isCollapsed = _collapsedGroups.contains(
+            '${folderPrefix}updateStatus:${verdict.name}',
           );
           if (!isCollapsed) {
             offset += indices.length * itemHeight;

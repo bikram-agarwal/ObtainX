@@ -19,6 +19,20 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:obtainium/http/source_request_session.dart';
+
+class _RealHttpOverrides extends HttpOverrides {}
+
+class _AuthenticatedRepo extends FDroidRepo {
+  @override
+  Future<Map<String, String>?> getRequestHeaders(
+    Map<String, dynamic> additionalSettings,
+    String url, {
+    bool forAPKDownload = false,
+  }) async {
+    return {'Authorization': additionalSettings['auth'] as String};
+  }
+}
 
 /// Stub source that returns a controllable [APKDetails] from
 /// [getLatestAPKDetails] without doing any network or HTML work.
@@ -65,6 +79,7 @@ class _StubSource extends AppSource {
     ],
     this.version = '2.0',
     this.versionCode,
+    this.versionCodesByAsset = const {},
   }) {
     hosts = <String>['example.com'];
     name = 'Example';
@@ -73,6 +88,7 @@ class _StubSource extends AppSource {
   final List<MapEntry<String, String>> apkUrls;
   final String version;
   final int? versionCode;
+  final Map<String, int> versionCodesByAsset;
 
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
@@ -89,6 +105,7 @@ class _StubSource extends AppSource {
       apkUrls,
       AppNames('Example Author', 'Readable Name'),
       versionCode: versionCode,
+      versionCodesByAsset: versionCodesByAsset,
     );
   }
 
@@ -474,6 +491,52 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
+
+  test(
+    'repository HTTP requests share in-flight work but isolate credentials and refreshes',
+    () async {
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requests = <String?>[];
+        final ports = <int>[];
+        server.listen((request) async {
+          requests.add(request.headers.value(HttpHeaders.authorizationHeader));
+          ports.add(request.connectionInfo!.remotePort);
+          request.response.write('<repo/>');
+          await request.response.close();
+        });
+        final url = 'http://127.0.0.1:${server.port}/index.xml';
+        final source = _AuthenticatedRepo();
+        await SourceRequestSession.run(() async {
+          final responses = await Future.wait(
+            List.generate(12, (_) {
+              return source.sourceRequest(url, {'auth': 'first'});
+            }),
+          );
+          expect(requests, ['first']);
+          expect(
+            responses.every((response) => identical(response, responses.first)),
+            isTrue,
+          );
+          await source.sourceRequest(url, {'auth': 'second'});
+          await source.sourceRequest(url, {
+            'auth': 'first',
+            'allowInsecure': true,
+          });
+          expect(requests, ['first', 'second', 'first']);
+          // Responses outside the repository cache still reuse the session's socket.
+          await source.sourceRequest('$url?next=1', {'auth': 'first'});
+          expect(ports[0], ports[1]);
+          expect(ports[0], ports[3]);
+        });
+        await SourceRequestSession.run(() async {
+          await source.sourceRequest(url, {'auth': 'first'});
+        });
+        expect(requests.length, 5);
+      }, _RealHttpOverrides());
+    },
+  );
 
   test(
     'source resolution reuses templates but returns fresh mutable sources',
@@ -1344,6 +1407,52 @@ void main() {
     });
   });
 
+  // GitHub Actions artifacts are auth-walled, so re-hosters like nightly.link
+  // only ever serve `<artifact>.zip`. Scraping one used to drop every link on
+  // the page.
+  group('HTML zip assets', () {
+    const String page = '''
+<a href="https://nightly.link/owner/repo/workflows/android/main/app-release.zip">app-release.zip</a>
+<a href="https://example.com/downloads/app-1.2.apk">app-1.2.apk</a>
+<a href="https://example.com/downloads/source.tar.gz">source.tar.gz</a>
+''';
+
+    test('a zip link is skipped until the app opts in', () async {
+      final List<MapEntry<String, String>> links = await grabLinksCommon(
+        page,
+        Uri.parse('https://example.com/'),
+        <String, dynamic>{},
+      );
+      expect(links.map((MapEntry<String, String> link) => link.key), <String>[
+        'https://example.com/downloads/app-1.2.apk',
+      ]);
+    });
+
+    test('opting in keeps the zip alongside real APKs', () async {
+      final List<MapEntry<String, String>> links = await grabLinksCommon(
+        page,
+        Uri.parse('https://example.com/'),
+        <String, dynamic>{'includeZips': true},
+      );
+      expect(
+        links.map((MapEntry<String, String> link) => link.key),
+        unorderedEquals(<String>[
+          'https://nightly.link/owner/repo/workflows/android/main/app-release.zip',
+          'https://example.com/downloads/app-1.2.apk',
+        ]),
+      );
+    });
+
+    test('the HTML source offers both zip options', () {
+      expect(
+        HTML().combinedAppSpecificSettingFormItems
+            .expand((List<GeneratedFormItem> row) => row)
+            .map((GeneratedFormItem item) => item.key),
+        containsAll(<String>['includeZips', 'zippedApkFilterRegEx']),
+      );
+    });
+  });
+
   test(
     'getDefaultValuesFromFormItems inflates subform items with full defaults',
     () {
@@ -1408,6 +1517,95 @@ void main() {
           });
 
       expect(app.latestVersion, '4.8.3');
+    },
+  );
+
+  test(
+    'source codes follow the filtered and selected APK through reload',
+    () async {
+      final source = _StubSource(
+        version: '4.8.3',
+        apkUrls: const [
+          MapEntry('arm.apk', 'https://example.com/arm.apk'),
+          MapEntry('x86.apk', 'https://example.com/x86.apk'),
+        ],
+        versionCodesByAsset: {'arm.apk': 48301, 'x86.apk': 48302},
+      );
+      final app = await SourceProvider()
+          .getApp(source, 'https://example.com/app', {
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'autoApkFilterByArch': false,
+          });
+      expect(app.latestVersion, '48302');
+      expect(selectedSourceVersionCode(app), 48302);
+      final selected = normalizeSelectedSourceVersion(
+        app.copyWith(preferredApkIndex: 0, installedVersion: '48301'),
+      );
+      expect(selected.latestVersion, '48301');
+      expect(selectedSourceVersionCode(selected), 48301);
+      expect(appIsUpToDateForFiltering(selected), true);
+      final restored = App.fromJson(selected.toJson());
+      expect(selectedSourceVersionCode(restored), 48301);
+      expect(normalizeSelectedSourceVersion(restored), same(restored));
+      final filtered = await SourceProvider()
+          .getApp(source, 'https://example.com/app', {
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'autoApkFilterByArch': false,
+            'apkFilterRegEx': 'arm',
+          });
+      expect(filtered.latestVersion, '48301');
+      expect(filtered.apkUrls.single.key, 'arm.apk');
+      expect(selectedSourceVersionCode(filtered), 48301);
+      expect(
+        selectedSourceVersionCode(filtered.copyWith(latestVersion: '48303')),
+        isNull,
+      );
+      expect(
+        selectedSourceVersionCode(
+          filtered.copyWith(url: 'https://different.com/app'),
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'device code and selected source code outrank display-name differences',
+    () async {
+      final source = _StubSource(version: '4.8.3', versionCode: 48300);
+      final app = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        {'appId': 'org.example.app', 'versionDetection': 'auto'},
+      );
+      final installed = app.copyWith(
+        installedVersion: 'store-specific name',
+        additionalSettings: {
+          ...app.additionalSettings,
+          observedPackageIdKey: app.id,
+          observedVersionNameKey: 'store-specific name',
+          observedVersionCodeKey: 48300,
+        },
+      );
+      expect(versionDecisionForApp(installed).reason, 'selectedApkCode');
+      expect(appIsUpToDateForFiltering(installed), true);
+      expect(
+        appHasActionableUpdate(
+          installed.copyWith(
+            additionalSettings: {
+              ...installed.additionalSettings,
+              observedVersionCodeKey: 48200,
+            },
+          ),
+        ),
+        true,
+      );
+      final stale = installed.copyWith(
+        installedVersion: 'different device observation',
+      );
+      expect(versionDecisionForApp(stale).relation, VersionRelation.unknown);
     },
   );
 

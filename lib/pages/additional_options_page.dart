@@ -103,9 +103,7 @@ Future<bool> persistAdditionalOptionsForm({
 
   if (releaseDateVersionEnabled && app.releaseDate != null) {
     final bool isUpdated =
-        app.installedVersion == app.latestVersion ||
-        (app.installedVersion != null &&
-            versionsEffectivelyEqual(app.installedVersion!, app.latestVersion));
+        versionDecisionForApp(appInMem.app).relation == VersionRelation.same;
     app = app.copyWith(
       latestVersion: app.releaseDate!.toUtc().toIso8601String(),
     );
@@ -128,18 +126,9 @@ Future<bool> persistAdditionalOptionsForm({
       syncVersionStringSourceSettings(app.additionalSettings);
     }
   } else if (versionDetectionDisabled && app.installedVersion != null) {
-    final String? realInstalledVersion = app.usesVersionCodeAsOsVersion
-        ? appInMem.installedInfo?.versionCode.toString()
-        : appInMem.installedInfo?.versionName;
-    if (realInstalledVersion != null) {
-      if (reconcileVersionDifferences(
-            realInstalledVersion,
-            app.latestVersion,
-          )?.areEqual !=
-          true) {
-        app = app.copyWith(installedVersion: app.latestVersion);
-      }
-    }
+    // Explicitly entering Pseudo starts tracking the current source release.
+    // Device observations remain separate and are refreshed by saveApps.
+    app = app.copyWith(installedVersion: app.latestVersion);
   }
 
   bool versionSettingsChanged = versionDetectionEnabled;
@@ -310,6 +299,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
     if (!mounted) return;
+    if (!context.read<SettingsProvider>().matchAppPageToIconColors) return;
     if (_iconSchemeCacheKey == cacheKey) return;
     if (_iconSchemeLoadingForKey == cacheKey) return;
     _iconSchemeLoadingForKey = cacheKey;
@@ -504,6 +494,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       (SettingsProvider settings) => Object.hash(
         settings.matchAppPageToIconColors,
         settings.blackThemeActive,
+        settings.useGradientBackground,
       ),
     );
     context.select<AppsProvider, int>((AppsProvider provider) {
@@ -581,7 +572,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
 
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
+        '${applyIconDerivedPageTheming ? _iconSchemeCacheKey : "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(
@@ -591,10 +582,24 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     }
     final ThemeData pageThemeForPage = _cachedPageTheme!;
 
-    final Color scaffoldBackground = appPageDeeperSurfaceColor(
-      pageColorSchemeForPage.surface,
-      pageBrightness,
-    );
+    final bool useGradientBackground = settingsProvider.useGradientBackground;
+    // The gradient is painted behind the page, so the Scaffold has to get out of
+    // its way; the deeper surface stays the backdrop when the gradient is off.
+    final Color scaffoldBackground = useGradientBackground
+        ? Colors.transparent
+        : appPageDeeperSurfaceColor(
+            pageColorSchemeForPage.surface,
+            pageBrightness,
+          );
+    final Widget? gradientBackdrop = useGradientBackground
+        ? Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: pageColorSchemeForPage.schemePageBackgroundGradient,
+              ),
+            ),
+          )
+        : null;
 
     if (_items.isEmpty) {
       return Theme(
@@ -602,7 +607,13 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         child: Scaffold(
           backgroundColor: scaffoldBackground,
           appBar: AppBar(title: Text(tr('additionalOptions'))),
-          body: const Center(child: SizedBox.shrink()),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              ?gradientBackdrop,
+              const Center(child: SizedBox.shrink()),
+            ],
+          ),
         ),
       );
     }
@@ -676,39 +687,54 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
             ),
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-          body: CustomScrollView(
-            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            slivers: [
-              CustomAppBar(
-                title: tr('additionalOptions'),
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
-              ),
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
-                sliver: SliverToBoxAdapter(
-                  child: GeneratedForm(
-                    items: _items,
-                    outlinedInputFields: true,
-                    prominentSectionHeaders: true,
-                    wrapFormSectionsInCards: true,
-                    onValueChanges: (values, valid, isBuilding) {
-                      if (isBuilding) {
-                        _values = values;
-                        _valid = valid;
-                      } else {
-                        setState(() {
-                          _values = values;
-                          _valid = valid;
-                        });
-                      }
-                    },
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              ?gradientBackdrop,
+              CustomScrollView(
+                scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                slivers: [
+                  CustomAppBar(
+                    title: tr('additionalOptions'),
+                    matchGradientBackground: useGradientBackground,
+                    leading: IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      tooltip: MaterialLocalizations.of(
+                        context,
+                      ).backButtonTooltip,
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
                   ),
-                ),
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      12,
+                      8,
+                      12,
+                      fabBottomPadding + 124,
+                    ),
+                    sliver: SliverToBoxAdapter(
+                      child: GeneratedForm(
+                        items: _items,
+                        outlinedInputFields: true,
+                        prominentSectionHeaders: true,
+                        wrapFormSectionsInCards: true,
+                        onValueChanges: (values, valid, isBuilding) {
+                          if (isBuilding) {
+                            _values = values;
+                            _valid = valid;
+                          } else {
+                            setState(() {
+                              _values = values;
+                              _valid = valid;
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

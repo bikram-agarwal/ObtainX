@@ -14,8 +14,8 @@ library;
 /// predicates, add-app), each with slightly different handling of legacy values —
 /// read it through `App.versionDetectionMode` instead.
 enum VersionDetectionMode {
-  /// Compare with the device, and fall back to [pseudo] if the source's version
-  /// strings turn out to be unreconcilable with the device's.
+  /// Compare with the device, preserving its version and reporting uncertainty
+  /// if the source's version strings cannot be reconciled with it.
   auto('auto'),
 
   /// Always compare with the device; never auto-disable.
@@ -38,8 +38,8 @@ enum VersionDetectionMode {
   /// skipped when `App.fromJson` falls back to unmigrated JSON, so these legacy
   /// forms are still reachable at runtime:
   ///   `true`/null → [auto], `false` → [pseudo], plus the pre-dropdown strings.
-  /// Anything unrecognised is treated as [auto]: detection stays on and, being
-  /// [auto], converges to [pseudo] on its own if the versions can't be related.
+  /// Anything unrecognised is treated as [auto]: detection stays on and reports
+  /// uncertainty if the versions cannot be related.
   static VersionDetectionMode fromStored(Object? value) {
     if (value == null || value == true) {
       return auto;

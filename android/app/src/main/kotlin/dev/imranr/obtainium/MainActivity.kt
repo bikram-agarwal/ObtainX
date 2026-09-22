@@ -33,9 +33,11 @@ import android.system.Os
 import android.text.format.DateFormat
 import android.util.DisplayMetrics
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import lab.neruno.android_package_manager.toMap
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintWriter
@@ -114,7 +116,15 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private val changedPackages = linkedSetOf<String>()
+        private var packageChangeReceiver: BroadcastReceiver? = null
         private var notificationsMethodChannel: MethodChannel? = null
+
+        /// Held on the companion rather than the activity so [packageChangeReceiver],
+        /// which outlives any single activity instance, can forward to Dart without
+        /// capturing (and leaking) the activity.
+        @Volatile
+        private var installerChannel: MethodChannel? = null
         private val downloadCancelLock = Any()
         private val pendingDownloadCancelAppIds = linkedSetOf<String>()
         private var downloadCancelHandlerReady = false
@@ -233,7 +243,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private var installWatcher: InstallWatcher? = null
-    private var installerChannel: MethodChannel? = null
     private val downloadKeepAwakeLock = Any()
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -254,6 +263,41 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installNativeCrashHandler(this)
         super.onCreate(savedInstanceState)
+        // Keep observing while the activity is covered or recreated. A new
+        // process performs a full Dart load before relying on this journal.
+        if (packageChangeReceiver == null) {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == Intent.ACTION_PACKAGE_REMOVED &&
+                        intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
+                    val changedPackage = intent.data?.schemeSpecificPart ?: return
+                    changedPackages.add(changedPackage)
+                    // A third-party installer can finish long after its handoff session
+                    // ended - InstallerX's "run in background" returns focus to ObtainX
+                    // while PackageInstaller is still working - so confirmation must not
+                    // depend on that session still being open. The journal above is only
+                    // drained on a foreground transition, which in that flow happens
+                    // before the install lands. Dart ignores packages it does not track.
+                    if (intent.action == Intent.ACTION_PACKAGE_ADDED ||
+                        intent.action == Intent.ACTION_PACKAGE_REPLACED
+                    ) {
+                        installerChannel?.invokeMethod(
+                            "thirdPartyInstallPackageChanged",
+                            mapOf("packageName" to changedPackage),
+                        )
+                    }
+                }
+            }
+            ContextCompat.registerReceiver(applicationContext, receiver, IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addAction(Intent.ACTION_PACKAGE_CHANGED)
+                addDataScheme("package")
+            }, ContextCompat.RECEIVER_EXPORTED)
+            packageChangeReceiver = receiver
+        }
+
     }
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
@@ -264,8 +308,21 @@ class MainActivity : FlutterActivity() {
         }
         watcher.handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
-        for (cacheFile in watcher.releaseCacheFiles) {
-            try { cacheFile.delete() } catch (_: Exception) { }
+        val installUnconfirmed = outcome is InstallSessionOutcome.Success && !outcome.installSucceeded
+        if (installUnconfirmed) {
+            // The session ended without the install being confirmed, which for a
+            // backgrounded installer means it is still reading the content:// URI.
+            // Deleting now would race that read into a FileNotFoundException.
+            val releaseCacheFiles = watcher.releaseCacheFiles
+            watcher.handler.postDelayed({
+                for (cacheFile in releaseCacheFiles) {
+                    try { cacheFile.delete() } catch (_: Exception) { }
+                }
+            }, UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS)
+        } else {
+            for (cacheFile in watcher.releaseCacheFiles) {
+                try { cacheFile.delete() } catch (_: Exception) { }
+            }
         }
         when (outcome) {
             is InstallSessionOutcome.Success -> watcher.methodResult.success(outcome.installSucceeded)
@@ -394,6 +451,35 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     result.success(getApplicationLabels(packageNames))
+                }
+                "consumePackageChanges" -> {
+                    result.success(changedPackages.toList())
+                    changedPackages.clear()
+                }
+                "getInstalledPackageInfo", "getInstalledPackageInfos" -> {
+                    val requestedPackage = call.argument<String>("packageName")
+                    val includeSigning = call.argument<Boolean>("includeSigningCertificates") == true
+                    val singlePackage = call.method == "getInstalledPackageInfo"
+                    deviceAppsExecutor.execute {
+                        try {
+                            val flags = if (includeSigning) PackageManager.GET_SIGNING_CERTIFICATES else 0
+                            @Suppress("DEPRECATION")
+                            val value = if (singlePackage) {
+                                requestedPackage?.let { packageName ->
+                                    try {
+                                        packageManager.getPackageInfo(packageName, flags).toMap()
+                                    } catch (_: PackageManager.NameNotFoundException) {
+                                        null
+                                    }
+                                }
+                            } else {
+                                packageManager.getInstalledPackages(flags).map { it.toMap() }
+                            }
+                            mainHandler.post { result.success(value) }
+                        } catch (exception: Exception) {
+                            mainHandler.post { result.error("PACKAGE_QUERY_FAILED", exception.message, null) }
+                        }
+                    }
                 }
                 "getInstalledAppsLight" -> {
                     // Compact one-pass enumeration: only the fields the bulk-add
@@ -536,6 +622,9 @@ class MainActivity : FlutterActivity() {
                 "consumeNativeCrashLog" -> {
                     result.success(consumeNativeCrashLog(this))
                 }
+                "getDisplayDiagnostics" -> {
+                    result.success(displayDiagnostics())
+                }
                 else -> result.notImplemented()
             }
         }
@@ -564,8 +653,22 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         resetNotificationChannel(null)
+        installerChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
+
+    /// Densities behind the user's Display size setting, for shared diagnostic logs.
+    ///
+    /// The activity renders at [withCappedDisplayScale]'s capped density, so a
+    /// Flutter-side devicePixelRatio alone cannot tell whether the user picked a
+    /// large Display size or the cap silently overrode it. The application
+    /// context keeps the uncapped system configuration, so both are reported.
+    private fun displayDiagnostics(): Map<String, Any> = mapOf(
+        "stableDensityDpi" to DisplayMetrics.DENSITY_DEVICE_STABLE,
+        "systemDensityDpi" to applicationContext.resources.configuration.densityDpi,
+        "effectiveDensityDpi" to resources.configuration.densityDpi,
+        "isInMultiWindowMode" to isInMultiWindowMode,
+    )
 
     private fun enqueueSharedText(sharedText: String) {
         pendingSharedText = sharedText

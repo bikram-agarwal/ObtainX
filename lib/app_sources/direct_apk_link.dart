@@ -3,6 +3,7 @@ import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/version/partial_download_version.dart';
 
 /// Tracks an APK at a direct URL (e.g. `https://example.com/app.apk`).
 /// Delegates version detection and downloading to [HTML] with pseudo-versioning
@@ -89,7 +90,21 @@ class DirectAPKLink extends AppSource {
       // versionDetection is a string enum ('auto'/'standard'/'pseudo'/
       // 'versionCode'); use the enum value, not the legacy bool.
       additionalSettingsNew['versionDetection'] = 'pseudo';
-      return await html.getLatestAPKDetails(standardUrl, additionalSettingsNew);
+      html.previouslyCheckedApp = previouslyCheckedApp;
+      if (additionalSettings[partialDownloadFingerprintKey] != null) {
+        additionalSettingsNew[partialDownloadFingerprintKey] =
+            additionalSettings[partialDownloadFingerprintKey];
+      }
+      final details = await html.getLatestAPKDetails(
+        standardUrl,
+        additionalSettingsNew,
+      );
+      additionalSettings.remove(partialDownloadFingerprintKey);
+      if (additionalSettingsNew[partialDownloadFingerprintKey] != null) {
+        additionalSettings[partialDownloadFingerprintKey] =
+            additionalSettingsNew[partialDownloadFingerprintKey];
+      }
+      return details;
     } catch (e) {
       rethrowOrWrapError(e);
     }

@@ -44,6 +44,8 @@ import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
+import 'package:obtainium/http/source_request_session.dart';
+import 'package:obtainium/http/response_bytes.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/version/version_detection_mode.dart';
@@ -279,6 +281,9 @@ class APKDetails {
 
   /// Source version code associated with the preferred APK, when available.
   final int? versionCode;
+
+  /// Version codes by asset name, retained through filtering and variant choice.
+  final Map<String, int> versionCodesByAsset;
   List<MapEntry<String, String>> apkUrls;
   final AppNames names;
   final DateTime? releaseDate;
@@ -290,6 +295,7 @@ class APKDetails {
 
   /// Release names/titles seen before title filtering (RegEx assist).
   List<String> rawReleaseTitleCandidates;
+  final String? releaseTitle;
 
   /// Size of the preferred APK in bytes, if known at update-check time (e.g. GitHub releases).
   int? apkSizeBytes;
@@ -302,11 +308,13 @@ class APKDetails {
     this.apkUrls,
     this.names, {
     this.versionCode,
+    this.versionCodesByAsset = const {},
     this.releaseDate,
     this.changeLog,
     this.allAssetUrls = const [],
     this.iconUrl,
     this.rawReleaseTitleCandidates = const [],
+    this.releaseTitle,
     this.apkSizeBytes,
     this.isReproducible,
     this.reproducibleStatus,
@@ -354,8 +362,80 @@ DateTime? dateTimeFromJsonValue(dynamic value) {
   return null;
 }
 
+/// Separates Android package ID from store identity in a listing ID (and
+/// therefore in on-disk record names). Package IDs cannot contain `@`.
+const String appListingKeySeparator = '@';
+
+/// Store identity for [app] (the AppSource runtime type, e.g. `GitHub`).
+///
+/// This is derived from the app's *current* URL, so it changes whenever the
+/// tracked source is swapped. It names the store for display and for the label
+/// a second listing is minted under - never which record on disk a listing
+/// belongs to (see [App.listingId]), and never whether two listings duplicate
+/// each other (see [storeIdentityForApp]).
+String sourceIdentifierForApp(App app) {
+  try {
+    return SourceProvider()
+        .getSourceTemplate(app.url, overrideSource: app.overrideSource)
+        .sourceIdentifier;
+  } catch (_) {
+    return app.overrideSource ?? 'Unknown';
+  }
+}
+
+/// Which store a listing tracks [app] from, for deciding whether two listings
+/// of one package are duplicates.
+///
+/// The source type alone is too coarse: `FDroidRepo` covers every third-party
+/// repo and `HTML` every website, so two listings pointing at unrelated hosts
+/// would otherwise count as the same store and one of them would be refused.
+/// The host is therefore part of the identity, at host granularity - two repos
+/// on one host are one store.
+///
+/// Comparison-only, and deliberately never used as (or embedded in) a record
+/// name: it is derived from the mutable [App.url], so a source swap changes it,
+/// while a listing's record must keep its identity across that swap.
+String storeIdentityForApp(App app) {
+  final String sourceIdentifier = sourceIdentifierForApp(app);
+  String host = Uri.tryParse(app.url)?.host.toLowerCase() ?? '';
+  // Source matching treats a leading 'www.' as equivalent, and stored URLs keep
+  // whatever the user pasted, so the two spellings must be one store.
+  if (host.startsWith('www.')) {
+    host = host.substring('www.'.length);
+  }
+  return host.isEmpty ? sourceIdentifier : '$sourceIdentifier:$host';
+}
+
+/// Candidate listing ID for a package tracked from a second store.
+String appListingKey(String packageId, String sourceIdentifier) =>
+    '$packageId$appListingKeySeparator$sourceIdentifier';
+
+/// Normalizes a stored `listingId`, collapsing a value that merely restates
+/// [packageId] (and anything blank) back to null.
+String? listingIdFromJsonValue(Object? value, {required String packageId}) {
+  final String? listingId = value?.toString().trim();
+  if (listingId == null || listingId.isEmpty || listingId == packageId) {
+    return null;
+  }
+  return listingId;
+}
+
 class App {
   final String id;
+
+  /// Stable identity for this one listing, letting a single package be tracked
+  /// from more than one store at once.
+  ///
+  /// Null for a package's only listing, whose key is just [id] - so records
+  /// written before multi-store tracking keep their file names. A second
+  /// listing of the same package gets a value like `com.example.app@FDroid`,
+  /// assigned once when it is added.
+  ///
+  /// Deliberately **not** derived from the tracked source: swapping a listing
+  /// from GitHub to F-Droid rewrites [url] and [overrideSource], and a
+  /// source-derived key would silently re-point the listing at a different
+  /// record (losing the original and breaking the swap back).
+  final String? listingId;
   final String url;
   final String author;
   final String name;
@@ -402,6 +482,7 @@ class App {
 
   const App({
     required this.id,
+    this.listingId,
     required this.url,
     required this.author,
     required this.name,
@@ -437,6 +518,9 @@ class App {
   String toString() {
     return 'ID: $id URL: $url INSTALLED: $installedVersion LATEST: $latestVersion APK: $apkUrls PREFERREDAPK: $preferredApkIndex ADDITIONALSETTINGS: ${additionalSettings.toString()} LASTCHECK: ${lastUpdateCheck.toString()} PINNED $pinned';
   }
+
+  /// Key identifying this listing in [AppsProvider.apps] and on disk.
+  String get listingKey => listingId ?? id;
 
   bool get hasPendingRepoRename =>
       pendingRepoRenameUrl != null && pendingRepoRenameUrl!.isNotEmpty;
@@ -500,6 +584,7 @@ class App {
 
   App copyWith({
     String? id,
+    Object? listingId = _sentinel,
     String? url,
     String? author,
     String? name,
@@ -532,6 +617,9 @@ class App {
   }) {
     return App(
       id: id ?? this.id,
+      listingId: listingId == _sentinel
+          ? this.listingId
+          : listingId?.toString(),
       url: url ?? this.url,
       author: author ?? this.author,
       name: name ?? this.name,
@@ -625,6 +713,10 @@ class App {
     try {
       return App(
         id: json['id']?.toString() ?? '',
+        listingId: listingIdFromJsonValue(
+          json['listingId'],
+          packageId: json['id']?.toString() ?? '',
+        ),
         url: json['url']?.toString() ?? '',
         author: json['author']?.toString() ?? '',
         name: json['name']?.toString() ?? '',
@@ -691,17 +783,27 @@ class App {
     }
   }
 
-  Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson({bool encodeNested = true}) => {
     'id': id,
+    // Omitted for a package's only listing, so single-store records stay
+    // byte-for-byte compatible with what earlier versions (and Obtainium)
+    // wrote and expect.
+    if (listingId != null) 'listingId': listingId,
     'url': url,
     'author': author,
     'name': name,
     'installedVersion': installedVersion,
     'latestVersion': latestVersion,
-    'apkUrls': jsonEncode(stringMapListTo2DList(apkUrls)),
-    'otherAssetUrls': jsonEncode(stringMapListTo2DList(otherAssetUrls)),
+    'apkUrls': encodeNested
+        ? jsonEncode(stringMapListTo2DList(apkUrls))
+        : stringMapListTo2DList(apkUrls),
+    'otherAssetUrls': encodeNested
+        ? jsonEncode(stringMapListTo2DList(otherAssetUrls))
+        : stringMapListTo2DList(otherAssetUrls),
     'preferredApkIndex': preferredApkIndex,
-    'additionalSettings': jsonEncode(additionalSettings),
+    'additionalSettings': encodeNested
+        ? jsonEncode(additionalSettings)
+        : additionalSettings,
     'lastUpdateCheck': lastUpdateCheck?.microsecondsSinceEpoch,
     'pinned': pinned,
     'categories': categories,
@@ -892,6 +994,10 @@ abstract class AppSource {
     return app;
   }
 
+  Future<App> resolveVersionComparison(App app) async {
+    return app;
+  }
+
   Future<Map<String, dynamic>> buildMergedSettings(
     Map<String, dynamic> additionalSettings,
     SettingsProvider settingsProvider,
@@ -923,21 +1029,45 @@ abstract class AppSource {
       additionalSettingsPlusSourceConfig,
       url,
     );
-    final streamedResponseUrlWithResponseAndClient =
-        await sourceRequestStreamResponse(
-          method,
-          url,
-          requestHeaders,
-          additionalSettingsPlusSourceConfig,
-          followRedirects: followRedirects,
-          postBody: postBody,
-        );
-    return await httpClientResponseStreamToFinalResponse(
-      streamedResponseUrlWithResponseAndClient.value.key,
-      method,
-      streamedResponseUrlWithResponseAndClient.key.toString(),
-      streamedResponseUrlWithResponseAndClient.value.value,
-    );
+    final session = SourceRequestSession.current;
+    final allowInsecure =
+        additionalSettingsPlusSourceConfig['allowInsecure'] == true;
+    Future<http.Response> loadResponse() async {
+      final service = HttpService();
+      final streamed = await service.sourceRequestStreamResponse(
+        method,
+        url,
+        requestHeaders,
+        additionalSettingsPlusSourceConfig,
+        followRedirects: followRedirects,
+        postBody: postBody,
+        sharedClient: session?.clientFor(allowInsecure),
+      );
+      return service.httpClientResponseStreamToFinalResponse(
+        streamed.value.key,
+        method,
+        streamed.key.toString(),
+        streamed.value.value,
+        closeClient: session == null,
+      );
+    }
+
+    if (session != null &&
+        method == 'GET' &&
+        Uri.parse(url).path.endsWith('/index.xml')) {
+      // Key after URL/header customization so credentials, TLS policy and
+      // redirects cannot accidentally share a response across configurations.
+      final headerNames = requestHeaders?.keys.toList() ?? <String>[];
+      headerNames.sort();
+      final key = jsonEncode([
+        url,
+        allowInsecure,
+        followRedirects,
+        for (final name in headerNames) [name, requestHeaders![name]],
+      ]);
+      return session.repositoryResponse(key, loadResponse);
+    }
+    return loadResponse();
   }
 
   void runOnAddAppInputChange(String inputUrl) {}
@@ -1770,6 +1900,15 @@ class SourceProvider {
     // Capture raw snapshots before version extraction / release-date/title
     // replacement and APK filtering mutate them (used by the RegEx assist).
     final String rawLatestVersionFromSource = apk.version;
+    additionalSettings.remove('rawSelectedReleaseTitle');
+    if (apk.releaseTitle != null) {
+      additionalSettings['rawSelectedReleaseTitle'] = apk.releaseTitle;
+    }
+    final codesByAsset = <String, int>{
+      if (apk.versionCode != null && apk.apkUrls.isNotEmpty)
+        apk.apkUrls.last.key: apk.versionCode!,
+      ...apk.versionCodesByAsset,
+    };
     final String? rawApkNamesFromSource = encodeRawAssistLines(
       apk.apkUrls.map((MapEntry<String, String> entry) => entry.key),
     );
@@ -1801,13 +1940,6 @@ class SourceProvider {
     // versionCode of 123 reads as "newer" than 1.2.4), so prefer the source's own
     // version code whenever it publishes one. Only the default version string is
     // overridden — an explicit versionStringSource choice still wins.
-    if (versionDetectionModeOf(additionalSettings) ==
-            VersionDetectionMode.versionCode &&
-        apk.versionCode != null &&
-        getVersionStringSource(additionalSettings) ==
-            versionStringSourceDefault) {
-      apk.version = apk.versionCode!.toString();
-    }
     apk.apkUrls = filterApks(
       apk.apkUrls,
       additionalSettings['apkFilterRegEx'],
@@ -1834,6 +1966,34 @@ class SourceProvider {
       );
     }
     final String sourceName = apk.names.name.trim();
+    final selectedCode = apk.apkUrls.isEmpty
+        ? null
+        : codesByAsset[apk.apkUrls[preferredApkIndex].key];
+    final usesCodeLabel =
+        versionCodeAsOsVersionFor(additionalSettings) &&
+        selectedCode != null &&
+        getVersionStringSource(additionalSettings) ==
+            versionStringSourceDefault;
+    if (usesCodeLabel) {
+      apk.version = selectedCode.toString();
+    }
+    additionalSettings.remove('sourceVersionCodes');
+    if (codesByAsset.isNotEmpty) {
+      additionalSettings['sourceVersionCodes'] = {
+        'sourceUrl': standardUrl,
+        'overrideSource': sourceIsOverriden
+            ? source.sourceIdentifier
+            : currentApp?.overrideSource,
+        'version': apk.version,
+        'usesCodeLabel': usesCodeLabel,
+        'assetUrls': {for (final asset in apk.apkUrls) asset.key: asset.value},
+        'codes': {
+          for (final asset in apk.apkUrls)
+            if (codesByAsset.containsKey(asset.key))
+              asset.key: codesByAsset[asset.key],
+        },
+      };
+    }
     // Replace the stored name with the source's readable name when the stored
     // name is missing, is exactly the app id, or merely looks like a package id
     // (e.g. 'org.example.app') while the source offers a real display name.
@@ -1903,7 +2063,7 @@ class SourceProvider {
           apk.attestationStatus ??
           (sameVersionAsPrevious ? currentApp.latestAttestationStatus : null),
     );
-    return source.postProcessApp(finalApp);
+    return source.resolveVersionComparison(source.postProcessApp(finalApp));
   }
 
   // Returns errors in [results, errors] instead of throwing them
@@ -1995,9 +2155,12 @@ class TypedSettings {
 
 class HttpService {
   static const int maxRedirects = 10;
+  final Duration responseTimeout;
+
+  HttpService({this.responseTimeout = sourceResponseTimeout});
 
   HttpClient createHttpClient(bool insecure) {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = sourceConnectionTimeout;
     if (insecure) {
       client.badCertificateCallback =
           (X509Certificate cert, String host, int port) => true;
@@ -2026,60 +2189,87 @@ class HttpService {
     Map<String, dynamic> additionalSettings, {
     bool followRedirects = true,
     Object? postBody,
+    HttpClient? sharedClient,
   }) async {
     var currentUrl = Uri.parse(url);
     var redirectCount = 0;
     List<Cookie> cookies = [];
-    HttpClient? httpClient;
-    while (redirectCount < maxRedirects) {
-      httpClient = createHttpClient(
-        additionalSettings['allowInsecure'] == true,
-      );
-      final request = await httpClient.openUrl(method, currentUrl);
-      withDefaultObtainXUserAgent(requestHeaders).forEach((
-        String headerName,
-        String headerValue,
-      ) {
-        request.headers.set(headerName, headerValue);
-      });
-      request.cookies.addAll(cookies);
-      request.followRedirects = false;
-      if (postBody != null) {
-        request.headers.contentType = ContentType.json;
-        request.write(jsonEncode(postBody));
-      }
-      final response = await request.close();
-
-      if (followRedirects &&
-          (response.statusCode >= 300 && response.statusCode <= 399)) {
-        final location = response.headers.value(HttpHeaders.locationHeader);
-        if (location != null) {
-          currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
-          redirectCount++;
-          cookies = response.cookies;
-          httpClient.close();
-          httpClient = null;
-          continue;
+    final httpClient =
+        sharedClient ??
+        createHttpClient(additionalSettings['allowInsecure'] == true);
+    try {
+      while (redirectCount < maxRedirects) {
+        bool openTimedOut = false;
+        final pendingRequest = httpClient.openUrl(method, currentUrl).then((
+          request,
+        ) {
+          if (openTimedOut) request.abort();
+          return request;
+        });
+        final request = await pendingRequest.timeout(
+          responseTimeout,
+          onTimeout: () {
+            openTimedOut = true;
+            throw TimeoutException(tr('unexpectedError'), responseTimeout);
+          },
+        );
+        withDefaultObtainXUserAgent(requestHeaders).forEach((
+          String headerName,
+          String headerValue,
+        ) {
+          request.headers.set(headerName, headerValue);
+        });
+        request.cookies.addAll(cookies);
+        request.followRedirects = false;
+        if (postBody != null) {
+          request.headers.contentType = ContentType.json;
+          request.write(jsonEncode(postBody));
         }
-      }
+        final response = await request.close().timeout(
+          responseTimeout,
+          onTimeout: () {
+            request.abort();
+            throw TimeoutException(tr('unexpectedError'), responseTimeout);
+          },
+        );
 
-      return MapEntry(currentUrl, MapEntry(httpClient, response));
+        if (followRedirects &&
+            (response.statusCode >= 300 && response.statusCode <= 399)) {
+          final location = response.headers.value(HttpHeaders.locationHeader);
+          if (location != null) {
+            currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
+            redirectCount++;
+            cookies = response.cookies;
+            await response.timeout(responseTimeout).drain<void>();
+            continue;
+          }
+        }
+
+        return MapEntry(currentUrl, MapEntry(httpClient, response));
+      }
+      throw ObtainiumError(tr('tooManyRedirects'));
+    } catch (_) {
+      if (sharedClient == null) httpClient.close(force: true);
+      rethrow;
     }
-    httpClient?.close();
-    throw ObtainiumError(tr('tooManyRedirects'));
   }
 
   Future<http.Response> httpClientResponseStreamToFinalResponse(
     HttpClient httpClient,
     String method,
     String url,
-    HttpClientResponse response,
-  ) async {
+    HttpClientResponse response, {
+    bool closeClient = true,
+  }) async {
     try {
-      final bytes = (await response.fold<BytesBuilder>(
-        BytesBuilder(),
-        (b, d) => b..add(d),
-      )).toBytes();
+      final bytes =
+          (await response
+                  .timeout(responseTimeout)
+                  .fold<BytesBuilder>(
+                    BytesBuilder(copy: false),
+                    (b, d) => b..add(d),
+                  ))
+              .takeBytes();
 
       final headers = <String, String>{};
       response.headers.forEach((name, values) {
@@ -2093,7 +2283,7 @@ class HttpService {
         request: http.Request(method, Uri.parse(url)),
       );
     } finally {
-      httpClient.close();
+      if (closeClient) httpClient.close();
     }
   }
 
@@ -2101,9 +2291,10 @@ class HttpService {
     if (res.statusCode == 404) return NoReleasesError();
 
     final reasonLower = res.reasonPhrase?.toLowerCase() ?? '';
-    final bodySample = res.body.length > 1000
-        ? res.body.substring(0, 1000).toLowerCase()
-        : res.body.toLowerCase();
+    final body = res.body;
+    final bodySample = body.length > 1000
+        ? body.substring(0, 1000).toLowerCase()
+        : body.toLowerCase();
     final isRateLimit =
         res.statusCode == 429 ||
         res.statusCode == 403 ||

@@ -68,7 +68,7 @@ enum SortColumnSettings {
 
 enum SortOrderSettings { ascending, descending }
 
-enum AppsListGroupBy { none, category, source, appType }
+enum AppsListGroupBy { none, category, source, appType, updateStatus }
 
 enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 
@@ -77,7 +77,8 @@ enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 // string [installerMode] getter/setter; the enum defines the shared vocabulary.
 // [AppsListGroupBy] is ObtainX's grouping model — it too persists under
 // upstream's `groupBy` key (its none/category/source names match upstream), with
-// `appType` as an ObtainX-only extra that Obtainium safely ignores.
+// `appType` and `updateStatus` as ObtainX-only extras that Obtainium safely
+// ignores.
 enum InstallerMode { system, shizuku, external, dhizuku }
 
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
@@ -252,10 +253,10 @@ class SettingsProvider with ChangeNotifier {
   /// Converges grouping onto upstream Obtainium's representation: pref key
   /// `groupBy`, value = [AppsListGroupBy] name. ObtainX's `none`/`category`/
   /// `source` names match upstream Obtainium's groupBy names, so Obtainium reads
-  /// them directly; ObtainX's extra `appType` value is one Obtainium simply
-  /// ignores (its getter falls back to `none`). Migrates from ObtainX's older
-  /// int `appsListGroupBy` key — which is authoritative because it alone can
-  /// encode `appType` — and the even-older `groupByCategory` bool.
+  /// them directly; ObtainX's extra `appType` and `updateStatus` values are ones
+  /// Obtainium simply ignores (its getter falls back to `none`). Migrates from
+  /// ObtainX's older int `appsListGroupBy` key — which is authoritative because
+  /// it alone can encode `appType` — and the even-older `groupByCategory` bool.
   void _migrateGroupBySetting() {
     if (prefs == null) return;
     if (prefs!.containsKey('appsListGroupBy')) {
@@ -701,6 +702,10 @@ class SettingsProvider with ChangeNotifier {
   //     so all BackdropFilter passes are skipped.
   //   - Skips the [OpenContainer] container-transform morph for the apps
   //     list -> AppPage navigation; uses a plain page-route push instead.
+  //   - Disables page gradients, section-card and detail-footer shadows, and
+  //     the details cards' full-surface offscreen clipping.
+  //   - Uses global page colors, skipping icon color extraction while keeping
+  //     the saved icon-color preference for when reduced effects is off.
   // Intended for users who report frame-rate drops on older devices, as a
   // single-switch escape hatch. Default false to preserve the visual look
   // for everyone whose hardware can handle it.
@@ -813,6 +818,8 @@ class SettingsProvider with ChangeNotifier {
   }
 
   bool get matchAppPageToIconColors {
+    // Keep the saved preference so it returns when reduced effects is off.
+    if (reduceVisualEffects) return false;
     return prefs?.getBool('matchAppPageToIconColors') ?? true;
   }
 
@@ -872,6 +879,8 @@ class SettingsProvider with ChangeNotifier {
 
   set updateInterval(int min) {
     prefs?.setInt('updateInterval', min);
+    // The cached due time was derived from the old interval.
+    bgNextCheckDue = null;
     notifyListeners();
   }
 
@@ -882,6 +891,31 @@ class SettingsProvider with ChangeNotifier {
   set updateIntervalSliderVal(double val) {
     prefs?.setDouble('updateIntervalSliderVal', val);
     notifyListeners();
+  }
+
+  /// Earliest moment any tracked app can become due for a background check.
+  ///
+  /// Android wakes the periodic task on its own schedule, which is not the
+  /// user's check interval, so most wake-ups have nothing to do. This lets one
+  /// of those return before loading every app record and opening the check
+  /// timestamp database. Treated as a hint only: it is cleared whenever the app
+  /// set or the interval changes, and a missing value means "load and decide".
+  /// Deliberately does not notify listeners - no UI reads it.
+  DateTime? get bgNextCheckDue {
+    final int? micros = prefs?.getInt('bgNextCheckDue');
+    return micros == null ? null : DateTime.fromMicrosecondsSinceEpoch(micros);
+  }
+
+  set bgNextCheckDue(DateTime? due) {
+    if (due == null) {
+      // Cleared from [AppsProvider.markAppsChanged], which runs on every app
+      // save, so skip the platform write when there is nothing to clear.
+      if (prefs?.containsKey('bgNextCheckDue') ?? false) {
+        prefs?.remove('bgNextCheckDue');
+      }
+    } else {
+      prefs?.setInt('bgNextCheckDue', due.microsecondsSinceEpoch);
+    }
   }
 
   bool get checkOnStart {
@@ -1110,7 +1144,13 @@ class SettingsProvider with ChangeNotifier {
     return Map<String, int>.from(_categoriesMemory!);
   }
 
-  void setCategories(Map<String, int> cats, {AppsProvider? appsProvider}) {
+  /// [appsProvider] is required, not optional: every write to the category map
+  /// is also the only chance to strip deleted categories from the apps that
+  /// carry them, and a call that skipped it used to leave orphaned tags behind.
+  void setCategories(
+    Map<String, int> cats, {
+    required AppsProvider appsProvider,
+  }) {
     final List<MapEntry<String, int>> sortedEntries = cats.entries.toList()
       ..sort((a, b) {
         final int cmp = a.key.toLowerCase().compareTo(b.key.toLowerCase());
@@ -1121,50 +1161,41 @@ class SettingsProvider with ChangeNotifier {
       sortedEntries,
     );
 
-    if (appsProvider != null) {
-      // Detect a rename: one key removed from old map, one key added to new map.
-      // Each UI action (rename, delete) fires a separate call, so at most one
-      // rename is in flight per call.
-      final Map<String, int> oldCats = categories;
-      final Set<String> removed = oldCats.keys.toSet().difference(
-        sortedCats.keys.toSet(),
-      );
-      final Set<String> added = sortedCats.keys.toSet().difference(
-        oldCats.keys.toSet(),
-      );
-      final String? renamedFrom = (removed.length == 1 && added.length == 1)
-          ? removed.first
-          : null;
-      final String? renamedTo = (removed.length == 1 && added.length == 1)
-          ? added.first
-          : null;
+    // Detect a rename: one key removed from old map, one key added to new map.
+    // Each UI action (rename, delete) fires a separate call, so at most one
+    // rename is in flight per call.
+    final Map<String, int> oldCats = categories;
+    final Set<String> removed = oldCats.keys.toSet().difference(
+      sortedCats.keys.toSet(),
+    );
+    final Set<String> added = sortedCats.keys.toSet().difference(
+      oldCats.keys.toSet(),
+    );
+    final bool isRename = removed.length == 1 && added.length == 1;
+    // Walking the loaded listings is cheap and catches tags orphaned by an
+    // earlier delete that never reached every record. Without it, a library
+    // that already holds orphans would only be repaired by another delete -
+    // and once the last category is gone there is nothing left to delete.
+    final bool hasOrphanedCategory = appsProvider.getAppValues().any(
+      (a) => a.app.categories.any((c) => !sortedCats.containsKey(c)),
+    );
 
-      final List<App> changedApps = appsProvider
-          .getAppValues()
-          .map((a) {
-            bool changed = false;
-            if (renamedFrom != null && renamedTo != null) {
-              final idx = a.app.categories.indexOf(renamedFrom);
-              if (idx >= 0) {
-                a.app.categories[idx] = renamedTo;
-                changed = true;
-              }
-            }
-            final n1 = a.app.categories.length;
-            a.app.categories.removeWhere((c) => !sortedCats.keys.contains(c));
-            if (a.app.categories.length < n1) changed = true;
-            return changed ? a.app : null;
-          })
-          .where((element) => element != null)
-          .map((e) => e as App)
-          .toList();
-      if (changedApps.isNotEmpty) {
-        appsProvider.saveApps(changedApps, updateInstalledInfo: false);
-      }
-    }
     _categoriesMemory = Map<String, int>.from(sortedCats);
     prefs?.setString('categories', jsonEncode(sortedCats));
     notifyListeners();
+
+    // The new map is committed before the sweep so the save it performs
+    // notifies listeners against the already-updated category list. The sweep
+    // reaches every saved app, loaded or not, and swallows its own errors.
+    if (removed.isNotEmpty || hasOrphanedCategory) {
+      unawaited(
+        appsProvider.reconcileAppCategories(
+          sortedCats.keys.toSet(),
+          renamedFrom: isRename ? removed.first : null,
+          renamedTo: isRename ? added.first : null,
+        ),
+      );
+    }
   }
 
   List<AppFolder> get appFolders {
@@ -1292,6 +1323,38 @@ class SettingsProvider with ChangeNotifier {
 
   void setFolderGroupUpdatesSeparately(String id, bool v) =>
       _setFolderViewField(id, 'groupUpdatesSeparately', v);
+
+  bool folderShowAppTypeBadge(String id) =>
+      (_getFolderViewRaw(id)?['showAppTypeBadge'] as bool?) ?? showAppTypeBadge;
+
+  void setFolderShowAppTypeBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showAppTypeBadge', v);
+
+  bool folderShowTrackedStoreBadge(String id) =>
+      (_getFolderViewRaw(id)?['showTrackedStoreBadge'] as bool?) ??
+      showTrackedStoreBadge;
+
+  void setFolderShowTrackedStoreBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showTrackedStoreBadge', v);
+
+  bool folderShowCategoriesBadge(String id) =>
+      (_getFolderViewRaw(id)?['showCategoriesBadge'] as bool?) ??
+      showCategoriesBadge;
+
+  void setFolderShowCategoriesBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showCategoriesBadge', v);
+
+  bool folderShowAuthorBadge(String id) =>
+      (_getFolderViewRaw(id)?['showAuthorBadge'] as bool?) ?? showAuthorBadge;
+
+  void setFolderShowAuthorBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showAuthorBadge', v);
+
+  bool folderShowVersionBadge(String id) =>
+      (_getFolderViewRaw(id)?['showVersionBadge'] as bool?) ?? showVersionBadge;
+
+  void setFolderShowVersionBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showVersionBadge', v);
 
   Locale? get forcedLocale {
     final Locale? storedLocale = parseStoredLocaleTag(
