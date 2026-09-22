@@ -186,8 +186,8 @@ Future<String> buildObtainxDiagnosticLog({
 
   if (probeNativePlatform) {
     try {
-      final AndroidDeviceInfo androidInfo = await DeviceInfoPlugin()
-          .androidInfo;
+      final AndroidDeviceInfo androidInfo =
+          await DeviceInfoPlugin().androidInfo;
       _writeLine(
         buffer,
         'Device',

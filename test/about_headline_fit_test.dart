@@ -16,7 +16,10 @@ bool _rendersInFull({
   required double maxWidth,
 }) {
   final painter = TextPainter(
-    text: TextSpan(text: text, style: _headlineStyle.copyWith(fontSize: fontSize)),
+    text: TextSpan(
+      text: text,
+      style: _headlineStyle.copyWith(fontSize: fontSize),
+    ),
     maxLines: aboutHeadlineMaxLines,
     textAlign: TextAlign.center,
     textDirection: Directionality.of(context),

@@ -119,6 +119,12 @@ class MainActivity : FlutterActivity() {
         private val changedPackages = linkedSetOf<String>()
         private var packageChangeReceiver: BroadcastReceiver? = null
         private var notificationsMethodChannel: MethodChannel? = null
+
+        /// Held on the companion rather than the activity so [packageChangeReceiver],
+        /// which outlives any single activity instance, can forward to Dart without
+        /// capturing (and leaking) the activity.
+        @Volatile
+        private var installerChannel: MethodChannel? = null
         private val downloadCancelLock = Any()
         private val pendingDownloadCancelAppIds = linkedSetOf<String>()
         private var downloadCancelHandlerReady = false
@@ -237,7 +243,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private var installWatcher: InstallWatcher? = null
-    private var installerChannel: MethodChannel? = null
     private val downloadKeepAwakeLock = Any()
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -265,7 +270,22 @@ class MainActivity : FlutterActivity() {
                 override fun onReceive(context: Context, intent: Intent) {
                     if (intent.action == Intent.ACTION_PACKAGE_REMOVED &&
                         intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
-                    intent.data?.schemeSpecificPart?.let { changedPackages.add(it) }
+                    val changedPackage = intent.data?.schemeSpecificPart ?: return
+                    changedPackages.add(changedPackage)
+                    // A third-party installer can finish long after its handoff session
+                    // ended - InstallerX's "run in background" returns focus to ObtainX
+                    // while PackageInstaller is still working - so confirmation must not
+                    // depend on that session still being open. The journal above is only
+                    // drained on a foreground transition, which in that flow happens
+                    // before the install lands. Dart ignores packages it does not track.
+                    if (intent.action == Intent.ACTION_PACKAGE_ADDED ||
+                        intent.action == Intent.ACTION_PACKAGE_REPLACED
+                    ) {
+                        installerChannel?.invokeMethod(
+                            "thirdPartyInstallPackageChanged",
+                            mapOf("packageName" to changedPackage),
+                        )
+                    }
                 }
             }
             ContextCompat.registerReceiver(applicationContext, receiver, IntentFilter().apply {
@@ -288,8 +308,21 @@ class MainActivity : FlutterActivity() {
         }
         watcher.handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
-        for (cacheFile in watcher.releaseCacheFiles) {
-            try { cacheFile.delete() } catch (_: Exception) { }
+        val installUnconfirmed = outcome is InstallSessionOutcome.Success && !outcome.installSucceeded
+        if (installUnconfirmed) {
+            // The session ended without the install being confirmed, which for a
+            // backgrounded installer means it is still reading the content:// URI.
+            // Deleting now would race that read into a FileNotFoundException.
+            val releaseCacheFiles = watcher.releaseCacheFiles
+            watcher.handler.postDelayed({
+                for (cacheFile in releaseCacheFiles) {
+                    try { cacheFile.delete() } catch (_: Exception) { }
+                }
+            }, UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS)
+        } else {
+            for (cacheFile in watcher.releaseCacheFiles) {
+                try { cacheFile.delete() } catch (_: Exception) { }
+            }
         }
         when (outcome) {
             is InstallSessionOutcome.Success -> watcher.methodResult.success(outcome.installSucceeded)
@@ -620,6 +653,7 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         resetNotificationChannel(null)
+        installerChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

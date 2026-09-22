@@ -442,7 +442,12 @@ class _DownloadProgressAction extends StatelessWidget {
     }
     final double dp = dpOrNull;
     final bool isScanning = dp == -2;
-    final bool isInstalling = dp == -1;
+    // -4 is an install a third-party installer accepted but hasn't confirmed;
+    // it reads as "Installing" the same as -1, but stays dismissible: a
+    // dismissed installer is indistinguishable from one still working, so the
+    // page must not be stuck spinning with no way out until the timer expires.
+    final bool isAwaitingThirdPartyInstall = dp == -4;
+    final bool isInstalling = dp == -1 || isAwaitingThirdPartyInstall;
     final bool isFlaggedState = dp == -3;
     final bool isBusy = isScanning || isInstalling;
     final String bytesLabel = !isBusy && !isFlaggedState && totalBytes != null
@@ -563,6 +568,15 @@ class _DownloadProgressAction extends StatelessWidget {
               onPressed: () =>
                   context.read<AppsProvider>().cancelDownload(appId),
               child: Text(tr('cancel')),
+            ),
+          )
+        else if (isAwaitingThirdPartyInstall)
+          Center(
+            child: TextButton(
+              onPressed: () => context
+                  .read<AppsProvider>()
+                  .dismissThirdPartyInstallIndicator(appId),
+              child: Text(tr('dismiss')),
             ),
           ),
       ],

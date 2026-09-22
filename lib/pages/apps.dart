@@ -1070,8 +1070,15 @@ class _AppListItem extends StatelessWidget {
       final double activeDownloadProgress = downloadProgress ?? 0;
       final bool isScanning =
           downloadProgress != null && activeDownloadProgress == -2;
+      // -4 is an install a third-party installer accepted but hasn't confirmed;
+      // it reads as "Installing" the same as -1, but stays dismissible: a
+      // dismissed installer is indistinguishable from one still working, so the
+      // row must not be stuck spinning with no way out until the timer expires.
+      final bool isAwaitingThirdPartyInstall =
+          downloadProgress != null && activeDownloadProgress == -4;
       final bool isInstalling =
-          downloadProgress != null && activeDownloadProgress == -1;
+          isAwaitingThirdPartyInstall ||
+          (downloadProgress != null && activeDownloadProgress == -1);
       final bool isBusy = isScanning || isInstalling;
       final double? progressValue = isBusy
           ? null
@@ -1085,7 +1092,7 @@ class _AppListItem extends StatelessWidget {
                 'percentProgress',
                 args: [activeDownloadProgress.toInt().toString()],
               ),
-        button: !isBusy,
+        button: !isBusy || isAwaitingThirdPartyInstall,
         child: SizedBox.square(
           dimension: 48,
           child: Stack(
@@ -1116,6 +1123,22 @@ class _AppListItem extends StatelessWidget {
                   onPressed: () => context.read<AppsProvider>().cancelDownload(
                     app.listingKey,
                   ),
+                )
+              else if (isAwaitingThirdPartyInstall)
+                IconButton.filledTonal(
+                  tooltip: tr('dismiss'),
+                  style: IconButton.styleFrom(
+                    fixedSize: const Size.square(32),
+                    minimumSize: const Size.square(32),
+                    padding: EdgeInsets.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: colorScheme.secondaryContainer,
+                    foregroundColor: colorScheme.onSecondaryContainer,
+                  ),
+                  icon: const Icon(Icons.close_rounded, size: 19),
+                  onPressed: () => context
+                      .read<AppsProvider>()
+                      .dismissThirdPartyInstallIndicator(app.listingKey),
                 ),
             ],
           ),
@@ -1529,11 +1552,12 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     if (oldWidget.keepAlive != widget.keepAlive) updateKeepAlive();
   }
 
-  bool _canExecute(SwipeAction action) {
+  bool _canExecute(SwipeAction action, bool isAwaitingThirdPartyInstall) {
     switch (action) {
       case SwipeAction.update:
         return (widget.hasUpdate || !widget.isInstalled) &&
-            !widget.areDownloadsRunning;
+            !widget.areDownloadsRunning &&
+            !isAwaitingThirdPartyInstall;
       case SwipeAction.open:
         return widget.isInstalled;
       case SwipeAction.none:
@@ -1697,8 +1721,21 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     const swipeThreshold = 80.0;
     const maxDrag = 120.0;
 
-    final canSwipeRight = _canExecute(widget.rightAction);
-    final canSwipeLeft = _canExecute(widget.leftAction);
+    // Watched per row rather than passed down: the awaiting-third-party
+    // indicator is deliberately absent from areDownloadsRunning(), so the list's
+    // rebuild token never moves when it arms and a value passed in from the
+    // builder would go stale.
+    final bool isAwaitingThirdPartyInstall = context.select<AppsProvider, bool>(
+      (provider) => provider.isAwaitingThirdPartyInstall(widget.appId),
+    );
+    final canSwipeRight = _canExecute(
+      widget.rightAction,
+      isAwaitingThirdPartyInstall,
+    );
+    final canSwipeLeft = _canExecute(
+      widget.leftAction,
+      isAwaitingThirdPartyInstall,
+    );
 
     Color bgColor;
     IconData bgIcon;

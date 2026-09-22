@@ -1354,6 +1354,13 @@ class AppsProvider with ChangeNotifier {
   final Map<String, Timer> deferredObtainiumTimers = {};
   final Map<String, AppInMemory> deferredObtainiumSnapshots = {};
 
+  // Apps handed to a third-party installer that returned without confirming the
+  // install. Each timer only bounds how long the row keeps showing "Installing"
+  // so a dismissed installer can't leave it spinning forever - it is purely
+  // cosmetic. Confirmation arrives on the system package broadcast and never
+  // waits on these. Public so the install extension can reach them.
+  final Map<String, Timer> thirdPartyInstallIndicatorTimers = {};
+
   Directory get apkDir {
     if (_apkDir == null) {
       throw StateError(
@@ -1689,6 +1696,10 @@ class AppsProvider with ChangeNotifier {
       timer.cancel();
     }
     deferredObtainiumTimers.clear();
+    for (final Timer timer in thirdPartyInstallIndicatorTimers.values) {
+      timer.cancel();
+    }
+    thirdPartyInstallIndicatorTimers.clear();
     refreshProgressNotifier.dispose();
     // Pending JSON under app_data/pending_removal is intentionally left on disk;
     // the next loadApps commits the removal for any id without a live deferral.
