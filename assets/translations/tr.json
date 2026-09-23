@@ -79,7 +79,7 @@
     "selectAll": "Tümünü seç",
     "deselectX": "{} seçimini kaldır",
     "removeSelectedApps": "Seçili uygulamaları kaldır",
-    "changeX": "{}'yi değiştir",
+    "changeX": "{}'ı değiştir",
     "installUpdateSelectedApps": "Seçili uygulamaları yükle/güncelle",
     "markXSelectedAppsAsUpdated": "{} seçili uygulama güncel olarak işaretlensin mi?",
     "no": "Hayır",
