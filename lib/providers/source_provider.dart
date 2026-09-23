@@ -43,8 +43,19 @@ import 'package:obtainium/app_sources/vivoappstore.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
+import 'package:obtainium/http/source_request_session.dart';
+import 'package:obtainium/http/response_bytes.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/version/version_detection_mode.dart';
+import 'package:obtainium/version/version_strings.dart';
+
+// Version semantics live in lib/version/ and are re-exported here so the ~40
+// files that already import source_provider.dart (for [App]) keep seeing the
+// whole version API from one place.
+export 'package:obtainium/version/version_detection_mode.dart';
+export 'package:obtainium/version/version_strings.dart';
 
 class AppNames {
   String author;
@@ -87,6 +98,19 @@ const Set<String> validMalwareScanStatuses = {
   malwareScanStatusFlagged,
   malwareScanStatusError,
 };
+
+/// Per-app companion to the global `enableVirusTotalScanning` setting: turning
+/// this off excludes one app from the pre-install VirusTotal scan. Same polarity
+/// and label as the global switch on purpose - on means "scan", so the two read
+/// identically wherever they appear.
+///
+/// Defaults to **true**, which every read MUST repeat as
+/// `getBool(enableVirusTotalScanKey, defaultValue: true)`. Apps saved before this
+/// key existed have no entry for it, and [TypedSettings.getBool]'s own default is
+/// false, so a bare `getBool(enableVirusTotalScanKey)` reads as "don't scan" and
+/// silently disables scanning for every pre-existing app. There is exactly one
+/// read site - AppsProvider.willScanApkWithVirusTotal - so keep it that way.
+const String enableVirusTotalScanKey = 'enableVirusTotalScan';
 
 /// Coerces a stored JSON value into a valid malware-scan status, or null.
 String? malwareScanStatusFromJsonValue(Object? value) {
@@ -257,6 +281,9 @@ class APKDetails {
 
   /// Source version code associated with the preferred APK, when available.
   final int? versionCode;
+
+  /// Version codes by asset name, retained through filtering and variant choice.
+  final Map<String, int> versionCodesByAsset;
   List<MapEntry<String, String>> apkUrls;
   final AppNames names;
   final DateTime? releaseDate;
@@ -268,6 +295,7 @@ class APKDetails {
 
   /// Release names/titles seen before title filtering (RegEx assist).
   List<String> rawReleaseTitleCandidates;
+  final String? releaseTitle;
 
   /// Size of the preferred APK in bytes, if known at update-check time (e.g. GitHub releases).
   int? apkSizeBytes;
@@ -280,11 +308,13 @@ class APKDetails {
     this.apkUrls,
     this.names, {
     this.versionCode,
+    this.versionCodesByAsset = const {},
     this.releaseDate,
     this.changeLog,
     this.allAssetUrls = const [],
     this.iconUrl,
     this.rawReleaseTitleCandidates = const [],
+    this.releaseTitle,
     this.apkSizeBytes,
     this.isReproducible,
     this.reproducibleStatus,
@@ -332,8 +362,80 @@ DateTime? dateTimeFromJsonValue(dynamic value) {
   return null;
 }
 
+/// Separates Android package ID from store identity in a listing ID (and
+/// therefore in on-disk record names). Package IDs cannot contain `@`.
+const String appListingKeySeparator = '@';
+
+/// Store identity for [app] (the AppSource runtime type, e.g. `GitHub`).
+///
+/// This is derived from the app's *current* URL, so it changes whenever the
+/// tracked source is swapped. It names the store for display and for the label
+/// a second listing is minted under - never which record on disk a listing
+/// belongs to (see [App.listingId]), and never whether two listings duplicate
+/// each other (see [storeIdentityForApp]).
+String sourceIdentifierForApp(App app) {
+  try {
+    return SourceProvider()
+        .getSourceTemplate(app.url, overrideSource: app.overrideSource)
+        .sourceIdentifier;
+  } catch (_) {
+    return app.overrideSource ?? 'Unknown';
+  }
+}
+
+/// Which store a listing tracks [app] from, for deciding whether two listings
+/// of one package are duplicates.
+///
+/// The source type alone is too coarse: `FDroidRepo` covers every third-party
+/// repo and `HTML` every website, so two listings pointing at unrelated hosts
+/// would otherwise count as the same store and one of them would be refused.
+/// The host is therefore part of the identity, at host granularity - two repos
+/// on one host are one store.
+///
+/// Comparison-only, and deliberately never used as (or embedded in) a record
+/// name: it is derived from the mutable [App.url], so a source swap changes it,
+/// while a listing's record must keep its identity across that swap.
+String storeIdentityForApp(App app) {
+  final String sourceIdentifier = sourceIdentifierForApp(app);
+  String host = Uri.tryParse(app.url)?.host.toLowerCase() ?? '';
+  // Source matching treats a leading 'www.' as equivalent, and stored URLs keep
+  // whatever the user pasted, so the two spellings must be one store.
+  if (host.startsWith('www.')) {
+    host = host.substring('www.'.length);
+  }
+  return host.isEmpty ? sourceIdentifier : '$sourceIdentifier:$host';
+}
+
+/// Candidate listing ID for a package tracked from a second store.
+String appListingKey(String packageId, String sourceIdentifier) =>
+    '$packageId$appListingKeySeparator$sourceIdentifier';
+
+/// Normalizes a stored `listingId`, collapsing a value that merely restates
+/// [packageId] (and anything blank) back to null.
+String? listingIdFromJsonValue(Object? value, {required String packageId}) {
+  final String? listingId = value?.toString().trim();
+  if (listingId == null || listingId.isEmpty || listingId == packageId) {
+    return null;
+  }
+  return listingId;
+}
+
 class App {
   final String id;
+
+  /// Stable identity for this one listing, letting a single package be tracked
+  /// from more than one store at once.
+  ///
+  /// Null for a package's only listing, whose key is just [id] - so records
+  /// written before multi-store tracking keep their file names. A second
+  /// listing of the same package gets a value like `com.example.app@FDroid`,
+  /// assigned once when it is added.
+  ///
+  /// Deliberately **not** derived from the tracked source: swapping a listing
+  /// from GitHub to F-Droid rewrites [url] and [overrideSource], and a
+  /// source-derived key would silently re-point the listing at a different
+  /// record (losing the original and breaking the swap back).
+  final String? listingId;
   final String url;
   final String author;
   final String name;
@@ -380,6 +482,7 @@ class App {
 
   const App({
     required this.id,
+    this.listingId,
     required this.url,
     required this.author,
     required this.name,
@@ -415,6 +518,9 @@ class App {
   String toString() {
     return 'ID: $id URL: $url INSTALLED: $installedVersion LATEST: $latestVersion APK: $apkUrls PREFERREDAPK: $preferredApkIndex ADDITIONALSETTINGS: ${additionalSettings.toString()} LASTCHECK: ${lastUpdateCheck.toString()} PINNED $pinned';
   }
+
+  /// Key identifying this listing in [AppsProvider.apps] and on disk.
+  String get listingKey => listingId ?? id;
 
   bool get hasPendingRepoRename =>
       pendingRepoRenameUrl != null && pendingRepoRenameUrl!.isNotEmpty;
@@ -455,8 +561,30 @@ class App {
   /// Type-safe accessor for [additionalSettings].
   TypedSettings get settings => TypedSettings(additionalSettings);
 
+  /// This app's parsed version-detection mode.
+  VersionDetectionMode get versionDetectionMode =>
+      VersionDetectionMode.fromStored(additionalSettings['versionDetection']);
+
+  /// Whether the stored versions are meant to be comparable with the device's —
+  /// i.e. every mode except [VersionDetectionMode.pseudo].
+  bool get usesStandardVersionDetection =>
+      versionDetectionMode != VersionDetectionMode.pseudo;
+
+  /// Whether the device's `versionCode` (not `versionName`) is this app's real
+  /// installed version.
+  ///
+  /// `useVersionCodeAsOSVersion` is a derived boolean kept in sync with the
+  /// [VersionDetectionMode.versionCode] dropdown option, so either one being set
+  /// means the same thing. Reading only the boolean (as install-status
+  /// reconciliation used to) compares `versionName` against a stored version
+  /// code whenever the two fall out of sync.
+  bool get usesVersionCodeAsOsVersion =>
+      versionDetectionMode == VersionDetectionMode.versionCode ||
+      settings.getBool('useVersionCodeAsOSVersion');
+
   App copyWith({
     String? id,
+    Object? listingId = _sentinel,
     String? url,
     String? author,
     String? name,
@@ -489,6 +617,9 @@ class App {
   }) {
     return App(
       id: id ?? this.id,
+      listingId: listingId == _sentinel
+          ? this.listingId
+          : listingId?.toString(),
       url: url ?? this.url,
       author: author ?? this.author,
       name: name ?? this.name,
@@ -582,6 +713,10 @@ class App {
     try {
       return App(
         id: json['id']?.toString() ?? '',
+        listingId: listingIdFromJsonValue(
+          json['listingId'],
+          packageId: json['id']?.toString() ?? '',
+        ),
         url: json['url']?.toString() ?? '',
         author: json['author']?.toString() ?? '',
         name: json['name']?.toString() ?? '',
@@ -648,17 +783,27 @@ class App {
     }
   }
 
-  Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson({bool encodeNested = true}) => {
     'id': id,
+    // Omitted for a package's only listing, so single-store records stay
+    // byte-for-byte compatible with what earlier versions (and Obtainium)
+    // wrote and expect.
+    if (listingId != null) 'listingId': listingId,
     'url': url,
     'author': author,
     'name': name,
     'installedVersion': installedVersion,
     'latestVersion': latestVersion,
-    'apkUrls': jsonEncode(stringMapListTo2DList(apkUrls)),
-    'otherAssetUrls': jsonEncode(stringMapListTo2DList(otherAssetUrls)),
+    'apkUrls': encodeNested
+        ? jsonEncode(stringMapListTo2DList(apkUrls))
+        : stringMapListTo2DList(apkUrls),
+    'otherAssetUrls': encodeNested
+        ? jsonEncode(stringMapListTo2DList(otherAssetUrls))
+        : stringMapListTo2DList(otherAssetUrls),
     'preferredApkIndex': preferredApkIndex,
-    'additionalSettings': jsonEncode(additionalSettings),
+    'additionalSettings': encodeNested
+        ? jsonEncode(additionalSettings)
+        : additionalSettings,
     'lastUpdateCheck': lastUpdateCheck?.microsecondsSinceEpoch,
     'pinned': pinned,
     'categories': categories,
@@ -839,13 +984,17 @@ abstract class AppSource {
 
   String standardizeUrl(String url) {
     url = preStandardizeUrl(url);
-    if (!hostChanged) {
+    if (!hostChanged || hostIdenticalDespiteAnyChange) {
       url = sourceSpecificStandardizeURL(url);
     }
     return url;
   }
 
   App postProcessApp(App app) {
+    return app;
+  }
+
+  Future<App> resolveVersionComparison(App app) async {
     return app;
   }
 
@@ -880,21 +1029,45 @@ abstract class AppSource {
       additionalSettingsPlusSourceConfig,
       url,
     );
-    final streamedResponseUrlWithResponseAndClient =
-        await sourceRequestStreamResponse(
-          method,
-          url,
-          requestHeaders,
-          additionalSettingsPlusSourceConfig,
-          followRedirects: followRedirects,
-          postBody: postBody,
-        );
-    return await httpClientResponseStreamToFinalResponse(
-      streamedResponseUrlWithResponseAndClient.value.key,
-      method,
-      streamedResponseUrlWithResponseAndClient.key.toString(),
-      streamedResponseUrlWithResponseAndClient.value.value,
-    );
+    final session = SourceRequestSession.current;
+    final allowInsecure =
+        additionalSettingsPlusSourceConfig['allowInsecure'] == true;
+    Future<http.Response> loadResponse() async {
+      final service = HttpService();
+      final streamed = await service.sourceRequestStreamResponse(
+        method,
+        url,
+        requestHeaders,
+        additionalSettingsPlusSourceConfig,
+        followRedirects: followRedirects,
+        postBody: postBody,
+        sharedClient: session?.clientFor(allowInsecure),
+      );
+      return service.httpClientResponseStreamToFinalResponse(
+        streamed.value.key,
+        method,
+        streamed.key.toString(),
+        streamed.value.value,
+        closeClient: session == null,
+      );
+    }
+
+    if (session != null &&
+        method == 'GET' &&
+        Uri.parse(url).path.endsWith('/index.xml')) {
+      // Key after URL/header customization so credentials, TLS policy and
+      // redirects cannot accidentally share a response across configurations.
+      final headerNames = requestHeaders?.keys.toList() ?? <String>[];
+      headerNames.sort();
+      final key = jsonEncode([
+        url,
+        allowInsecure,
+        followRedirects,
+        for (final name in headerNames) [name, requestHeaders![name]],
+      ]);
+      return session.repositoryResponse(key, loadResponse);
+    }
+    return loadResponse();
   }
 
   void runOnAddAppInputChange(String inputUrl) {}
@@ -1109,6 +1282,17 @@ abstract class AppSource {
         label: tr('refreshBeforeDownload'),
       ),
     ],
+    [
+      // Same label as the global setting in Settings > Integrations,
+      // deliberately: this is that switch scoped to one app, not a separate
+      // opt-out with inverted meaning.
+      GeneratedFormSwitch(
+        enableVirusTotalScanKey,
+        label: tr('enableVirusTotalScanning'),
+        value: true,
+        labelTooltip: tr('perAppVirusTotalScanTooltip'),
+      ),
+    ],
   ];
 
   /// The choices for the unified "Use as version string" (`versionStringSource`)
@@ -1250,13 +1434,25 @@ abstract class AppSource {
 
     if (versionDetectionDisallowed) {
       for (final item in agnosticItems.expand((row) => row)) {
-        // versionDetection is now a dropdown; guard the cast so this can't crash
-        // (mirrors fork main, which only disables switch-typed items here).
-        if ((item.key == 'versionDetection' ||
-                item.key == 'useVersionCodeAsOSVersion') &&
-            item is GeneratedFormSwitch) {
+        if (item.key != 'versionDetection' &&
+            item.key != 'useVersionCodeAsOSVersion') {
+          continue;
+        }
+        if (item is GeneratedFormSwitch) {
           item.disabled = true;
           item.value = false;
+        } else if (item is GeneratedFormDropdown) {
+          // versionDetection is a dropdown now. Pinning it to the only mode this
+          // source supports is what actually enforces the flag: the previous
+          // switch-only guard silently did nothing, leaving every mode selectable
+          // on sources that cannot compare versions at all (and 'versionCode' /
+          // explicit 'standard' are excluded from install-status auto-disable, so
+          // nothing corrected the choice afterwards).
+          item.disabledOptKeys = VersionDetectionMode.values
+              .where((mode) => mode != VersionDetectionMode.pseudo)
+              .map((mode) => mode.key)
+              .toList();
+          item.value = VersionDetectionMode.pseudo.key;
         }
       }
     }
@@ -1401,6 +1597,20 @@ abstract class MassAppUrlSource {
 /// Delegates to [VersionService.regExValidator].
 String? regExValidator(String? value) => VersionService().regExValidator(value);
 
+/// The user-supplied "App ID - Custom" value, or null when none was given.
+///
+/// Empty means "not supplied", not "the id is the empty string".
+/// [GeneratedFormTextField] defaults to `''`, and the Add-app page assigns the
+/// whole form value map to `additionalSettings` on every change, so an untouched
+/// box reaches callers as `''` as soon as the user touches any other option.
+/// Treating that as explicit made the app id blank.
+/// [IzzyOnDroid.tryInferringAppId] guards its own read the same way.
+String? explicitAppIdFromSettings(Map<String, dynamic> additionalSettings) {
+  final String? raw = additionalSettings['appId'] as String?;
+  final String? trimmed = raw?.trim();
+  return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+}
+
 /// Returns true if the app's ID is a temporary placeholder rather than a real
 /// package name. Matches [generateTempID]'s sha256-hex prefix and legacy numeric
 /// IDs; real package names contain a dot and never match.
@@ -1436,11 +1646,7 @@ List<MapEntry<String, String>> filterApks(
 /// Returns true when the app uses pseudo-versioning (track-only or disabled version detection).
 bool isVersionPseudo(App app) =>
     app.settings.getBool('trackOnly') ||
-    (app.installedVersion != null &&
-        // versionDetection is a string enum, NOT a bool — getBool() would return
-        // false for 'auto'/'standard'/'versionCode' and mark every app pseudo.
-        (app.additionalSettings['versionDetection'] == 'pseudo' ||
-            app.additionalSettings['versionDetection'] == false));
+    (app.installedVersion != null && !app.usesStandardVersionDetection);
 
 class SourceProvider {
   static final SourceProvider _instance = SourceProvider._();
@@ -1469,11 +1675,12 @@ class SourceProvider {
     () => APKMirror(),
     () => APKPure(),
     () => Aptoide(),
+    () => Codeberg(),
     () => CoolApk(),
     () => Farsroid(),
     () => FDroid(), // "F-Droid official"
     () => FDroidRepo(), // "F-Droid third-party repo"
-    () => Codeberg(), // "Forgejo (Codeberg)"
+    () => Forgejo(), // Forgejo instances other than Codeberg.org
     () => GitHub(),
     () => GitLab(),
     () => HuaweiAppGallery(), // "Huawei AppGallery"
@@ -1640,7 +1847,7 @@ class SourceProvider {
     bool inferAppIdIfOptional,
   ) async {
     if (currentApp?.id != null) return currentApp!.id;
-    final explicitId = additionalSettings['appId'] as String?;
+    final String? explicitId = explicitAppIdFromSettings(additionalSettings);
     if (explicitId != null) return explicitId;
     if (!trackOnly &&
         (!source.appIdInferIsOptional ||
@@ -1693,6 +1900,15 @@ class SourceProvider {
     // Capture raw snapshots before version extraction / release-date/title
     // replacement and APK filtering mutate them (used by the RegEx assist).
     final String rawLatestVersionFromSource = apk.version;
+    additionalSettings.remove('rawSelectedReleaseTitle');
+    if (apk.releaseTitle != null) {
+      additionalSettings['rawSelectedReleaseTitle'] = apk.releaseTitle;
+    }
+    final codesByAsset = <String, int>{
+      if (apk.versionCode != null && apk.apkUrls.isNotEmpty)
+        apk.apkUrls.last.key: apk.versionCode!,
+      ...apk.versionCodesByAsset,
+    };
     final String? rawApkNamesFromSource = encodeRawAssistLines(
       apk.apkUrls.map((MapEntry<String, String> entry) => entry.key),
     );
@@ -1718,6 +1934,12 @@ class SourceProvider {
       // recomputes to a different value → a one-time spurious "update".
       apk.version = apk.releaseDate!.toUtc().toIso8601String();
     }
+    // In version-code mode the app's installed version is the device's
+    // versionCode, so the stored latest version has to be a version code too.
+    // Comparing a code against a dotted version string cannot be ordered (a
+    // versionCode of 123 reads as "newer" than 1.2.4), so prefer the source's own
+    // version code whenever it publishes one. Only the default version string is
+    // overridden — an explicit versionStringSource choice still wins.
     apk.apkUrls = filterApks(
       apk.apkUrls,
       additionalSettings['apkFilterRegEx'],
@@ -1732,7 +1954,46 @@ class SourceProvider {
         throw NoAPKError()..url = standardUrl;
       }
     }
+    final int preferredApkIndex;
+    if (apk.apkUrls.isEmpty) {
+      preferredApkIndex = 0;
+    } else if (currentApp == null) {
+      preferredApkIndex = apk.apkUrls.length - 1;
+    } else {
+      preferredApkIndex = currentApp.preferredApkIndex.clamp(
+        0,
+        apk.apkUrls.length - 1,
+      );
+    }
     final String sourceName = apk.names.name.trim();
+    final selectedCode = apk.apkUrls.isEmpty
+        ? null
+        : codesByAsset[apk.apkUrls[preferredApkIndex].key];
+    final usesCodeLabel =
+        versionCodeAsOsVersionFor(additionalSettings) &&
+        selectedCode != null &&
+        getVersionStringSource(additionalSettings) ==
+            versionStringSourceDefault;
+    if (usesCodeLabel) {
+      apk.version = selectedCode.toString();
+    }
+    additionalSettings.remove('sourceVersionCodes');
+    if (codesByAsset.isNotEmpty) {
+      additionalSettings['sourceVersionCodes'] = {
+        'sourceUrl': standardUrl,
+        'overrideSource': sourceIsOverriden
+            ? source.sourceIdentifier
+            : currentApp?.overrideSource,
+        'version': apk.version,
+        'usesCodeLabel': usesCodeLabel,
+        'assetUrls': {for (final asset in apk.apkUrls) asset.key: asset.value},
+        'codes': {
+          for (final asset in apk.apkUrls)
+            if (codesByAsset.containsKey(asset.key))
+              asset.key: codesByAsset[asset.key],
+        },
+      };
+    }
     // Replace the stored name with the source's readable name when the stored
     // name is missing, is exactly the app id, or merely looks like a package id
     // (e.g. 'org.example.app') while the source offers a real display name.
@@ -1770,9 +2031,7 @@ class SourceProvider {
       installedVersion: currentApp?.installedVersion,
       latestVersion: apk.version,
       apkUrls: apk.apkUrls,
-      preferredApkIndex:
-          currentApp?.preferredApkIndex ??
-          (apk.apkUrls.isNotEmpty ? apk.apkUrls.length - 1 : 0),
+      preferredApkIndex: preferredApkIndex,
       additionalSettings: additionalSettings,
       lastUpdateCheck: DateTime.now(),
       pinned: currentApp?.pinned ?? false,
@@ -1804,7 +2063,7 @@ class SourceProvider {
           apk.attestationStatus ??
           (sameVersionAsPrevious ? currentApp.latestAttestationStatus : null),
     );
-    return source.postProcessApp(finalApp);
+    return source.resolveVersionComparison(source.postProcessApp(finalApp));
   }
 
   // Returns errors in [results, errors] instead of throwing them
@@ -1896,9 +2155,12 @@ class TypedSettings {
 
 class HttpService {
   static const int maxRedirects = 10;
+  final Duration responseTimeout;
+
+  HttpService({this.responseTimeout = sourceResponseTimeout});
 
   HttpClient createHttpClient(bool insecure) {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = sourceConnectionTimeout;
     if (insecure) {
       client.badCertificateCallback =
           (X509Certificate cert, String host, int port) => true;
@@ -1927,59 +2189,87 @@ class HttpService {
     Map<String, dynamic> additionalSettings, {
     bool followRedirects = true,
     Object? postBody,
+    HttpClient? sharedClient,
   }) async {
     var currentUrl = Uri.parse(url);
     var redirectCount = 0;
     List<Cookie> cookies = [];
-    HttpClient? httpClient;
-    while (redirectCount < maxRedirects) {
-      httpClient = createHttpClient(
-        additionalSettings['allowInsecure'] == true,
-      );
-      final request = await httpClient.openUrl(method, currentUrl);
-      if (requestHeaders != null) {
-        requestHeaders.forEach((key, value) {
-          request.headers.set(key, value);
+    final httpClient =
+        sharedClient ??
+        createHttpClient(additionalSettings['allowInsecure'] == true);
+    try {
+      while (redirectCount < maxRedirects) {
+        bool openTimedOut = false;
+        final pendingRequest = httpClient.openUrl(method, currentUrl).then((
+          request,
+        ) {
+          if (openTimedOut) request.abort();
+          return request;
         });
-      }
-      request.cookies.addAll(cookies);
-      request.followRedirects = false;
-      if (postBody != null) {
-        request.headers.contentType = ContentType.json;
-        request.write(jsonEncode(postBody));
-      }
-      final response = await request.close();
-
-      if (followRedirects &&
-          (response.statusCode >= 300 && response.statusCode <= 399)) {
-        final location = response.headers.value(HttpHeaders.locationHeader);
-        if (location != null) {
-          currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
-          redirectCount++;
-          cookies = response.cookies;
-          httpClient.close();
-          httpClient = null;
-          continue;
+        final request = await pendingRequest.timeout(
+          responseTimeout,
+          onTimeout: () {
+            openTimedOut = true;
+            throw TimeoutException(tr('unexpectedError'), responseTimeout);
+          },
+        );
+        withDefaultObtainXUserAgent(requestHeaders).forEach((
+          String headerName,
+          String headerValue,
+        ) {
+          request.headers.set(headerName, headerValue);
+        });
+        request.cookies.addAll(cookies);
+        request.followRedirects = false;
+        if (postBody != null) {
+          request.headers.contentType = ContentType.json;
+          request.write(jsonEncode(postBody));
         }
-      }
+        final response = await request.close().timeout(
+          responseTimeout,
+          onTimeout: () {
+            request.abort();
+            throw TimeoutException(tr('unexpectedError'), responseTimeout);
+          },
+        );
 
-      return MapEntry(currentUrl, MapEntry(httpClient, response));
+        if (followRedirects &&
+            (response.statusCode >= 300 && response.statusCode <= 399)) {
+          final location = response.headers.value(HttpHeaders.locationHeader);
+          if (location != null) {
+            currentUrl = Uri.parse(ensureAbsoluteUrl(location, currentUrl));
+            redirectCount++;
+            cookies = response.cookies;
+            await response.timeout(responseTimeout).drain<void>();
+            continue;
+          }
+        }
+
+        return MapEntry(currentUrl, MapEntry(httpClient, response));
+      }
+      throw ObtainiumError(tr('tooManyRedirects'));
+    } catch (_) {
+      if (sharedClient == null) httpClient.close(force: true);
+      rethrow;
     }
-    httpClient?.close();
-    throw ObtainiumError(tr('tooManyRedirects'));
   }
 
   Future<http.Response> httpClientResponseStreamToFinalResponse(
     HttpClient httpClient,
     String method,
     String url,
-    HttpClientResponse response,
-  ) async {
+    HttpClientResponse response, {
+    bool closeClient = true,
+  }) async {
     try {
-      final bytes = (await response.fold<BytesBuilder>(
-        BytesBuilder(),
-        (b, d) => b..add(d),
-      )).toBytes();
+      final bytes =
+          (await response
+                  .timeout(responseTimeout)
+                  .fold<BytesBuilder>(
+                    BytesBuilder(copy: false),
+                    (b, d) => b..add(d),
+                  ))
+              .takeBytes();
 
       final headers = <String, String>{};
       response.headers.forEach((name, values) {
@@ -1993,7 +2283,7 @@ class HttpService {
         request: http.Request(method, Uri.parse(url)),
       );
     } finally {
-      httpClient.close();
+      if (closeClient) httpClient.close();
     }
   }
 
@@ -2001,9 +2291,10 @@ class HttpService {
     if (res.statusCode == 404) return NoReleasesError();
 
     final reasonLower = res.reasonPhrase?.toLowerCase() ?? '';
-    final bodySample = res.body.length > 1000
-        ? res.body.substring(0, 1000).toLowerCase()
-        : res.body.toLowerCase();
+    final body = res.body;
+    final bodySample = body.length > 1000
+        ? body.substring(0, 1000).toLowerCase()
+        : body.toLowerCase();
     final isRateLimit =
         res.statusCode == 429 ||
         res.statusCode == 403 ||
@@ -2037,163 +2328,6 @@ class HttpService {
           : tr('errorWithHttpStatusCode', args: [res.statusCode.toString()]),
       code: 'HTTP_ERROR',
     );
-  }
-}
-
-class VersionService {
-  static const defaultMatchGroup = '0';
-
-  static final List<String> standardVersionRegExStrings =
-      _generateStandardVersionRegExStrings();
-
-  static final List<MapEntry<String, RegExp>> strictStandardVersionRegExes =
-      standardVersionRegExStrings
-          .map((p) => MapEntry(p, RegExp('^$p\$')))
-          .toList();
-
-  static final List<MapEntry<String, RegExp>> looseStandardVersionRegExes =
-      standardVersionRegExStrings.map((p) => MapEntry(p, RegExp(p))).toList();
-
-  static List<String> _generateStandardVersionRegExStrings() {
-    final basics = [
-      '[0-9]+',
-      '[0-9]+\\.[0-9]+',
-      '[0-9]+\\.[0-9]+\\.[0-9]+',
-      '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+',
-    ];
-    final preSuffixes = ['-', '\\+'];
-    final suffixes = [
-      'alpha',
-      'beta',
-      'rc',
-      'pre',
-      'dev',
-      'snapshot',
-      'nightly',
-      'ose',
-      '[0-9]+',
-    ];
-    final finals = ['\\+[0-9]+', '[0-9]+'];
-    final List<String> results = [];
-    for (var b in basics) {
-      results.add(b);
-      for (var p in preSuffixes) {
-        for (var s in suffixes) {
-          results.add('$b$s');
-          results.add('$b$p$s');
-          for (var f in finals) {
-            results.add('$b$s$f');
-            results.add('$b$p$s$f');
-          }
-        }
-      }
-    }
-    return results.toSet().toList();
-  }
-
-  String? regExValidator(String? value) {
-    if (value == null || value.isEmpty) {
-      return null;
-    }
-    try {
-      RegExp(value);
-    } catch (e) {
-      return tr('invalidRegEx');
-    }
-    return null;
-  }
-
-  /// Replaces `$N` references in a string with the corresponding regex match groups.
-  String? replaceMatchGroupsInString(
-    RegExpMatch match,
-    String matchGroupString,
-  ) {
-    if (RegExp('^\\d+\$').hasMatch(matchGroupString)) {
-      matchGroupString = '\$$matchGroupString';
-    }
-    final numberRegex = RegExp(r'\$\d+');
-    final numbers = numberRegex.allMatches(matchGroupString);
-    if (numbers.isEmpty) {
-      return null;
-    }
-    var outputString = matchGroupString;
-    for (final numberMatch in numbers) {
-      final number = numberMatch.group(0)!;
-      final int matchGroupIndex = int.parse(number.substring(1));
-      // Guard against a replacement referencing a capture group that doesn't
-      // exist — return null (→ caller raises NoVersionError) instead of letting
-      // match.group() throw a RangeError (parity with fork main).
-      if (matchGroupIndex > match.groupCount) {
-        return null;
-      }
-      final matchGroup = match.group(matchGroupIndex) ?? '';
-      final isEscaped = outputString.contains('\\$number');
-      if (!isEscaped) {
-        outputString = outputString.replaceAll(number, matchGroup);
-      } else {
-        outputString = outputString.replaceAll('\\$number', number);
-      }
-    }
-    return outputString;
-  }
-
-  /// Applies a version extraction regex to a string and returns the captured match group.
-  String? extractVersion(
-    String? versionExtractionRegEx,
-    String? matchGroupString,
-    String stringToCheck,
-  ) {
-    if (versionExtractionRegEx?.isNotEmpty == true) {
-      String? version = stringToCheck;
-      final match = RegExp(versionExtractionRegEx!).allMatches(version);
-      if (match.isEmpty) {
-        throw NoVersionError();
-      }
-      matchGroupString = matchGroupString?.trim() ?? '';
-      if (matchGroupString.isEmpty) {
-        matchGroupString = defaultMatchGroup;
-      }
-      version = replaceMatchGroupsInString(match.last, matchGroupString);
-      if (version?.isNotEmpty != true) {
-        throw NoVersionError();
-      }
-      return version!;
-    } else {
-      return null;
-    }
-  }
-
-  static final Map<String, Set<String>> _strictFormatCache = {};
-  static final Map<String, Set<String>> _looseFormatCache = {};
-  static const int _maxFormatCacheSize = 4096;
-
-  Set<String> findStandardFormatsForVersion(String version, bool strict) {
-    final cache = strict ? _strictFormatCache : _looseFormatCache;
-    final cached = cache[version];
-    if (cached != null) return cached;
-
-    final Set<String> results = {};
-    final patterns = strict
-        ? strictStandardVersionRegExes
-        : looseStandardVersionRegExes;
-    for (var entry in patterns) {
-      if (entry.value.hasMatch(version)) {
-        results.add(entry.key);
-      }
-    }
-    if (cache.length >= _maxFormatCacheSize) cache.clear();
-    cache[version] = results;
-    return results;
-  }
-
-  bool doStringsMatchUnderRegEx(String pattern, String value1, String value2) {
-    final r = RegExp(pattern);
-    final m1 = r.firstMatch(value1);
-    final m2 = r.firstMatch(value2);
-    return m1 != null && m2 != null
-        ? value1.substring(m1.start, m1.end) ==
-              value2.substring(m2.start, m2.end)
-        : false;
   }
 }
 
@@ -2241,7 +2375,8 @@ class ApkFilterService {
     if (apkFilterRegEx?.isNotEmpty == true) {
       final reg = RegExp(apkFilterRegEx!);
       apkUrls = apkUrls.where((element) {
-        final hasMatch = reg.hasMatch(element.key);
+        final hasMatch =
+            reg.hasMatch(element.key) || reg.hasMatch(element.value);
         return invert == true ? !hasMatch : hasMatch;
       }).toList();
     }
@@ -2255,12 +2390,15 @@ class ApkFilterService {
   }) async {
     if (apkUrls.length > 1) {
       for (var abi in abis) {
+        final RegExp architecturePattern = RegExp(
+          '.*$abi.*',
+          caseSensitive: false,
+        );
         final urls2 = apkUrls
             .where(
-              (element) => RegExp(
-                '.*$abi.*',
-                caseSensitive: false,
-              ).hasMatch(element.key),
+              (element) =>
+                  architecturePattern.hasMatch(element.key) ||
+                  architecturePattern.hasMatch(element.value),
             )
             .toList();
         if (urls2.isNotEmpty && urls2.length < apkUrls.length) {
@@ -2334,31 +2472,21 @@ void _migrateVersionDetectionFormat(Map<String, dynamic> additionalSettings) {
     additionalSettings.remove('noVersionDetection');
     additionalSettings.remove('releaseDateAsVersion');
   }
-  // Old dropdown/boolean values → the three-state string enum that every reader
-  // now expects ('auto'/'standard'/'pseudo'/'versionCode'). This MUST land on a
-  // string, never a bool — a bool value makes every installed app read as
-  // pseudo-versioned (see isVersionPseudo) and breaks update detection.
-  if (additionalSettings['versionDetection'] == 'standardVersionDetection') {
-    additionalSettings['versionDetection'] = 'auto';
-  } else if (additionalSettings['versionDetection'] == 'noVersionDetection') {
-    additionalSettings['versionDetection'] = 'pseudo';
-  } else if (additionalSettings['versionDetection'] == 'releaseDateAsVersion') {
-    additionalSettings['versionDetection'] = 'pseudo';
+  // 'releaseDateAsVersion' additionally carries a version-string choice, which
+  // [VersionDetectionMode.fromStored] (a pure mode parse) can't express — apply
+  // that side effect before normalising.
+  if (additionalSettings['versionDetection'] == 'releaseDateAsVersion') {
     additionalSettings['releaseDateAsVersion'] = true;
-  } else if (additionalSettings['versionDetection'] == true) {
-    additionalSettings['versionDetection'] = 'auto';
-  } else if (additionalSettings['versionDetection'] == false) {
-    additionalSettings['versionDetection'] = 'pseudo';
   }
-  // 'versionCode' is a dropdown option; keep the derived useVersionCodeAsOSVersion
-  // bool in sync (mirrors fork main).
-  if (additionalSettings['versionDetection'] == 'versionCode' ||
-      additionalSettings['useVersionCodeAsOSVersion'] == true) {
-    additionalSettings['versionDetection'] = 'versionCode';
-    additionalSettings['useVersionCodeAsOSVersion'] = true;
-  } else {
-    additionalSettings['useVersionCodeAsOSVersion'] = false;
-  }
+  // Every other legacy encoding (bools, the pre-dropdown strings) is handled by
+  // [VersionDetectionMode.fromStored]; this rewrites the stored value to the
+  // canonical mode key and re-derives useVersionCodeAsOSVersion. It MUST land on
+  // a string, never a bool — a bool makes every installed app read as
+  // pseudo-versioned (see isVersionPseudo) and breaks update detection.
+  normalizeVersionDetectionSettings(
+    additionalSettings,
+    promoteLegacyBoolean: true,
+  );
 }
 
 /// Converts legacy `supportFixedAPKURL` bool to `defaultPseudoVersioningMethod`.
@@ -2383,6 +2511,22 @@ void _coerceAdditionalSettingTypes(
       additionalSettings[item.key] = item.ensureType(
         additionalSettings[item.key],
       );
+    }
+  }
+}
+
+/// Resolves legacy saved forms where switches that now turn each other off
+/// were both enabled. Form order determines priority.
+void _normalizeMutuallyExclusiveSwitches(
+  Map<String, dynamic> additionalSettings,
+  List<GeneratedFormItem> formItems,
+) {
+  for (final GeneratedFormItem item in formItems) {
+    if (item is! GeneratedFormSwitch || additionalSettings[item.key] != true) {
+      continue;
+    }
+    for (final String targetKey in item.turnsOffKeys) {
+      additionalSettings[targetKey] = false;
     }
   }
 }
@@ -2566,6 +2710,7 @@ Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
     additionalSettings,
   );
   _coerceAdditionalSettingTypes(additionalSettings, formItems);
+  _normalizeMutuallyExclusiveSwitches(additionalSettings, formItems);
 
   int preferredApkIndex = json['preferredApkIndex'] == null
       ? 0

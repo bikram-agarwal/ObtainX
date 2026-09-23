@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
+import 'package:obtainium/services/json_file_work.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Persists package → store → page URL mappings from bulk scans under app
@@ -16,8 +16,8 @@ import 'package:path_provider/path_provider.dart';
 ///      [_maybeCheckAndCacheAllStores] in app.dart - so two flows can no
 ///      longer overlap their load → modify → save windows and clobber
 ///      each other's writes.
-///   2. Re-reads the disk inside the lock, merges the caller's diff onto
-///      the freshest copy, and writes that. Eliminates the
+///   2. Merges the caller's diff onto the latest committed snapshot inside
+///      the queue, then writes that. Eliminates the
 ///      last-writer-wins data loss that was wiping store-availability
 ///      entries when an AppPage save raced a [backgroundScanStoreAvailability].
 ///   3. Writes via tmp-file + atomic rename so a kill or crash mid-write
@@ -29,6 +29,7 @@ class BulkScanCache {
   static const String _fileName = 'store_url_map.json';
 
   static Map<String, Map<String, String>>? _cache;
+  static Future<Map<String, Map<String, String>>>? _pendingLoad;
 
   static Map<String, Map<String, String>> _deepCopy(
     Map<String, Map<String, String>> source,
@@ -59,8 +60,8 @@ class BulkScanCache {
       base = await getApplicationDocumentsDirectory();
     }
     final Directory dir = Directory('${base.path}/$_relativeDir');
-    if (!dir.existsSync()) {
-      dir.createSync(recursive: true);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
     }
     return dir;
   }
@@ -72,21 +73,35 @@ class BulkScanCache {
   /// Outer key: package name. Inner key: store name (e.g. APKMirror).
   /// Empty string value means "looked up, not found" for that store.
   static Future<Map<String, Map<String, String>>> load() async {
+    return _deepCopy(await _readCache());
+  }
+
+  /// Reads one app without cloning every other app's store mappings.
+  static Future<Map<String, String>?> loadForApp(String appId) async {
+    final entry = (await _readCache())[appId];
+    return entry == null ? null : Map<String, String>.from(entry);
+  }
+
+  static Future<Map<String, Map<String, String>>> _readCache() async {
     if (_cache != null) {
-      return _deepCopy(_cache!);
+      return _cache!;
     }
+    final pending = _pendingLoad ??= _loadFromDisk();
+    try {
+      return await pending;
+    } finally {
+      if (identical(_pendingLoad, pending)) _pendingLoad = null;
+    }
+  }
+
+  static Future<Map<String, Map<String, String>>> _loadFromDisk() async {
     try {
       final File file = await _file();
-      if (!file.existsSync()) {
+      if (!await file.exists()) {
         _cache = {};
-        return {};
+        return _cache!;
       }
-      final String content = await file.readAsString();
-      if (content.trim().isEmpty) {
-        _cache = {};
-        return {};
-      }
-      final Object? decoded = jsonDecode(content);
+      final Object? decoded = await readJsonFileOffIsolate(file.path);
       if (decoded is! Map<String, dynamic>) {
         _cache = {};
         return {};
@@ -101,7 +116,7 @@ class BulkScanCache {
           );
         }
       }
-      _cache = _deepCopy(out);
+      _cache = out;
       return out;
     } catch (_) {
       _cache = {};
@@ -112,26 +127,28 @@ class BulkScanCache {
   /// Enqueues an atomic, mutation-merging disk write.
   ///
   /// Behaviour inside the lock:
-  ///   - Reload the cache from disk so we incorporate any writes made by
-  ///     other flows since the caller's snapshot was loaded.
-  ///   - Hand the fresh disk copy to [merger] for in-place mutation.
+  ///   - Copy the latest committed cache so writes made by other flows since
+  ///     the caller loaded its snapshot are preserved.
+  ///   - Hand that copy to [merger], which reports whether anything changed.
   ///   - Serialize the result to a `.tmp` file beside the cache file.
   ///   - Atomically rename the `.tmp` over the cache file. POSIX rename is
   ///     atomic on the filesystems Android uses (ext4 / F2FS), so a kill
   ///     between writeAsString and rename leaves the previous good file
   ///     intact instead of producing a half-written destination.
   static Future<void> _enqueueWrite(
-    void Function(Map<String, Map<String, String>> diskCopy) merger,
-  ) {
+    bool Function(Map<String, Map<String, String>> diskCopy) merger, {
+    bool deleteFile = false,
+  }) {
     final Future<void> work = _writeChainTail.then((_) async {
-      final Map<String, Map<String, String>> fresh = await load();
-      merger(fresh);
-      _cache = _deepCopy(fresh);
+      final fresh = _deepCopy(await _readCache());
+      if (!merger(fresh)) return;
       final File file = await _file();
-      final File tmp = File('${file.path}.tmp');
-      final String json = const JsonEncoder.withIndent('  ').convert(fresh);
-      await tmp.writeAsString(json);
-      await tmp.rename(file.path);
+      if (deleteFile) {
+        if (await file.exists()) await file.delete();
+      } else {
+        await writeJsonFileOffIsolate(file.path, fresh);
+      }
+      _cache = fresh;
     });
     // Swallow errors on the chain itself so one failed write doesn't poison
     // every subsequent enqueue. The original caller still gets the error
@@ -150,32 +167,31 @@ class BulkScanCache {
   /// store key (the caller's data is presumed fresher than what was on
   /// disk before they queued the write).
   static Future<void> save(Map<String, Map<String, String>> data) {
+    final snapshot = _deepCopy(data);
     return _enqueueWrite((Map<String, Map<String, String>> disk) {
-      data.forEach((String appId, Map<String, String> callerStoreMap) {
+      var changed = false;
+      snapshot.forEach((String appId, Map<String, String> callerStoreMap) {
+        if (!disk.containsKey(appId)) changed = true;
         final Map<String, String> diskStoreMap = disk.putIfAbsent(
           appId,
           () => <String, String>{},
         );
         callerStoreMap.forEach((String storeKey, String urlValue) {
+          if (diskStoreMap[storeKey] != urlValue) changed = true;
           diskStoreMap[storeKey] = urlValue;
         });
       });
+      return changed;
     });
   }
 
   static Future<void> clear() async {
     try {
-      // Drain the queue first so any in-flight writes don't ghost-resurrect
-      // the file after the delete.
+      // Keep the deletion inside the queue too, so it cannot erase a newer save.
       await _enqueueWrite((Map<String, Map<String, String>> disk) {
         disk.clear();
-      });
-      // Also remove the (now-empty) file so a subsequent load short-circuits
-      // on `existsSync == false`.
-      final File file = await _file();
-      if (file.existsSync()) {
-        await file.delete();
-      }
+        return true;
+      }, deleteFile: true);
     } catch (_) {
       // ignore
     }
@@ -187,11 +203,13 @@ class BulkScanCache {
     if (storeNames.isEmpty) return;
     try {
       await _enqueueWrite((Map<String, Map<String, String>> disk) {
+        var changed = false;
         for (final Map<String, String> storeMap in disk.values) {
           for (final String store in storeNames) {
-            storeMap.remove(store);
+            if (storeMap.remove(store) != null) changed = true;
           }
         }
+        return changed;
       });
     } catch (_) {
       // ignore
@@ -200,7 +218,7 @@ class BulkScanCache {
 
   /// Returns the set of store names that have at least one cached entry.
   static Future<Set<String>> cachedStores() async {
-    final Map<String, Map<String, String>> cache = await load();
+    final Map<String, Map<String, String>> cache = await _readCache();
     final Set<String> stores = {};
     for (final Map<String, String> storeMap in cache.values) {
       stores.addAll(storeMap.keys);
@@ -224,13 +242,10 @@ class BulkScanCache {
       cache.putIfAbsent(entry.key, () => <String, String>{})[storeName] =
           entry.value ?? '';
     }
-    // Persist: queued atomic write that re-reads the disk so concurrent
-    // writers' contributions aren't clobbered.
-    return _enqueueWrite((Map<String, Map<String, String>> disk) {
-      for (final MapEntry<String, String?> entry in storeResults.entries) {
-        disk.putIfAbsent(entry.key, () => <String, String>{})[storeName] =
-            entry.value ?? '';
-      }
+    // Persist only this store's results, rather than the caller's full snapshot.
+    return save({
+      for (final entry in storeResults.entries)
+        entry.key: {storeName: entry.value ?? ''},
     });
   }
 }

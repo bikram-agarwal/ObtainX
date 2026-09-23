@@ -5,16 +5,20 @@ import 'package:obtainium/components/theme_accent_settings_section.dart'
     show buildThemeAccentSettingsCardItems;
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
+import 'package:obtainium/components/ui_widgets.dart'
+    show AppSwitch, AppSwitchListTile;
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 
 void _showBlackThemeSurfaceSettingDisabledSnackbar(BuildContext context) {
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(tr('settingsGradientDisabledInBlackTheme')),
-      duration: const Duration(seconds: 4),
+    buildAppSnackBar(
+      context,
+      tr('settingsGradientDisabledInBlackTheme'),
+      type: ToastType.warning,
     ),
   );
 }
@@ -88,7 +92,7 @@ List<Widget> buildThemesSettingsCardItems(
       ),
     ),
     if (settings.theme != ThemeSettings.light)
-      SwitchListTile(
+      AppSwitchListTile(
         title: Text(tr('useBlackTheme')),
         value: settings.useBlackTheme,
         onChanged: (bool value) {
@@ -97,28 +101,17 @@ List<Widget> buildThemesSettingsCardItems(
       ),
     ...buildThemeAccentSettingsCardItems(androidInfoFuture),
     _ShadingIntensityTile(settings: settings),
-    ListTile(
+    AppSwitchListTile(
       title: Text(tr('settingsGradientBackground')),
-      trailing: IgnorePointer(
-        ignoring: settings.blackThemeActive,
-        child: Switch(
-          value: settings.useGradientBackground,
-          onChanged: settings.blackThemeActive
-              ? null
-              : (bool value) {
-                  settings.useGradientBackground = value;
-                },
-        ),
-      ),
-      onTap: () {
-        if (settings.blackThemeActive) {
-          _showBlackThemeSurfaceSettingDisabledSnackbar(context);
-          return;
-        }
-        settings.useGradientBackground = !settings.useGradientBackground;
-      },
+      value: settings.useGradientBackground,
+      onChanged: settings.reduceVisualEffects || settings.blackThemeActive
+          ? null
+          : (bool value) {
+              settings.useGradientBackground = value;
+            },
     ),
     ListTile(
+      enabled: !settings.reduceVisualEffects,
       title: Text(tr('settingsProgressiveBlur')),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -127,7 +120,7 @@ List<Widget> buildThemesSettingsCardItems(
             message: tr('settingsProgressiveBlurSubtitle'),
             padding: EdgeInsets.zero,
           ),
-          Switch(
+          AppSwitch(
             value: settings.progressiveBlurEnabled,
             onChanged: settings.reduceVisualEffects
                 ? null
@@ -147,12 +140,14 @@ List<Widget> buildThemesSettingsCardItems(
                   !settings.progressiveBlurEnabled;
             },
     ),
-    SwitchListTile(
+    AppSwitchListTile(
       title: Text(tr('matchAppPageToIconColors')),
       value: settings.matchAppPageToIconColors,
-      onChanged: (bool value) {
-        settings.matchAppPageToIconColors = value;
-      },
+      onChanged: settings.reduceVisualEffects
+          ? null
+          : (bool value) {
+              settings.matchAppPageToIconColors = value;
+            },
     ),
     // Master "low-fidelity mode" toggle. Forces blur off and skips the
     // OpenContainer container-transform morph for apps-list -> AppPage
@@ -167,7 +162,7 @@ List<Widget> buildThemesSettingsCardItems(
             message: tr('settingsReduceVisualEffectsSubtitle'),
             padding: EdgeInsets.zero,
           ),
-          Switch(
+          AppSwitch(
             value: settings.reduceVisualEffects,
             onChanged: (bool value) {
               settings.reduceVisualEffects = value;

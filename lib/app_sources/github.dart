@@ -5,14 +5,17 @@ import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart';
+import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
-import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/version/app_version.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
   try {
@@ -27,6 +30,156 @@ Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
 }
 
 class GitHub extends AppSource {
+  @override
+  Future<App> resolveVersionComparison(App app) async {
+    // GitLab/Forgejo reuse release selection but expose different compare APIs.
+    if (Uri.tryParse(app.url)?.host.toLowerCase() != 'github.com' ||
+        app.installedVersion == null ||
+        app.usesVersionCodeAsOsVersion) {
+      return app;
+    }
+    final identity = versionEvidenceIdentity(app);
+    final cached = app.additionalSettings[sourceBuildComparisonKey];
+    if (cached is Map &&
+        cached['identity'] == identity &&
+        {
+          'ahead',
+          'behind',
+          'identical',
+          'diverged',
+        }.contains(cached['status'])) {
+      return app;
+    }
+    final decision = versionDecisionForApp(app);
+    if (decision.reason == 'sourceCommitAncestry') return app;
+    final latestHash = selectedSourceBuildHash(app);
+    final direct = compareVersionStrings(
+      app.installedVersion!,
+      app.latestVersion,
+      latestBuildHash: latestHash,
+    );
+    if (direct.reason != 'differentBuildHashes') return app;
+    final installedHash = releaseBuildHash(app.installedVersion!);
+    if (installedHash == null ||
+        latestHash == null ||
+        installedHash == latestHash) {
+      return app;
+    }
+    Response? response;
+    String? requestIdentity;
+    var previousFailures = 0;
+    try {
+      final apiUrl = await convertStandardUrlToAPIUrl(
+        app.url,
+        app.additionalSettings,
+      );
+      // Only preference reads are needed here, without device/storage setup.
+      final settingsProvider = SettingsProvider()
+        ..prefs = await SharedPreferences.getInstance();
+      final requestSettings = await buildMergedSettings(
+        app.additionalSettings,
+        settingsProvider,
+      );
+      // Changing credentials or a proxy must allow an immediate retry, without
+      // persisting those credentials in the comparison evidence.
+      requestIdentity = sha256
+          .convert(
+            utf8.encode(
+              jsonEncode([
+                apiUrl,
+                requestSettings[githubCredsKey] ?? '',
+                requestSettings[githubReqPrefixKey] ?? '',
+                requestSettings[githubReqPrefixUseTokenKey] == 'true',
+                requestSettings['allowInsecure'] == true,
+              ]),
+            ),
+          )
+          .toString();
+      if (cached is Map &&
+          cached['identity'] == identity &&
+          cached['requestIdentity'] == requestIdentity &&
+          cached['status'] == 'unavailable') {
+        final retryAfter = cached['retryAfter'];
+        if (retryAfter is int &&
+            retryAfter > DateTime.now().millisecondsSinceEpoch) {
+          return app;
+        }
+        final failureCount = cached['failureCount'];
+        if (failureCount is int) previousFailures = failureCount.clamp(0, 5);
+      }
+      // GitHub includes the full changed-file list only on page 1. Page 2
+      // retains the overall status and base commit even with no commits on it.
+      response = await sourceRequest(
+        '$apiUrl/compare/$installedHash...$latestHash?per_page=1&page=2',
+        requestSettings,
+      );
+      if (response.statusCode == 200) {
+        final comparison = _jsonObjectFromResponseBody(response.body);
+        final status = comparison?['status'];
+        final base = comparison?['base_commit'];
+        if ({'ahead', 'behind', 'identical', 'diverged'}.contains(status) &&
+            base is Map &&
+            base['sha'] is String &&
+            (base['sha'] as String).toLowerCase().startsWith(installedHash)) {
+          return app.copyWith(
+            additionalSettings:
+                Map<String, dynamic>.from(app.additionalSettings)
+                  ..[sourceBuildComparisonKey] = {
+                    'identity': identity,
+                    'status': status,
+                  },
+          );
+        }
+      }
+    } catch (_) {
+      // Missing/deleted commits, rate limits and network errors leave only this
+      // build unresolved; they must not fail an otherwise valid source refresh.
+    }
+
+    // Remember failures across refreshes/restarts, but retry transient failures
+    // after 1, 2, 4, ... minutes (at most 30). Missing commits get 15 minutes.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final delayMinutes = (1 << previousFailures).clamp(
+      response?.statusCode == 404 ? 15 : 1,
+      30,
+    );
+    var retryAfter = now + Duration(minutes: delayMinutes).inMilliseconds;
+    final retryHeader = response?.headers['retry-after'];
+    if (retryHeader != null) {
+      final seconds = int.tryParse(retryHeader);
+      int? serverRetryAfter;
+      if (seconds != null && seconds >= 0) {
+        serverRetryAfter = now + Duration(seconds: seconds).inMilliseconds;
+      } else {
+        try {
+          serverRetryAfter = HttpDate.parse(retryHeader).millisecondsSinceEpoch;
+        } catch (_) {
+          // An invalid header must not discard the local backoff.
+        }
+      }
+      if (serverRetryAfter != null && serverRetryAfter > retryAfter) {
+        retryAfter = serverRetryAfter;
+      }
+    }
+    if (response?.statusCode == 429 ||
+        response?.headers['x-ratelimit-remaining'] == '0') {
+      final reset = int.tryParse(response?.headers['x-ratelimit-reset'] ?? '');
+      if (reset != null && reset * 1000 > retryAfter) {
+        retryAfter = reset * 1000;
+      }
+    }
+    return app.copyWith(
+      additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+        ..[sourceBuildComparisonKey] = {
+          'identity': identity,
+          'status': 'unavailable',
+          'requestIdentity': requestIdentity,
+          'retryAfter': retryAfter,
+          'failureCount': previousFailures + 1,
+        },
+    );
+  }
+
   static const String githubCredsKey = 'github-creds';
   static const String githubReqPrefixKey = 'GHReqPrefix';
   static const String githubReqPrefixUseTokenKey = 'GHReqPrefixUseToken';
@@ -112,9 +265,16 @@ class GitHub extends AppSource {
         'includePrereleases',
         label: tr('includePrereleases'),
         value: false,
+        turnsOffKeys: const ['verifyLatestTag'],
       ),
     ],
-    [GeneratedFormSwitch('verifyLatestTag', label: tr('verifyLatestTag'))],
+    [
+      GeneratedFormSwitch(
+        'verifyLatestTag',
+        label: tr('verifyLatestTag'),
+        turnsOffKeys: const ['includePrereleases'],
+      ),
+    ],
     AppSource.fallbackToOlderReleasesFormItem,
     [
       GeneratedFormTextField(
@@ -209,78 +369,35 @@ class GitHub extends AppSource {
     String standardUrl, {
     Map<String, dynamic> additionalSettings = const {},
   }) async {
-    const possibleBuildGradleLocations = [
-      '/app/build.gradle',
-      'android/app/build.gradle',
-      'src/app/build.gradle',
-    ];
-    for (var path in possibleBuildGradleLocations) {
-      try {
+    // Parsing lives in gradle_app_id.dart so GitLab, Codeberg and SourceHut
+    // share it — see the notes there on the Kotlin-DSL gap this closed.
+    final String apiUrl = await convertStandardUrlToAPIUrl(
+      standardUrl,
+      additionalSettings,
+    );
+    return inferAppIdFromGradleFiles(
+      (String path) async {
         final res = await sourceRequest(
-          '${await convertStandardUrlToAPIUrl(standardUrl, additionalSettings)}/contents/$path',
+          '$apiUrl/contents/$path',
           additionalSettings,
         );
-        if (res.statusCode == 200) {
-          try {
-            final body = jsonDecode(res.body);
-            final trimmedLines = utf8
-                .decode(
-                  base64.decode(
-                    body['content'].toString().split('\n').join(''),
-                  ),
-                )
-                .split('\n')
-                .map((e) => e.trim());
-            var appIds = trimmedLines.where(
-              (l) =>
-                  l.startsWith('applicationId "') ||
-                  l.startsWith('applicationId \''),
-            );
-            appIds = appIds.map((appId) {
-              final parts = appId.split(
-                appId.startsWith('applicationId "') ? '"' : '\'',
-              );
-              return parts.length > 1 ? parts[1] : '';
-            });
-            appIds = appIds
-                .map((appId) {
-                  if (appId.startsWith('\${') && appId.endsWith('}')) {
-                    final varLine = trimmedLines
-                        .where(
-                          (l) => l.startsWith(
-                            'def ${appId.substring(2, appId.length - 1)}',
-                          ),
-                        )
-                        .firstOrNull;
-                    if (varLine == null) return '';
-                    final parts = varLine.split(
-                      varLine.contains('"') ? '"' : '\'',
-                    );
-                    appId = parts.length > 1 ? parts[1] : '';
-                  }
-                  return appId;
-                })
-                .where((appId) => appId.isNotEmpty);
-            if (appIds.length == 1) {
-              return appIds.first;
-            }
-          } catch (err) {
-            unawaited(
-              LogsProvider().add(
-                'Error parsing build.gradle from ${res.request?.url.toString() ?? standardUrl}: ${err.toString()}',
-              ),
-            );
-          }
-        }
-      } catch (err) {
-        unawaited(
-          LogsProvider().add(
-            'Failed to extract ID from build.gradle or APK: ${err.toString()}',
-          ),
+        if (res.statusCode != 200) return null;
+        return decodeRepoContentsApiBody(res.body);
+      },
+      listRepoFilePaths: () async {
+        final res = await sourceRequest(
+          '$apiUrl/git/trees/HEAD?recursive=1',
+          additionalSettings,
         );
-      }
-    }
-    return null;
+        if (res.statusCode != 200) return null;
+        return repoFilePathsFromTreeApiBody(res.body);
+      },
+      onError: (String message) => unawaited(LogsProvider().add(message)),
+      // A repo that builds a flavour per distribution channel names the one it
+      // publishes here after this host, and that flavour can carry its own
+      // applicationId or suffix.
+      preferredFlavorNames: const <String>{'github', 'gh'},
+    );
   }
 
   @override
@@ -302,7 +419,7 @@ class GitHub extends AppSource {
     final token = await getTokenIfAny(additionalSettings);
     final headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
-      headers[HttpHeaders.authorizationHeader] = 'Token $token';
+      headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
     }
     if (forAPKDownload == true) {
       headers[HttpHeaders.acceptHeader] = 'application/octet-stream';
@@ -312,6 +429,43 @@ class GitHub extends AppSource {
     } else {
       return null;
     }
+  }
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    final Response res = await super.sourceRequest(
+      url,
+      additionalSettings,
+      followRedirects: followRedirects,
+      postBody: postBody,
+    );
+    final String? token = await getTokenIfAny(additionalSettings);
+    if (res.statusCode == 401 && token != null && token.isNotEmpty) {
+      final Map<String, dynamic> unauthSettings = Map<String, dynamic>.from(
+        additionalSettings,
+      );
+      unauthSettings[githubCredsKey] = '';
+      final Response retryRes = await super.sourceRequest(
+        url,
+        unauthSettings,
+        followRedirects: followRedirects,
+        postBody: postBody,
+      );
+      if (retryRes.statusCode < 400) {
+        unawaited(
+          LogsProvider().add(
+            'GitHub API returned 401 with stored PAT. Retried unauthenticated successfully. Please check or update your GitHub Personal Access Token in Settings.',
+          ),
+        );
+        return retryRes;
+      }
+    }
+    return res;
   }
 
   Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
@@ -407,7 +561,7 @@ class GitHub extends AppSource {
         headers: <String, String>{
           HttpHeaders.authorizationHeader: 'Bearer $token',
           HttpHeaders.acceptHeader: 'application/vnd.github+json',
-          HttpHeaders.userAgentHeader: 'Obtainium',
+          HttpHeaders.userAgentHeader: 'ObtainX',
         },
       );
       if (response.statusCode == 200) {
@@ -438,14 +592,18 @@ class GitHub extends AppSource {
     }
     if (error == null) {
       storePATValidation(creds, settingsProvider);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(tr('githubPATValidated'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        buildAppSnackBar(
+          context,
+          tr('githubPATValidated'),
+          type: ToastType.success,
+        ),
+      );
     } else {
       clearPATValidation(settingsProvider);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(error)));
+      ).showSnackBar(buildAppSnackBar(context, error, type: ToastType.error));
     }
   }
 
@@ -674,7 +832,13 @@ class GitHub extends AppSource {
     final filteredAssets = rel['filteredAssets'] as List<dynamic>?;
     final t = (filteredAssets ?? allAssets)
         ?.map((e) {
-          final updated = e?['updated_at'];
+          // GitHub assets carry both timestamps; Forgejo/Gitea assets (Codeberg,
+          // which reuses this code) expose only `created_at` — verified against
+          // codeberg.org/api/v1 on 2026-08-18. Without the fallback this
+          // returned null for every Forgejo asset, so "Use latest asset upload
+          // as release date" silently did nothing there and left the release
+          // date unset.
+          final updated = e?['updated_at'] ?? e?['created_at'];
           return updated is String ? DateTime.tryParse(updated) : null;
         })
         .where((e) => e != null)
@@ -691,76 +855,79 @@ class GitHub extends AppSource {
       ? _getPublishDateFromRelease(rel)
       : _getNewestAssetDateFromRelease(rel);
 
-  void _sortGitHubReleases(
+  void sortGitHubReleases(
     List<dynamic> releases,
     String sortMethod,
     bool useLatestAssetDateAsReleaseDate,
   ) {
     if (sortMethod == 'none') return;
 
-    // Precompute dates and (for smartname/name sorts) per-release format
-    // sets once. Memoization in findStandardFormatsForVersion already handles
-    // the per-version cache; we still precompute here so the sort comparator
-    // only performs O(1) lookups instead of O(n) per comparison.
-    final isDateOnly = sortMethod == 'date';
-    final Map<dynamic, DateTime?> dates = {};
-    final Map<dynamic, Set<String>> formats = {};
-    if (!isDateOnly) {
-      for (final r in releases) {
-        if (r == null) continue;
-        final name = (r['tag_name'] ?? r['name'])?.toString() ?? '';
-        formats[r] = findStandardFormatsForVersion(name, false);
-      }
+    int compareReleaseDates(DateTime? firstDate, DateTime? secondDate) {
+      if (firstDate == null && secondDate == null) return 0;
+      if (firstDate == null) return -1;
+      if (secondDate == null) return 1;
+      return firstDate.compareTo(secondDate);
     }
 
-    releases.sort((a, b) {
-      if (a == null) return -1;
-      if (b == null) return 1;
-
-      if (isDateOnly) {
-        final dateA = dates.putIfAbsent(
-          a,
-          () => _getReleaseDateFromRelease(a, useLatestAssetDateAsReleaseDate),
-        );
-        final dateB = dates.putIfAbsent(
-          b,
-          () => _getReleaseDateFromRelease(b, useLatestAssetDateAsReleaseDate),
-        );
-        return (dateA ?? DateTime(1)).compareTo(dateB ?? DateTime(0));
-      }
-
-      final nameA = a['tag_name'] ?? a['name'];
-      final nameB = b['tag_name'] ?? b['name'];
-      final stdFormats = formats[a]!.intersection(formats[b]!);
-
-      if (sortMethod == 'smartname-datefallback' && stdFormats.isEmpty) {
-        final dateA = _getReleaseDateFromRelease(
-          a,
+    final Map<dynamic, DateTime?> dates = {};
+    DateTime? releaseDate(dynamic release) {
+      return dates.putIfAbsent(
+        release,
+        () => _getReleaseDateFromRelease(
+          release,
           useLatestAssetDateAsReleaseDate,
-        );
-        final dateB = _getReleaseDateFromRelease(
-          b,
-          useLatestAssetDateAsReleaseDate,
-        );
-        return (dateA ?? DateTime(1)).compareTo(dateB ?? DateTime(0));
-      }
+        ),
+      );
+    }
 
-      if (sortMethod != 'name' && stdFormats.isNotEmpty) {
-        final sortedFormats = stdFormats.toList()
-          ..sort((x, y) => y.length.compareTo(x.length));
-        final reg = RegExp(sortedFormats.first);
-        final matchA = reg.firstMatch(nameA);
-        final matchB = reg.firstMatch(nameB);
-        if (matchA == null || matchB == null) {
-          return compareAlphaNumeric(nameA as String, nameB as String);
+    // Natural-name/date ordering only selects a source release when its labels
+    // are incomparable. It never supplies evidence for a device update.
+    final useVersionOrder =
+        sortMethod != 'date' &&
+        sortMethod != 'name' &&
+        versionsHaveConsistentOrder(
+          releases
+              .where((release) => release != null)
+              .map(
+                (release) =>
+                    (release['tag_name'] ?? release['name'])?.toString() ?? '',
+              ),
+        );
+    releases.sort((firstRelease, secondRelease) {
+      if (firstRelease == null && secondRelease == null) return 0;
+      if (firstRelease == null) return -1;
+      if (secondRelease == null) return 1;
+      if (sortMethod == 'date' ||
+          (!useVersionOrder && sortMethod == 'smartname-datefallback')) {
+        return compareReleaseDates(
+          releaseDate(firstRelease),
+          releaseDate(secondRelease),
+        );
+      }
+      final firstName =
+          (firstRelease['tag_name'] ?? firstRelease['name'])?.toString() ?? '';
+      final secondName =
+          (secondRelease['tag_name'] ?? secondRelease['name'])?.toString() ??
+          '';
+      if (useVersionOrder) {
+        final ordered = compareVersionStrings(firstName, secondName).comparison;
+        if (ordered != null && ordered != 0) return ordered;
+        if (ordered == 0 || sortMethod == 'smartname-datefallback') {
+          return compareReleaseDates(
+            releaseDate(firstRelease),
+            releaseDate(secondRelease),
+          );
         }
-        return compareAlphaNumeric(
-          (nameA as String).substring(matchA.start, matchA.end),
-          (nameB as String).substring(matchB.start, matchB.end),
-        );
       }
-
-      return compareAlphaNumeric(nameA as String, nameB as String);
+      final nameComparison = compareAlphaNumeric(
+        firstName.toLowerCase(),
+        secondName.toLowerCase(),
+      );
+      if (nameComparison != 0) return nameComparison;
+      return compareReleaseDates(
+        releaseDate(firstRelease),
+        releaseDate(secondRelease),
+      );
     });
   }
 
@@ -1001,7 +1168,8 @@ class GitHub extends AppSource {
             true
         ? additionalSettings['filterReleaseNotesByRegEx']
         : null;
-    final bool verifyLatestTag = additionalSettings['verifyLatestTag'] == true;
+    final bool verifyLatestTag =
+        additionalSettings['verifyLatestTag'] == true && !includePrereleases;
     final bool useLatestAssetDateAsReleaseDate =
         additionalSettings['useLatestAssetDateAsReleaseDate'] == true;
     final String sortMethod =
@@ -1046,7 +1214,7 @@ class GitHub extends AppSource {
       if (sortMethod == 'none') {
         releases = releases.reversed.toList();
       } else {
-        _sortGitHubReleases(
+        sortGitHubReleases(
           releases,
           sortMethod,
           useLatestAssetDateAsReleaseDate,
@@ -1170,6 +1338,21 @@ class GitHub extends AppSource {
             : githubAttestationStatusError;
       }
 
+      final List<String> rawReleaseTitleCandidates = <String>[];
+      for (final rel in releases) {
+        if (rel is Map<String, dynamic>) {
+          final String? title =
+              (rel['name'] as String?)?.trim().isNotEmpty == true
+              ? (rel['name'] as String).trim()
+              : (rel['tag_name'] as String?)?.trim();
+          if (title != null &&
+              title.isNotEmpty &&
+              !rawReleaseTitleCandidates.contains(title)) {
+            rawReleaseTitleCandidates.add(title);
+          }
+        }
+      }
+
       return APKDetails(
         version,
         apkUrls,
@@ -1178,6 +1361,7 @@ class GitHub extends AppSource {
         changeLog: changeLog.isEmpty ? null : changeLog,
         allAssetUrls:
             targetRelease['allAssetUrls'] as List<MapEntry<String, String>>,
+        rawReleaseTitleCandidates: rawReleaseTitleCandidates,
         apkSizeBytes: apkSizeBytes,
         attestationStatus: attestationStatus,
       );

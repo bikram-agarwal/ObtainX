@@ -9,6 +9,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/version/partial_download_version.dart';
 
 int compareAlphaNumeric(String a, String b) {
   final List<String> aParts = _splitAlphaNumeric(a);
@@ -22,9 +23,7 @@ int compareAlphaNumeric(String a, String b) {
     final bool bIsNumber = _isDigit(bPart);
 
     if (aIsNumber && bIsNumber) {
-      final int aNumber = int.parse(aPart);
-      final int bNumber = int.parse(bPart);
-      final int cmp = aNumber.compareTo(bNumber);
+      final int cmp = compareDecimalIdentifiers(aPart, bPart);
       if (cmp != 0) {
         return cmp;
       }
@@ -40,6 +39,18 @@ int compareAlphaNumeric(String a, String b) {
   }
 
   return aParts.length.compareTo(bParts.length);
+}
+
+final _releaseFileExtension = RegExp(
+  r'\.(?:apk|xapk|apks|zip|tar(?:\.gz)?)$',
+  caseSensitive: false,
+);
+int compareReleaseNames(String first, String second) {
+  final decision = compareVersionStrings(
+    first.replaceFirst(_releaseFileExtension, ''),
+    second.replaceFirst(_releaseFileExtension, ''),
+  );
+  return decision.comparison ?? compareAlphaNumeric(first, second);
 }
 
 List<String> collectAllStringsFromJSONObject(dynamic obj) {
@@ -196,23 +207,96 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
       }
       return AppSource.isApkOrContainerFile(
         Uri.parse((filterLinkByText ? element.value : link).trim()).path,
+        // Off by default because most pages link a source zip next to the APK;
+        // on, it reaches the CI-artifact hosts that only ever serve zips.
+        includeArchives: additionalSettings['includeZips'] == true,
       );
     }).toList();
   }
   if (!skipSort) {
+    final names = {
+      for (final link in links)
+        link.key: additionalSettings['sortByLastLinkSegment'] == true
+            ? link.key.split('/').where((segment) => segment.isNotEmpty).last
+            : link.key,
+    };
+    final useVersionOrder = versionsHaveConsistentOrder(
+      names.values.map((name) => name.replaceFirst(_releaseFileExtension, '')),
+    );
     links.sort(
-      (a, b) => additionalSettings['sortByLastLinkSegment'] == true
-          ? compareAlphaNumeric(
-              a.key.split('/').where((e) => e.isNotEmpty).last,
-              b.key.split('/').where((e) => e.isNotEmpty).last,
-            )
-          : compareAlphaNumeric(a.key, b.key),
+      (first, second) => useVersionOrder
+          ? compareReleaseNames(names[first.key]!, names[second.key]!)
+          : compareAlphaNumeric(names[first.key]!, names[second.key]!),
     );
   }
   if (additionalSettings['reverseSort'] == true) {
     links = links.reversed.toList();
   }
   return links;
+}
+
+String resolveHtmlAssetDisplayName({
+  required String downloadUrl,
+  required String version,
+  String? appName,
+  String? linkLabel,
+  DownloadResponseMetadata? responseMetadata,
+}) {
+  final String? responseFileName = responseMetadata?.suggestedFileName;
+  if (responseFileName != null) {
+    return responseFileName;
+  }
+
+  final Uri? finalUri = responseMetadata?.finalUri;
+  if (finalUri != null && finalUri.pathSegments.isNotEmpty) {
+    final String? finalUrlFileName = sanitizeDownloadFileName(
+      finalUri.pathSegments.last,
+    );
+    if (finalUrlFileName != null &&
+        AppSource.isApkOrContainerFile(
+          finalUrlFileName,
+          includeArchives: true,
+          includeTarballs: true,
+        )) {
+      return finalUrlFileName;
+    }
+  }
+
+  final Uri downloadUri = Uri.parse(downloadUrl);
+  if (downloadUri.pathSegments.isNotEmpty) {
+    final String? downloadUrlFileName = sanitizeDownloadFileName(
+      downloadUri.pathSegments.last,
+    );
+    if (downloadUrlFileName != null &&
+        AppSource.isApkOrContainerFile(
+          downloadUrlFileName,
+          includeArchives: true,
+          includeTarballs: true,
+        )) {
+      return downloadUrlFileName;
+    }
+  }
+
+  final String? sanitizedLinkLabel = sanitizeDownloadFileName(linkLabel);
+  if (sanitizedLinkLabel != null &&
+      AppSource.isApkOrContainerFile(
+        sanitizedLinkLabel,
+        includeArchives: true,
+        includeTarballs: true,
+      )) {
+    return sanitizedLinkLabel;
+  }
+
+  final String? sanitizedAppName = sanitizeDownloadFileName(appName);
+  final String? sanitizedVersion = sanitizeDownloadFileName(version);
+  if (sanitizedAppName != null && sanitizedVersion != null) {
+    return '$sanitizedAppName-$sanitizedVersion.apk';
+  }
+
+  final String fallbackName = downloadUri.pathSegments.isNotEmpty
+      ? downloadUri.pathSegments.last
+      : downloadUri.origin;
+  return '${downloadUrl.hashCode}-$fallbackName';
 }
 
 class HTML extends AppSource {
@@ -293,6 +377,11 @@ class HTML extends AppSource {
   HTML() {
     name = 'HTML';
     suppressStandardVersionExtraction = true;
+    // A zip is the only way some hosts can serve a build: GitHub Actions
+    // artifacts are auth-walled, so re-hosters like nightly.link hand out
+    // `<artifact>.zip`. The download side already unpacks one and installs the
+    // APK inside, so only the link filter and these options were missing.
+    allowIncludeZips = true;
   }
 
   @override
@@ -443,7 +532,8 @@ class HTML extends AppSource {
       } else {
         links = [MapEntry(currentUrl, currentUrl)];
       }
-      final rel = links.last.key;
+      final MapEntry<String, String> selectedLink = links.last;
+      final String rel = selectedLink.key;
       var relDecoded = rel;
       try {
         relDecoded = Uri.decodeFull(rel);
@@ -468,36 +558,124 @@ class HTML extends AppSource {
         rel,
         forAPKDownload: true,
       );
+      DownloadResponseMetadata? downloadMetadata;
+      void captureDownloadMetadata(DownloadResponseMetadata metadata) {
+        downloadMetadata ??= metadata;
+      }
+
       if (version == null &&
           additionalSettings['defaultPseudoVersioningMethod'] == 'ETag') {
         version = await checkETagHeader(
           rel,
           headers: apkReqHeaders,
           allowInsecure: additionalSettings['allowInsecure'] == true,
+          onResponseMetadata: captureDownloadMetadata,
         );
         if (version == null || version.isEmpty) {
           throw NoVersionError();
         }
       }
-      version ??=
-          additionalSettings['defaultPseudoVersioningMethod'] == 'APKLinkHash'
-          ? rel.hashCode.toString()
-          : (await checkPartialDownloadHashDynamic(
-              rel,
-              headers: apkReqHeaders,
-              allowInsecure: additionalSettings['allowInsecure'] == true,
-            )).toString();
-      return APKDetails(
-        version,
-        [rel].map((e) {
-          final uri = Uri.parse(e);
-          final fileName = uri.pathSegments.isNotEmpty
-              ? uri.pathSegments.last
-              : uri.origin;
-          return MapEntry('${e.hashCode}-$fileName', e);
-        }).toList(),
-        AppNames(uri.host, tr('app')),
+      if (version == null) {
+        if (additionalSettings['defaultPseudoVersioningMethod'] ==
+            'APKLinkHash') {
+          version = rel.hashCode.toString();
+          additionalSettings.remove(partialDownloadFingerprintKey);
+        } else {
+          final saved = additionalSettings[partialDownloadFingerprintKey];
+          final savedFingerprint = saved is Map && saved['url'] == rel
+              ? saved['fingerprint']
+              : null;
+          final parsedSize = savedFingerprint is String
+              ? int.tryParse(
+                  savedFingerprint.split(':').elementAtOrNull(1) ?? '',
+                )
+              : null;
+          final savedSize =
+              parsedSize != null && parsedSize >= 128 && parsedSize <= 1024
+              ? parsedSize
+              : null;
+          final fingerprint = await checkPartialDownloadHashDynamic(
+            rel,
+            // Keep an established prefix size. Shrinking an unstable response
+            // would change the fingerprint even if the APK had not changed.
+            startingSize: savedSize ?? 1024,
+            lowerLimit: savedSize ?? 128,
+            headers: apkReqHeaders,
+            allowInsecure: additionalSettings['allowInsecure'] == true,
+            onResponseMetadata: captureDownloadMetadata,
+          );
+          version = resolvePartialDownloadVersion(
+            fingerprint: fingerprint,
+            downloadUrl: rel,
+            settings: additionalSettings,
+            previousVersion:
+                previouslyCheckedApp?.rawLatestVersionFromSource ??
+                previouslyCheckedApp?.latestVersion,
+            samePreviousDownload:
+                previouslyCheckedApp?.apkUrls.any(
+                      (asset) => asset.value == rel,
+                    ) ==
+                    true &&
+                previouslyCheckedApp
+                        ?.additionalSettings['defaultPseudoVersioningMethod'] ==
+                    additionalSettings['defaultPseudoVersioningMethod'],
+          );
+        }
+      } else {
+        additionalSettings.remove(partialDownloadFingerprintKey);
+      }
+      final bool ambiguousDownloadUrl = !AppSource.isApkOrContainerFile(
+        Uri.parse(rel).path,
+        includeArchives: true,
+        includeTarballs: true,
       );
+      String? cachedDisplayName;
+      if (ambiguousDownloadUrl &&
+          previouslyCheckedApp?.latestVersion == version) {
+        final String legacyDisplayName = resolveHtmlAssetDisplayName(
+          downloadUrl: rel,
+          version: version,
+        );
+        for (final MapEntry<String, String> apkUrl
+            in previouslyCheckedApp!.apkUrls) {
+          if (apkUrl.value == rel &&
+              apkUrl.key.isNotEmpty &&
+              apkUrl.key != legacyDisplayName) {
+            cachedDisplayName = apkUrl.key;
+            break;
+          }
+        }
+      }
+      if (ambiguousDownloadUrl &&
+          downloadMetadata == null &&
+          cachedDisplayName == null) {
+        try {
+          downloadMetadata = await probeDownloadResponseMetadata(
+            rel,
+            headers: apkReqHeaders,
+            allowInsecure: additionalSettings['allowInsecure'] == true,
+          );
+        } catch (error) {
+          unawaited(
+            LogsProvider().add(
+              'Failed to resolve HTML download filename: $error',
+              level: LogLevel.debug,
+            ),
+          );
+        }
+      }
+      final String assetDisplayName =
+          cachedDisplayName ??
+          resolveHtmlAssetDisplayName(
+            downloadUrl: rel,
+            version: version,
+            appName: previouslyCheckedApp?.finalName,
+            linkLabel: selectedLink.value,
+            responseMetadata: downloadMetadata,
+          );
+      return APKDetails(version, [
+        MapEntry(assetDisplayName, rel),
+      ], AppNames(uri.host, tr('app')));
     } catch (e) {
       rethrowOrWrapError(e);
     }

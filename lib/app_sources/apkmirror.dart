@@ -22,6 +22,41 @@ import 'package:obtainium/services/html_parse_isolate.dart';
 const bool apkMirrorSizeDebug = false;
 const String _apkMirrorSizeDebugPrefix = 'OBTAINX-APK-SIZE-DEBUG';
 
+/// The user-agent token APKMirror's Cloudflare rule allowlists.
+///
+/// Every APKMirror *HTML* page (app listing, release page, `-apk-download/`
+/// page) is served only to this allowlist. Anything else — including a
+/// convincingly spoofed mobile-browser UA, which is what this source used to
+/// send — gets a 403 carrying `Cf-Mitigated: challenge` and a "Just a moment…"
+/// interstitial body. The `/feed/` RSS endpoint is the sole exception, which is
+/// why version detection kept working while everything that scrapes HTML (icon
+/// resolution in [APKMirror.getLatestAPKDetails], the lazy size walk in
+/// [APKMirror.resolveLatestApkSizeBytes], the changelog fetch, and
+/// [APKMirror.tryInferringAppId]) silently returned nothing: each of those
+/// treats a failed request as "unavailable" rather than an error.
+///
+/// Measured 2026-08-18, holding every other header constant and varying only
+/// the UA: the rule is a plain substring test on `APKUpdater` — bare
+/// `APKUpdater`, `APKUpdater-v9.9.9` and `APKUpdater-v3.5.9 ObtainX/x.y.z` all
+/// return 200, while `ObtainX-v1.0.0`, `Obtainium`, `okhttp/4.12.0` and the old
+/// browser UA all return 403. Because the match tolerates extra text, ObtainX
+/// keeps its own name and version in the string instead of impersonating
+/// APKUpdater outright, so APKMirror can still attribute (and, if they want,
+/// block) this traffic.
+///
+/// Do NOT "fix" this back to a browser user-agent — that is precisely what
+/// disabled the features above.
+const String apkMirrorAllowlistedUserAgentToken = 'APKUpdater-v3.5.9';
+
+/// [apkMirrorAllowlistedUserAgentToken], with ObtainX's own identification
+/// appended when the running version is known.
+String apkMirrorUserAgent([String? obtainXVersion]) {
+  final String version = obtainXVersion?.trim() ?? '';
+  return version.isEmpty
+      ? apkMirrorAllowlistedUserAgentToken
+      : '$apkMirrorAllowlistedUserAgentToken ObtainX/$version';
+}
+
 class _ApkMirrorSizeCandidate {
   final String key;
   final String url;
@@ -499,11 +534,30 @@ DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
   return null;
 }
 
+String? apkMirrorVersionFromTitle(String? title) {
+  if (title == null) return null;
+  final authorStart = title.lastIndexOf(' by ');
+  final label = (authorStart < 0 ? title : title.substring(0, authorStart))
+      .trim();
+  final systemVersion = RegExp(
+    r'(?<![a-z0-9.])(?:(?:[a-z]\.)?\d+\.(?:playstore\.[a-z0-9_-]+|odad-stub)\.\d{6,}|(?:stargate\.android_)?\d{8}_\d+_rc\d+\.release_[a-z_]+)$',
+    caseSensitive: false,
+  ).firstMatch(label);
+  if (systemVersion != null) return systemVersion.group(0);
+  final release = releaseVersionPattern.firstMatch(label);
+  if (release != null) return label.substring(release.start).trim();
+  final digit = RegExp(r'\d').firstMatch(label);
+  return digit == null ? label : label.substring(digit.start).trim();
+}
+
 class APKMirror extends AppSource {
   APKMirror() {
     name = 'APKMirror';
     hosts = ['apkmirror.com'];
     enforceTrackOnly = true;
+    // Track-only controls opening the store page; installed packages still
+    // participate in the shared device-version comparison.
+    naiveStandardVersionDetection = true;
     showReleaseDateAsVersionToggle = true;
     appIdInferIsOptional = true;
   }
@@ -537,8 +591,8 @@ class APKMirror extends AppSource {
       includeOwnDebugBuild: true,
     );
     return {
-      'user-agent':
-          'Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36 ObtainX/${packageInfo?.versionName ?? '1.0.0'}',
+      // See [apkMirrorAllowlistedUserAgentToken] — a browser UA is refused.
+      'user-agent': apkMirrorUserAgent(packageInfo?.versionName),
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
@@ -569,6 +623,28 @@ class APKMirror extends AppSource {
   String? changeLogPageFromStandardUrl(String standardUrl) =>
       '$standardUrl/#whatsnew';
 
+  /// UNSOUND — do not rely on this without replacing the scrape first.
+  ///
+  /// Unreachable today: [SourceProvider._resolveAppId] only infers when the app
+  /// is not track-only, and this source enforces track-only. Verified against a
+  /// live listing page 2026-08-18, it fails two ways if that ever changes:
+  /// the `com.` prefix cannot express ids like `org.thoughtcrime.securesms`,
+  /// and the first match on a page is usually a *different* app's icon filename
+  /// from a sidebar/related-apps widget — Signal's page yields
+  /// `com.google.android.youtube`.
+  ///
+  /// The fix is not a better regex, but it is not the `app_exists` API either:
+  /// that endpoint is a *reverse* lookup (you post `pnames` and it returns app
+  /// links), so it cannot answer "which package is this URL?". Two forward
+  /// routes were verified against live pages on 2026-08-18:
+  ///  * the listing page's `og:image` filename carries `_<pname>` for newer
+  ///    uploads — exact when present (chrome/whatsapp/spotify/signal all
+  ///    matched the API's `pname`), but absent on older icons, which are just
+  ///    `<hash>.png` (firefox, termux, vlc);
+  ///  * authoritative: walk to `download.php` and read the **302 `Location`**
+  ///    header without fetching a body. The R2 filename encodes package,
+  ///    version and version code, e.g.
+  ///    `com.android.chrome_151.0.7922.139-792213933_25lang_2feat_<md5>_apkmirror.com.apkm`.
   @override
   Future<String?> tryInferringAppId(
     String standardUrl, {
@@ -710,12 +786,7 @@ class APKMirror extends AppSource {
     if (releasePageUrl != null && !releasePageUrl.startsWith('$standardUrl/')) {
       releasePageUrl = null;
     }
-    String? version = titleString
-        ?.substring(
-          RegExp('[0-9]').firstMatch(titleString)?.start ?? 0,
-          RegExp(' by ').allMatches(titleString).last.start,
-        )
-        .trim();
+    String? version = apkMirrorVersionFromTitle(titleString);
     if (version == null || version.isEmpty) {
       version = titleString;
     }
@@ -754,6 +825,7 @@ class APKMirror extends AppSource {
       changeLog: releasePageUrl,
       iconUrl: iconUrl,
       rawReleaseTitleCandidates: rawReleaseTitleCandidates,
+      releaseTitle: titleString,
     );
   }
 

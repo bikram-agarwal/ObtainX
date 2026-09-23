@@ -10,6 +10,7 @@ import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/bulk_add_widget.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
+import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/components/version_regex_assist_dialog.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
@@ -25,6 +26,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
@@ -38,6 +40,11 @@ import 'package:url_launcher/url_launcher_string.dart';
 const double _appVaultFabBottomGap = 8.0;
 const double _fabHorizontalMargin = 16.0;
 const double _fabMinimumSafeBottomPadding = 16.0;
+
+/// Height of the extended save FAB. It floats over the scroll view instead of
+/// taking layout space, so the scrolled content has to reserve this itself or
+/// the last card ends up underneath it.
+const double _bottomActionFabHeight = 56.0;
 InlineSpan _tooltipMessageWithBoldMarkdown(String message) {
   final List<String> messageParts = message.split('**');
   return TextSpan(
@@ -53,6 +60,31 @@ InlineSpan _tooltipMessageWithBoldMarkdown(String message) {
   );
 }
 
+/// Autocomplete entries for the repo-URL field of a source's search prompt.
+///
+/// Only sources with no [AppSource.hosts] prompt (F-Droid third-party repos),
+/// and what they want is the repo itself. Tracked apps are stripped back to
+/// origin + path, so the several apps added from one repo collapse to the one
+/// URL worth suggesting instead of repeating it per `?appid=`.
+List<String> searchPromptAutoCompleteOptions({
+  required Iterable<String> trackedAppUrls,
+}) {
+  final List<String> options = [];
+  for (final String trackedAppUrl in trackedAppUrls) {
+    final Uri? trackedUri = Uri.tryParse(trackedAppUrl);
+    if (trackedUri == null ||
+        trackedUri.host.isEmpty ||
+        (trackedUri.scheme != 'https' && trackedUri.scheme != 'http')) {
+      continue;
+    }
+    final String option = '${trackedUri.origin}${trackedUri.path}';
+    if (!options.contains(option)) {
+      options.add(option);
+    }
+  }
+  return options;
+}
+
 enum _AddMode { launcher, byUrl, search }
 
 enum _AddAppLauncherDestination {
@@ -64,7 +96,29 @@ enum _AddAppLauncherDestination {
   githubStars,
 }
 
-enum _PackageIdDetectionChoice { download, trackOnly }
+class _PackageIdDetectionResult {
+  final bool isTrackOnly;
+  final Object? downloadedArtifact;
+  final int? preferredApkIndex;
+  final Object? error;
+
+  const _PackageIdDetectionResult.trackOnly()
+    : isTrackOnly = true,
+      downloadedArtifact = null,
+      preferredApkIndex = null,
+      error = null;
+
+  const _PackageIdDetectionResult.downloaded(
+    this.downloadedArtifact, {
+    this.preferredApkIndex,
+  }) : isTrackOnly = false,
+       error = null;
+
+  const _PackageIdDetectionResult.error(this.error)
+    : isTrackOnly = false,
+      downloadedArtifact = null,
+      preferredApkIndex = null;
+}
 
 class AddAppPage extends StatefulWidget {
   const AddAppPage({super.key, this.homeFabChromeTick, this.onStateChanged})
@@ -133,6 +187,17 @@ class AddAppPageState extends State<AddAppPage> {
   Map<String, dynamic> additionalSettings = {};
   bool additionalSettingsValid = true;
   bool inferAppIdIfOptional = true;
+
+  /// Whether the "App ID - Custom" box currently holds a value, debounced.
+  ///
+  /// Drives the disabled state of the inference switch: a custom id wins
+  /// outright in [SourceProvider] (it returns before inference is even
+  /// attempted), so leaving the switch live would suggest a choice the user does
+  /// not have. Debounced rather than read straight from the form value so a
+  /// half-typed id does not flip the switch's appearance on every keystroke.
+  bool _customAppIdEntered = false;
+  Timer? _customAppIdDebounce;
+  static const Duration _customAppIdDebounceDelay = Duration(milliseconds: 400);
   List<String> pickedCategories = [];
   SourceProvider sourceProvider = SourceProvider();
   final GlobalKey _urlFieldKey = GlobalKey();
@@ -288,13 +353,13 @@ class AddAppPageState extends State<AddAppPage> {
   // ─── Search mode state ─────────────────────────────────────────────────
   bool searching = false;
   String searchQuery = '';
-  // Cache of past inline-search results. Instance-scoped (so it's discarded
-  // when leaving the page, rather than serving stale results across sessions)
-  // and size-bounded so it can't grow unbounded. The key includes the selected
-  // sources, and searches that prompt for per-source options are never cached
-  // (their results depend on that dialog input — see runInlineSearch).
-  final Map<String, Map<String, MapEntry<String, List<String>>>> _searchCache =
-      {};
+  // Cache past inline-search results for the lifetime of this app process,
+  // including when the Add page is disposed and reopened. It remains bounded
+  // so it cannot grow indefinitely. The key includes the selected sources, and
+  // searches that prompt for per-source options are never cached because their
+  // results depend on that dialog input (see runInlineSearch).
+  static final Map<String, Map<String, MapEntry<String, List<String>>>>
+  _searchCache = {};
   static const int _searchCacheMaxEntries = 50;
   // Searchable-source names the user has selected (null = not yet initialised)
   Set<String>? _searchSelectedStores;
@@ -356,12 +421,32 @@ class AddAppPageState extends State<AddAppPage> {
 
   @override
   void dispose() {
+    _customAppIdDebounce?.cancel();
     _urlFieldController.dispose();
     _urlFieldFocusNode.dispose();
     _searchSomeSourcesController.dispose();
     _searchResultFilterController.dispose();
     _searchSomeSourcesFocusNode.dispose();
     super.dispose();
+  }
+
+  /// Flips [_customAppIdEntered] once the user has paused typing.
+  ///
+  /// Cancels a pending flip when the value returns to its current meaning, so
+  /// typing and then clearing the box again settles without a visible bounce.
+  void _scheduleCustomAppIdCheck(dynamic rawAppId) {
+    final bool entered = rawAppId is String && rawAppId.trim().isNotEmpty;
+    if (entered == _customAppIdEntered) {
+      _customAppIdDebounce?.cancel();
+      return;
+    }
+    _customAppIdDebounce?.cancel();
+    _customAppIdDebounce = Timer(_customAppIdDebounceDelay, () {
+      if (!mounted || entered == _customAppIdEntered) return;
+      setState(() {
+        _customAppIdEntered = entered;
+      });
+    });
   }
 
   /// Lazily initialise the store selection for the active search workflow.
@@ -666,6 +751,9 @@ class AddAppPageState extends State<AddAppPage> {
       style: launcherTextStyle,
       textAlignVertical: TextAlignVertical.center,
       onTap: onTap,
+      onTapOutside: (_) {
+        _urlFieldFocusNode.unfocus();
+      },
       onChanged: (String text) {
         final bool valid = _isUrlInputValid(text);
         changeUserInput(text, valid, false);
@@ -680,6 +768,7 @@ class AddAppPageState extends State<AddAppPage> {
       keyboardType: TextInputType.url,
       textInputAction: TextInputAction.go,
       onSubmitted: (_) {
+        _urlFieldFocusNode.unfocus();
         if (!submitDisabled) {
           hapticSelection();
           onSubmit();
@@ -705,10 +794,13 @@ class AddAppPageState extends State<AddAppPage> {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     final HomePageState? homeState = context
         .findAncestorStateOfType<HomePageState>();
-    final double coveredBottomInset = MediaQuery.viewPaddingOf(context).bottom;
-    final double bottomChromeClearance = settingsProvider.progressiveBlurEnabled
-        ? coveredBottomInset
-        : 0.0;
+    // Not conditional on progressiveBlurEnabled: that setting only decides
+    // whether the navigation pill is drawn with a BackdropFilter, not where it
+    // sits, and the system navigation bar is there either way. Gating on it left
+    // the last row of content under both whenever the blur was off.
+    final double bottomChromeClearance = MediaQuery.viewPaddingOf(
+      context,
+    ).bottom;
 
     final bool useTwoPaneLayout =
         MediaQuery.sizeOf(context).width >= kLargeScreenWidthBreakpoint &&
@@ -1195,10 +1287,13 @@ class AddAppPageState extends State<AddAppPage> {
     // the blurred bottom nav extends underneath it. Place this FAB from the
     // actual screen bottom chrome instead of letting the default endFloat
     // location stack its own 16 dp margin on top of that inherited padding.
-    final double coveredBottomInset = MediaQuery.paddingOf(context).bottom;
-    final double bottomChromeClearance = settingsProvider.progressiveBlurEnabled
-        ? coveredBottomInset
-        : 0.0;
+    // viewPadding, not padding: padding collapses to zero as the keyboard's
+    // viewInsets grow, which would drop the FAB onto the navigation bar mid
+    // animation. See the note in _buildLauncher on why the blur setting has no
+    // say in this.
+    final double bottomChromeClearance = MediaQuery.viewPaddingOf(
+      context,
+    ).bottom;
     final double appVaultFabBottomPadding =
         (bottomChromeClearance > _fabMinimumSafeBottomPadding
             ? bottomChromeClearance
@@ -1276,35 +1371,19 @@ class AddAppPageState extends State<AddAppPage> {
           null;
     }
 
-    Future<_PackageIdDetectionChoice?>
-    getPackageIdDetectionConfirmation() async {
+    Future<_PackageIdDetectionResult?> showDownloadApkToIdentifyAppDialog(
+      App app,
+    ) async {
       final NavigatorState? navigator = globalNavigatorKey.currentState;
       if (navigator == null || !navigator.mounted) return null;
-      return showDialog<_PackageIdDetectionChoice>(
+      return showDialog<_PackageIdDetectionResult>(
         context: navigator.context,
+        barrierDismissible: false,
         builder: (BuildContext dialogContext) {
-          return AlertDialog(
-            title: Text(tr('downloadAPKToIdentifyAppQuestion')),
-            contentPadding: appDialogContentPadding,
-            content: Text(tr('downloadAPKToIdentifyAppExplanation')),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: Text(tr('cancel')),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(
-                  dialogContext,
-                ).pop(_PackageIdDetectionChoice.trackOnly),
-                child: Text(tr('trackOnly')),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(
-                  dialogContext,
-                ).pop(_PackageIdDetectionChoice.download),
-                child: Text(tr('downloadX', args: [tr('app')])),
-              ),
-            ],
+          return _DownloadApkToIdentifyAppDialog(
+            app: app,
+            appsProvider: appsProvider,
+            notificationsProvider: notificationsProvider,
           );
         },
       );
@@ -1314,6 +1393,7 @@ class AddAppPageState extends State<AddAppPage> {
 
     Future<void> addApp({bool resetUserInputAfter = false}) async {
       bool appWasAdded = false;
+      clearInputFocus();
       setState(() {
         gettingAppInfo = true;
       });
@@ -1381,35 +1461,26 @@ class AddAppPageState extends State<AddAppPage> {
           );
           // Only download the APK here if you need to for the package ID
           if (isTempId(app) && app.additionalSettings['trackOnly'] != true) {
-            final packageIdDetectionChoice =
-                await getPackageIdDetectionConfirmation();
-            if (packageIdDetectionChoice == null) {
+            final detectionResult = await showDownloadApkToIdentifyAppDialog(
+              app,
+            );
+            if (detectionResult == null) {
               throw ObtainiumError(tr('cancelled'));
             }
-            if (packageIdDetectionChoice ==
-                _PackageIdDetectionChoice.trackOnly) {
+            if (detectionResult.isTrackOnly) {
               app.additionalSettings['trackOnly'] = true;
-            } else {
-              if (!context.mounted) return;
-              final apkUrl = await appsProvider.confirmAppFileUrl(
-                app,
-                false,
-                allowUserInteraction: true,
-              );
-              if (apkUrl == null) {
+            } else if (detectionResult.error != null) {
+              if (detectionResult.error is CancellationException) {
                 throw ObtainiumError(tr('cancelled'));
               }
-              app = app.copyWith(
-                preferredApkIndex: app.apkUrls
-                    .map((e) => e.value)
-                    .toList()
-                    .indexOf(apkUrl.value),
-              );
-              final downloadedArtifact = await appsProvider.downloadApp(
-                app,
-                allowUserInteraction: true,
-                notificationsProvider: notificationsProvider,
-              );
+              throw detectionResult.error!;
+            } else if (detectionResult.downloadedArtifact != null) {
+              if (detectionResult.preferredApkIndex != null) {
+                app = app.copyWith(
+                  preferredApkIndex: detectionResult.preferredApkIndex!,
+                );
+              }
+              final downloadedArtifact = detectionResult.downloadedArtifact!;
               DownloadedApk? downloadedFile;
               DownloadedDir? downloadedDir;
               if (downloadedArtifact is DownloadedApk) {
@@ -1422,11 +1493,11 @@ class AddAppPageState extends State<AddAppPage> {
               );
             }
           }
-          if (appsProvider.apps.containsKey(app.id)) {
+          if (sameStoreListingIn(appsProvider.apps, app) != null) {
             throw ObtainiumError(tr('appAlreadyAdded'));
           }
           app.additionalSettings['useVersionCodeAsOSVersion'] =
-              app.additionalSettings['versionDetection'] == 'versionCode';
+              app.versionDetectionMode == VersionDetectionMode.versionCode;
           if (app.additionalSettings['trackOnly'] == true) {
             app = app.copyWith(installedVersion: null);
             if (isTempId(app)) {
@@ -1441,9 +1512,7 @@ class AddAppPageState extends State<AddAppPage> {
               );
               if (installedInfo != null) {
                 app = app.copyWith(
-                  installedVersion:
-                      app.additionalSettings['useVersionCodeAsOSVersion'] ==
-                          true
+                  installedVersion: app.usesVersionCodeAsOsVersion
                       ? installedInfo.versionCode.toString()
                       : installedInfo.versionName,
                 );
@@ -1454,13 +1523,15 @@ class AddAppPageState extends State<AddAppPage> {
                     true;
               }
             }
-          } else if (app.additionalSettings['versionDetection'] == 'pseudo' ||
-              app.additionalSettings['versionDetection'] == false) {
+          } else if (!app.usesStandardVersionDetection) {
             app = app.copyWith(installedVersion: app.latestVersion);
           }
           app = app.copyWith(categories: pickedCategories);
+          // Tracking this package from a second store needs its own listing ID
+          // so the two records never overwrite each other.
+          app = appsProvider.withAllocatedListingId(app);
           await appsProvider.saveApps([app], onlyIfExists: false);
-          final liveApp = appsProvider.apps[app.id]?.app;
+          final liveApp = appsProvider.apps[app.listingKey]?.app;
           if (liveApp != null) {
             await appsProvider.assignMatchingFoldersToAppIfNeeded(liveApp);
           }
@@ -1473,13 +1544,15 @@ class AddAppPageState extends State<AddAppPage> {
                 widget._onEmbeddedAddCompleted;
             _resetUrlModeInput();
             onEmbeddedAddCompleted?.call();
-            unawaited(homeState.switchToAppsTabAndOpenApp(app.id));
+            unawaited(homeState.switchToAppsTabAndOpenApp(app.listingKey));
           } else {
             final NavigatorState? navigator = globalNavigatorKey.currentState;
             if (navigator != null && navigator.mounted) {
               unawaited(
                 navigator.push(
-                  heroFriendlyAppPageRoute((_) => AppPage(appId: app!.id)),
+                  heroFriendlyAppPageRoute(
+                    (_) => AppPage(appId: app!.listingKey),
+                  ),
                 ),
               );
             }
@@ -1489,12 +1562,22 @@ class AddAppPageState extends State<AddAppPage> {
         showError(e);
       } finally {
         if (mounted) {
+          final bool returnedToLauncher =
+              appWasAdded &&
+              widget._initialMode == _AddMode.launcher &&
+              _mode != _AddMode.launcher;
           setState(() {
             gettingAppInfo = false;
             if (appWasAdded || resetUserInputAfter) {
               _resetUrlModeInput();
             }
+            if (returnedToLauncher) {
+              _mode = _AddMode.launcher;
+            }
           });
+          if (returnedToLauncher) {
+            _notifyModeChanged();
+          }
         }
       }
     }
@@ -1530,6 +1613,18 @@ class AddAppPageState extends State<AddAppPage> {
           }
         }
       }
+      // Mirrors AdditionalOptionsPage: the per-app VirusTotal switch stays visible
+      // but inert when scanning isn't usable (global toggle off or no validated
+      // key). Not clamped - see the comment there for why the chosen value must
+      // survive global scanning being toggled off and back on.
+      if (!virusTotalScanningAvailable(settingsProvider)) {
+        for (final GeneratedFormItem item in items.expand((row) => row)) {
+          if (item is GeneratedFormSwitch &&
+              item.key == enableVirusTotalScanKey) {
+            item.disabled = true;
+          }
+        }
+      }
       if (pickedSource is GitHub) {
         final bool canVerifyGitHubBuild = (pickedSource as GitHub)
             .canVerifyAttestations(additionalSettings, settingsProvider);
@@ -1552,6 +1647,85 @@ class AddAppPageState extends State<AddAppPage> {
             }
           }
         }
+      }
+      // App-id controls belong to the picked source, so they render in the same
+      // card as its other options rather than in stacked cards of their own.
+      // They live here, in an Add-app-local builder, and NOT in
+      // AppSource.combinedAppSpecificSettingFormItems: AdditionalOptionsPage
+      // renders that same getter to edit an existing app, where inference can
+      // never run (SourceProvider._resolveAppId returns the known id at once),
+      // so they would show up there as dead controls.
+      final bool showInferToggle =
+          pickedSource!.appIdInferIsOptional && !pickedSource!.enforceTrackOnly;
+      final bool showAppIdField =
+          pickedSource!.appIdInferIsOptional || pickedSource!.enforceTrackOnly;
+      final List<List<GeneratedFormItem>> appIdRows = [
+        // Omitted where it would be inert: inference is skipped for track-only
+        // apps, so for e.g. APKMirror this switch used to sit there, on by
+        // default, doing nothing — and labelled 'from source code' for a store
+        // that has none. The manual field below stays, as the only way in.
+        if (showInferToggle)
+          [
+            GeneratedFormSwitch(
+              'inferAppIdIfOptional',
+              label: tr('tryInferAppIdFromCode'),
+              value: inferAppIdIfOptional,
+              // A custom id short-circuits SourceProvider._resolveAppId before
+              // inference runs, so the switch cannot affect the outcome while
+              // the box below has a value. Say so instead of leaving a live
+              // control that does nothing.
+              disabled: _customAppIdEntered,
+              labelTooltip: _customAppIdEntered
+                  ? tr('inferAppIdOverriddenByCustom')
+                  : null,
+            ),
+          ],
+        if (showAppIdField)
+          [
+            GeneratedFormTextField(
+              'appId',
+              label: '${tr('appId')} - ${tr('custom')}',
+              required: false,
+              additionalValidators: [
+                (value) {
+                  if (value == null || value.isEmpty) {
+                    return null;
+                  }
+                  final isValid = RegExp(
+                    r'^([A-Za-z]{1}[A-Za-z\d_]*\.)+[A-Za-z][A-Za-z\d_]*$',
+                  ).hasMatch(value);
+                  if (!isValid) {
+                    return tr('invalidInput');
+                  }
+                  return null;
+                },
+              ],
+            ),
+          ],
+      ];
+      // The source's own options arrive first and headerless, so they join this
+      // section; the first generic header (TRACKING BEHAVIOR) opens the next
+      // card. Only add the header when something actually follows it, otherwise
+      // a source with neither app-id controls nor its own options would title an
+      // empty card. (The pruning in combinedAppSpecificSettingFormItems runs
+      // before this injection, so it cannot cover this case.)
+      final bool leadsWithSourceOwnedRows =
+          items.isNotEmpty &&
+          !(items.first.length == 1 &&
+              items.first.first is GeneratedFormSectionHeader);
+      if (appIdRows.isNotEmpty || leadsWithSourceOwnedRows) {
+        items.insertAll(0, [
+          [
+            GeneratedFormSectionHeader(
+              '__formSectionSource',
+              label: tr(
+                'additionalOptsFor',
+                args: [pickedSource?.name ?? tr('source')],
+              ),
+            ),
+          ],
+          ...appIdRows,
+        ]);
       }
       return attachRegexAssistToItems(
         items,
@@ -1765,50 +1939,9 @@ class AddAppPageState extends State<AddAppPage> {
     );
 
     Widget getAdditionalOptsCol() {
-      final ColorScheme colorScheme = Theme.of(context).colorScheme;
-      final TextStyle? sectionIntroStyle = Theme.of(context)
-          .textTheme
-          .titleSmall
-          ?.copyWith(fontWeight: FontWeight.w600, color: colorScheme.primary);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (pickedSource != null && pickedSource!.appIdInferIsOptional)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: GeneratedForm(
-                key: const Key('inferAppIdIfOptional'),
-                outlinedInputFields: true,
-                prominentSectionHeaders: true,
-                wrapFormSectionsInCards: true,
-                items: [
-                  [
-                    GeneratedFormSwitch(
-                      'inferAppIdIfOptional',
-                      label: tr('tryInferAppIdFromCode'),
-                      value: inferAppIdIfOptional,
-                    ),
-                  ],
-                ],
-                onValueChanges: (values, valid, isBuilding) {
-                  if (!isBuilding) {
-                    setState(() {
-                      inferAppIdIfOptional = values['inferAppIdIfOptional'];
-                    });
-                  }
-                },
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              tr(
-                'additionalOptsFor',
-                args: [pickedSource?.name ?? tr('source')],
-              ),
-              style: sectionIntroStyle,
-            ),
-          ),
           GeneratedForm(
             key: Key(
               '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}',
@@ -1820,7 +1953,18 @@ class AddAppPageState extends State<AddAppPage> {
             onValueChanges: (values, valid, isBuilding) {
               if (!isBuilding) {
                 setState(() {
-                  additionalSettings = values;
+                  // 'inferAppIdIfOptional' is an add-time-only choice passed
+                  // straight to SourceProvider.getApp, not a per-app setting —
+                  // take it out before the rest becomes additionalSettings so it
+                  // is never written to the app's stored JSON.
+                  final Map<String, dynamic> settings =
+                      Map<String, dynamic>.from(values);
+                  if (settings.containsKey('inferAppIdIfOptional')) {
+                    inferAppIdIfOptional =
+                        settings.remove('inferAppIdIfOptional') == true;
+                  }
+                  _scheduleCustomAppIdCheck(settings['appId']);
+                  additionalSettings = settings;
                   additionalSettingsValid = valid;
                 });
               }
@@ -1853,48 +1997,6 @@ class AddAppPageState extends State<AddAppPage> {
               ),
             ),
           ),
-          if (pickedSource != null && pickedSource!.enforceTrackOnly)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: GeneratedForm(
-                key: Key(
-                  '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}-appId',
-                ),
-                outlinedInputFields: true,
-                prominentSectionHeaders: true,
-                wrapFormSectionsInCards: true,
-                items: [
-                  [
-                    GeneratedFormTextField(
-                      'appId',
-                      label: '${tr('appId')} - ${tr('custom')}',
-                      required: false,
-                      additionalValidators: [
-                        (value) {
-                          if (value == null || value.isEmpty) {
-                            return null;
-                          }
-                          final isValid = RegExp(
-                            r'^([A-Za-z]{1}[A-Za-z\d_]*\.)+[A-Za-z][A-Za-z\d_]*$',
-                          ).hasMatch(value);
-                          if (!isValid) {
-                            return tr('invalidInput');
-                          }
-                          return null;
-                        },
-                      ],
-                    ),
-                  ],
-                ],
-                onValueChanges: (values, valid, isBuilding) {
-                  if (!isBuilding) {
-                    setState(() {
-                      additionalSettings['appId'] = values['appId'];
-                    });
-                  }
-                },
-              ),
-            ),
         ],
       );
     }
@@ -1971,29 +2073,24 @@ class AddAppPageState extends State<AddAppPage> {
                             [
                               GeneratedFormTextField(
                                 'url',
-                                label: e.hosts.isNotEmpty
-                                    ? tr('overrideSource')
-                                    : plural('url', 1).substring(2),
-                                autoCompleteOptions: [
-                                  ...(e.hosts.isNotEmpty ? [e.hosts[0]] : []),
-                                  ...appsProvider.apps.values
-                                      .where(
-                                        (a) =>
-                                            sourceProvider
-                                                .getSource(
-                                                  a.app.url,
-                                                  overrideSource:
-                                                      a.app.overrideSource,
-                                                )
-                                                .runtimeType ==
-                                            e.runtimeType,
-                                      )
-                                      .map((a) {
-                                        final uri = Uri.parse(a.app.url);
-                                        return '${uri.origin}${uri.path}';
-                                      }),
-                                ],
-                                value: e.hosts.isNotEmpty ? e.hosts[0] : '',
+                                label: plural('url', 1).substring(2),
+                                autoCompleteOptions:
+                                    searchPromptAutoCompleteOptions(
+                                      trackedAppUrls: appsProvider.apps.values
+                                          .where(
+                                            (a) =>
+                                                sourceProvider
+                                                    .getSource(
+                                                      a.app.url,
+                                                      overrideSource:
+                                                          a.app.overrideSource,
+                                                    )
+                                                    .runtimeType ==
+                                                e.runtimeType,
+                                          )
+                                          .map((a) => a.app.url),
+                                    ),
+                                value: '',
                                 required: true,
                               ),
                             ],
@@ -2257,6 +2354,7 @@ class AddAppPageState extends State<AddAppPage> {
         final subtitle = e.value.value.join(' ').toLowerCase();
         return title.contains(filterQ) || subtitle.contains(filterQ);
       }).toList();
+      final ColorScheme searchResultColorScheme = Theme.of(context).colorScheme;
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2319,69 +2417,111 @@ class AddAppPageState extends State<AddAppPage> {
               });
             }
 
+            void proceedWithSelection() {
+              clearInputFocus();
+              changeUserInput(
+                displayTitle,
+                true,
+                false,
+                updateUrlInput: true,
+                overrideSource: sourceName,
+              );
+              setState(() {
+                _byUrlOpenedFromSearchPick = true;
+                _mode = _AddMode.byUrl;
+              });
+            }
+
+            void openExternalUrl() {
+              if (displayTitle.isNotEmpty) {
+                unawaited(
+                  launchUrlString(
+                    displayTitle,
+                    mode: LaunchMode.externalApplication,
+                  ),
+                );
+              }
+            }
+
             return Card(
               margin: const EdgeInsets.only(bottom: 6),
-              child: ListTile(
-                selected: widget._searchAddsMultipleApps && selected,
-                leading: SizedBox(
-                  width: 32,
-                  child: Center(child: _searchSourceIcon(sourceName)),
-                ),
-                title: subtitleLines.isNotEmpty
-                    ? Text(
-                        subtitleLines.join(' · '),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      )
-                    : Text(
-                        displayTitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                subtitle: subtitleLines.isNotEmpty
-                    ? Text(
-                        displayTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      )
-                    : null,
-                trailing: widget._searchAddsMultipleApps
-                    ? SizedBox.square(
-                        dimension: 28,
-                        child: Checkbox(
-                          value: selected,
-                          materialTapTargetSize:
-                              MaterialTapTargetSize.shrinkWrap,
-                          visualDensity: const VisualDensity(
-                            horizontal: -4,
-                            vertical: -4,
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  ListTile(
+                    selected: widget._searchAddsMultipleApps && selected,
+                    leading: SizedBox(
+                      width: 32,
+                      child: Center(child: _searchSourceIcon(sourceName)),
+                    ),
+                    title: subtitleLines.isNotEmpty
+                        ? Text(
+                            subtitleLines.join(' · '),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        : Text(
+                            displayTitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          onChanged: (value) {
-                            updateResultSelection(value ?? false);
-                          },
+                    subtitle: subtitleLines.isNotEmpty
+                        ? Text(
+                            displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          )
+                        : null,
+                    trailing: widget._searchAddsMultipleApps
+                        ? const SizedBox.square(dimension: 28)
+                        : const SizedBox.square(dimension: 16),
+                    onTap: openExternalUrl,
+                  ),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    width: widget._searchAddsMultipleApps ? 60 : 48,
+                    child: Material(
+                      color: Color.alphaBlend(
+                        searchResultColorScheme.primary.withValues(alpha: 0.05),
+                        searchResultColorScheme.surfaceContainerLow,
+                      ),
+                      child: InkWell(
+                        onTap: widget._searchAddsMultipleApps
+                            ? () {
+                                updateResultSelection(!selected);
+                              }
+                            : proceedWithSelection,
+                        child: Center(
+                          child: widget._searchAddsMultipleApps
+                              ? SizedBox.square(
+                                  dimension: 28,
+                                  child: Checkbox(
+                                    value: selected,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: const VisualDensity(
+                                      horizontal: -4,
+                                      vertical: -4,
+                                    ),
+                                    onChanged: (value) {
+                                      updateResultSelection(value ?? false);
+                                    },
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.arrow_forward_ios_rounded,
+                                  size: 16,
+                                  color:
+                                      searchResultColorScheme.onSurfaceVariant,
+                                ),
                         ),
-                      )
-                    : const Icon(Icons.chevron_right_rounded, size: 20),
-                onTap: () {
-                  if (widget._searchAddsMultipleApps) {
-                    updateResultSelection(!selected);
-                    return;
-                  }
-                  // Fill URL mode with selected result and switch to it
-                  clearInputFocus();
-                  changeUserInput(
-                    displayTitle,
-                    true,
-                    false,
-                    updateUrlInput: true,
-                    overrideSource: sourceName,
-                  );
-                  setState(() {
-                    _byUrlOpenedFromSearchPick = true;
-                    _mode = _AddMode.byUrl;
-                  });
-                },
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
           }),
@@ -2415,11 +2555,143 @@ class AddAppPageState extends State<AddAppPage> {
       );
     }
 
+    final Widget flowScrollView = CustomScrollView(
+      scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
+      key: PageStorageKey<String>(
+        'add-app-flow-${widget._initialMode.name}-'
+        '${widget._searchAddsMultipleApps}-scroll',
+      ),
+      slivers: <Widget>[
+        if (!widget._embeddedDetail)
+          CustomAppBar(
+            title: isInlineLauncherFlow
+                ? tr('addApp')
+                : _mode == _AddMode.byUrl
+                ? tr('addAppUrl')
+                : tr(
+                    widget._searchAddsMultipleApps
+                        ? 'searchSourceAddApps'
+                        : 'searchSourcesAddApp',
+                  ),
+            searchWidget: isInlineLauncherFlow ? null : const SizedBox.shrink(),
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              onPressed: () {
+                unawaited(_requestFlowPop());
+              },
+            ),
+            matchGradientBackground: settingsProvider.useGradientBackground,
+          ),
+        SliverSafeArea(
+          top: widget._embeddedDetail,
+          bottom: false,
+          sliver: SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                isInlineLauncherFlow ? 16 : 12,
+                8,
+                isInlineLauncherFlow ? 16 : 12,
+                16,
+              ),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: isInlineLauncherFlow ? 720 : 840,
+                  ),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    layoutBuilder: (currentChild, previousChildren) {
+                      return Stack(
+                        alignment: Alignment.topCenter,
+                        children: <Widget>[...previousChildren, ?currentChild],
+                      );
+                    },
+                    child: KeyedSubtree(
+                      key: ValueKey(_mode),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_mode == _AddMode.byUrl) ...[
+                            const SizedBox(height: 8),
+                            _buildAppSourceUrlField(
+                              context: context,
+                              submitDisabled: urlAddDisabled(),
+                              matchLauncherButton: isInlineLauncherFlow,
+                              onSubmit: () {
+                                unawaited(addApp());
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            if (pickedSource != null)
+                              getHTMLSourceOverrideDropdown(),
+                            if (pickedSource != null)
+                              FutureBuilder(
+                                builder: (ctx, val) {
+                                  return val.data != null &&
+                                          val.data!.isNotEmpty
+                                      ? Text(
+                                          val.data!,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
+                                        )
+                                      : const SizedBox();
+                                },
+                                future: pickedSource?.getSourceNote(),
+                              ),
+                            if (pickedSource != null) getAdditionalOptsCol(),
+                          ],
+                          if (_mode == _AddMode.search) ...[
+                            const SizedBox(height: 8),
+                            getSearchBarRow(),
+                            const SizedBox(height: 12),
+                            Text(
+                              widget._searchAddsMultipleApps
+                                  ? tr(
+                                      'selectX',
+                                      args: [tr('source').toLowerCase()],
+                                    )
+                                  : tr('storesToSearch'),
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(height: 6),
+                            getSearchStoreChips(),
+                            getSearchResultsList(),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Reserved unconditionally, and sized for the save FAB as well as
+        // the navigation bar: the FAB is an overlay in the Stack below, so
+        // nothing else keeps the last card out from under it. Reserved
+        // even in the modes that show no FAB, so switching modes or
+        // starting to type doesn't shift the content that is already on
+        // screen.
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: appVaultFabBottomPadding + _bottomActionFabHeight,
+          ),
+        ),
+      ],
+    );
+
     final Widget flowScaffold = Scaffold(
       // Don't let the keyboard resize the body (see the apps-list Scaffold): the
       // per-frame resize repaint forces the app bar's progressive-blur
       // BackdropFilter to re-rasterize every frame and stutters the keyboard
-      // slide. The URL / search field is at the top, so it stays visible.
+      // slide. Fields still get out from under the keyboard — the scroll view
+      // alone takes the inset, in the Builder below.
       resizeToAvoidBottomInset: false,
       backgroundColor:
           widget._embeddedDetail && settingsProvider.useGradientBackground
@@ -2429,137 +2701,27 @@ class AddAppPageState extends State<AddAppPage> {
         fit: StackFit.expand,
         children: [
           if (settingsProvider.useGradientBackground) buildGradientBackground(),
-          CustomScrollView(
-            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
-            key: PageStorageKey<String>(
-              'add-app-flow-${widget._initialMode.name}-'
-              '${widget._searchAddsMultipleApps}-scroll',
-            ),
-            slivers: <Widget>[
-              if (!widget._embeddedDetail)
-                CustomAppBar(
-                  title: isInlineLauncherFlow
-                      ? tr('addApp')
-                      : _mode == _AddMode.byUrl
-                      ? tr('addAppUrl')
-                      : tr(
-                          widget._searchAddsMultipleApps
-                              ? 'searchSourceAddApps'
-                              : 'searchSourcesAddApp',
-                        ),
-                  searchWidget: isInlineLauncherFlow
-                      ? null
-                      : const SizedBox.shrink(),
-                  leading: IconButton(
-                    icon: const Icon(Icons.arrow_back_rounded),
-                    onPressed: () {
-                      unawaited(_requestFlowPop());
-                    },
-                  ),
-                  matchGradientBackground:
-                      settingsProvider.useGradientBackground,
-                ),
-              SliverSafeArea(
-                top: widget._embeddedDetail,
-                bottom: false,
-                sliver: SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      isInlineLauncherFlow ? 16 : 12,
-                      8,
-                      isInlineLauncherFlow ? 16 : 12,
-                      16,
-                    ),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: isInlineLauncherFlow ? 720 : 840,
-                        ),
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 180),
-                          layoutBuilder: (currentChild, previousChildren) {
-                            return Stack(
-                              alignment: Alignment.topCenter,
-                              children: <Widget>[
-                                ...previousChildren,
-                                ?currentChild,
-                              ],
-                            );
-                          },
-                          child: KeyedSubtree(
-                            key: ValueKey(_mode),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (_mode == _AddMode.byUrl) ...[
-                                  const SizedBox(height: 8),
-                                  _buildAppSourceUrlField(
-                                    context: context,
-                                    submitDisabled: urlAddDisabled(),
-                                    matchLauncherButton: isInlineLauncherFlow,
-                                    onSubmit: () {
-                                      unawaited(addApp());
-                                    },
-                                  ),
-                                  const SizedBox(height: 16),
-                                  if (pickedSource != null)
-                                    getHTMLSourceOverrideDropdown(),
-                                  if (pickedSource != null)
-                                    FutureBuilder(
-                                      builder: (ctx, val) {
-                                        return val.data != null &&
-                                                val.data!.isNotEmpty
-                                            ? Text(
-                                                val.data!,
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.bodySmall,
-                                              )
-                                            : const SizedBox();
-                                      },
-                                      future: pickedSource?.getSourceNote(),
-                                    ),
-                                  if (pickedSource != null)
-                                    getAdditionalOptsCol(),
-                                ],
-                                if (_mode == _AddMode.search) ...[
-                                  const SizedBox(height: 8),
-                                  getSearchBarRow(),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    widget._searchAddsMultipleApps
-                                        ? tr(
-                                            'selectX',
-                                            args: [tr('source').toLowerCase()],
-                                          )
-                                        : tr('storesToSearch'),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelMedium
-                                        ?.copyWith(
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.onSurfaceVariant,
-                                        ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  getSearchStoreChips(),
-                                  getSearchResultsList(),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+          // The Scaffold deliberately doesn't resize for the keyboard (see
+          // above), but the *scroll viewport* has to, otherwise a field tapped
+          // further down the form never scrolls into view: EditableText asks its
+          // enclosing viewport to reveal the caret, and a viewport that still
+          // extends behind the keyboard reports the field as already visible, so
+          // nothing moves. Padding only the scroll view keeps the app bar's
+          // blurred rect and the FAB overlay out of the per-frame layout, which
+          // is what the Scaffold-level opt-out was protecting.
+          //
+          // Scoped to a Builder so the MediaQuery.viewInsets dependency lands
+          // here rather than on this page's own build, which would rebuild the
+          // whole (long, expensive) add-app form on every keyboard animation
+          // frame. flowScrollView is the same widget instance each time, so only
+          // the viewport relayouts.
+          Builder(
+            builder: (BuildContext context) => Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.viewInsetsOf(context).bottom,
               ),
-              if (settingsProvider.progressiveBlurEnabled)
-                SliverToBoxAdapter(
-                  child: SizedBox(height: bottomChromeClearance),
-                ),
-            ],
+              child: flowScrollView,
+            ),
           ),
           buildBottomActionFabOverlay(),
         ],
@@ -2587,5 +2749,179 @@ class AddAppPageState extends State<AddAppPage> {
     final String? assetPath = storeSourceAssetPathForClassName(sourceName);
     if (assetPath == null) return const Icon(Icons.store_rounded, size: 20);
     return StoreSourceIconImage(assetPath: assetPath, size: 20);
+  }
+}
+
+class _DownloadApkToIdentifyAppDialog extends StatefulWidget {
+  final App app;
+  final AppsProvider appsProvider;
+  final NotificationsProvider notificationsProvider;
+
+  const _DownloadApkToIdentifyAppDialog({
+    required this.app,
+    required this.appsProvider,
+    required this.notificationsProvider,
+  });
+
+  @override
+  State<_DownloadApkToIdentifyAppDialog> createState() =>
+      _DownloadApkToIdentifyAppDialogState();
+}
+
+class _DownloadApkToIdentifyAppDialogState
+    extends State<_DownloadApkToIdentifyAppDialog> {
+  bool _isDownloading = false;
+  bool _isCancelling = false;
+  double? _downloadProgress;
+  int? _downloadReceivedBytes;
+  int? _downloadTotalBytes;
+  late App _currentApp;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentApp = widget.app;
+  }
+
+  Future<void> _startDownload() async {
+    if (_isDownloading) return;
+    // Flip this synchronously before the first await below, so a second tap
+    // on "Download" while `confirmAppFileUrl` is still pending (e.g. a single
+    // APK URL, which shows no intermediate picker) is rejected by the guard
+    // above instead of racing a second concurrent downloadApp() call.
+    setState(() {
+      _isDownloading = true;
+    });
+    try {
+      final apkUrl = await widget.appsProvider.confirmAppFileUrl(
+        _currentApp,
+        false,
+        allowUserInteraction: true,
+      );
+      if (apkUrl == null) {
+        if (mounted) {
+          setState(() {
+            _isDownloading = false;
+            _isCancelling = false;
+          });
+        }
+        return;
+      }
+      if (!mounted) return;
+      final selectedApkIndex = _currentApp.apkUrls
+          .map((e) => e.value)
+          .toList()
+          .indexOf(apkUrl.value);
+      if (selectedApkIndex >= 0) {
+        _currentApp = _currentApp.copyWith(preferredApkIndex: selectedApkIndex);
+      }
+
+      final downloadedArtifact = await widget.appsProvider.downloadApp(
+        _currentApp,
+        allowUserInteraction: true,
+        notificationsProvider: widget.notificationsProvider,
+        onProgress: (progress, received, total) {
+          if (mounted) {
+            setState(() {
+              _downloadProgress = progress;
+              _downloadReceivedBytes = received;
+              _downloadTotalBytes = total;
+            });
+          }
+        },
+      );
+      if (mounted) {
+        Navigator.of(context).pop(
+          _PackageIdDetectionResult.downloaded(
+            downloadedArtifact,
+            preferredApkIndex: _currentApp.preferredApkIndex,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(_PackageIdDetectionResult.error(e));
+      }
+    }
+  }
+
+  void _cancel() {
+    if (_isDownloading) {
+      setState(() {
+        _isCancelling = true;
+      });
+      widget.appsProvider.cancelDownload(_currentApp.id);
+    } else {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final String? downloadSizeText = formatDownloadSize(
+      _downloadReceivedBytes,
+      _downloadTotalBytes,
+    );
+
+    return PopScope(
+      canPop: !_isDownloading,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isDownloading) {
+          _cancel();
+        }
+      },
+      child: AlertDialog(
+        title: Text(tr('downloadAPKToIdentifyAppQuestion')),
+        contentPadding: appDialogContentPadding,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(tr('downloadAPKToIdentifyAppExplanation')),
+            if (_isDownloading) ...[
+              const SizedBox(height: 16),
+              LinearRipplingWavyProgressIndicator(
+                value: _downloadProgress != null
+                    ? (_downloadProgress! / 100).clamp(0.0, 1.0)
+                    : null,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    _downloadProgress != null
+                        ? '${_downloadProgress!.toInt()}%'
+                        : tr('pleaseWait'),
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  if (downloadSizeText != null)
+                    Text(downloadSizeText, style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: _isCancelling ? null : _cancel,
+            child: Text(tr('cancel')),
+          ),
+          if (!_isDownloading) ...[
+            TextButton(
+              onPressed: () => Navigator.of(
+                context,
+              ).pop(const _PackageIdDetectionResult.trackOnly()),
+              child: Text(tr('trackOnly')),
+            ),
+            FilledButton(
+              onPressed: _startDownload,
+              child: Text(tr('downloadX', args: [tr('app')])),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }

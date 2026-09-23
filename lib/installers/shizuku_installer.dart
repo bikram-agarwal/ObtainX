@@ -1,12 +1,14 @@
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/material.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
+import 'package:obtainium/installers/shizuku_plugin.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 
-/// Installs via the Shizuku/Dhizuku/Sui binder API for elevated installs with
+/// Installs via the Shizuku/Sui binder API for elevated installs with
 /// no user-facing permission dialog. Supports silent installs.
 class ShizukuInstaller extends Installer {
   ShizukuInstaller(super.settingsProvider);
@@ -18,20 +20,25 @@ class ShizukuInstaller extends Installer {
   Future<bool> canInstallSilently(App app) async => true;
 
   @override
-  Future<bool> checkPermission() async =>
-      (await ShizukuApkInstaller().checkPermission())?.startsWith('granted') ??
-      false;
+  Future<bool> checkPermission() async => isShizukuPluginPermissionGranted(
+    InstallerMode.shizuku,
+    await checkShizukuPluginPermission(InstallerMode.shizuku),
+  );
 
   @override
-  Future<void> ensurePermission() async {
-    switch ((await ShizukuApkInstaller().checkPermission())) {
+  Future<void> ensurePermission({ThemeData? toastTheme}) async {
+    final String? res = await checkShizukuPluginPermission(
+      InstallerMode.shizuku,
+    );
+    if (isShizukuPluginPermissionGranted(InstallerMode.shizuku, res)) return;
+    switch (res) {
       case 'services_not_found':
         throw ObtainiumError(tr('shizukuBinderNotFound'));
       case 'old_shizuku':
         throw ObtainiumError(tr('shizukuOld'));
       case 'old_android_with_adb':
         throw ObtainiumError(tr('shizukuOldAndroidWithADB'));
-      case 'denied':
+      default:
         throw ObtainiumError(tr('cancelled'));
     }
   }
@@ -47,18 +54,13 @@ class ShizukuInstaller extends Installer {
         ? 'com.android.vending'
         : '';
     final uris = apkFilePaths.map((p) => File(p).uri.toString()).toList();
-    int? code;
-    if (uris.length > 1) {
-      code = await ShizukuApkInstaller().installAABSplits(
-        uris,
-        fakeInstallSource,
-      );
-    } else {
-      code = await ShizukuApkInstaller().installAPK(
-        uris.first,
-        fakeInstallSource,
-      );
-    }
+    final ShizukuApkInstaller shizukuInstaller = ShizukuApkInstaller();
+    final int? code = await runExclusiveShizukuPluginCall(() async {
+      await shizukuInstaller.setInstallerMode(InstallerMode.shizuku);
+      return uris.length > 1
+          ? shizukuInstaller.installAABSplits(uris, fakeInstallSource)
+          : shizukuInstaller.installAPK(uris.first, fakeInstallSource);
+    });
     return InstallResult.fromPlatformCode(code);
   }
 }

@@ -11,17 +11,20 @@ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
+import 'package:obtainium/components/performance_recording_control.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
+import 'package:obtainium/components/ui_widgets.dart'
+    show AppSwitch, AppSwitchListTile;
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/installers/shizuku_plugin.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
@@ -31,17 +34,19 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/diagnostic_snapshot.dart';
+import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/theme.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
-import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
+import 'package:shizuku_apk_installer/shizuku_apk_installer.dart' as shizuku;
 import 'package:url_launcher/url_launcher_string.dart';
 
 IconData _swipeActionIcon(SwipeAction action) => switch (action) {
@@ -60,7 +65,7 @@ String get _aboutObtainXPrivacyUrl => tr('aboutObtainXPrivacyUrl');
 String get _aboutObtainXTermsUrl => tr('aboutObtainXTermsUrl');
 String get _aboutRememberUrl => tr('aboutRememberUrl');
 String get _aboutFilePipeUrl => tr('aboutFilePipeUrl');
-const String _aboutAuthorUrl = 'https://github.com/bikram-agarwal';
+const String _aboutAuthorUrl = 'https://bikram-agarwal.github.io/';
 const String _aboutWikiUrl = 'https://wiki.obtainium.imranr.dev/';
 
 class SettingsPage extends StatefulWidget {
@@ -468,7 +473,7 @@ class SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 IconButton(
-                  onPressed: () => _openLogsDialog(context),
+                  onPressed: () => _openLogsSheet(context),
                   icon: const Icon(Icons.bug_report_outlined),
                   tooltip: tr('appLogs'),
                   color: cs.primary,
@@ -699,6 +704,10 @@ class SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                     child: Scaffold(
+                      // Keep IME animation from relaying out the entire settings
+                      // master pane and re-rasterizing its blurred app bar every
+                      // frame. The keyboard overlays the scroll view instead.
+                      resizeToAvoidBottomInset: false,
                       backgroundColor: sp.useGradientBackground
                           ? Colors.transparent
                           : cs.surface,
@@ -739,14 +748,13 @@ class SettingsPageState extends State<SettingsPage> {
                                     ),
                                   ),
                                 ),
-                                if (sp.progressiveBlurEnabled)
-                                  SliverToBoxAdapter(
-                                    child: SizedBox(
-                                      height: MediaQuery.paddingOf(
-                                        context,
-                                      ).bottom,
-                                    ),
+                                SliverToBoxAdapter(
+                                  child: SizedBox(
+                                    height:
+                                        MediaQuery.paddingOf(context).bottom +
+                                        24.0,
                                   ),
+                                ),
                               ],
                             ),
                           ),
@@ -763,6 +771,9 @@ class SettingsPageState extends State<SettingsPage> {
                 Expanded(
                   flex: 4,
                   child: Scaffold(
+                    // The detail pane contains text fields but does not need its
+                    // full widget tree resized on every keyboard animation frame.
+                    resizeToAvoidBottomInset: false,
                     backgroundColor: sp.useGradientBackground
                         ? Colors.transparent
                         : cs.surface,
@@ -796,12 +807,13 @@ class SettingsPageState extends State<SettingsPage> {
                                 ),
                               ),
                             ),
-                            if (sp.progressiveBlurEnabled)
-                              SliverToBoxAdapter(
-                                child: SizedBox(
-                                  height: MediaQuery.paddingOf(context).bottom,
-                                ),
+                            SliverToBoxAdapter(
+                              child: SizedBox(
+                                height:
+                                    MediaQuery.paddingOf(context).bottom +
+                                    (!isLargeScreen ? 88.0 : 24.0),
                               ),
+                            ),
                           ],
                         ),
                       ],
@@ -822,6 +834,11 @@ class SettingsPageState extends State<SettingsPage> {
         ),
       ),
       child: Scaffold(
+        // Settings is an eager, card-heavy scroll surface. Resizing it for every
+        // intermediate IME inset repeatedly lays out all sections and repaints
+        // the progressive-blur app bar, which makes keyboard entry visibly
+        // advance in stages. Let the keyboard overlay the scroll view instead.
+        resizeToAvoidBottomInset: false,
         backgroundColor: cs.surface,
         body: Stack(
           fit: StackFit.expand,
@@ -976,12 +993,13 @@ class SettingsPageState extends State<SettingsPage> {
                           ),
                   ),
                 ),
-                if (sp.progressiveBlurEnabled)
-                  SliverToBoxAdapter(
-                    child: SizedBox(
-                      height: MediaQuery.paddingOf(context).bottom,
-                    ),
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height:
+                        MediaQuery.paddingOf(context).bottom +
+                        (!isLargeScreen ? 88.0 : 24.0),
                   ),
+                ),
               ],
             ),
           ],
@@ -1086,11 +1104,14 @@ class _UpdatesSection extends StatelessWidget {
     final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
     final bool showBgControls =
         (sp.updateInterval > 0) &&
-        (((snapshot.data?.version.sdkInt ?? 0) >= 30) || sp.useShizuku);
+        (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
+            sp.useShizuku ||
+            sp.useDhizuku);
     if (showBgControls) {
       rows
         ..add(
           ListTile(
+            key: const ValueKey<String>('foreground_service_update_checking'),
             title: Text(tr('foregroundServiceForUpdateChecking')),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1099,7 +1120,7 @@ class _UpdatesSection extends StatelessWidget {
                   message: tr('foregroundServiceReliabilityNote'),
                   padding: EdgeInsets.zero,
                 ),
-                Switch(
+                AppSwitch(
                   value: sp.useFGService,
                   onChanged: (bool value) => sp.useFGService = value,
                 ),
@@ -1110,6 +1131,7 @@ class _UpdatesSection extends StatelessWidget {
         )
         ..add(
           ListTile(
+            key: const ValueKey<String>('background_update_installation'),
             title: Text(tr('enableBackgroundUpdates')),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1119,7 +1141,7 @@ class _UpdatesSection extends StatelessWidget {
                       '${tr('backgroundUpdateReqsExplanation')}\n\n${tr('backgroundUpdateLimitsExplanation')}',
                   padding: EdgeInsets.zero,
                 ),
-                Switch(
+                AppSwitch(
                   value: sp.enableBackgroundUpdates,
                   onChanged: (bool value) => sp.enableBackgroundUpdates = value,
                 ),
@@ -1132,14 +1154,16 @@ class _UpdatesSection extends StatelessWidget {
       if (sp.enableBackgroundUpdates) {
         rows
           ..add(
-            SwitchListTile(
+            AppSwitchListTile(
+              key: const ValueKey<String>('background_install_wifi_only'),
               title: Text(tr('bgUpdatesOnWiFiOnly')),
               value: sp.bgUpdatesOnWiFiOnly,
               onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
             ),
           )
           ..add(
-            SwitchListTile(
+            AppSwitchListTile(
+              key: const ValueKey<String>('background_install_charging_only'),
               title: Text(tr('bgUpdatesWhileChargingOnly')),
               value: sp.bgUpdatesWhileChargingOnly,
               onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
@@ -1148,32 +1172,38 @@ class _UpdatesSection extends StatelessWidget {
       }
     }
     rows.addAll(<Widget>[
-      SwitchListTile(
+      AppSwitchListTile(
+        key: const ValueKey<String>('check_updates_on_start'),
         title: Text(tr('checkOnStart')),
         value: sp.checkOnStart,
         onChanged: (bool value) => sp.checkOnStart = value,
       ),
-      SwitchListTile(
+      AppSwitchListTile(
+        key: const ValueKey<String>('check_update_on_detail_page'),
         title: Text(tr('checkUpdateOnDetailPage')),
         value: sp.checkUpdateOnDetailPage,
         onChanged: (bool value) => sp.checkUpdateOnDetailPage = value,
       ),
-      SwitchListTile(
+      AppSwitchListTile(
+        key: const ValueKey<String>('include_prereleases_by_default'),
         title: Text(tr('includePrereleasesByDefault')),
         value: sp.includePrereleasesByDefault,
         onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
-      SwitchListTile(
+      AppSwitchListTile(
+        key: const ValueKey<String>('only_check_installed_or_track_only_apps'),
         title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
         value: sp.onlyCheckInstalledOrTrackOnlyApps,
         onChanged: (bool value) => sp.onlyCheckInstalledOrTrackOnlyApps = value,
       ),
-      SwitchListTile(
+      AppSwitchListTile(
+        key: const ValueKey<String>('remove_on_external_uninstall'),
         title: Text(tr('removeOnExternalUninstall')),
         value: sp.removeOnExternalUninstall,
         onChanged: (bool value) => sp.removeOnExternalUninstall = value,
       ),
-      SwitchListTile(
+      AppSwitchListTile(
+        key: const ValueKey<String>('parallel_downloads'),
         title: Text(tr('parallelDownloads')),
         value: sp.parallelDownloads,
         onChanged: (bool value) => sp.parallelDownloads = value,
@@ -1419,6 +1449,12 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   late final TextEditingController _githubPatController;
   late final TextEditingController _hubProxyController;
   late final TextEditingController _gitlabPatController;
+  // Stored pref values as of the last sync, so [didChangeDependencies] can tell
+  // an external write (a backup import rewrites these keys with no user
+  // involvement) apart from the user's own unsaved typing.
+  String _storedGithubPat = '';
+  String _storedHubProxy = '';
+  String _storedGitlabPat = '';
   bool _githubChecking = false;
   bool _gitlabChecking = false;
 
@@ -1438,9 +1474,10 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
 
   void discardChanges() {
     final SettingsProvider sp = context.read<SettingsProvider>();
-    _githubPatController.text =
-        sp.getSettingString(GitHub.githubCredsKey) ?? '';
-    _gitlabPatController.text = sp.getSettingString('gitlab-creds') ?? '';
+    _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _githubPatController.text = _storedGithubPat;
+    _gitlabPatController.text = _storedGitlabPat;
     setState(() {});
   }
 
@@ -1448,15 +1485,52 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   void initState() {
     super.initState();
     final SettingsProvider sp = context.read<SettingsProvider>();
-    _githubPatController = TextEditingController(
-      text: sp.getSettingString(GitHub.githubCredsKey) ?? '',
-    );
-    _hubProxyController = TextEditingController(
-      text: sp.getSettingString(GitHub.githubReqPrefixKey) ?? '',
-    );
-    _gitlabPatController = TextEditingController(
-      text: sp.getSettingString('gitlab-creds') ?? '',
-    );
+    _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    _storedHubProxy = sp.getSettingString(GitHub.githubReqPrefixKey) ?? '';
+    _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _githubPatController = TextEditingController(text: _storedGithubPat);
+    _hubProxyController = TextEditingController(text: _storedHubProxy);
+    _gitlabPatController = TextEditingController(text: _storedGitlabPat);
+  }
+
+  // Home keeps every tab mounted, so this section - and the controllers seeded
+  // once in initState - survives an import run on the Import/Export tab.
+  // Nothing else re-reads the prefs, so the fields kept showing the pre-import
+  // text and the dirty getters above read that stale text as unsaved user
+  // input, raising the discard-changes dialog over an edit nobody made.
+  //
+  // Both guards matter: the stored-value comparison limits re-seeding to
+  // external writes so genuine unsaved typing isn't wiped by an unrelated
+  // settings notification, and the text comparison skips a write the field
+  // already reflects (the hub proxy saves on every keystroke, and assigning
+  // `text` would drop the cursor to the end mid-edit).
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String storedGithubPat =
+        sp.getSettingString(GitHub.githubCredsKey) ?? '';
+    if (storedGithubPat != _storedGithubPat) {
+      _storedGithubPat = storedGithubPat;
+      if (_githubPatController.text != storedGithubPat) {
+        _githubPatController.text = storedGithubPat;
+      }
+    }
+    final String storedHubProxy =
+        sp.getSettingString(GitHub.githubReqPrefixKey) ?? '';
+    if (storedHubProxy != _storedHubProxy) {
+      _storedHubProxy = storedHubProxy;
+      if (_hubProxyController.text != storedHubProxy) {
+        _hubProxyController.text = storedHubProxy;
+      }
+    }
+    final String storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    if (storedGitlabPat != _storedGitlabPat) {
+      _storedGitlabPat = storedGitlabPat;
+      if (_gitlabPatController.text != storedGitlabPat) {
+        _gitlabPatController.text = storedGitlabPat;
+      }
+    }
   }
 
   @override
@@ -1591,10 +1665,9 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                   ScaffoldMessenger.of(
                                                     context,
                                                   ).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(
-                                                        tr('dismiss'),
-                                                      ),
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('dismiss'),
                                                     ),
                                                   );
                                                   setState(() {});
@@ -1623,20 +1696,20 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                   ScaffoldMessenger.of(
                                                     context,
                                                   ).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(
-                                                        tr(
-                                                          'githubPATValidated',
-                                                        ),
-                                                      ),
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('githubPATValidated'),
+                                                      type: ToastType.success,
                                                     ),
                                                   );
                                                 } else {
                                                   ScaffoldMessenger.of(
                                                     context,
                                                   ).showSnackBar(
-                                                    SnackBar(
-                                                      content: Text(error),
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
                                                     ),
                                                   );
                                                 }
@@ -1682,14 +1755,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
             },
           ),
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('GHReqPrefixUseToken')),
           value: sp.getSettingBool(GitHub.githubReqPrefixUseTokenKey) ?? false,
           onChanged: (val) {
             sp.setSettingBool(GitHub.githubReqPrefixUseTokenKey, val);
           },
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('repoRenamedCheck')),
           value: sp.getSettingBool('checkRepoRename') ?? false,
           onChanged: (val) {
@@ -1784,8 +1857,9 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(tr('dismiss')),
+                                                buildAppSnackBar(
+                                                  context,
+                                                  tr('dismiss'),
                                                 ),
                                               );
                                               setState(() {});
@@ -1814,17 +1888,21 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    tr('gitlabPATValidated'),
-                                                  ),
+                                                buildAppSnackBar(
+                                                  context,
+                                                  tr('gitlabPATValidated'),
+                                                  type: ToastType.success,
                                                 ),
                                               );
                                             } else {
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
-                                                SnackBar(content: Text(error)),
+                                                buildAppSnackBar(
+                                                  context,
+                                                  error,
+                                                  type: ToastType.error,
+                                                ),
                                               );
                                             }
                                           }
@@ -1868,6 +1946,7 @@ class _AppearanceSection extends StatelessWidget {
     sp.appUiScale,
     sp.cardCornerScale,
     sp.showAppWebpage,
+    sp.updateButtonsAtTopOfAppPage,
     sp.highlightTouchTargets,
     sp.alwaysUsePhoneLayout,
     sp.customFontPath,
@@ -1894,17 +1973,22 @@ class _AppearanceSection extends StatelessWidget {
         _CustomFontTile(sp: sp),
         const _UiScaleSlider(),
         const _CardCornerScaleSlider(),
-        SwitchListTile(
+        AppSwitchListTile(
+          title: Text(tr('updateButtonsAtTopOfAppPage')),
+          value: sp.updateButtonsAtTopOfAppPage,
+          onChanged: (value) => sp.updateButtonsAtTopOfAppPage = value,
+        ),
+        AppSwitchListTile(
           title: Text(tr('alwaysUsePhoneLayout')),
           value: sp.alwaysUsePhoneLayout,
           onChanged: (value) => sp.alwaysUsePhoneLayout = value,
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('showWebInAppView')),
           value: sp.showAppWebpage,
           onChanged: (value) => sp.showAppWebpage = value,
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('highlightTouchTargets')),
           value: sp.highlightTouchTargets,
           onChanged: (value) => sp.highlightTouchTargets = value,
@@ -2024,12 +2108,12 @@ class _CustomFontTile extends StatelessWidget {
       );
       if (proceed != true) return;
 
-      final FilePickerResult? result = await FilePicker.pickFiles(
+      final PlatformFile? picked = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['ttf', 'otf'],
       );
-      if (result == null || result.files.single.path == null) return;
-      final String pickedPath = result.files.single.path!;
+      if (picked == null || picked.path == null) return;
+      final String pickedPath = picked.path!;
 
       final Directory appDocDir = await getApplicationDocumentsDirectory();
       final Directory fontsDir = Directory('${appDocDir.path}/fonts');
@@ -2059,8 +2143,10 @@ class _CustomFontTile extends StatelessWidget {
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(tr('settingsCustomFontSuccess')),
+          buildAppSnackBar(
+            context,
+            tr('settingsCustomFontSuccess'),
+            type: ToastType.success,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -2068,9 +2154,10 @@ class _CustomFontTile extends StatelessWidget {
     } catch (_) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(tr('settingsCustomFontErrorInvalid')),
-            duration: const Duration(seconds: 4),
+          buildAppSnackBar(
+            context,
+            tr('settingsCustomFontErrorInvalid'),
+            type: ToastType.error,
           ),
         );
       }
@@ -2095,8 +2182,10 @@ class _CustomFontTile extends StatelessWidget {
                 sp.customFontName = null;
                 sp.customFontPath = null;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(tr('settingsCustomFontResetSuccess')),
+                  buildAppSnackBar(
+                    context,
+                    tr('settingsCustomFontResetSuccess'),
+                    type: ToastType.success,
                     duration: const Duration(seconds: 2),
                   ),
                 );
@@ -2412,24 +2501,24 @@ class _WarningsSection extends StatelessWidget {
     return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('showBatteryOptimizationPrompt')),
           // Bound to the existing hideBatteryOptimizationWarning (inverted) so the
           // launch dialog's "don't show again" and this toggle stay in sync.
           value: !sp.hideBatteryOptimizationWarning,
           onChanged: (value) => sp.hideBatteryOptimizationWarning = !value,
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('showTrackOnlyWarnings')),
           value: !sp.hideTrackOnlyWarning,
           onChanged: (value) => sp.hideTrackOnlyWarning = !value,
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('showAPKOriginWarnings')),
           value: !sp.hideAPKOriginWarning,
           onChanged: (value) => sp.hideAPKOriginWarning = !value,
         ),
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('showAppDowngradeError')),
           value: sp.showAppDowngradeError,
           onChanged: (value) => sp.showAppDowngradeError = value,
@@ -2483,7 +2572,7 @@ class _InteractionSection extends StatelessWidget {
     return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
-        SwitchListTile(
+        AppSwitchListTile(
           title: Text(tr('tactileFeedbackEnabled')),
           value: sp.tactileFeedbackEnabled,
           onChanged: (value) => sp.tactileFeedbackEnabled = value,
@@ -2542,6 +2631,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
   bool _letMeDowngradeInstalled = false;
   bool _loading = true;
   late final TextEditingController _virusTotalApiKeyController;
+  // Stored pref value as of the last sync - see [didChangeDependencies].
+  String _storedVirusTotalApiKey = '';
   bool _virusTotalChecking = false;
 
   @override
@@ -2549,13 +2640,35 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkInstalledApps();
+    _storedVirusTotalApiKey =
+        context.read<SettingsProvider>().getSettingString(
+          virusTotalApiKeyKey,
+        ) ??
+        '';
     _virusTotalApiKeyController = TextEditingController(
-      text:
-          context.read<SettingsProvider>().getSettingString(
-            virusTotalApiKeyKey,
-          ) ??
-          '',
+      text: _storedVirusTotalApiKey,
     );
+  }
+
+  // Re-seed the field when the stored key is rewritten from outside this page
+  // (a backup import), which the controller alone would never notice. See the
+  // matching override in _SourceSpecificSectionState for why each guard is
+  // needed; the API key and its fingerprint are part of
+  // [_integrationsSettingsHash] so an import actually reaches this callback.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String storedVirusTotalApiKey =
+        context.read<SettingsProvider>().getSettingString(
+          virusTotalApiKeyKey,
+        ) ??
+        '';
+    if (storedVirusTotalApiKey != _storedVirusTotalApiKey) {
+      _storedVirusTotalApiKey = storedVirusTotalApiKey;
+      if (_virusTotalApiKeyController.text != storedVirusTotalApiKey) {
+        _virusTotalApiKeyController.text = storedVirusTotalApiKey;
+      }
+    }
   }
 
   @override
@@ -2574,8 +2687,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
 
   void discardChanges() {
     final SettingsProvider sp = context.read<SettingsProvider>();
-    _virusTotalApiKeyController.text =
-        sp.getSettingString(virusTotalApiKeyKey) ?? '';
+    _storedVirusTotalApiKey = sp.getSettingString(virusTotalApiKeyKey) ?? '';
+    _virusTotalApiKeyController.text = _storedVirusTotalApiKey;
     setState(() {});
   }
 
@@ -2607,6 +2720,12 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     sp.enableLetMeDowngrade,
     sp.installerMode,
     sp.shizukuPretendToBeGooglePlay,
+    // The API key drives the field text and, with its validation fingerprint,
+    // the validated-shield state. An import can change either without the user
+    // touching this page, and without these two the section would never be
+    // notified of that - see [didChangeDependencies].
+    sp.getSettingString(virusTotalApiKeyKey),
+    sp.getSettingString(virusTotalValidatedApiKeyFingerprintKey),
   );
 
   @override
@@ -2631,7 +2750,11 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
           ),
           onTap: !_loading && !_appManagerInstalled
               ? () => ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(tr('appManagerNotInstalledSnackbar'))),
+                  buildAppSnackBar(
+                    context,
+                    tr('appManagerNotInstalledSnackbar'),
+                    type: ToastType.warning,
+                  ),
                 )
               : null,
           trailing: Row(
@@ -2655,7 +2778,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 ),
                 icon: const Icon(Icons.open_in_new_rounded),
               ),
-              Switch(
+              AppSwitch(
                 value:
                     !_loading &&
                     _appManagerInstalled &&
@@ -2682,7 +2805,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 size: 20,
                 padding: EdgeInsets.zero,
               ),
-              Switch(
+              AppSwitch(
                 value: !_loading && sp.beforeNewInstallsShareToAppVerifier,
                 onChanged: !_loading
                     ? (bool value) =>
@@ -2705,8 +2828,10 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
           ),
           onTap: !_loading && !_letMeDowngradeInstalled
               ? () => ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(tr('letMeDowngradeNotInstalledSnackbar')),
+                  buildAppSnackBar(
+                    context,
+                    tr('letMeDowngradeNotInstalledSnackbar'),
+                    type: ToastType.warning,
                   ),
                 )
               : null,
@@ -2731,7 +2856,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 ),
                 icon: const Icon(Icons.open_in_new_rounded),
               ),
-              Switch(
+              AppSwitch(
                 value:
                     !_loading &&
                     _letMeDowngradeInstalled &&
@@ -2753,8 +2878,10 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
               title: Text(tr('enableVirusTotalScanning')),
               onTap: !hasValidatedKey
                   ? () => ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(tr('virusTotalNotValidatedSnackbar')),
+                      buildAppSnackBar(
+                        context,
+                        tr('virusTotalNotValidatedSnackbar'),
+                        type: ToastType.warning,
                       ),
                     )
                   : null,
@@ -2766,7 +2893,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                     size: 20,
                     padding: EdgeInsets.zero,
                   ),
-                  Switch(
+                  AppSwitch(
                     value: hasValidatedKey && sp.enableVirusTotalScanning,
                     onChanged: hasValidatedKey
                         ? (bool value) => sp.enableVirusTotalScanning = value
@@ -2887,12 +3014,10 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text(
-                                                    tr(
-                                                      'virusTotalKeyValidated',
-                                                    ),
-                                                  ),
+                                                buildAppSnackBar(
+                                                  context,
+                                                  tr('virusTotalKeyValidated'),
+                                                  type: ToastType.success,
                                                 ),
                                               );
                                               setState(() {});
@@ -2901,7 +3026,11 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
-                                                SnackBar(content: Text(error)),
+                                                buildAppSnackBar(
+                                                  context,
+                                                  error,
+                                                  type: ToastType.error,
+                                                ),
                                               );
                                             }
                                           }
@@ -2917,72 +3046,79 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
         Padding(
           padding: const EdgeInsets.fromLTRB(
             kM3eSettingsCardHorizontalInset,
-            8,
+            12,
             kM3eSettingsCardHorizontalInset,
-            4,
+            12,
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(tr('installerMode')),
-              const SizedBox(height: 4),
-              SizedBox(
-                width: double.infinity,
-                child: AppSegmentedButton<String>(
-                  segments: [
-                    ButtonSegment<String>(
-                      value: 'system',
-                      label: AppSegmentedButtonLabel(tr('installerModeStock')),
-                    ),
-                    ButtonSegment<String>(
-                      value: 'shizuku',
-                      label: AppSegmentedButtonLabel(
-                        tr('installerModeShizuku'),
-                      ),
-                    ),
-                    ButtonSegment<String>(
-                      value: 'external',
-                      label: AppSegmentedButtonLabel(
-                        tr('installerModeThirdParty'),
-                      ),
-                    ),
-                  ],
-                  selected: {sp.installerMode},
-                  onSelectionChanged: (Set<String> selected) {
-                    final String mode = selected.first;
-                    if (mode == 'shizuku') {
-                      ShizukuApkInstaller().checkPermission().then((
-                        String? resCode,
-                      ) {
-                        if (!context.mounted) return;
-                        if (resCode!.startsWith('granted')) {
-                          sp.installerMode = 'shizuku';
-                        } else {
-                          switch (resCode) {
-                            case 'services_not_found':
-                              showError(
-                                ObtainiumError(tr('shizukuBinderNotFound')),
-                              );
-                            case 'old_shizuku':
-                              showError(ObtainiumError(tr('shizukuOld')));
-                            case 'old_android_with_adb':
-                              showError(
-                                ObtainiumError(tr('shizukuOldAndroidWithADB')),
-                              );
-                            case 'denied':
-                              showError(ObtainiumError(tr('cancelled')));
-                          }
-                        }
-                      });
-                    } else {
-                      sp.installerMode = mode;
+              appDropdownField<String>(
+                key: ValueKey('installerMode_${sp.installerMode}'),
+                context: context,
+                value: sp.installerMode,
+                labelText: tr('installerMode'),
+                updateInternalValueOnChange: false,
+                items: [
+                  DropdownMenuItem<String>(
+                    value: 'system',
+                    child: Text(tr('installerModeStock')),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'shizuku',
+                    child: Text(tr('installerModeShizuku')),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'dhizuku',
+                    child: Text(tr('installerModeDhizuku')),
+                  ),
+                  DropdownMenuItem<String>(
+                    value: 'external',
+                    child: Text(tr('installerModeThirdParty')),
+                  ),
+                ],
+                onChanged: (String? mode) async {
+                  if (mode == null) return;
+                  if (mode == 'shizuku' || mode == 'dhizuku') {
+                    final String binderNotFoundKey = mode == 'dhizuku'
+                        ? 'dhizukuBinderNotFound'
+                        : 'shizukuBinderNotFound';
+                    final shizuku.InstallerMode pluginMode = mode == 'dhizuku'
+                        ? shizuku.InstallerMode.dhizuku
+                        : shizuku.InstallerMode.shizuku;
+                    String? resCode;
+                    try {
+                      resCode = await checkShizukuPluginPermission(pluginMode);
+                    } on Exception {
+                      if (!context.mounted) return;
+                      showError(ObtainiumError(tr(binderNotFoundKey)));
+                      return;
                     }
-                  },
-                ),
+                    if (!context.mounted) return;
+                    if (isShizukuPluginPermissionGranted(pluginMode, resCode)) {
+                      sp.installerMode = mode;
+                    } else {
+                      switch (resCode) {
+                        case 'services_not_found':
+                          showError(ObtainiumError(tr(binderNotFoundKey)));
+                        case 'old_shizuku':
+                          showError(ObtainiumError(tr('shizukuOld')));
+                        case 'old_android_with_adb':
+                          showError(
+                            ObtainiumError(tr('shizukuOldAndroidWithADB')),
+                          );
+                        default:
+                          showError(ObtainiumError(tr('cancelled')));
+                      }
+                    }
+                  } else {
+                    sp.installerMode = mode;
+                  }
+                },
               ),
               if (sp.installerMode == 'shizuku')
-                SwitchListTile(
+                AppSwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(tr('shizukuPretendToBeGooglePlay')),
                   value: sp.shizukuPretendToBeGooglePlay,
@@ -3025,6 +3161,51 @@ class _CategoriesSection extends StatelessWidget {
   }
 }
 
+const int aboutHeadlineMaxLines = 2;
+
+/// Largest font size, at or below [style]'s own, that renders [text] in full
+/// within [maxWidth] and [aboutHeadlineMaxLines].
+///
+/// Version names carry a build suffix ("ObtainX v2.20.0-Preview-277"), which at
+/// this headline's display size ellipsizes on narrow screens and at large system
+/// font scales - hiding the very part that identifies the build. Shrinking to
+/// fit keeps the whole version readable.
+double aboutHeadlineFontSize({
+  required BuildContext context,
+  required String text,
+  required TextStyle style,
+  required double maxWidth,
+}) {
+  final double baseFontSize = style.fontSize ?? 36;
+  if (!maxWidth.isFinite || maxWidth <= 0) return baseFontSize;
+  const double minimumFontSize = 20;
+  final TextScaler textScaler = MediaQuery.textScalerOf(context);
+  final TextDirection textDirection = Directionality.of(context);
+  for (
+    double fontSize = baseFontSize;
+    fontSize > minimumFontSize;
+    fontSize -= 1
+  ) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: style.copyWith(fontSize: fontSize),
+      ),
+      maxLines: aboutHeadlineMaxLines,
+      textAlign: TextAlign.center,
+      textDirection: textDirection,
+      textScaler: textScaler,
+    )..layout(maxWidth: maxWidth);
+    // A word too long to wrap (a build suffix) overflows its line without ever
+    // exceeding the line count, so width has to be checked as well.
+    final bool aLineOverflows = painter.computeLineMetrics().any(
+      (line) => line.width > maxWidth + 0.5,
+    );
+    if (!painter.didExceedMaxLines && !aLineOverflows) return fontSize;
+  }
+  return minimumFontSize;
+}
+
 class AboutSectionContent extends StatelessWidget {
   const AboutSectionContent({super.key, required this.colorScheme});
 
@@ -3041,7 +3222,7 @@ class AboutSectionContent extends StatelessWidget {
     return Stack(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -3054,14 +3235,30 @@ class AboutSectionContent extends StatelessWidget {
                 builder: (context, snapshot) {
                   final String versionName =
                       snapshot.data?.versionName ?? tr('unknown');
-                  return Text(
-                    tr('aboutAppVersion', args: [versionName]),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.displaySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: colorScheme.onSurface,
+                  final String headline = tr(
+                    'aboutAppVersion',
+                    args: [versionName],
+                  );
+                  final TextStyle headlineStyle =
+                      (textTheme.displaySmall ?? const TextStyle(fontSize: 36))
+                          .copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: colorScheme.onSurface,
+                          );
+                  return LayoutBuilder(
+                    builder: (context, constraints) => Text(
+                      headline,
+                      textAlign: TextAlign.center,
+                      maxLines: aboutHeadlineMaxLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: headlineStyle.copyWith(
+                        fontSize: aboutHeadlineFontSize(
+                          context: context,
+                          text: headline,
+                          style: headlineStyle,
+                          maxWidth: constraints.maxWidth,
+                        ),
+                      ),
                     ),
                   );
                 },
@@ -3195,7 +3392,7 @@ class AboutSectionContent extends StatelessWidget {
             top: 8,
             right: 8,
             child: IconButton(
-              onPressed: () => _openLogsDialog(context),
+              onPressed: () => _openLogsSheet(context),
               icon: Icon(Icons.bug_report_outlined, color: colorScheme.primary),
               tooltip: tr('appLogs'),
               padding: EdgeInsets.zero,
@@ -3536,34 +3733,48 @@ Future<void> _shareAboutUrl(String url, String subject) async {
   );
 }
 
-void _openLogsDialog(BuildContext context) {
-  showDialog(
-    context: context,
-    builder: (BuildContext dialogContext) {
-      return const LogsDialog(initialDays: 7);
-    },
+void _openLogsSheet(BuildContext context) {
+  unawaited(
+    showAppModalSheet<void>(
+      context: context,
+      builder: (BuildContext _) {
+        return const LogsSheet(initialDays: 7);
+      },
+    ),
   );
 }
 
-class LogsDialog extends StatefulWidget {
+class LogsSheet extends StatefulWidget {
   final int initialDays;
-  const LogsDialog({super.key, required this.initialDays});
+  final PerformanceRecorder? performanceRecorder;
+  const LogsSheet({
+    super.key,
+    required this.initialDays,
+    this.performanceRecorder,
+  });
 
   @override
-  State<LogsDialog> createState() => _LogsDialogState();
+  State<LogsSheet> createState() => _LogsSheetState();
 }
 
-class _LogsDialogState extends State<LogsDialog> {
+class _LogsSheetState extends State<LogsSheet> {
   String? logString;
   bool isLoading = true;
   late int selectedDays;
   List<int> days = [7, 5, 4, 3, 2, 1];
+  final ScrollController logScrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     selectedDays = widget.initialDays;
     fetchLogs(selectedDays);
+  }
+
+  @override
+  void dispose() {
+    logScrollController.dispose();
+    super.dispose();
   }
 
   void fetchLogs(int daysLimit) {
@@ -3600,286 +3811,193 @@ class _LogsDialogState extends State<LogsDialog> {
   @override
   Widget build(BuildContext context) {
     final logsProvider = context.read<LogsProvider>();
+    final performanceRecorder =
+        widget.performanceRecorder ?? PerformanceRecorder.instance;
 
-    Future<String> getDiagnosticsText() async {
-      final buffer = StringBuffer();
-      buffer.writeln('=== ObtainX Diagnostic Log ===');
-      // Captured before the first async gap below so context isn't used across
-      // an await.
-      final settingsProvider = context.read<SettingsProvider>();
-      final appsProvider = context.read<AppsProvider>();
-
-      try {
-        final packageInfo = await getInstalledInfo(
-          obtainiumId,
-          printErr: false,
-          includeOwnDebugBuild: true,
-        );
-        buffer.writeln(
-          'App Version: ${packageInfo?.versionName ?? 'Unknown'} (code ${packageInfo?.versionCode ?? 'unknown'})',
-        );
-        buffer.writeln(
-          'Package ID: ${packageInfo?.packageName ?? obtainiumId}',
-        );
-      } catch (exception) {
-        buffer.writeln('App Version: Unknown (Error fetching package info)');
-      }
-
-      try {
-        final androidInfo = await DeviceInfoPlugin().androidInfo;
-        buffer.writeln(
-          'Device: ${androidInfo.manufacturer} ${androidInfo.model} (${androidInfo.device})',
-        );
-        buffer.writeln(
-          'Android Version: ${androidInfo.version.release} (SDK ${androidInfo.version.sdkInt})',
-        );
-        buffer.writeln(
-          'Supported ABIs: ${androidInfo.supportedAbis.join(', ')}',
-        );
-      } catch (exception) {
-        buffer.writeln('Device Info: Unknown (Error fetching device info)');
-      }
-
-      buffer.writeln('Installer Mode: ${settingsProvider.installerMode}');
-      buffer.writeln('Use Shizuku: ${settingsProvider.useShizuku}');
-      buffer.writeln(
-        'Background Updates: ${settingsProvider.enableBackgroundUpdates}',
+    Future<String> getDiagnosticsText(String logsToShare) async {
+      // Captured before the first async gap so context isn't used across an await.
+      final SettingsProvider settingsProvider = context
+          .read<SettingsProvider>();
+      final AppsProvider appsProvider = context.read<AppsProvider>();
+      final DiagnosticDisplayInfo display = DiagnosticDisplayInfo.fromContext(
+        context,
       );
-      buffer.writeln(
-        'Parallel Downloads: ${settingsProvider.parallelDownloads}',
+      final String appLocale = context.locale.toLanguageTag();
+      final String deviceLocale = context.deviceLocale.toLanguageTag();
+      final String performanceReport = await performanceRecorder
+          .reportForExport(logsToShare);
+      return buildObtainxDiagnosticLog(
+        settings: settingsProvider,
+        trackedAppCount: appsProvider.apps.length,
+        display: display,
+        appLocale: appLocale,
+        deviceLocale: deviceLocale,
+        performanceReport: performanceReport,
       );
-      buffer.writeln('Tracked Apps: ${appsProvider.apps.length}');
-
-      try {
-        final notificationGranted = await Permission.notification.isGranted;
-        buffer.writeln('Notifications Enabled: $notificationGranted');
-      } catch (exception) {
-        buffer.writeln(
-          'Notifications Enabled: Unknown (Error checking permission)',
-        );
-      }
-
-      final autoExportEnabled = settingsProvider.autoExportOnChanges;
-      buffer.writeln('Auto-Export on Changes: $autoExportEnabled');
-      if (autoExportEnabled) {
-        try {
-          final exportDir = await settingsProvider.getExportDir(
-            requireAccess: false,
-          );
-          if (exportDir == null) {
-            buffer.writeln('Export Directory: Not configured');
-          } else {
-            final accessGranted =
-                await settingsProvider.getExportDir(
-                  warnIfInaccessible: false,
-                ) !=
-                null;
-            buffer.writeln(
-              'Export Directory Configured: true (Access Present: $accessGranted)',
-            );
-          }
-        } catch (exception) {
-          buffer.writeln('Export Directory: Unknown (Error checking path)');
-        }
-      }
-
-      final saveApkCopies = settingsProvider.saveDownloadedApkCopies;
-      buffer.writeln('Save APK Copies: $saveApkCopies');
-      if (saveApkCopies) {
-        try {
-          final apkSaveDir = await settingsProvider.getApkSaveDir(
-            requireAccess: false,
-          );
-          if (apkSaveDir == null) {
-            buffer.writeln('APK Save Directory: Not configured');
-          } else {
-            final accessGranted =
-                await settingsProvider.getApkSaveDir(
-                  warnIfInaccessible: false,
-                ) !=
-                null;
-            buffer.writeln(
-              'APK Save Directory Configured: true (Access Present: $accessGranted)',
-            );
-          }
-        } catch (exception) {
-          buffer.writeln('APK Save Directory: Unknown (Error checking path)');
-        }
-      }
-
-      final githubPat = settingsProvider.getSettingString(
-        GitHub.githubCredsKey,
-      );
-      final hasGithubPat = githubPat != null && githubPat.isNotEmpty;
-      final githubPatValid =
-          hasGithubPat && GitHub.hasValidatedPAT(githubPat, settingsProvider);
-      buffer.writeln(
-        'GitHub PAT: ${hasGithubPat ? "Saved" : "Not Saved"}${hasGithubPat ? " (Validated: $githubPatValid)" : ""}',
-      );
-
-      final gitlabPat = settingsProvider.getSettingString('gitlab-creds');
-      final hasGitlabPat = gitlabPat != null && gitlabPat.isNotEmpty;
-      final gitlabPatValid =
-          hasGitlabPat && GitLab.hasValidatedPAT(gitlabPat, settingsProvider);
-      buffer.writeln(
-        'GitLab PAT: ${hasGitlabPat ? "Saved" : "Not Saved"}${hasGitlabPat ? " (Validated: $gitlabPatValid)" : ""}',
-      );
-
-      final vtApiKey = settingsProvider.getSettingString(virusTotalApiKeyKey);
-      final hasVtApiKey = vtApiKey != null && vtApiKey.isNotEmpty;
-      final vtApiKeyValid =
-          hasVtApiKey && hasValidatedApiKey(vtApiKey, settingsProvider);
-      buffer.writeln(
-        'VirusTotal API Key: ${hasVtApiKey ? "Saved" : "Not Saved"}${hasVtApiKey ? " (Validated: $vtApiKeyValid)" : ""}',
-      );
-
-      buffer.writeln('===============================\n');
-
-      return buffer.toString();
     }
 
-    return AlertDialog(
-      title: Text(tr('appLogs')),
-      contentPadding: appDialogContentPadding,
-      content: SizedBox(
-        width: double.maxFinite,
-        height: MediaQuery.of(context).size.height * 0.6,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            appDropdownField<int>(
-              key: ValueKey(selectedDays),
-              context: context,
-              value: selectedDays,
-              enabled: !isLoading,
-              menuWidth: appDropdownMenuWidth(
+    return AppSheetScaffold(
+      expand: true,
+      header: Row(
+        children: [
+          Expanded(
+            child: Text(
+              tr('appLogs'),
+              style: Theme.of(
                 context,
-                days.map((int dayValue) => plural('day', dayValue)),
-                style: Theme.of(context).textTheme.bodyLarge,
-              ),
-              items: days
-                  .map(
-                    (int dayValue) => DropdownMenuItem<int>(
-                      value: dayValue,
-                      child: Text(plural('day', dayValue)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (int? selectedValue) {
-                if (selectedValue != null) {
-                  selectedDays = selectedValue;
-                  fetchLogs(selectedValue);
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: isLoading
-                  ? const Center(child: ExpressiveLoadingIndicator())
-                  : Scrollbar(
-                      child: SingleChildScrollView(
-                        child: SelectableText(logString ?? ''),
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        SizedBox(
-          width: double.maxFinite,
-          child: Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextButton(
-                    onPressed: () async {
-                      final cont =
-                          (await showDialog<Map<String, dynamic>?>(
-                            context: context,
-                            builder: (BuildContext modalContext) {
-                              return GeneratedFormModal(
-                                title: tr('appLogs'),
-                                items: const [],
-                                initValid: true,
-                                message: tr('removeFromObtainX'),
-                                primaryActionColour: Theme.of(
-                                  modalContext,
-                                ).colorScheme.error,
-                              );
-                            },
-                          )) !=
-                          null;
-                      if (cont) {
-                        unawaited(logsProvider.clear());
-                        if (!context.mounted) return;
-                        Navigator.of(context).pop();
-                      }
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                    ),
-                    child: Text(tr('remove')),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
-                    child: Text(tr('close')),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      final diagnostics = await getDiagnosticsText();
-                      final logs = logString ?? '';
-                      const int maxLogChars = 100000;
-                      final String safeLogs = logs.length > maxLogChars
-                          ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
-                          : logs;
-                      unawaited(
-                        SharePlus.instance.share(
-                          ShareParams(
-                            text: '$diagnostics$safeLogs',
-                            subject: tr('appLogs'),
-                          ),
-                        ),
-                      );
-                    },
-                    child: Text(tr('share')),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      final diagnostics = await getDiagnosticsText();
-                      final timestampForFilename = DateTime.now()
-                          .toIso8601String()
-                          .replaceAll(':', '-');
-                      final logFileName =
-                          'obtainx-logs-$timestampForFilename.txt';
-                      final logFile = XFile.fromData(
-                        Uint8List.fromList(
-                          utf8.encode('$diagnostics${logString ?? ''}'),
-                        ),
-                        mimeType: 'text/plain',
-                        name: logFileName,
-                      );
-                      await SharePlus.instance.share(
-                        ShareParams(
-                          files: [logFile],
-                          fileNameOverrides: [logFileName],
-                          subject: tr('appLogs'),
-                        ),
-                      );
-                    },
-                    child: Text(tr('shareAsFile')),
-                  ),
-                ],
-              ),
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
+          HelpHintIcon(
+            message: tr('performanceRecordingHelp'),
+            padding: EdgeInsets.zero,
+          ),
+        ],
+      ),
+      bodyPadding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      // Title, controls and log text share one scroll view: a landscape sheet
+      // is short enough that a pinned header would leave the log itself about
+      // three lines tall.
+      bodyScrollController: logScrollController,
+      bodyChildren: [
+        Builder(
+          builder: (BuildContext controlContext) {
+            final SettingsProvider settings = controlContext
+                .read<SettingsProvider>();
+            final AppsProvider apps = controlContext.read<AppsProvider>();
+            final view = View.of(controlContext);
+            return PerformanceRecordingControl(
+              recorder: performanceRecorder,
+              readEnvironment: () => PerformanceEnvironment(
+                refreshRate: view.display.refreshRate,
+                blur: settings.progressiveBlurEnabled,
+                reducedEffects: settings.reduceVisualEffects,
+                gradients: settings.useGradientBackground,
+                appCount: apps.apps.length,
+              ),
+              onStarted: () => Navigator.of(controlContext).pop(),
+            );
+          },
         ),
+        const SizedBox(height: 16),
+        appDropdownField<int>(
+          key: ValueKey<int>(selectedDays),
+          context: context,
+          value: selectedDays,
+          enabled: !isLoading,
+          menuWidth: appDropdownMenuWidth(
+            context,
+            days.map((int dayValue) => plural('day', dayValue)),
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
+          items: days
+              .map(
+                (int dayValue) => DropdownMenuItem<int>(
+                  value: dayValue,
+                  child: Text(plural('day', dayValue)),
+                ),
+              )
+              .toList(),
+          onChanged: (int? selectedValue) {
+            if (selectedValue != null) {
+              selectedDays = selectedValue;
+              fetchLogs(selectedValue);
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+        if (isLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: ExpressiveLoadingIndicator()),
+          )
+        else
+          SelectableText(logString ?? ''),
       ],
+      footer: OverflowBar(
+        alignment: MainAxisAlignment.end,
+        spacing: 8,
+        overflowSpacing: 4,
+        children: [
+          TextButton(
+            onPressed: () async {
+              final bool confirmed =
+                  (await showDialog<Map<String, dynamic>?>(
+                    context: context,
+                    builder: (BuildContext modalContext) {
+                      return GeneratedFormModal(
+                        title: tr('appLogs'),
+                        items: const [],
+                        initValid: true,
+                        message: tr('removeFromObtainX'),
+                        primaryActionColour: Theme.of(
+                          modalContext,
+                        ).colorScheme.error,
+                      );
+                    },
+                  )) !=
+                  null;
+              if (confirmed) {
+                await performanceRecorder.discard();
+                unawaited(logsProvider.clear());
+                if (!context.mounted) return;
+                Navigator.of(context).pop();
+              }
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(tr('remove')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(tr('close')),
+          ),
+          TextButton(
+            onPressed: () async {
+              final String logs = logString ?? '';
+              const int maxLogChars = 100000;
+              final String safeLogs = logs.length > maxLogChars
+                  ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
+                  : logs;
+              final String diagnostics = await getDiagnosticsText(safeLogs);
+              unawaited(
+                SharePlus.instance.share(
+                  ShareParams(
+                    text: '$diagnostics$safeLogs',
+                    subject: tr('appLogs'),
+                  ),
+                ),
+              );
+            },
+            child: Text(tr('share')),
+          ),
+          TextButton(
+            onPressed: () async {
+              final String logs = logString ?? '';
+              final String diagnostics = await getDiagnosticsText(logs);
+              final String timestampForFilename = DateTime.now()
+                  .toIso8601String()
+                  .replaceAll(':', '-');
+              final String logFileName =
+                  'obtainx-logs-$timestampForFilename.txt';
+              final XFile logFile = XFile.fromData(
+                Uint8List.fromList(utf8.encode('$diagnostics$logs')),
+                mimeType: 'text/plain',
+                name: logFileName,
+              );
+              await SharePlus.instance.share(
+                ShareParams(
+                  files: [logFile],
+                  fileNameOverrides: [logFileName],
+                  subject: tr('appLogs'),
+                ),
+              );
+            },
+            child: Text(tr('shareAsFile')),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3966,6 +4084,14 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
       storedValues,
       widget.preselected,
     );
+    // The labels below go through context.tr rather than the top-level tr()
+    // because that is what subscribes this element to Localizations. The
+    // top-level tr() reads a global singleton, so it leaves nothing to mark
+    // dirty when the language changes, and nothing else here rebuilds on a
+    // locale switch: the category map is unchanged, so the select() above does
+    // not fire, and every ancestor between this widget and the settings page is
+    // a const instance that the framework reuses without rebuilding. Together
+    // that froze these labels at whichever language the app launched in.
     return GeneratedForm(
       key: ValueKey<String>(
         'categories_${_stableCategoriesMapJson(fromPrefs)}',
@@ -3974,13 +4100,13 @@ class _CategoryEditorSelectorState extends State<CategoryEditorSelector> {
         [
           GeneratedFormTagInput(
             'categories',
-            label: tr('categories'),
-            emptyMessage: tr('noCategories'),
+            label: context.tr('categories'),
+            emptyMessage: context.tr('noCategories'),
             value: merged,
             alignment: widget.alignment,
             deleteConfirmationMessage: MapEntry(
-              tr('deleteCategoriesQuestion'),
-              tr('categoryDeleteWarning'),
+              context.tr('deleteCategoriesQuestion'),
+              context.tr('categoryDeleteWarning'),
             ),
             singleSelect: widget.singleSelect,
             showLabelWhenNotEmpty: widget.showLabelWhenNotEmpty,

@@ -33,9 +33,11 @@ import android.system.Os
 import android.text.format.DateFormat
 import android.util.DisplayMetrics
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import lab.neruno.android_package_manager.toMap
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintWriter
@@ -66,6 +68,13 @@ private const val APK_MIME = "application/vnd.android.package-archive"
 private const val RELEASE_DIR = "releases"
 private const val INSTALL_TIMEOUT_MS = 120_000L
 private const val INSTALL_BROADCAST_BATCH_CONTINUE_DELAY_MS = 200L
+/// How long to keep a cache-served release file around after handing it to an
+/// installer we're not tracking (no [expectedPkgName]). startActivity() returns
+/// as soon as the target activity is requested, well before it has actually
+/// opened and read the content:// URI - deleting the file synchronously after
+/// that call races the installer's own read and can turn it into a
+/// FileNotFoundException. This window is generous enough to outlast that read.
+private const val UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS = 60_000L
 private const val MAX_SYSTEM_DISPLAY_SCALE = 1.2f
 private const val OPEN_PERSISTED_DOCUMENT_TREE_REQUEST_CODE = 5107
 /// Ignore focus regain if it arrived within this window of the FIRST focus loss (transition bounce).
@@ -107,7 +116,15 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private val changedPackages = linkedSetOf<String>()
+        private var packageChangeReceiver: BroadcastReceiver? = null
         private var notificationsMethodChannel: MethodChannel? = null
+
+        /// Held on the companion rather than the activity so [packageChangeReceiver],
+        /// which outlives any single activity instance, can forward to Dart without
+        /// capturing (and leaking) the activity.
+        @Volatile
+        private var installerChannel: MethodChannel? = null
         private val downloadCancelLock = Any()
         private val pendingDownloadCancelAppIds = linkedSetOf<String>()
         private var downloadCancelHandlerReady = false
@@ -226,7 +243,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private var installWatcher: InstallWatcher? = null
-    private var installerChannel: MethodChannel? = null
     private val downloadKeepAwakeLock = Any()
     private var downloadKeepAwakeCount = 0
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -247,6 +263,41 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installNativeCrashHandler(this)
         super.onCreate(savedInstanceState)
+        // Keep observing while the activity is covered or recreated. A new
+        // process performs a full Dart load before relying on this journal.
+        if (packageChangeReceiver == null) {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == Intent.ACTION_PACKAGE_REMOVED &&
+                        intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
+                    val changedPackage = intent.data?.schemeSpecificPart ?: return
+                    changedPackages.add(changedPackage)
+                    // A third-party installer can finish long after its handoff session
+                    // ended - InstallerX's "run in background" returns focus to ObtainX
+                    // while PackageInstaller is still working - so confirmation must not
+                    // depend on that session still being open. The journal above is only
+                    // drained on a foreground transition, which in that flow happens
+                    // before the install lands. Dart ignores packages it does not track.
+                    if (intent.action == Intent.ACTION_PACKAGE_ADDED ||
+                        intent.action == Intent.ACTION_PACKAGE_REPLACED
+                    ) {
+                        installerChannel?.invokeMethod(
+                            "thirdPartyInstallPackageChanged",
+                            mapOf("packageName" to changedPackage),
+                        )
+                    }
+                }
+            }
+            ContextCompat.registerReceiver(applicationContext, receiver, IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addAction(Intent.ACTION_PACKAGE_CHANGED)
+                addDataScheme("package")
+            }, ContextCompat.RECEIVER_EXPORTED)
+            packageChangeReceiver = receiver
+        }
+
     }
 
     private fun completeThirdPartyInstallSession(watcher: InstallWatcher, outcome: InstallSessionOutcome) {
@@ -257,8 +308,21 @@ class MainActivity : FlutterActivity() {
         }
         watcher.handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(watcher.receiver) } catch (_: Exception) { }
-        for (cacheFile in watcher.releaseCacheFiles) {
-            try { cacheFile.delete() } catch (_: Exception) { }
+        val installUnconfirmed = outcome is InstallSessionOutcome.Success && !outcome.installSucceeded
+        if (installUnconfirmed) {
+            // The session ended without the install being confirmed, which for a
+            // backgrounded installer means it is still reading the content:// URI.
+            // Deleting now would race that read into a FileNotFoundException.
+            val releaseCacheFiles = watcher.releaseCacheFiles
+            watcher.handler.postDelayed({
+                for (cacheFile in releaseCacheFiles) {
+                    try { cacheFile.delete() } catch (_: Exception) { }
+                }
+            }, UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS)
+        } else {
+            for (cacheFile in watcher.releaseCacheFiles) {
+                try { cacheFile.delete() } catch (_: Exception) { }
+            }
         }
         when (outcome) {
             is InstallSessionOutcome.Success -> watcher.methodResult.success(outcome.installSucceeded)
@@ -388,6 +452,35 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(getApplicationLabels(packageNames))
                 }
+                "consumePackageChanges" -> {
+                    result.success(changedPackages.toList())
+                    changedPackages.clear()
+                }
+                "getInstalledPackageInfo", "getInstalledPackageInfos" -> {
+                    val requestedPackage = call.argument<String>("packageName")
+                    val includeSigning = call.argument<Boolean>("includeSigningCertificates") == true
+                    val singlePackage = call.method == "getInstalledPackageInfo"
+                    deviceAppsExecutor.execute {
+                        try {
+                            val flags = if (includeSigning) PackageManager.GET_SIGNING_CERTIFICATES else 0
+                            @Suppress("DEPRECATION")
+                            val value = if (singlePackage) {
+                                requestedPackage?.let { packageName ->
+                                    try {
+                                        packageManager.getPackageInfo(packageName, flags).toMap()
+                                    } catch (_: PackageManager.NameNotFoundException) {
+                                        null
+                                    }
+                                }
+                            } else {
+                                packageManager.getInstalledPackages(flags).map { it.toMap() }
+                            }
+                            mainHandler.post { result.success(value) }
+                        } catch (exception: Exception) {
+                            mainHandler.post { result.error("PACKAGE_QUERY_FAILED", exception.message, null) }
+                        }
+                    }
+                }
                 "getInstalledAppsLight" -> {
                     // Compact one-pass enumeration: only the fields the bulk-add
                     // list needs, avoiding the heavy full-PackageInfo marshalling
@@ -409,6 +502,17 @@ class MainActivity : FlutterActivity() {
                     }
                     deviceAppsExecutor.execute {
                         val bytes = getAppIconBytes(packageName)
+                        mainHandler.post { result.success(bytes) }
+                    }
+                }
+                "getApkArchiveIcon" -> {
+                    val archiveFilePath = call.argument<String>("archiveFilePath")
+                    if (archiveFilePath == null) {
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    deviceAppsExecutor.execute {
+                        val bytes = getApkArchiveIconBytes(archiveFilePath)
                         mainHandler.post { result.success(bytes) }
                     }
                 }
@@ -518,6 +622,9 @@ class MainActivity : FlutterActivity() {
                 "consumeNativeCrashLog" -> {
                     result.success(consumeNativeCrashLog(this))
                 }
+                "getDisplayDiagnostics" -> {
+                    result.success(displayDiagnostics())
+                }
                 else -> result.notImplemented()
             }
         }
@@ -546,8 +653,22 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         resetNotificationChannel(null)
+        installerChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
+
+    /// Densities behind the user's Display size setting, for shared diagnostic logs.
+    ///
+    /// The activity renders at [withCappedDisplayScale]'s capped density, so a
+    /// Flutter-side devicePixelRatio alone cannot tell whether the user picked a
+    /// large Display size or the cap silently overrode it. The application
+    /// context keeps the uncapped system configuration, so both are reported.
+    private fun displayDiagnostics(): Map<String, Any> = mapOf(
+        "stableDensityDpi" to DisplayMetrics.DENSITY_DEVICE_STABLE,
+        "systemDensityDpi" to applicationContext.resources.configuration.densityDpi,
+        "effectiveDensityDpi" to resources.configuration.densityDpi,
+        "isInMultiWindowMode" to isInMultiWindowMode,
+    )
 
     private fun enqueueSharedText(sharedText: String) {
         pendingSharedText = sharedText
@@ -602,6 +723,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // DocumentsUI resolves EXTRA_INITIAL_URI as a *document* URI, but a picked folder is persisted
+    // as a bare tree URI (content://.../tree/<id>), which is not one - the picker silently ignores
+    // it and opens wherever it was last left instead. That is most visible when re-picking a folder
+    // whose access was lost, where landing on the folder being restored is the whole point. Convert
+    // the tree URI to the document URI of its own root so the picker starts there. Resolution is
+    // done by DocumentsUI, not by us, so it still works after our own grant is gone.
+    private fun initialDocumentUriOf(uriString: String): Uri? {
+        return try {
+            val uri = Uri.parse(uriString)
+            if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(this, uri)) {
+                DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                uri
+            }
+        } catch (_: Exception) {
+            // A malformed persisted URI must not block the picker - just open it with no start location.
+            null
+        }
+    }
+
     private fun openPersistedDocumentTree(initialUri: String?, result: MethodChannel.Result) {
         if (openPersistedDocumentTreeResult != null) {
             result.error("PICKER_ACTIVE", "A document tree picker is already active.", null)
@@ -614,7 +755,9 @@ class MainActivity : FlutterActivity() {
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
             if (!initialUri.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(initialUri))
+                initialDocumentUriOf(initialUri)?.let {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, it)
+                }
             }
         }
 
@@ -742,6 +885,17 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private var cachedLaunchIntent: Intent? = null
+    private fun getCachedLaunchIntent(): Intent {
+        val existing = cachedLaunchIntent
+        if (existing != null) return existing
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(this, MainActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        cachedLaunchIntent = intent
+        return intent
+    }
+
     private fun showDownloadProgressNotification(call: io.flutter.plugin.common.MethodCall): Boolean {
         val id = call.argument<Int>("id") ?: return false
         val title = call.argument<String>("title") ?: return false
@@ -751,13 +905,10 @@ class MainActivity : FlutterActivity() {
         val indeterminate = call.argument<Boolean>("indeterminate") ?: false
         val shortCriticalText = call.argument<String>("shortCriticalText")
 
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, MainActivity::class.java)
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val contentIntent = PendingIntent.getActivity(
             this,
             id,
-            launchIntent,
+            getCachedLaunchIntent(),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             activityLaunchOptions(),
         )
@@ -923,6 +1074,38 @@ class MainActivity : FlutterActivity() {
                 packageManager.getApplicationInfo(packageName, 0)
             }
             val drawable = packageManager.getApplicationIcon(appInfo)
+            val bitmap = drawableToBitmap(drawable)
+            ByteArrayOutputStream().use { stream ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                stream.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /// Renders the launcher icon of an APK file that is not installed, so an app
+    /// whose source publishes no icon can still show one.
+    ///
+    /// getPackageArchiveInfo leaves sourceDir/publicSourceDir unset, and loadIcon
+    /// resolves the icon resource through those paths: without them the loader
+    /// has no archive to read from and falls back to the default icon. Pointing
+    /// both at the APK makes it read the resource out of the archive itself.
+    private fun getApkArchiveIconBytes(archiveFilePath: String): ByteArray? {
+        return try {
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageArchiveInfo(
+                    archiveFilePath,
+                    PackageManager.PackageInfoFlags.of(0),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageArchiveInfo(archiveFilePath, 0)
+            } ?: return null
+            val appInfo = packageInfo.applicationInfo ?: return null
+            appInfo.sourceDir = archiveFilePath
+            appInfo.publicSourceDir = archiveFilePath
+            val drawable = appInfo.loadIcon(packageManager)
             val bitmap = drawableToBitmap(drawable)
             ByteArrayOutputStream().use { stream ->
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
@@ -1161,15 +1344,10 @@ class MainActivity : FlutterActivity() {
         } else {
             APK_MIME
         }
-        // XAPK/APKM/ZIP bundles: use ACTION_VIEW so targets that only handle "open file"
-        // (e.g. InstallerX from a file manager) receive the same intent shape.
-        val intentAction =
-            if (releaseFiles.size == 1 && primaryMime == "application/zip") {
-                Intent.ACTION_VIEW
-            } else {
-                Intent.ACTION_INSTALL_PACKAGE
-            }
-        val intent = Intent(intentAction).apply {
+        // Third-party installers commonly expose the same "open file" entry point used
+        // by file managers. Use ACTION_VIEW for every format so installers such as Thor
+        // parse APKs as well as XAPK/APKM/ZIP bundles.
+        val intent = Intent(Intent.ACTION_VIEW).apply {
             if (contentUris.size == 1) {
                 setDataAndType(contentUris[0], primaryMime)
             } else {
@@ -1187,11 +1365,19 @@ class MainActivity : FlutterActivity() {
         }
 
         if (expectedPkgName.isNullOrEmpty()) {
-            try {
+            val launched = try {
                 startActivity(intent)
+                true
             } catch (_: Exception) {
-                //
-            } finally {
+                false
+            }
+            if (launched) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    for (releaseFile in releaseFiles) {
+                        try { releaseFile.delete() } catch (_: Exception) { }
+                    }
+                }, UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS)
+            } else {
                 for (releaseFile in releaseFiles) {
                     try { releaseFile.delete() } catch (_: Exception) { }
                 }

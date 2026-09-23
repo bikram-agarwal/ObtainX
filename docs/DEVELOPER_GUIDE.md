@@ -84,7 +84,8 @@ lib/
 ├─ installers/                    Install strategy abstraction
 │  ├─ installer.dart              Abstract Installer + InstallResult
 │  ├─ stock_installer.dart        AndroidPackageInstaller
-│  ├─ shizuku_installer.dart      Shizuku/Dhizuku/Sui
+│  ├─ shizuku_installer.dart      Shizuku/Sui binder
+│  ├─ dhizuku_installer.dart      Dhizuku Device Owner binder
 │  └─ external_installer.dart     Third-party installer hand-off
 └─ app_sources/                  One file per supported source (28 sources + githubstars)
 ```
@@ -228,7 +229,10 @@ Override the contract methods you need:
 - **Two-pane** list+detail on very wide screens (`width >= 900`) for the Apps tab.
 - Single-pane content on wide screens is **width-capped at 720px** and centered.
 - Update count is shown as a live `Badge` driven by
-  `context.select<AppsProvider>(...findAppIdsWithPendingUpdates...)`.
+  `context.select<AppsProvider>(...)` over `AppsProvider.pendingUpdateCount`, which is
+  backed by `findExistingUpdates(installedOnly: true, excludeOnDemandOnly: true,
+  includeVersionOrderUncertain: true)` — i.e. the same verdict the app list renders,
+  not a raw `installedVersion != latestVersion` compare.
 - Only **two tabs** (Apps, Settings). "Add App" is a FAB; Import/Export are folded into
   the Add App page and Settings respectively.
 
@@ -379,16 +383,16 @@ abstract class Installer {
 }
 ```
 
-Three concrete implementations:
+Four concrete implementations:
 
 | Installer | Backend | Use case |
 | --- | --- | --- |
 | `StockInstaller` | `android_package_installer` plugin (PackageInstaller session API) | Standard installs; supports silent install via ADB-granted `INSTALL_PACKAGES` |
-| `ShizukuInstaller` | `shizuku_apk_installer` plugin | Self-update of Obtainium itself, or when Shizuku/Dhizuku/Sui is available |
+| `ShizukuInstaller` | `shizuku_apk_installer` plugin | Elevated installs via Shizuku/Sui binder |
+| `DhizukuInstaller` | `shizuku_apk_installer` plugin | Elevated installs via Dhizuku Device Owner binder |
 | `ExternalInstaller` | Native `MethodChannel` bridge (`external_install_bridge.dart` + `MainActivity.kt`) | Hands off to a third-party installer app chosen by the user; lists eligible targets via `listInstallTargets()` and converts file paths to `content://` URIs via `FileProvider` |
 
-The selection logic (in `apps_provider_install.dart`) checks: self-update → `ShizukuInstaller`;
-user has chosen an external installer → `ExternalInstaller`; otherwise → `StockInstaller`.
+The selection logic (in `apps_provider_install.dart`) checks `installerMode`: `shizuku` → `ShizukuInstaller`; `dhizuku` → `DhizukuInstaller`; `external` → `ExternalInstaller`; otherwise → `StockInstaller`.
 
 ### Credentials
 

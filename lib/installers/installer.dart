@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
@@ -5,7 +6,7 @@ import 'package:obtainium/providers/source_provider.dart';
 const int installSuccessCode = 0;
 const int installAlreadyPendingCode = 3;
 
-enum InstallOutcome { success, cancelled, alreadyInstalled, error }
+enum InstallOutcome { success, cancelled, alreadyInstalled, handedOff, error }
 
 /// Unified result of an install operation, replacing the previous
 /// "nullable int code" pattern used by the platform install APIs.
@@ -23,6 +24,14 @@ class InstallResult {
 
   factory InstallResult.alreadyInstalled() =>
       const InstallResult(outcome: InstallOutcome.alreadyInstalled);
+
+  /// The APK reached an installer that reports no result of its own, and no
+  /// confirmation had arrived by the time the handoff returned. Distinct from
+  /// [cancelled], which discards the pending install: the install may still be
+  /// running (a backgrounded third-party installer), so the receipt must
+  /// survive until the system package broadcast settles it either way.
+  factory InstallResult.handedOff() =>
+      const InstallResult(outcome: InstallOutcome.handedOff);
 
   factory InstallResult.error(int code) =>
       InstallResult(outcome: InstallOutcome.error, errorCode: code);
@@ -47,6 +56,7 @@ class InstallResult {
   bool get isSuccess => outcome == InstallOutcome.success;
   bool get isCancelled => outcome == InstallOutcome.cancelled;
   bool get isAlreadyInstalled => outcome == InstallOutcome.alreadyInstalled;
+  bool get isHandedOff => outcome == InstallOutcome.handedOff;
   bool get isError => outcome == InstallOutcome.error;
 }
 
@@ -81,7 +91,7 @@ abstract class Installer {
 
   /// Ensures the installer has the privileges needed to install, prompting the
   /// user if necessary. Throws an [ObtainiumError] if permission is denied.
-  Future<void> ensurePermission();
+  Future<void> ensurePermission({ThemeData? toastTheme});
 
   /// Installs one or more APK file paths (a base APK plus optional splits).
   /// [installOptions] carries installer-specific key-value flags (e.g. Shizuku's

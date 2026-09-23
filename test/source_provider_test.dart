@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:device_info_plus_platform_interface/device_info_plus_platform_interface.dart';
@@ -7,11 +9,30 @@ import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
+import 'package:obtainium/app_sources/html.dart';
+import 'package:obtainium/components/generated_form_model.dart';
+import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:obtainium/http/source_request_session.dart';
+
+class _RealHttpOverrides extends HttpOverrides {}
+
+class _AuthenticatedRepo extends FDroidRepo {
+  @override
+  Future<Map<String, String>?> getRequestHeaders(
+    Map<String, dynamic> additionalSettings,
+    String url, {
+    bool forAPKDownload = false,
+  }) async {
+    return {'Authorization': additionalSettings['auth'] as String};
+  }
+}
 
 /// Stub source that returns a controllable [APKDetails] from
 /// [getLatestAPKDetails] without doing any network or HTML work.
@@ -52,10 +73,22 @@ class _StubAPKMirror extends APKMirror {
 }
 
 class _StubSource extends AppSource {
-  _StubSource() {
+  _StubSource({
+    this.apkUrls = const <MapEntry<String, String>>[
+      MapEntry('example.apk', 'https://example.com/example.apk'),
+    ],
+    this.version = '2.0',
+    this.versionCode,
+    this.versionCodesByAsset = const {},
+  }) {
     hosts = <String>['example.com'];
     name = 'Example';
   }
+
+  final List<MapEntry<String, String>> apkUrls;
+  final String version;
+  final int? versionCode;
+  final Map<String, int> versionCodesByAsset;
 
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
@@ -67,9 +100,13 @@ class _StubSource extends AppSource {
     String standardUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
-    return APKDetails('2.0', const <MapEntry<String, String>>[
-      MapEntry('example.apk', 'https://example.com/example.apk'),
-    ], AppNames('Example Author', 'Readable Name'));
+    return APKDetails(
+      version,
+      apkUrls,
+      AppNames('Example Author', 'Readable Name'),
+      versionCode: versionCode,
+      versionCodesByAsset: versionCodesByAsset,
+    );
   }
 
   @override
@@ -195,6 +232,8 @@ class _StubFDroidRepo extends FDroidRepo {
 }
 
 class _StubGitHub extends GitHub {
+  bool latestEndpointRequested = false;
+
   @override
   Future<Response> sourceRequest(
     String url,
@@ -202,9 +241,43 @@ class _StubGitHub extends GitHub {
     bool followRedirects = true,
     Object? postBody,
   }) async {
+    if (url.endsWith('/releases/latest')) {
+      latestEndpointRequested = true;
+      return Response(
+        jsonEncode({
+          'tag_name': '1.0',
+          'name': '1.0',
+          'draft': false,
+          'prerelease': false,
+          'published_at': '2026-01-01T00:00:00Z',
+          'body': '',
+          'assets': <Map<String, dynamic>>[],
+        }),
+        200,
+      );
+    }
     if (url.endsWith('/releases?per_page=100')) {
       return Response(
         jsonEncode([
+          {
+            'tag_name': '1.1-Preview-2',
+            'name': '1.1-Preview-2',
+            'draft': false,
+            'prerelease': true,
+            'published_at': '2026-01-02T00:00:00Z',
+            'body': '',
+            'assets': [
+              {
+                'name': 'example-preview.apk',
+                'browser_download_url':
+                    'https://github.com/example/app/releases/download/preview/example-preview.apk',
+                'url':
+                    'https://api.github.com/repos/example/app/releases/assets/2',
+                'size': 124,
+                'digest': 'sha256:preview123',
+              },
+            ],
+          },
           {
             'tag_name': '1.0',
             'name': '1.0',
@@ -404,10 +477,66 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   DeviceInfoPlatform.instance = _FakeAndroidDeviceInfoPlatform();
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (MethodCall methodCall) async {
+          if (methodCall.method == 'getApplicationDocumentsDirectory') {
+            return Directory.systemTemp.path;
+          }
+          return null;
+        },
+      );
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
+
+  test(
+    'repository HTTP requests share in-flight work but isolate credentials and refreshes',
+    () async {
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requests = <String?>[];
+        final ports = <int>[];
+        server.listen((request) async {
+          requests.add(request.headers.value(HttpHeaders.authorizationHeader));
+          ports.add(request.connectionInfo!.remotePort);
+          request.response.write('<repo/>');
+          await request.response.close();
+        });
+        final url = 'http://127.0.0.1:${server.port}/index.xml';
+        final source = _AuthenticatedRepo();
+        await SourceRequestSession.run(() async {
+          final responses = await Future.wait(
+            List.generate(12, (_) {
+              return source.sourceRequest(url, {'auth': 'first'});
+            }),
+          );
+          expect(requests, ['first']);
+          expect(
+            responses.every((response) => identical(response, responses.first)),
+            isTrue,
+          );
+          await source.sourceRequest(url, {'auth': 'second'});
+          await source.sourceRequest(url, {
+            'auth': 'first',
+            'allowInsecure': true,
+          });
+          expect(requests, ['first', 'second', 'first']);
+          // Responses outside the repository cache still reuse the session's socket.
+          await source.sourceRequest('$url?next=1', {'auth': 'first'});
+          expect(ports[0], ports[1]);
+          expect(ports[0], ports[3]);
+        });
+        await SourceRequestSession.run(() async {
+          await source.sourceRequest(url, {'auth': 'first'});
+        });
+        expect(requests.length, 5);
+      }, _RealHttpOverrides());
+    },
+  );
 
   test(
     'source resolution reuses templates but returns fresh mutable sources',
@@ -441,6 +570,103 @@ void main() {
     expect(overriddenSource.hosts, <String>['git.example.com']);
     expect(overriddenSource.hostChanged, isTrue);
     expect(githubTemplate.hosts, contains('github.com'));
+  });
+
+  test('same-host GitHub override still normalizes repository URLs', () {
+    final SourceProvider provider = SourceProvider();
+    final AppSource githubTemplate = provider.getSourceTemplate(
+      'https://github.com/example/app',
+    );
+    final AppSource overriddenSource = provider.getSource(
+      'https://github.com/example/app/releases/',
+      overrideSource: githubTemplate.sourceIdentifier,
+    );
+
+    expect(overriddenSource, isA<GitHub>());
+    expect(overriddenSource.hostChanged, isTrue);
+    expect(overriddenSource.hostIdenticalDespiteAnyChange, isTrue);
+    expect(
+      overriddenSource.standardizeUrl(
+        'https://github.com/example/app/releases/',
+      ),
+      'https://github.com/example/app',
+    );
+  });
+
+  test('GitHub prerelease and latest switches turn each other off', () {
+    final List<GeneratedFormSwitch> switches = GitHub()
+        .additionalSourceAppSpecificSettingFormItems
+        .expand((List<GeneratedFormItem> row) => row)
+        .whereType<GeneratedFormSwitch>()
+        .toList();
+    final GeneratedFormSwitch includePrereleases = switches.firstWhere(
+      (GeneratedFormSwitch item) => item.key == 'includePrereleases',
+    );
+    final GeneratedFormSwitch verifyLatestTag = switches.firstWhere(
+      (GeneratedFormSwitch item) => item.key == 'verifyLatestTag',
+    );
+
+    expect(includePrereleases.turnsOffKeys, contains('verifyLatestTag'));
+    expect(verifyLatestTag.turnsOffKeys, contains('includePrereleases'));
+  });
+
+  test(
+    'GitHub prerelease selection overrides legacy verify-latest state',
+    () async {
+      final _StubGitHub source = _StubGitHub();
+      final APKDetails details = await source.getLatestAPKDetails(
+        'https://github.com/example/app',
+        <String, dynamic>{
+          'includePrereleases': true,
+          'verifyLatestTag': true,
+          'sortMethodChoice': 'date',
+        },
+      );
+
+      expect(source.latestEndpointRequested, false);
+      expect(details.version, '1.1-Preview-2');
+    },
+  );
+
+  test('GitHub download retries 401 without an authorization header', () {
+    final Map<String, String> headers = <String, String>{
+      HttpHeaders.authorizationHeader: 'Bearer invalid-token',
+      HttpHeaders.acceptHeader: 'application/octet-stream',
+    };
+    final ObtainiumError unauthorizedError = ObtainiumError(
+      'Unauthorized',
+      code: 'HTTP_ERROR',
+      data: <String, dynamic>{'statusCode': HttpStatus.unauthorized},
+    );
+
+    expect(
+      shouldRetryGitHubDownloadWithoutAuthorization(
+        source: GitHub(),
+        headers: headers,
+        error: unauthorizedError,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldRetryGitHubDownloadWithoutAuthorization(
+        source: GitHub(),
+        headers: headers,
+        error: ObtainiumError(
+          'Forbidden',
+          code: 'HTTP_ERROR',
+          data: <String, dynamic>{'statusCode': HttpStatus.forbidden},
+        ),
+      ),
+      isFalse,
+    );
+    expect(
+      shouldRetryGitHubDownloadWithoutAuthorization(
+        source: _StubSource(),
+        headers: headers,
+        error: unauthorizedError,
+      ),
+      isFalse,
+    );
   });
 
   // ── Size cache key invalidation ─────────────────────────────────────
@@ -499,6 +725,55 @@ void main() {
       currentApp: currentApp,
     );
     expect(newApp.apkSizeBytes, 99999999);
+  });
+
+  test(
+    'preferred APK index is clamped after filtering shrinks assets',
+    () async {
+      const List<MapEntry<String, String>> originalApkUrls = [
+        MapEntry('first.apk', 'https://example.com/first.apk'),
+        MapEntry('second.apk', 'https://example.com/second.apk'),
+        MapEntry('third.apk', 'https://example.com/third.apk'),
+        MapEntry('fourth.apk', 'https://example.com/fourth.apk'),
+        MapEntry('last.apk', 'https://example.com/last.apk'),
+      ];
+      const App currentApp = App(
+        id: 'org.example.app',
+        url: 'https://example.com/app',
+        author: 'Example Author',
+        name: 'Example App',
+        latestVersion: '1.0',
+        apkUrls: originalApkUrls,
+        preferredApkIndex: 4,
+        additionalSettings: <String, dynamic>{},
+      );
+
+      final App refreshedApp = await SourceProvider().getApp(
+        _StubSource(apkUrls: originalApkUrls),
+        currentApp.url,
+        <String, dynamic>{'apkFilterRegEx': r'^first\.apk$'},
+        currentApp: currentApp,
+      );
+
+      expect(refreshedApp.apkUrls, hasLength(1));
+      expect(refreshedApp.apkUrls.single.key, 'first.apk');
+      expect(refreshedApp.preferredApkIndex, 0);
+    },
+  );
+
+  test('APK filters also match the download URL', () async {
+    const MapEntry<String, String> ironFoxApk = MapEntry(
+      'IronFox-153.0.1.apk',
+      'https://example.com/arm64-v8a/ironfox-153.0.1-arm64-v8a.apk',
+    );
+
+    final App app = await SourceProvider().getApp(
+      _StubSource(apkUrls: const [ironFoxApk]),
+      'https://example.com/releases',
+      <String, dynamic>{'apkFilterRegEx': 'arm64-v8a'},
+    );
+
+    expect(app.apkUrls, const [ironFoxApk]);
   });
 
   test(
@@ -1009,4 +1284,404 @@ void main() {
 
     expect(app.finalName, 'Readable Name');
   });
+
+  test(
+    'GitLab getLatestAPKDetails extracts changelog from release description',
+    () async {
+      final gitlab = _StubGitLab(
+        jsonEncode([
+          {
+            'tag_name': '4.8.3',
+            'name': 'Aurora Store 4.8.3',
+            'description': '## Release 4.8.3\n- Fixed changelog issue',
+            'released_at': '2026-07-27T00:00:00Z',
+            'assets': {
+              'links': [
+                {
+                  'name': 'app.apk',
+                  'url':
+                      'https://gitlab.com/AuroraOSS/AuroraStore/-/releases/4.8.3/downloads/app.apk',
+                },
+              ],
+            },
+          },
+        ]),
+      );
+
+      final details = await gitlab.getLatestAPKDetails(
+        'https://gitlab.com/AuroraOSS/AuroraStore',
+        const <String, dynamic>{},
+      );
+
+      expect(details.changeLog, '## Release 4.8.3\n- Fixed changelog issue');
+    },
+  );
+
+  group('HTML dynamic download filenames', () {
+    test('prefers and decodes RFC 5987 Content-Disposition filenames', () {
+      expect(
+        extractDownloadFileNameFromContentDisposition(
+          'attachment; filename="fallback.apk"; '
+          "filename*=UTF-8''LazyMedia%20Deluxe-3.457.apk",
+        ),
+        'LazyMedia Deluxe-3.457.apk',
+      );
+    });
+
+    test('sanitizes path components from response filenames', () {
+      expect(
+        extractDownloadFileNameFromContentDisposition(
+          r'attachment; filename="..\..\unsafe:name.apk"',
+        ),
+        'unsafe_name.apk',
+      );
+    });
+
+    test('uses Content-Disposition before the final redirected URL', () {
+      expect(
+        resolveHtmlAssetDisplayName(
+          downloadUrl: 'https://example.com/index.php?id=1234',
+          version: '3.457',
+          appName: 'LazyMedia Deluxe',
+          responseMetadata: DownloadResponseMetadata(
+            finalUri: Uri.parse('https://cdn.example.com/redirected-name.apk'),
+            headers: const {
+              'content-disposition': 'attachment; filename="server-name.apk"',
+            },
+          ),
+        ),
+        'server-name.apk',
+      );
+    });
+
+    test('uses a package filename from the final redirected URL', () {
+      expect(
+        resolveHtmlAssetDisplayName(
+          downloadUrl: 'https://example.com/index.php?id=1234',
+          version: '3.457',
+          appName: 'LazyMedia Deluxe',
+          responseMetadata: DownloadResponseMetadata(
+            finalUri: Uri.parse(
+              'https://cdn.example.com/LazyMedia-Deluxe-3.457.xapk',
+            ),
+            headers: const {},
+          ),
+        ),
+        'LazyMedia-Deluxe-3.457.xapk',
+      );
+    });
+
+    test('preserves a package filename from the original download URL', () {
+      expect(
+        resolveHtmlAssetDisplayName(
+          downloadUrl:
+              'https://example.com/releases/ironfox-153.0.1-universal.apk',
+          version: '153.0.1',
+          appName: 'IronFox',
+        ),
+        'ironfox-153.0.1-universal.apk',
+      );
+    });
+
+    test('preserves a package filename from the link label', () {
+      expect(
+        resolveHtmlAssetDisplayName(
+          downloadUrl: 'https://example.com/download?id=1234',
+          version: '21.0',
+          appName: 'Thunderbird',
+          linkLabel: 'thunderbird-21.0.apk',
+        ),
+        'thunderbird-21.0.apk',
+      );
+    });
+
+    test('falls back to the known app name and version', () {
+      expect(
+        resolveHtmlAssetDisplayName(
+          downloadUrl: 'https://example.com/index.php?id=1234',
+          version: '3.457',
+          appName: 'LazyMedia Deluxe',
+        ),
+        'LazyMedia Deluxe-3.457.apk',
+      );
+    });
+  });
+
+  // GitHub Actions artifacts are auth-walled, so re-hosters like nightly.link
+  // only ever serve `<artifact>.zip`. Scraping one used to drop every link on
+  // the page.
+  group('HTML zip assets', () {
+    const String page = '''
+<a href="https://nightly.link/owner/repo/workflows/android/main/app-release.zip">app-release.zip</a>
+<a href="https://example.com/downloads/app-1.2.apk">app-1.2.apk</a>
+<a href="https://example.com/downloads/source.tar.gz">source.tar.gz</a>
+''';
+
+    test('a zip link is skipped until the app opts in', () async {
+      final List<MapEntry<String, String>> links = await grabLinksCommon(
+        page,
+        Uri.parse('https://example.com/'),
+        <String, dynamic>{},
+      );
+      expect(links.map((MapEntry<String, String> link) => link.key), <String>[
+        'https://example.com/downloads/app-1.2.apk',
+      ]);
+    });
+
+    test('opting in keeps the zip alongside real APKs', () async {
+      final List<MapEntry<String, String>> links = await grabLinksCommon(
+        page,
+        Uri.parse('https://example.com/'),
+        <String, dynamic>{'includeZips': true},
+      );
+      expect(
+        links.map((MapEntry<String, String> link) => link.key),
+        unorderedEquals(<String>[
+          'https://nightly.link/owner/repo/workflows/android/main/app-release.zip',
+          'https://example.com/downloads/app-1.2.apk',
+        ]),
+      );
+    });
+
+    test('the HTML source offers both zip options', () {
+      expect(
+        HTML().combinedAppSpecificSettingFormItems
+            .expand((List<GeneratedFormItem> row) => row)
+            .map((GeneratedFormItem item) => item.key),
+        containsAll(<String>['includeZips', 'zippedApkFilterRegEx']),
+      );
+    });
+  });
+
+  test(
+    'getDefaultValuesFromFormItems inflates subform items with full defaults',
+    () {
+      final html = HTML();
+      final defaults = getDefaultValuesFromFormItems(
+        html.combinedAppSpecificSettingFormItems,
+      );
+
+      final requestHeaders = defaults['requestHeader'] as List?;
+      expect(requestHeaders, isNotNull);
+      expect(requestHeaders!.length, 1);
+      final reqMap = requestHeaders.first as Map<String, dynamic>;
+      expect(reqMap.containsKey('requestHeader'), true);
+      expect(reqMap['requestHeader'], contains('Mozilla/5.0'));
+    },
+  );
+
+  test(
+    'version-code mode stores the source version code as the latest version',
+    () async {
+      // The installed version in this mode is the device's versionCode, so the
+      // latest version has to be a code too — otherwise the two are unorderable.
+      final source = _StubSource(version: '4.8.3', versionCode: 48300);
+      final app = await SourceProvider()
+          .getApp(source, 'https://example.com/app', <String, dynamic>{
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'useVersionCodeAsOSVersion': true,
+          });
+
+      expect(app.latestVersion, '48300');
+      // The source's own string is still kept for the RegEx assist helpers.
+      expect(app.rawLatestVersionFromSource, '4.8.3');
+    },
+  );
+
+  test(
+    'version-code mode leaves the version string alone without a source code',
+    () async {
+      final source = _StubSource(version: '4.8.3');
+      final app = await SourceProvider()
+          .getApp(source, 'https://example.com/app', <String, dynamic>{
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'useVersionCodeAsOSVersion': true,
+          });
+
+      expect(app.latestVersion, '4.8.3');
+    },
+  );
+
+  test(
+    'an explicit version-string source outranks version-code mode',
+    () async {
+      final source = _StubSource(version: '4.8.3', versionCode: 48300);
+      final app = await SourceProvider()
+          .getApp(source, 'https://example.com/app', <String, dynamic>{
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'useVersionCodeAsOSVersion': true,
+            'versionStringSource': versionStringSourceReleaseTitle,
+          });
+
+      expect(app.latestVersion, '4.8.3');
+    },
+  );
+
+  test(
+    'source codes follow the filtered and selected APK through reload',
+    () async {
+      final source = _StubSource(
+        version: '4.8.3',
+        apkUrls: const [
+          MapEntry('arm.apk', 'https://example.com/arm.apk'),
+          MapEntry('x86.apk', 'https://example.com/x86.apk'),
+        ],
+        versionCodesByAsset: {'arm.apk': 48301, 'x86.apk': 48302},
+      );
+      final app = await SourceProvider()
+          .getApp(source, 'https://example.com/app', {
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'autoApkFilterByArch': false,
+          });
+      expect(app.latestVersion, '48302');
+      expect(selectedSourceVersionCode(app), 48302);
+      final selected = normalizeSelectedSourceVersion(
+        app.copyWith(preferredApkIndex: 0, installedVersion: '48301'),
+      );
+      expect(selected.latestVersion, '48301');
+      expect(selectedSourceVersionCode(selected), 48301);
+      expect(appIsUpToDateForFiltering(selected), true);
+      final restored = App.fromJson(selected.toJson());
+      expect(selectedSourceVersionCode(restored), 48301);
+      expect(normalizeSelectedSourceVersion(restored), same(restored));
+      final filtered = await SourceProvider()
+          .getApp(source, 'https://example.com/app', {
+            'appId': 'org.example.app',
+            'versionDetection': 'versionCode',
+            'autoApkFilterByArch': false,
+            'apkFilterRegEx': 'arm',
+          });
+      expect(filtered.latestVersion, '48301');
+      expect(filtered.apkUrls.single.key, 'arm.apk');
+      expect(selectedSourceVersionCode(filtered), 48301);
+      expect(
+        selectedSourceVersionCode(filtered.copyWith(latestVersion: '48303')),
+        isNull,
+      );
+      expect(
+        selectedSourceVersionCode(
+          filtered.copyWith(url: 'https://different.com/app'),
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'device code and selected source code outrank display-name differences',
+    () async {
+      final source = _StubSource(version: '4.8.3', versionCode: 48300);
+      final app = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        {'appId': 'org.example.app', 'versionDetection': 'auto'},
+      );
+      final installed = app.copyWith(
+        installedVersion: 'store-specific name',
+        additionalSettings: {
+          ...app.additionalSettings,
+          observedPackageIdKey: app.id,
+          observedVersionNameKey: 'store-specific name',
+          observedVersionCodeKey: 48300,
+        },
+      );
+      expect(versionDecisionForApp(installed).reason, 'selectedApkCode');
+      expect(appIsUpToDateForFiltering(installed), true);
+      expect(
+        appHasActionableUpdate(
+          installed.copyWith(
+            additionalSettings: {
+              ...installed.additionalSettings,
+              observedVersionCodeKey: 48200,
+            },
+          ),
+        ),
+        true,
+      );
+      final stale = installed.copyWith(
+        installedVersion: 'different device observation',
+      );
+      expect(versionDecisionForApp(stale).relation, VersionRelation.unknown);
+    },
+  );
+
+  test('per-app VirusTotal switch is offered in the advanced section', () {
+    final List<List<GeneratedFormItem>> rows =
+        GitHub().combinedAppSpecificSettingFormItems;
+    final int advancedHeaderIndex = rows.indexWhere(
+      (List<GeneratedFormItem> row) =>
+          row.length == 1 && row.first.key == '__formSectionAdvanced',
+    );
+    final int scanIndex = rows.indexWhere(
+      (List<GeneratedFormItem> row) => row.any(
+        (GeneratedFormItem item) => item.key == enableVirusTotalScanKey,
+      ),
+    );
+
+    expect(advancedHeaderIndex, greaterThanOrEqualTo(0));
+    expect(scanIndex, greaterThan(advancedHeaderIndex));
+
+    final GeneratedFormItem item = rows[scanIndex].firstWhere(
+      (GeneratedFormItem item) => item.key == enableVirusTotalScanKey,
+    );
+    expect(item, isA<GeneratedFormSwitch>());
+    // Enabled by default in the form: the pages disable it only when VirusTotal
+    // scanning isn't usable, so a plain form build must leave it interactive.
+    expect((item as GeneratedFormSwitch).disabled, false);
+    // Same polarity as the global setting - on means "scan" - so it must default
+    // to on, matching what an app that was never configured actually does.
+    expect(item.value, true);
+  });
+
+  test('a saved app with no VirusTotal key is still scanned', () {
+    // The switch defaults to on, so every read must pass defaultValue: true.
+    // Apps saved before the key existed have no entry for it, and getBool's own
+    // default (false) would read as "don't scan" - silently disabling scanning
+    // for every pre-existing app on upgrade.
+    expect(
+      const TypedSettings(
+        <String, dynamic>{},
+      ).getBool(enableVirusTotalScanKey, defaultValue: true),
+      true,
+    );
+    expect(
+      const TypedSettings(<String, dynamic>{
+        enableVirusTotalScanKey: false,
+      }).getBool(enableVirusTotalScanKey, defaultValue: true),
+      false,
+    );
+    // Backups round-trip additionalSettings through JSON, where a bool can come
+    // back as a string.
+    expect(
+      const TypedSettings(<String, dynamic>{
+        enableVirusTotalScanKey: 'false',
+      }).getBool(enableVirusTotalScanKey, defaultValue: true),
+      false,
+    );
+  });
+}
+
+class _StubGitLab extends GitLab {
+  _StubGitLab(this.responseJson);
+  final String responseJson;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (url.contains('/api/v4/projects/')) {
+      if (!url.contains('/releases') && !url.contains('/tags')) {
+        return Response(jsonEncode(<String, dynamic>{'id': 12345}), 200);
+      }
+      return Response(responseJson, 200);
+    }
+    return Response('', 404);
+  }
 }

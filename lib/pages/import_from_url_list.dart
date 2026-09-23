@@ -60,9 +60,9 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
 
   Future<void> _importFromFile() async {
     try {
-      final FilePickerResult? result = await FilePicker.pickFiles();
-      if (result == null || result.files.isEmpty) return;
-      final String? path = result.files.single.path;
+      final PlatformFile? picked = await FilePicker.pickFile();
+      if (picked == null) return;
+      final String? path = picked.path;
       if (path == null) return;
       final String fileContents = await File(path).readAsString();
       final String urls = RegExp(r'https?://[^\s"]+')

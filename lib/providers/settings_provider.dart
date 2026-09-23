@@ -7,7 +7,6 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/locale_resolution.dart';
 import 'package:obtainium/main.dart';
@@ -15,6 +14,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,6 +43,11 @@ void hapticMediumImpact() {
   if (_tactileFeedbackEnabled) HapticFeedback.mediumImpact();
 }
 
+/// User-picked SAF folders with a `warnIfInaccessible` toast, for the shared
+/// access-warning plumbing in [SettingsProvider._showStorageAccessWarning].
+/// The icons folder has no entry here - see [SettingsProvider.getIconsDir].
+enum SafFolderKind { export, apkSave }
+
 void hapticHeavyImpact() {
   if (_tactileFeedbackEnabled) HapticFeedback.heavyImpact();
 }
@@ -63,7 +68,7 @@ enum SortColumnSettings {
 
 enum SortOrderSettings { ascending, descending }
 
-enum AppsListGroupBy { none, category, source, appType }
+enum AppsListGroupBy { none, category, source, appType, updateStatus }
 
 enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 
@@ -72,8 +77,9 @@ enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 // string [installerMode] getter/setter; the enum defines the shared vocabulary.
 // [AppsListGroupBy] is ObtainX's grouping model — it too persists under
 // upstream's `groupBy` key (its none/category/source names match upstream), with
-// `appType` as an ObtainX-only extra that Obtainium safely ignores.
-enum InstallerMode { system, shizuku, external }
+// `appType` and `updateStatus` as ObtainX-only extras that Obtainium safely
+// ignores.
+enum InstallerMode { system, shizuku, external, dhizuku }
 
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
 
@@ -160,6 +166,21 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Wipes every persisted setting back to ObtainX's out-of-the-box defaults.
+  /// Used by backup "Restore" (as opposed to "Import"): a restore is meant to
+  /// be OOTB-ObtainX-plus-whatever-the-backup-contains, not the backup merged
+  /// on top of whatever settings happened to be in place before it.
+  ///
+  /// Re-runs [initializeSettings]'s one-time bootstrap (by clearing the
+  /// [_settingsInitialized] guard) rather than hand-clearing each in-memory
+  /// cache here, so this can't drift out of sync with what a real fresh
+  /// install does.
+  Future<void> resetToDefaults() async {
+    await prefs?.clear();
+    _settingsInitialized = false;
+    await initializeSettings();
+  }
+
   void _removeUnusedUpstreamSettings() {
     if (prefs == null) return;
     prefs!.remove('disableSwipeActions');
@@ -204,7 +225,7 @@ class SettingsProvider with ChangeNotifier {
   void _migrateThemeAccentPrefs() {
     if (prefs == null) return;
     if (prefs!.containsKey('appAccentColorSource')) return;
-    final bool oldMaterialYou = prefs!.getBool('useMaterialYou') ?? false;
+    final bool oldMaterialYou = prefs!.getBool('useMaterialYou') ?? true;
     if (oldMaterialYou) {
       prefs!.setString(
         'appAccentColorSource',
@@ -232,10 +253,10 @@ class SettingsProvider with ChangeNotifier {
   /// Converges grouping onto upstream Obtainium's representation: pref key
   /// `groupBy`, value = [AppsListGroupBy] name. ObtainX's `none`/`category`/
   /// `source` names match upstream Obtainium's groupBy names, so Obtainium reads
-  /// them directly; ObtainX's extra `appType` value is one Obtainium simply
-  /// ignores (its getter falls back to `none`). Migrates from ObtainX's older
-  /// int `appsListGroupBy` key — which is authoritative because it alone can
-  /// encode `appType` — and the even-older `groupByCategory` bool.
+  /// them directly; ObtainX's extra `appType` and `updateStatus` values are ones
+  /// Obtainium simply ignores (its getter falls back to `none`). Migrates from
+  /// ObtainX's older int `appsListGroupBy` key — which is authoritative because
+  /// it alone can encode `appType` — and the even-older `groupByCategory` bool.
   void _migrateGroupBySetting() {
     if (prefs == null) return;
     if (prefs!.containsKey('appsListGroupBy')) {
@@ -286,6 +307,17 @@ class SettingsProvider with ChangeNotifier {
       prefs!.remove(_rightSwipeNameKey);
       prefs!.remove(_leftSwipeNameKey);
       prefs!.setInt('swipeActionEnumVersion', 3);
+      schemaVersion = 3;
+    }
+
+    if (schemaVersion < 4) {
+      if (prefs!.getString(_leftSwipeNameKey) == 'pin' ||
+          (!prefs!.containsKey(_leftSwipeNameKey) &&
+              prefs!.getInt('leftSwipeAction') == SwipeAction.pin.index)) {
+        prefs!.remove(_leftSwipeNameKey);
+        prefs!.remove('leftSwipeAction');
+      }
+      prefs!.setInt('swipeActionEnumVersion', 4);
     }
   }
 
@@ -301,7 +333,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     syncOne('rightSwipeAction', _rightSwipeNameKey, SwipeAction.update.index);
-    syncOne('leftSwipeAction', _leftSwipeNameKey, SwipeAction.pin.index);
+    syncOne('leftSwipeAction', _leftSwipeNameKey, SwipeAction.delete.index);
   }
 
   SwipeAction _swipeActionFromPrefs(
@@ -339,6 +371,7 @@ class SettingsProvider with ChangeNotifier {
       final String legacyStr = legacyMode.toString();
       final String converged = switch (legacyStr) {
         'shizuku' || '1' => InstallerMode.shizuku.name,
+        'dhizuku' => InstallerMode.dhizuku.name,
         'legacy' || '2' => InstallerMode.external.name,
         'stock' || '0' => InstallerMode.system.name,
         _ =>
@@ -383,9 +416,9 @@ class SettingsProvider with ChangeNotifier {
   }
 
   // ── App UI scale ────────────────────────────────────────────────────────
-  // User-tunable multiplier applied to the effective text scale used by the
-  // top-level MediaQuery override in main.dart. The system scaler is capped at
-  // 1.2 and the final custom scale stays inside this 0.75-1.25 range.
+  // User-tunable multiplier applied to the complete app viewport in main.dart.
+  // The system text scaler is capped separately at 1.2, and the viewport scale
+  // stays inside this 0.75-1.25 range.
   static const double appUiScaleMin = 0.75;
   static const double appUiScaleMax = 1.25;
   static const double appUiScaleDefault = 1.0;
@@ -476,6 +509,16 @@ class SettingsProvider with ChangeNotifier {
         : InstallerMode.system.name;
   }
 
+  bool get useDhizuku {
+    return installerMode == InstallerMode.dhizuku.name;
+  }
+
+  set useDhizuku(bool useDhizuku) {
+    installerMode = useDhizuku
+        ? InstallerMode.dhizuku.name
+        : InstallerMode.system.name;
+  }
+
   ThemeSettings get theme {
     return ThemeSettings.values[prefs?.getInt('theme') ??
         ThemeSettings.system.index];
@@ -511,7 +554,7 @@ class SettingsProvider with ChangeNotifier {
       prefs?.getString('appAccentColorSource'),
     );
     if (parsed != null) return parsed;
-    return (prefs?.getBool('useMaterialYou') ?? false)
+    return (prefs?.getBool('useMaterialYou') ?? true)
         ? AppAccentColorSource.materialYou
         : AppAccentColorSource.custom;
   }
@@ -646,7 +689,7 @@ class SettingsProvider with ChangeNotifier {
   // implicit enabled default for users upgrading without an explicit pref.
   bool get progressiveBlurEnabled {
     if (reduceVisualEffects) return false;
-    return prefs?.getBool('progressiveBlurEnabled') ?? false;
+    return prefs?.getBool('progressiveBlurEnabled') ?? true;
   }
 
   set progressiveBlurEnabled(bool value) {
@@ -659,6 +702,10 @@ class SettingsProvider with ChangeNotifier {
   //     so all BackdropFilter passes are skipped.
   //   - Skips the [OpenContainer] container-transform morph for the apps
   //     list -> AppPage navigation; uses a plain page-route push instead.
+  //   - Disables page gradients, section-card and detail-footer shadows, and
+  //     the details cards' full-surface offscreen clipping.
+  //   - Uses global page colors, skipping icon color extraction while keeping
+  //     the saved icon-color preference for when reduced effects is off.
   // Intended for users who report frame-rate drops on older devices, as a
   // single-switch escape hatch. Default false to preserve the visual look
   // for everyone whose hardware can handle it.
@@ -771,6 +818,8 @@ class SettingsProvider with ChangeNotifier {
   }
 
   bool get matchAppPageToIconColors {
+    // Keep the saved preference so it returns when reduced effects is off.
+    if (reduceVisualEffects) return false;
     return prefs?.getBool('matchAppPageToIconColors') ?? true;
   }
 
@@ -806,12 +855,32 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  bool get showAuthorBadge {
+    return prefs?.getBool('showAuthorBadge') ?? true;
+  }
+
+  set showAuthorBadge(bool value) {
+    prefs?.setBool('showAuthorBadge', value);
+    notifyListeners();
+  }
+
+  bool get showVersionBadge {
+    return prefs?.getBool('showVersionBadge') ?? true;
+  }
+
+  set showVersionBadge(bool value) {
+    prefs?.setBool('showVersionBadge', value);
+    notifyListeners();
+  }
+
   int get updateInterval {
     return prefs?.getInt('updateInterval') ?? 360;
   }
 
   set updateInterval(int min) {
     prefs?.setInt('updateInterval', min);
+    // The cached due time was derived from the old interval.
+    bgNextCheckDue = null;
     notifyListeners();
   }
 
@@ -822,6 +891,31 @@ class SettingsProvider with ChangeNotifier {
   set updateIntervalSliderVal(double val) {
     prefs?.setDouble('updateIntervalSliderVal', val);
     notifyListeners();
+  }
+
+  /// Earliest moment any tracked app can become due for a background check.
+  ///
+  /// Android wakes the periodic task on its own schedule, which is not the
+  /// user's check interval, so most wake-ups have nothing to do. This lets one
+  /// of those return before loading every app record and opening the check
+  /// timestamp database. Treated as a hint only: it is cleared whenever the app
+  /// set or the interval changes, and a missing value means "load and decide".
+  /// Deliberately does not notify listeners - no UI reads it.
+  DateTime? get bgNextCheckDue {
+    final int? micros = prefs?.getInt('bgNextCheckDue');
+    return micros == null ? null : DateTime.fromMicrosecondsSinceEpoch(micros);
+  }
+
+  set bgNextCheckDue(DateTime? due) {
+    if (due == null) {
+      // Cleared from [AppsProvider.markAppsChanged], which runs on every app
+      // save, so skip the platform write when there is nothing to clear.
+      if (prefs?.containsKey('bgNextCheckDue') ?? false) {
+        prefs?.remove('bgNextCheckDue');
+      }
+    } else {
+      prefs?.setInt('bgNextCheckDue', due.microsecondsSinceEpoch);
+    }
   }
 
   bool get checkOnStart {
@@ -873,14 +967,17 @@ class SettingsProvider with ChangeNotifier {
     return false;
   }
 
-  Future<bool> getInstallPermission({bool enforce = false}) async {
+  Future<bool> getInstallPermission({
+    bool enforce = false,
+    ThemeData? toastTheme,
+  }) async {
     while (!(await Permission.requestInstallPackages.isGranted)) {
       // Explicit request as InstallPlugin request sometimes bugged
-      unawaited(
-        Fluttertoast.showToast(
-          msg: tr('pleaseAllowInstallPerm'),
-          toastLength: Toast.LENGTH_LONG,
-        ),
+      showAppToast(
+        tr('pleaseAllowInstallPerm'),
+        type: ToastType.warning,
+        duration: const Duration(seconds: 4),
+        theme: toastTheme,
       );
       if ((await Permission.requestInstallPackages.request()) ==
           PermissionStatus.granted) {
@@ -899,6 +996,15 @@ class SettingsProvider with ChangeNotifier {
 
   set showAppWebpage(bool show) {
     prefs?.setBool('showAppWebpage', show);
+    notifyListeners();
+  }
+
+  bool get updateButtonsAtTopOfAppPage {
+    return prefs?.getBool('updateButtonsAtTopOfAppPage') ?? false;
+  }
+
+  set updateButtonsAtTopOfAppPage(bool value) {
+    prefs?.setBool('updateButtonsAtTopOfAppPage', value);
     notifyListeners();
   }
 
@@ -1038,7 +1144,13 @@ class SettingsProvider with ChangeNotifier {
     return Map<String, int>.from(_categoriesMemory!);
   }
 
-  void setCategories(Map<String, int> cats, {AppsProvider? appsProvider}) {
+  /// [appsProvider] is required, not optional: every write to the category map
+  /// is also the only chance to strip deleted categories from the apps that
+  /// carry them, and a call that skipped it used to leave orphaned tags behind.
+  void setCategories(
+    Map<String, int> cats, {
+    required AppsProvider appsProvider,
+  }) {
     final List<MapEntry<String, int>> sortedEntries = cats.entries.toList()
       ..sort((a, b) {
         final int cmp = a.key.toLowerCase().compareTo(b.key.toLowerCase());
@@ -1049,50 +1161,41 @@ class SettingsProvider with ChangeNotifier {
       sortedEntries,
     );
 
-    if (appsProvider != null) {
-      // Detect a rename: one key removed from old map, one key added to new map.
-      // Each UI action (rename, delete) fires a separate call, so at most one
-      // rename is in flight per call.
-      final Map<String, int> oldCats = categories;
-      final Set<String> removed = oldCats.keys.toSet().difference(
-        sortedCats.keys.toSet(),
-      );
-      final Set<String> added = sortedCats.keys.toSet().difference(
-        oldCats.keys.toSet(),
-      );
-      final String? renamedFrom = (removed.length == 1 && added.length == 1)
-          ? removed.first
-          : null;
-      final String? renamedTo = (removed.length == 1 && added.length == 1)
-          ? added.first
-          : null;
+    // Detect a rename: one key removed from old map, one key added to new map.
+    // Each UI action (rename, delete) fires a separate call, so at most one
+    // rename is in flight per call.
+    final Map<String, int> oldCats = categories;
+    final Set<String> removed = oldCats.keys.toSet().difference(
+      sortedCats.keys.toSet(),
+    );
+    final Set<String> added = sortedCats.keys.toSet().difference(
+      oldCats.keys.toSet(),
+    );
+    final bool isRename = removed.length == 1 && added.length == 1;
+    // Walking the loaded listings is cheap and catches tags orphaned by an
+    // earlier delete that never reached every record. Without it, a library
+    // that already holds orphans would only be repaired by another delete -
+    // and once the last category is gone there is nothing left to delete.
+    final bool hasOrphanedCategory = appsProvider.getAppValues().any(
+      (a) => a.app.categories.any((c) => !sortedCats.containsKey(c)),
+    );
 
-      final List<App> changedApps = appsProvider
-          .getAppValues()
-          .map((a) {
-            bool changed = false;
-            if (renamedFrom != null && renamedTo != null) {
-              final idx = a.app.categories.indexOf(renamedFrom);
-              if (idx >= 0) {
-                a.app.categories[idx] = renamedTo;
-                changed = true;
-              }
-            }
-            final n1 = a.app.categories.length;
-            a.app.categories.removeWhere((c) => !sortedCats.keys.contains(c));
-            if (a.app.categories.length < n1) changed = true;
-            return changed ? a.app : null;
-          })
-          .where((element) => element != null)
-          .map((e) => e as App)
-          .toList();
-      if (changedApps.isNotEmpty) {
-        appsProvider.saveApps(changedApps, updateInstalledInfo: false);
-      }
-    }
     _categoriesMemory = Map<String, int>.from(sortedCats);
     prefs?.setString('categories', jsonEncode(sortedCats));
     notifyListeners();
+
+    // The new map is committed before the sweep so the save it performs
+    // notifies listeners against the already-updated category list. The sweep
+    // reaches every saved app, loaded or not, and swallows its own errors.
+    if (removed.isNotEmpty || hasOrphanedCategory) {
+      unawaited(
+        appsProvider.reconcileAppCategories(
+          sortedCats.keys.toSet(),
+          renamedFrom: isRename ? removed.first : null,
+          renamedTo: isRename ? added.first : null,
+        ),
+      );
+    }
   }
 
   List<AppFolder> get appFolders {
@@ -1220,6 +1323,38 @@ class SettingsProvider with ChangeNotifier {
 
   void setFolderGroupUpdatesSeparately(String id, bool v) =>
       _setFolderViewField(id, 'groupUpdatesSeparately', v);
+
+  bool folderShowAppTypeBadge(String id) =>
+      (_getFolderViewRaw(id)?['showAppTypeBadge'] as bool?) ?? showAppTypeBadge;
+
+  void setFolderShowAppTypeBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showAppTypeBadge', v);
+
+  bool folderShowTrackedStoreBadge(String id) =>
+      (_getFolderViewRaw(id)?['showTrackedStoreBadge'] as bool?) ??
+      showTrackedStoreBadge;
+
+  void setFolderShowTrackedStoreBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showTrackedStoreBadge', v);
+
+  bool folderShowCategoriesBadge(String id) =>
+      (_getFolderViewRaw(id)?['showCategoriesBadge'] as bool?) ??
+      showCategoriesBadge;
+
+  void setFolderShowCategoriesBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showCategoriesBadge', v);
+
+  bool folderShowAuthorBadge(String id) =>
+      (_getFolderViewRaw(id)?['showAuthorBadge'] as bool?) ?? showAuthorBadge;
+
+  void setFolderShowAuthorBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showAuthorBadge', v);
+
+  bool folderShowVersionBadge(String id) =>
+      (_getFolderViewRaw(id)?['showVersionBadge'] as bool?) ?? showVersionBadge;
+
+  void setFolderShowVersionBadge(String id, bool v) =>
+      _setFolderViewField(id, 'showVersionBadge', v);
 
   Locale? get forcedLocale {
     final Locale? storedLocale = parseStoredLocaleTag(
@@ -1370,8 +1505,14 @@ class SettingsProvider with ChangeNotifier {
       // Retry once so transient SAF failures do not hide a still-valid grant.
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await _canReadAndWriteSafTree(uri)) {
+        // Deliberately not cleared here: only [pickExportDir]'s explicit
+        // `remove: true` (the user's own long-press reset) should erase this.
+        // A reinstall/new device always fails this check the first time (the
+        // OS grant never survives even though a restored backup just set this
+        // pref), and silently wiping it here would also lose it as the re-pick
+        // picker's starting location (see [pickExportDir]'s `initialUri`).
         if (warnIfInaccessible) {
-          _showStorageAccessWarning(isExportDir: true);
+          _showStorageAccessWarning(SafFolderKind.export);
         }
         return null;
       }
@@ -1439,8 +1580,14 @@ class SettingsProvider with ChangeNotifier {
     if (!await _canReadAndWriteSafTree(uri)) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await _canReadAndWriteSafTree(uri)) {
+        // Deliberately not cleared here: only [pickApkSaveDir]'s explicit
+        // `remove: true` (the user's own long-press reset) should erase this.
+        // A reinstall/new device always fails this check the first time (the
+        // OS grant never survives even though a restored backup just set this
+        // pref), and silently wiping it here would also lose it as the re-pick
+        // picker's starting location (see [pickApkSaveDir]'s `initialUri`).
         if (warnIfInaccessible) {
-          _showStorageAccessWarning(isExportDir: false);
+          _showStorageAccessWarning(SafFolderKind.apkSave);
         }
         return null;
       }
@@ -1492,14 +1639,94 @@ class SettingsProvider with ChangeNotifier {
     }
   }
 
+  /// Icon mirroring is always best-effort and silent (see
+  /// AppsProviderIconBackup), so unlike [getExportDir]/[getApkSaveDir] there is
+  /// no `warnIfInaccessible` toast here - a lost-access state is only ever
+  /// surfaced inline, in the Backup page's "App icons" card.
+  Future<Uri?> getIconsDir({bool requireAccess = true}) async {
+    final String? uriString = prefs?.getString('iconsDir');
+    if (uriString == null) {
+      return null;
+    }
+    final Uri uri = Uri.parse(uriString);
+    if (!requireAccess) {
+      return uri;
+    }
+
+    if (!await _canReadAndWriteSafTree(uri)) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!await _canReadAndWriteSafTree(uri)) {
+        // Deliberately kept (not cleared) on a failed check: a reinstall/new
+        // device always fails this the first time (the OS grant never
+        // survives, even though a restored backup just set this pref), and
+        // losing the old URI here would also lose it as the re-pick picker's
+        // starting location (see [pickIconsDir]'s `initialUri`).
+        return null;
+      }
+    }
+    return uri;
+  }
+
+  /// Lets the user pick a folder that app icons are mirrored into, so custom
+  /// and deduced icons survive a reinstall or a move to a new device. Cancelling
+  /// leaves the previous folder and persisted URI permission unchanged.
+  Future<void> pickIconsDir({bool remove = false}) async {
+    if (remove) {
+      final String? saved = prefs?.getString('iconsDir');
+      unawaited(prefs?.remove('iconsDir'));
+      notifyListeners();
+      if (saved != null && saved.isNotEmpty) {
+        try {
+          await saf.releasePersistableUriPermission(Uri.parse(saved));
+        } catch (_) {}
+      }
+      return;
+    }
+
+    final String? previousIconsDirString = prefs?.getString('iconsDir');
+    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
+      initialUri: previousIconsDirString == null
+          ? null
+          : Uri.parse(previousIconsDirString),
+    );
+
+    if (newUri == null) {
+      return;
+    }
+
+    final String newUriString = newUri.toString();
+    if (previousIconsDirString == newUriString) {
+      return;
+    }
+
+    unawaited(prefs?.setString('iconsDir', newUriString));
+    notifyListeners();
+
+    if (previousIconsDirString != null && previousIconsDirString.isNotEmpty) {
+      try {
+        await saf.releasePersistableUriPermission(
+          Uri.parse(previousIconsDirString),
+        );
+      } catch (_) {}
+    }
+  }
+
   Future<bool> _canReadAndWriteSafTree(Uri treeUri) async {
     try {
       if (await NativeFeatures.hasPersistedDocumentTreePermission(treeUri)) {
-        final bool canReadTree = await saf.canRead(treeUri) ?? false;
+        bool canReadTree = await saf.canRead(treeUri) ?? false;
         if (!canReadTree) {
-          return false;
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+          canReadTree = await saf.canRead(treeUri) ?? false;
+          if (!canReadTree) {
+            return false;
+          }
         }
-        final bool canWriteTree = await saf.canWrite(treeUri) ?? false;
+        bool canWriteTree = await saf.canWrite(treeUri) ?? false;
+        if (!canWriteTree) {
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+          canWriteTree = await saf.canWrite(treeUri) ?? false;
+        }
         return canWriteTree;
       }
 
@@ -1516,24 +1743,33 @@ class SettingsProvider with ChangeNotifier {
     }
   }
 
-  void _showStorageAccessWarning({required bool isExportDir}) {
+  void _showStorageAccessWarning(SafFolderKind kind) {
     final DateTime now = DateTime.now();
-    final DateTime? lastWarningAt = isExportDir
-        ? _lastExportDirAccessWarningAt
-        : _lastApkSaveDirAccessWarningAt;
+    final DateTime? lastWarningAt = switch (kind) {
+      SafFolderKind.export => _lastExportDirAccessWarningAt,
+      SafFolderKind.apkSave => _lastApkSaveDirAccessWarningAt,
+    };
 
     if (lastWarningAt != null &&
         now.difference(lastWarningAt) < _storageAccessWarningCooldown) {
       return;
     }
 
-    if (isExportDir) {
-      _lastExportDirAccessWarningAt = now;
-    } else {
-      _lastApkSaveDirAccessWarningAt = now;
+    switch (kind) {
+      case SafFolderKind.export:
+        _lastExportDirAccessWarningAt = now;
+      case SafFolderKind.apkSave:
+        _lastApkSaveDirAccessWarningAt = now;
     }
 
-    Fluttertoast.showToast(msg: tr('storagePermissionDenied'));
+    showAppToast(
+      tr(switch (kind) {
+        SafFolderKind.export => 'exportFolderAccessUnavailable',
+        SafFolderKind.apkSave => 'apkSaveFolderAccessUnavailable',
+      }),
+      type: ToastType.error,
+      duration: const Duration(seconds: 5),
+    );
   }
 
   /// When true (and an APK save folder is set), copies of downloaded APKs are
@@ -1558,7 +1794,7 @@ class SettingsProvider with ChangeNotifier {
   }
 
   bool get onlyCheckInstalledOrTrackOnlyApps {
-    return prefs?.getBool('onlyCheckInstalledOrTrackOnlyApps') ?? false;
+    return prefs?.getBool('onlyCheckInstalledOrTrackOnlyApps') ?? true;
   }
 
   set onlyCheckInstalledOrTrackOnlyApps(bool val) {
@@ -1602,7 +1838,7 @@ class SettingsProvider with ChangeNotifier {
   }
 
   bool get beforeNewInstallsShareToAppVerifier {
-    return prefs?.getBool('beforeNewInstallsShareToAppVerifier') ?? true;
+    return prefs?.getBool('beforeNewInstallsShareToAppVerifier') ?? false;
   }
 
   set beforeNewInstallsShareToAppVerifier(bool val) {
@@ -1655,7 +1891,7 @@ class SettingsProvider with ChangeNotifier {
     return _swipeActionFromPrefs(
       'leftSwipeAction',
       _leftSwipeNameKey,
-      SwipeAction.pin.index,
+      SwipeAction.delete.index,
     );
   }
 

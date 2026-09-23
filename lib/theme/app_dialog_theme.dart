@@ -21,3 +21,16 @@ DialogThemeData appDialogTheme() {
 /// (`EdgeInsets.only(left: 24, top: 16, right: 24, bottom: 24)`) gap above
 /// the buttons.
 const EdgeInsets appDialogContentPadding = EdgeInsets.fromLTRB(24, 16, 24, 16);
+
+/// Width to pin [AlertDialog.content] to, so a dialog's size doesn't depend on
+/// how long its title happens to be.
+///
+/// [AlertDialog] lays its column out inside an [IntrinsicWidth], so by default
+/// a dialog is only as wide as its widest line of text: a short title collapses
+/// to [Dialog]'s 280dp floor while "Search F-Droid third-party repo" fills the
+/// screen, and identical input fields look pinched in the narrow one.
+/// Giving the content a definite width makes that measurement constant instead.
+///
+/// Plus [appDialogContentPadding] this is Material 3's 560dp maximum dialog
+/// width; narrower screens clamp it down to the space the dialog actually has.
+const double appDialogContentWidth = 512;

@@ -1,0 +1,114 @@
+name: Format Issue Body & Comments
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+
+jobs:
+  format-issue-or-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            // The bot's own PATCH retriggers `edited`. Skip it so a no-op
+            // rewrite cannot loop, and so a later html-img pass cannot strip
+            // alt text that the markdown-img pass just added.
+            if (context.actor === 'github-actions[bot]') return;
+
+            const isComment = !!context.payload.comment;
+            const target = isComment ? context.payload.comment : context.payload.issue;
+            const body = target.body;
+            if (!body) return;
+
+            const githubAssetSrc =
+              'https:\\/\\/(?:github\\.com|user-images\\.githubusercontent\\.com)\\/';
+
+            function looksLikeRawLog(text) {
+              const hasDiagnosticHeader =
+                /^===\s+(?:ObtainX|Obtainium)\s+Diagnostic Log\s+===$/im.test(text);
+              const timestampedLogLines = text.match(
+                /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?:\s+(?:debug|info|warning|error):/gim
+              ) || [];
+              const hasStackTrace =
+                /(?:^|\n)[^\n]*(?:Exception|Error):[^\n]*\n(?:\s+at\s+[^\n]+\n?){2,}/m.test(text);
+              return hasDiagnosticHeader || timestampedLogLines.length >= 2 || hasStackTrace;
+            }
+
+            function isAttachmentOnly(text) {
+              const lines = text.split(/\s*\n\s*/).filter(Boolean);
+              if (lines.length === 0) return false;
+              return lines.every((line) =>
+                /^\[.*?\]\(https?:\/\/[^\)]+\)$/i.test(line) ||
+                /^https?:\/\/[^\s]+$/i.test(line)
+              );
+            }
+
+            function wrapInFence(text) {
+              let ticks = '```';
+              while (text.includes(ticks)) ticks += '`';
+              return `${ticks}\n${text}\n${ticks}`;
+            }
+
+            let updatedBody = body;
+
+            // Do not call .test() on these /g regexes first: that advances
+            // lastIndex and makes the following replace skip the first match.
+            updatedBody = updatedBody.replace(
+              new RegExp(`<img\\s+[^>]*src="(${githubAssetSrc}[^"]+)"[^>]*\\/?>`, 'gi'),
+              '<img width="300" src="$1" />'
+            );
+            updatedBody = updatedBody.replace(
+              new RegExp(`!\\[([^\\]]*)\\]\\((${githubAssetSrc}[^\\)]+)\\)`, 'g'),
+              '<img width="300" alt="$1" src="$2" />'
+            );
+
+            if (isComment) {
+              const trimmed = updatedBody.trim();
+              const alreadyFenced = trimmed.startsWith('```');
+              if (!alreadyFenced && !isAttachmentOnly(trimmed) && looksLikeRawLog(trimmed)) {
+                updatedBody = wrapInFence(trimmed);
+              }
+            } else {
+              const logsSectionRegex = /(### ObtainX logs\s*\n+)([\s\S]*?)(?=\n### |$)/i;
+              const logsMatch = updatedBody.match(logsSectionRegex);
+              if (logsMatch) {
+                const header = logsMatch[1];
+                const logsContent = logsMatch[2].trim();
+                const alreadyFenced = logsContent.startsWith('```');
+                if (
+                  logsContent.length > 0 &&
+                  logsContent !== '_No response_' &&
+                  !alreadyFenced &&
+                  !isAttachmentOnly(logsContent) &&
+                  looksLikeRawLog(logsContent)
+                ) {
+                  const wrappedSection = `${header}${wrapInFence(logsContent)}\n`;
+                  // Function replacer: a string replacer would interpret $1 /
+                  // $' inside Android stack traces as regex substitution.
+                  updatedBody = updatedBody.replace(logsSectionRegex, () => wrappedSection);
+                }
+              }
+            }
+
+            if (updatedBody !== body) {
+              if (isComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: context.payload.comment.id,
+                  body: updatedBody
+                });
+              } else {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.issue.number,
+                  body: updatedBody
+                });
+              }
+            }

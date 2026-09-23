@@ -11,6 +11,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
@@ -45,17 +46,29 @@ Future<bool> persistAdditionalOptionsForm({
     app.additionalSettings,
   );
   syncVersionStringSourceSettings(originalSettings);
-  if (originalSettings['versionDetection'] == 'versionCode' ||
-      originalSettings['useVersionCodeAsOSVersion'] == true) {
-    originalSettings['versionDetection'] = 'versionCode';
-    originalSettings['useVersionCodeAsOSVersion'] = true;
-  } else {
-    originalSettings['useVersionCodeAsOSVersion'] = false;
-  }
+  normalizeVersionDetectionSettings(
+    originalSettings,
+    promoteLegacyBoolean: true,
+  );
   app = app.copyWith(additionalSettings: {...originalSettings, ...formValues});
   syncVersionStringSourceSettings(app.additionalSettings);
-  app.additionalSettings['useVersionCodeAsOSVersion'] =
-      app.additionalSettings['versionDetection'] == 'versionCode';
+  normalizeVersionDetectionSettings(app.additionalSettings);
+  if (app.additionalSettings.containsKey(installStatusResetKey)) {
+    app = resetInstallStatusToDeviceVersion(app, appInMem.installedInfo);
+  }
+  // Excluding an app drops any verdict a previous scan left behind. The app
+  // detail page renders latestMalwareScanStatus as a Clean/Flagged/Failed chip,
+  // and once scanning is off for this app that chip can never be refreshed or
+  // contradicted - leaving a stale "Clean" badge asserting something nothing is
+  // checking anymore.
+  if (!app.settings.getBool(enableVirusTotalScanKey, defaultValue: true) &&
+      app.latestMalwareScanStatus != null) {
+    app = app.copyWith(
+      latestMalwareScanStatus: null,
+      latestMalwareScanDetail: null,
+      latestMalwareScanReportUrl: null,
+    );
+  }
   if (source is GitHub) {
     if (!source.canVerifyAttestations(
       app.additionalSettings,
@@ -73,17 +86,8 @@ Future<bool> persistAdditionalOptionsForm({
   }
 
   final bool versionDetectionPreviouslyActive =
-      originalSettings['versionDetection'] == 'auto' ||
-      originalSettings['versionDetection'] == 'standard' ||
-      originalSettings['versionDetection'] == 'versionCode' ||
-      originalSettings['versionDetection'] == true ||
-      originalSettings['versionDetection'] == null;
-  final bool versionDetectionCurrentlyActive =
-      app.additionalSettings['versionDetection'] == 'auto' ||
-      app.additionalSettings['versionDetection'] == 'standard' ||
-      app.additionalSettings['versionDetection'] == 'versionCode' ||
-      app.additionalSettings['versionDetection'] == true ||
-      app.additionalSettings['versionDetection'] == null;
+      versionDetectionModeOf(originalSettings) != VersionDetectionMode.pseudo;
+  final bool versionDetectionCurrentlyActive = app.usesStandardVersionDetection;
 
   final bool versionDetectionEnabled =
       versionDetectionCurrentlyActive && !versionDetectionPreviouslyActive;
@@ -99,9 +103,7 @@ Future<bool> persistAdditionalOptionsForm({
 
   if (releaseDateVersionEnabled && app.releaseDate != null) {
     final bool isUpdated =
-        app.installedVersion == app.latestVersion ||
-        (app.installedVersion != null &&
-            versionsEffectivelyEqual(app.installedVersion!, app.latestVersion));
+        versionDecisionForApp(appInMem.app).relation == VersionRelation.same;
     app = app.copyWith(
       latestVersion: app.releaseDate!.toUtc().toIso8601String(),
     );
@@ -114,10 +116,9 @@ Future<bool> persistAdditionalOptionsForm({
   }
 
   if (versionDetectionEnabled) {
-    if (app.additionalSettings['versionDetection'] != 'auto' &&
-        app.additionalSettings['versionDetection'] != 'standard' &&
-        app.additionalSettings['versionDetection'] != 'versionCode') {
-      app.additionalSettings['versionDetection'] = 'auto';
+    if (!app.usesStandardVersionDetection) {
+      app.additionalSettings['versionDetection'] =
+          VersionDetectionMode.auto.key;
     }
     if (app.additionalSettings['releaseDateAsVersion'] == true) {
       app.additionalSettings['versionStringSource'] =
@@ -125,19 +126,9 @@ Future<bool> persistAdditionalOptionsForm({
       syncVersionStringSourceSettings(app.additionalSettings);
     }
   } else if (versionDetectionDisabled && app.installedVersion != null) {
-    final String? realInstalledVersion =
-        app.additionalSettings['useVersionCodeAsOSVersion'] == true
-        ? appInMem.installedInfo?.versionCode.toString()
-        : appInMem.installedInfo?.versionName;
-    if (realInstalledVersion != null) {
-      if (reconcileVersionDifferences(
-            realInstalledVersion,
-            app.latestVersion,
-          )?.key !=
-          true) {
-        app = app.copyWith(installedVersion: app.latestVersion);
-      }
-    }
+    // Explicitly entering Pseudo starts tracking the current source release.
+    // Device observations remain separate and are refreshed by saveApps.
+    app = app.copyWith(installedVersion: app.latestVersion);
   }
 
   bool versionSettingsChanged = versionDetectionEnabled;
@@ -205,29 +196,14 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     final Map<String, dynamic> appAdditionalSettings =
         Map<String, dynamic>.from(app.additionalSettings);
     syncVersionStringSourceSettings(appAdditionalSettings);
-    // Defensively normalize versionDetection to the string enum the dropdown
-    // expects. App.fromJson normally migrates legacy bool values, but it falls
-    // back to raw JSON if that migration throws — a bool here would crash the
-    // DropdownButton ("no item with value: false"). false→pseudo / true→auto
-    // preserves the app's actual behavior; anything unrecognized → auto.
-    final dynamic vd = appAdditionalSettings['versionDetection'];
-    if (vd == false) {
-      appAdditionalSettings['versionDetection'] = 'pseudo';
-    } else if (vd == true) {
-      appAdditionalSettings['versionDetection'] = 'auto';
-    } else if (vd != 'auto' &&
-        vd != 'standard' &&
-        vd != 'pseudo' &&
-        vd != 'versionCode') {
-      appAdditionalSettings['versionDetection'] = 'auto';
-    }
-    if (appAdditionalSettings['versionDetection'] == 'versionCode' ||
-        appAdditionalSettings['useVersionCodeAsOSVersion'] == true) {
-      appAdditionalSettings['versionDetection'] = 'versionCode';
-      appAdditionalSettings['useVersionCodeAsOSVersion'] = true;
-    } else {
-      appAdditionalSettings['useVersionCodeAsOSVersion'] = false;
-    }
+    // Normalize versionDetection to one of the dropdown's own values. App.fromJson
+    // normally migrates legacy encodings, but it falls back to raw JSON if that
+    // migration throws — a bool here would crash the DropdownButton ("no item
+    // with value: false").
+    normalizeVersionDetectionSettings(
+      appAdditionalSettings,
+      promoteLegacyBoolean: true,
+    );
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
     final AppSource source = SourceProvider().getSource(
       app.url,
@@ -249,6 +225,22 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           } else {
             element.value = stored;
           }
+        }
+        // Same shape as the build-verification gating below: the switch stays
+        // visible but inert when VirusTotal scanning isn't usable, so people can
+        // see the option exists (and, via its tooltip, what it needs) instead of
+        // hunting for a control that silently vanished.
+        //
+        // Unlike buildVerificationMode, a disabled value here is NOT clamped. The
+        // attestation clamp exists because a stale 'enforce' is a security claim
+        // that must not outlive the PAT backing it; this switch is the opposite -
+        // clamping it would silently re-enable scanning for an app the user
+        // deliberately excluded (e.g. a 700MB APK) the moment they toggled global
+        // scanning off and back on.
+        if (element is GeneratedFormSwitch &&
+            element.key == enableVirusTotalScanKey &&
+            !virusTotalScanningAvailable(settingsProvider)) {
+          element.disabled = true;
         }
         if (source is GitHub &&
             element is GeneratedFormDropdown &&
@@ -307,6 +299,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {
     if (!mounted) return;
+    if (!context.read<SettingsProvider>().matchAppPageToIconColors) return;
     if (_iconSchemeCacheKey == cacheKey) return;
     if (_iconSchemeLoadingForKey == cacheKey) return;
     _iconSchemeLoadingForKey = cacheKey;
@@ -501,6 +494,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
       (SettingsProvider settings) => Object.hash(
         settings.matchAppPageToIconColors,
         settings.blackThemeActive,
+        settings.useGradientBackground,
       ),
     );
     context.select<AppsProvider, int>((AppsProvider provider) {
@@ -578,7 +572,7 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     final Brightness pageBrightness = pageColorSchemeForPage.brightness;
 
     final String pageThemeKey =
-        '${_iconSchemeCacheKey ?? "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
+        '${applyIconDerivedPageTheming ? _iconSchemeCacheKey : "none"}_${themeBrightness.name}_${applyBlackPageTheme ? "black" : "standard"}';
     if (_cachedPageThemeKey != pageThemeKey || _cachedPageTheme == null) {
       _cachedPageThemeKey = pageThemeKey;
       _cachedPageTheme = buildAppPageThemedData(
@@ -588,10 +582,24 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
     }
     final ThemeData pageThemeForPage = _cachedPageTheme!;
 
-    final Color scaffoldBackground = appPageDeeperSurfaceColor(
-      pageColorSchemeForPage.surface,
-      pageBrightness,
-    );
+    final bool useGradientBackground = settingsProvider.useGradientBackground;
+    // The gradient is painted behind the page, so the Scaffold has to get out of
+    // its way; the deeper surface stays the backdrop when the gradient is off.
+    final Color scaffoldBackground = useGradientBackground
+        ? Colors.transparent
+        : appPageDeeperSurfaceColor(
+            pageColorSchemeForPage.surface,
+            pageBrightness,
+          );
+    final Widget? gradientBackdrop = useGradientBackground
+        ? Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: pageColorSchemeForPage.schemePageBackgroundGradient,
+              ),
+            ),
+          )
+        : null;
 
     if (_items.isEmpty) {
       return Theme(
@@ -599,7 +607,13 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
         child: Scaffold(
           backgroundColor: scaffoldBackground,
           appBar: AppBar(title: Text(tr('additionalOptions'))),
-          body: const Center(child: SizedBox.shrink()),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              ?gradientBackdrop,
+              const Center(child: SizedBox.shrink()),
+            ],
+          ),
         ),
       );
     }
@@ -673,39 +687,54 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
             ),
           ),
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-          body: CustomScrollView(
-            scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            slivers: [
-              CustomAppBar(
-                title: tr('additionalOptions'),
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
-              ),
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(12, 8, 12, fabBottomPadding + 124),
-                sliver: SliverToBoxAdapter(
-                  child: GeneratedForm(
-                    items: _items,
-                    outlinedInputFields: true,
-                    prominentSectionHeaders: true,
-                    wrapFormSectionsInCards: true,
-                    onValueChanges: (values, valid, isBuilding) {
-                      if (isBuilding) {
-                        _values = values;
-                        _valid = valid;
-                      } else {
-                        setState(() {
-                          _values = values;
-                          _valid = valid;
-                        });
-                      }
-                    },
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              ?gradientBackdrop,
+              CustomScrollView(
+                scrollCacheExtent: const ScrollCacheExtent.pixels(1600),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                slivers: [
+                  CustomAppBar(
+                    title: tr('additionalOptions'),
+                    matchGradientBackground: useGradientBackground,
+                    leading: IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      tooltip: MaterialLocalizations.of(
+                        context,
+                      ).backButtonTooltip,
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
                   ),
-                ),
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      12,
+                      8,
+                      12,
+                      fabBottomPadding + 124,
+                    ),
+                    sliver: SliverToBoxAdapter(
+                      child: GeneratedForm(
+                        items: _items,
+                        outlinedInputFields: true,
+                        prominentSectionHeaders: true,
+                        wrapFormSectionsInCards: true,
+                        onValueChanges: (values, valid, isBuilding) {
+                          if (isBuilding) {
+                            _values = values;
+                            _valid = valid;
+                          } else {
+                            setState(() {
+                              _values = values;
+                              _valid = valid;
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

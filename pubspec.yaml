@@ -15,11 +15,11 @@ publish_to: 'none'
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # ObtainX uses its own version line, independent of upstream Obtainium's.
-version: 2.9.6+3960
+version: 2.20.0+22000
 
 environment:
   sdk: ^3.12.0
-  flutter: ">=3.44.0"
+  flutter: ">=3.47.5"
 
 dependencies:
   flutter:
@@ -33,6 +33,9 @@ dependencies:
   provider: ^6.1.5+1
   http: ^1.6.0
   webview_flutter: ^4.14.1
+  # Direct dependency only for AndroidWebViewController's platform-specific
+  # inset opt-out, which the cross-platform package does not expose.
+  webview_flutter_android: ^4.14.1
   # Upstream Material `dynamic_color` package. We use only `DynamicColorBuilder`
   # and the `.harmonized()` ColorScheme extension - both available in the
   # upstream package - so the previous `dynamic_system_colors` fork (which
@@ -44,11 +47,11 @@ dependencies:
   html: ^0.15.6
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2
-  permission_handler: ^12.0.3
-  fluttertoast: ^9.1.0
+  permission_handler: ^13.0.0
+  fluttertoast: ^10.0.0
   device_info_plus: ^13.2.0
-  file_picker: ^12.0.0-beta.7
-  animations: ^2.2.0
+  file_picker: ^13.0.0
+  animations: ^3.0.0
   android_package_installer: # TODO: Upstream PR pending; if not accepted, keep fork maintained
     git:
       url: https://github.com/ImranR98/android_package_installer
@@ -71,20 +74,21 @@ dependencies:
       url: https://github.com/AlexBacich/shared-storage
       ref: 6dbcdf2c2045e326f59c062f542724aedf73cb6e
   crypto: ^3.0.7
+  collection: ^1.19.1
   bcrypt: ^1.2.0
   app_links: ^7.2.1
   equations: ^6.0.0
   shizuku_apk_installer: # TODO: Forked dependency; watch upstream for releases
     git:
       url: https://github.com/re7gog/shizuku_apk_installer
-      ref: 3ef7f8fbf904848d144304556b0f80c91fee82a5
+      ref: d9fb008fa4735a517986369b8aa7a025db9a43de
   markdown: ^7.3.1
   flutter_typeahead: ^6.0.0
   battery_plus: ^7.1.0
   flutter_charset_detector: ^6.0.0
   flutter_markdown_plus: ^1.0.12
-  workmanager: ^0.9.0+3
-  flutter_foreground_task: ^10.0.0
+  workmanager: ^0.10.0+1
+  flutter_foreground_task: ^11.0.0
   # Material 3 Expressive pull-to-refresh: drop-in replacement for the legacy
   # circular spinner inside RefreshIndicator with the M3E morphing-polygon
   # loading shape. MIT-licensed, mirrors RefreshIndicator's API exactly.

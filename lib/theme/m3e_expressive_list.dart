@@ -286,6 +286,7 @@ class M3eExpressiveSettingsCard extends StatelessWidget {
           for (int itemIndex = 0; itemIndex < items.length; itemIndex++) ...[
             if (itemIndex > 0) SizedBox(height: itemGap),
             Material(
+              key: items[itemIndex].key,
               color: m3eGroupedListRowFill(effectiveColorScheme),
               shape: RoundedRectangleBorder(
                 borderRadius: m3eListGroupItemRadius(

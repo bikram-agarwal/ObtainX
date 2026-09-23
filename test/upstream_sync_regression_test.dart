@@ -4,13 +4,45 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/components/generated_form_model.dart';
+import 'package:obtainium/installers/dhizuku_installer.dart';
+import 'package:obtainium/installers/installer.dart';
+import 'package:obtainium/installers/shizuku_installer.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:shizuku_apk_installer/shizuku_apk_installer_platform_interface.dart';
+
+class _RecordingShizukuPlatform extends ShizukuApkInstallerPlatform {
+  String? selectedInstallerMode;
+  String permissionResult = 'services_not_found';
+  String? receivedFakeInstallSource;
+
+  @override
+  Future<void> setInstallerMode(String mode) async {
+    selectedInstallerMode = mode;
+  }
+
+  @override
+  Future<String?> checkPermission() async {
+    return permissionResult;
+  }
+
+  @override
+  Future<int?> installAPKs(
+    List<String> apkFilesURIs,
+    String fakeInstallSource,
+  ) async {
+    receivedFakeInstallSource = fakeInstallSource;
+    return installSuccessCode;
+  }
+}
 
 App _buildTestApp({
   required String id,
@@ -279,7 +311,7 @@ void main() {
       ),
       isTrue,
     );
-    for (final String installerMode in ['shizuku', 'external']) {
+    for (final String installerMode in ['shizuku', 'dhizuku', 'external']) {
       expect(
         isStockInstallerDowngrade(
           installedVersionCode: 10,
@@ -306,6 +338,55 @@ void main() {
       isFalse,
     );
   });
+
+  test(
+    'privileged installers select and configure their own backend',
+    () async {
+      final ShizukuApkInstallerPlatform originalPlatform =
+          ShizukuApkInstallerPlatform.instance;
+      final _RecordingShizukuPlatform recordingPlatform =
+          _RecordingShizukuPlatform();
+      ShizukuApkInstallerPlatform.instance = recordingPlatform;
+      addTearDown(() {
+        ShizukuApkInstallerPlatform.instance = originalPlatform;
+      });
+
+      final SettingsProvider settingsProvider = SettingsProvider();
+      final ShizukuInstaller shizukuInstaller = ShizukuInstaller(
+        settingsProvider,
+      );
+      final DhizukuInstaller dhizukuInstaller = DhizukuInstaller(
+        settingsProvider,
+      );
+
+      recordingPlatform.permissionResult = 'granted_adb';
+      expect(await shizukuInstaller.checkPermission(), isTrue);
+      expect(recordingPlatform.selectedInstallerMode, 'shizuku');
+
+      recordingPlatform.permissionResult = 'granted_owner';
+      expect(await dhizukuInstaller.checkPermission(), isTrue);
+      expect(recordingPlatform.selectedInstallerMode, 'dhizuku');
+
+      await shizukuInstaller.installApk(
+        const ['test.apk'],
+        appId: 'dev.example.app',
+        installOptions: const {'shizukuPretendToBeGooglePlay': true},
+      );
+      expect(recordingPlatform.selectedInstallerMode, 'shizuku');
+      expect(
+        recordingPlatform.receivedFakeInstallSource,
+        'com.android.vending',
+      );
+
+      await dhizukuInstaller.installApk(
+        const ['test.apk'],
+        appId: 'dev.example.app',
+        installOptions: const {'shizukuPretendToBeGooglePlay': true},
+      );
+      expect(recordingPlatform.selectedInstallerMode, 'dhizuku');
+      expect(recordingPlatform.receivedFakeInstallSource, isEmpty);
+    },
+  );
 
   test('only HTTP download URLs require a cleartext warning', () {
     expect(isCleartextDownloadUrl('http://example.com/app.apk'), isTrue);
@@ -384,14 +465,17 @@ void main() {
   });
 
   test('settings-without-secrets excludes all known credential keys', () {
-    expect(isSecretSettingKey('github-creds'), isTrue);
+    expect(isSecretSettingKey(GitHub.githubCredsKey), isTrue);
     expect(isSecretSettingKey('gitlab-creds'), isTrue);
+    expect(isSecretSettingKey(GitHub.validatedPATFingerprintKey), isTrue);
+    expect(isSecretSettingKey(GitLab.validatedPATFingerprintKey), isTrue);
     expect(isSecretSettingKey('virustotal-api-key'), isTrue);
     expect(
       isSecretSettingKey('virustotal-api-key-validated-fingerprint'),
       isTrue,
     );
     expect(isSecretSettingKey('updateInterval'), isFalse);
+    expect(isSecretSettingKey(GitHub.githubReqPrefixKey), isFalse);
   });
 
   test('always-use-phone-layout overrides every breakpoint', () {

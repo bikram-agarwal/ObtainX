@@ -34,7 +34,7 @@ class CacheContentProvider : ContentProvider() {
         val (file, _) = getFileAndTypeForUri(uri)
         val columns = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         val cursor = MatrixCursor(columns)
-        val row = columns.map { column ->
+        val row: List<Any?> = columns.map { column ->
             when (column) {
                 OpenableColumns.DISPLAY_NAME -> file.name
                 OpenableColumns.SIZE -> file.length()

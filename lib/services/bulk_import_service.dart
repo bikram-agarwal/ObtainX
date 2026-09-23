@@ -9,8 +9,10 @@ import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' show parse;
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
+import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/services/store_lookup_queue.dart';
 
 const _deviceAppsChannel = MethodChannel('dev.imranr.obtainium/device_apps');
 
@@ -325,7 +327,9 @@ class BulkImportService {
               headers: {
                 'Authorization': auth,
                 'Content-Type': 'application/json',
-                'User-Agent': 'APKUpdater-v3.5.9',
+                // Same Cloudflare allowlist as the HTML pages — see
+                // [apkMirrorAllowlistedUserAgentToken].
+                'User-Agent': apkMirrorUserAgent(),
               },
               body: jsonEncode({
                 'pnames': batch,
@@ -423,85 +427,91 @@ class BulkImportService {
       return result;
     }
 
-    // Same endpoint the APKPure app source uses — known to work.
-    // Sub-batches so [shouldAbort] is checked between groups (not only after
-    // an entire large [Future.wait] completes).
-    const int concurrency = 10;
-    const int subBatchSize = 4;
+    final queue = await StoreLookupQueue.forDevice();
+    final chunkSize = queue.concurrency;
+    final client = IOClient(HttpClient()..maxConnectionsPerHost = chunkSize);
     const headers = {
       'Ual-Access-Businessid': 'projecta',
       'Ual-Access-ProjectA': '{"device_info":{"os_ver":"30"}}',
       'User-Agent': 'APKPure/3.19.39 (Aegon)',
     };
 
-    for (int i = 0; i < toQuery.length; i += concurrency) {
-      if (shouldAbort?.call() == true) return result;
-      final chunk = toQuery.sublist(i, min(i + concurrency, toQuery.length));
+    try {
       for (
-        int subStart = 0;
-        subStart < chunk.length;
-        subStart += subBatchSize
+        int chunkStart = 0;
+        chunkStart < toQuery.length;
+        chunkStart += chunkSize
       ) {
         if (shouldAbort?.call() == true) return result;
-        final subChunk = chunk.sublist(
-          subStart,
-          min(subStart + subBatchSize, chunk.length),
+        final chunk = toQuery.sublist(
+          chunkStart,
+          min(chunkStart + chunkSize, toQuery.length),
         );
         await Future.wait(
-          subChunk.map((pkg) async {
-            final candidates = getPackageIdCandidates(pkg);
-            for (final candidate in candidates) {
-              try {
-                final response = await http
-                    .get(
-                      Uri.parse(
-                        'https://tapi.pureapk.com/v3/get_app_his_version'
-                        '?package_name=$candidate&hl=en',
-                      ),
-                      headers: headers,
-                    )
-                    .timeout(const Duration(seconds: 15));
+          chunk.map(
+            (pkg) => queue.run(() async {
+              final candidates = getPackageIdCandidates(pkg);
+              for (final candidate in candidates) {
+                if (shouldAbort?.call() == true) return;
+                try {
+                  final response = await client
+                      .get(
+                        Uri.parse(
+                          'https://tapi.pureapk.com/v3/get_app_his_version'
+                          '?package_name=$candidate&hl=en',
+                        ),
+                        headers: headers,
+                      )
+                      .timeout(const Duration(seconds: 15));
 
-                if (response.statusCode == 200) {
-                  final body = jsonDecode(response.body);
-                  final List<dynamic> versions = body is Map
-                      ? (body['version_list'] as List? ?? [])
-                      : [];
-                  if (versions.isNotEmpty) {
-                    final first = versions.first;
-                    final appName = first is Map
-                        ? (first['title'] as String? ?? '')
-                        : '';
-                    result[pkg] = appName.isNotEmpty
-                        ? 'https://apkpure.net/${_slugify(appName)}/$candidate'
-                        : 'https://apkpure.net/$candidate';
-                    return;
+                  if (response.statusCode == 200) {
+                    final body = jsonDecode(response.body);
+                    final List<dynamic> versions = body is Map
+                        ? (body['version_list'] as List? ?? [])
+                        : [];
+                    if (versions.isNotEmpty) {
+                      final first = versions.first;
+                      final appName = first is Map
+                          ? (first['title'] as String? ?? '')
+                          : '';
+                      // APKPure's real URLs always need <name-slug>/<package> -
+                      // a stub catalog entry with no title (confirmed live:
+                      // that gives a 404) can't produce a working link, so
+                      // treat it as not found rather than hand back a URL
+                      // that's guaranteed to be dead.
+                      if (appName.isNotEmpty) {
+                        // .com, not .net: .net sits behind a Cloudflare bot
+                        // challenge (see store_icon_resolver.dart's
+                        // normalizeApkPureHost) that blocks both the icon
+                        // scrape and a user tapping this as an "Other Sources"
+                        // link.
+                        result[pkg] =
+                            'https://apkpure.com/${_slugify(appName)}/$candidate';
+                        reportProgress();
+                        return;
+                      }
+                    }
+                  }
+                } catch (e) {
+                  debugPrint('APKPure check failed for $candidate: $e');
+                  if (candidate == pkg) {
+                    rethrow;
                   }
                 }
-              } catch (e) {
-                debugPrint('APKPure check failed for $candidate: $e');
-                if (candidate == pkg) {
-                  rethrow;
-                }
               }
-            }
-            result[pkg] = null;
-            reportProgress();
-          }),
+              if (shouldAbort?.call() == true) return;
+              result[pkg] = null;
+              reportProgress();
+            }, shouldAbort: shouldAbort),
+          ),
         );
         if (shouldAbort?.call() == true) return result;
       }
+    } finally {
+      client.close();
     }
     return result;
   }
-
-  /// F-Droid-style APIs have no batch endpoint; we fire one GET per package.
-  /// The global [http.get] client caps connections per host (~6), so bulk scans
-  /// share this [IOClient] with a raised [HttpClient.maxConnectionsPerHost] and
-  /// one [Future.wait] per chunk of [_bulkPackageApiChunkSize] packages.
-  static const int _bulkPackageApiChunkSize = 20;
-  static const int _bulkPackageApiMaxConnectionsPerHost =
-      _bulkPackageApiChunkSize;
 
   /// Ensures [recordStoreCoverage] sees every package (null means not in store).
   static void _putMissingPackageKeysAsNull(
@@ -529,40 +539,46 @@ class BulkImportService {
 
     reportAttemptProgress();
 
+    final queue = await StoreLookupQueue.forDevice();
+    final chunkSize = queue.concurrency;
     final HttpClient rawHttpClient = HttpClient()
-      ..maxConnectionsPerHost = _bulkPackageApiMaxConnectionsPerHost;
+      ..maxConnectionsPerHost = chunkSize;
     final http.Client client = IOClient(rawHttpClient);
     try {
       for (
         int chunkStart = 0;
         chunkStart < toQuery.length;
-        chunkStart += _bulkPackageApiChunkSize
+        chunkStart += chunkSize
       ) {
         if (shouldAbort?.call() == true) {
           return;
         }
         final List<String> chunk = toQuery.sublist(
           chunkStart,
-          min(chunkStart + _bulkPackageApiChunkSize, toQuery.length),
+          min(chunkStart + chunkSize, toQuery.length),
         );
         await Future.wait(
-          chunk.map((String pkg) async {
-            try {
-              await runLookup(client, pkg);
-            } catch (_) {
-              //
-            } finally {
-              finishedAttempts++;
-              reportAttemptProgress();
-            }
-          }),
+          chunk.map(
+            (String pkg) => queue.run(() async {
+              try {
+                await runLookup(client, pkg);
+              } catch (_) {
+                //
+              } finally {
+                finishedAttempts++;
+                reportAttemptProgress();
+              }
+            }, shouldAbort: shouldAbort),
+          ),
         );
         if (shouldAbort?.call() == true) {
           return;
         }
       }
     } finally {
-      _putMissingPackageKeysAsNull(result, toQuery);
+      if (shouldAbort?.call() != true) {
+        _putMissingPackageKeysAsNull(result, toQuery);
+      }
       client.close();
     }
   }
@@ -622,7 +638,9 @@ class BulkImportService {
         result[pkg] = null;
       },
     );
-    _putMissingPackageKeysAsNull(result, packageNames);
+    if (shouldAbort?.call() != true) {
+      _putMissingPackageKeysAsNull(result, packageNames);
+    }
     return result;
   }
 

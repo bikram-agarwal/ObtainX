@@ -1,8 +1,6 @@
 Categories:
   - App Manager
   - App Store & Updater
-  - Development
-  - Download
   - System
 License: GPL-3.0-only
 AuthorName: Bikram Agarwal
@@ -158,7 +156,7 @@ Builds:
 AllowedAPKSigningKeys: 6437e8be9451bd7d02215511d3e504a88c50be72b6dd05ac4b5b87f5a205b687
 
 AutoUpdateMode: Version
-UpdateCheckMode: Tags
+UpdateCheckMode: Tags ^v[0-9]+(?:\.[0-9]+)*$
 VercodeOperation:
   - 10*%c+1
   - 10*%c+2

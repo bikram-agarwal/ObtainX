@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/components/generated_form_model.dart';
@@ -21,6 +24,42 @@ class GitLab extends AppSource {
     canSearch = true;
     showReleaseDateAsVersionToggle = true;
     this.hostChanged = hostChanged;
+    // Same deal as GitHub: read the app id out of the repo rather than making
+    // the user download an APK first. Optional because it is a guess — see
+    // [tryInferringAppId].
+    appIdInferIsOptional = true;
+  }
+
+  /// GitLab has no base64 contents endpoint; its raw-file route returns the
+  /// file body directly, so there is nothing to decode.
+  @override
+  Future<String?> tryInferringAppId(
+    String standardUrl, {
+    Map<String, dynamic> additionalSettings = const {},
+  }) async {
+    final AppNames names = _gh.getAppNames(standardUrl);
+    final String projectUriComponent =
+        '${Uri.encodeComponent(names.author)}%2F${Uri.encodeComponent(names.name)}';
+    final String? pat = await getPATIfAny(
+      hostChanged ? additionalSettings : {},
+    );
+    final String optionalAuth = (pat != null) ? '&private_token=$pat' : '';
+    return inferAppIdFromGradleFiles(
+      (String path) async {
+        final res = await sourceRequest(
+          'https://${hosts[0]}/api/v4/projects/$projectUriComponent'
+          '/repository/files/${Uri.encodeComponent(path)}/raw'
+          '?ref=HEAD$optionalAuth',
+          additionalSettings,
+        );
+        if (res.statusCode != 200) return null;
+        return res.body;
+      },
+      onError: (String message) => unawaited(LogsProvider().add(message)),
+      // See the note on GitHub's call: a per-channel flavour named after this
+      // host decides the id its build installs as.
+      preferredFlavorNames: const <String>{'gitlab'},
+    );
   }
 
   @override
@@ -173,6 +212,20 @@ class GitLab extends AppSource {
         throw NoReleasesError();
       }
       final json = decoded;
+      final List<String> rawReleaseTitleCandidates = <String>[];
+      for (final rel in json) {
+        if (rel is Map<String, dynamic>) {
+          final String? title =
+              (rel['name'] as String?)?.trim().isNotEmpty == true
+              ? (rel['name'] as String).trim()
+              : (rel['tag_name'] as String?)?.trim();
+          if (title != null &&
+              title.isNotEmpty &&
+              !rawReleaseTitleCandidates.contains(title)) {
+            rawReleaseTitleCandidates.add(title);
+          }
+        }
+      }
       apkDetailsList = json.map((e) {
         final apkUrlsFromAssets =
             (e['assets']?['links'] as List<dynamic>? ?? [])
@@ -229,11 +282,23 @@ class GitLab extends AppSource {
         final DateTime? releaseDate = releaseDateString != null
             ? DateTime.tryParse(releaseDateString.toString())
             : null;
+        final String? rawChangeLog =
+            (e['description'] ??
+                    e['release']?['description'] ??
+                    e['message'] ??
+                    e['commit']?['message'])
+                ?.toString();
+        final String? changeLog =
+            (rawChangeLog != null && rawChangeLog.trim().isNotEmpty)
+            ? rawChangeLog.trim()
+            : null;
         return APKDetails(
           e['tag_name'] ?? e['name'],
           apkUrls.entries.toList(),
           AppNames(names.author, names.name.split('/').last),
           releaseDate: releaseDate,
+          changeLog: changeLog,
+          rawReleaseTitleCandidates: rawReleaseTitleCandidates,
         );
       });
       if (apkDetailsList.isEmpty) {
@@ -325,7 +390,7 @@ class GitLab extends AppSource {
         Uri.parse('https://gitlab.com/api/v4/user'),
         headers: <String, String>{
           'Authorization': 'Bearer $token',
-          HttpHeaders.userAgentHeader: 'Obtainium',
+          HttpHeaders.userAgentHeader: 'ObtainX',
         },
       );
       if (response.statusCode == 200) {

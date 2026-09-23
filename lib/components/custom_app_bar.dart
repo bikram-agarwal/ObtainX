@@ -126,6 +126,8 @@ class _CustomAppBarState extends State<CustomAppBar> {
     } else {
       headerBackground = ColoredBox(color: colorScheme.surface);
     }
+    final bool transparentAppBar =
+        blurEnabled || widget.matchGradientBackground;
 
     if (widget.searchWidget != null) {
       // Compact layout - draw the header background as flexibleSpace so the
@@ -140,9 +142,11 @@ class _CustomAppBarState extends State<CustomAppBar> {
         elevation: 0,
         scrolledUnderElevation: 0,
         shadowColor: Colors.transparent,
-        backgroundColor: Colors.transparent,
+        backgroundColor: transparentAppBar
+            ? Colors.transparent
+            : colorScheme.surface,
         surfaceTintColor: Colors.transparent,
-        forceMaterialTransparency: true,
+        forceMaterialTransparency: transparentAppBar,
         iconTheme: IconThemeData(color: colorScheme.onSurface),
         actionsIconTheme: IconThemeData(color: colorScheme.onSurface),
         flexibleSpace: headerBackground,
@@ -218,9 +222,11 @@ class _CustomAppBarState extends State<CustomAppBar> {
       elevation: 0,
       scrolledUnderElevation: 0,
       shadowColor: Colors.transparent,
-      backgroundColor: Colors.transparent,
+      backgroundColor: transparentAppBar
+          ? Colors.transparent
+          : colorScheme.surface,
       surfaceTintColor: Colors.transparent,
-      forceMaterialTransparency: true,
+      forceMaterialTransparency: transparentAppBar,
       iconTheme: IconThemeData(color: colorScheme.onSurface),
       actionsIconTheme: IconThemeData(color: colorScheme.onSurface),
       flexibleSpace: flexibleSpace,
@@ -245,9 +251,41 @@ class ScrollLinkedProgressiveBlur extends StatefulWidget {
 
 class _ScrollLinkedProgressiveBlurState
     extends State<ScrollLinkedProgressiveBlur> {
+  ScrollPosition? _scrollPosition;
+  double _opacity = 1.0;
   // Last quantized ramp value we built a subtree for, and that subtree.
   double _lastT = -1;
   Widget _cached = const SizedBox.shrink();
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final position = Scrollable.maybeOf(context)?.position;
+    if (identical(position, _scrollPosition)) return;
+    _scrollPosition?.removeListener(_onScroll);
+    _scrollPosition = position;
+    _opacity = _scrollOpacity();
+    position?.addListener(_onScroll);
+  }
+
+  double _scrollOpacity() {
+    final position = _scrollPosition;
+    if (position == null) return 1.0;
+    if (!position.hasPixels) return 0.0;
+    return ((position.pixels / 36.0).clamp(0.0, 1.0) * 100).round() / 100;
+  }
+
+  void _onScroll() {
+    final opacity = _scrollOpacity();
+    if (opacity == _opacity) return;
+    setState(() => _opacity = opacity);
+  }
+
+  @override
+  void dispose() {
+    _scrollPosition?.removeListener(_onScroll);
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(ScrollLinkedProgressiveBlur oldWidget) {
@@ -261,22 +299,7 @@ class _ScrollLinkedProgressiveBlurState
 
   @override
   Widget build(BuildContext context) {
-    final scrollPosition = Scrollable.maybeOf(context)?.position;
-    if (scrollPosition == null) {
-      return _contentFor(1.0);
-    }
-
-    return AnimatedBuilder(
-      animation: scrollPosition,
-      builder: (context, child) {
-        double opacity = 0.0;
-        if (scrollPosition.hasPixels) {
-          // Fades in over 36 pixels of scroll
-          opacity = (scrollPosition.pixels / 36.0).clamp(0.0, 1.0);
-        }
-        return _contentFor(opacity);
-      },
-    );
+    return _contentFor(_opacity);
   }
 
   /// Returns the blur subtree for ramp value [t], reusing the cached instance
@@ -287,11 +310,11 @@ class _ScrollLinkedProgressiveBlurState
   /// rebuild entirely. (The backdrop blur still re-rasterizes over the moving
   /// content on the raster thread — that is inherent to a live blur.)
   Widget _contentFor(double t) {
-    // Quantize to 1% so sub-pixel scroll deltas don't defeat the cache.
-    final double q = (t * 100).roundToDouble() / 100;
-    if (q == _lastT) return _cached;
-    _lastT = q;
-    _cached = _buildBlurContent(q);
+    // The scroll listener quantizes the fade and stops scheduling rebuilds
+    // once it reaches full opacity. Live background pixels still get blurred.
+    if (t == _lastT) return _cached;
+    _lastT = t;
+    _cached = _buildBlurContent(t);
     return _cached;
   }
 

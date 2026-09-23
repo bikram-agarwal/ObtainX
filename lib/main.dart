@@ -1,5 +1,6 @@
 import 'dart:async' show unawaited;
 import 'dart:io' show File;
+import 'dart:math' show max;
 import 'dart:ui' show PlatformDispatcher, PointerDeviceKind;
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -77,6 +79,10 @@ const localeDir = 'assets/translations';
 
 final globalNavigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+// Lets code outside the shell's subtree (e.g. a pushed folder/app route) reach
+// the shell to switch tabs — findAncestorStateOfType can't, since those routes
+// are siblings of HomePage under the root navigator, not descendants.
+final homePageKey = GlobalKey<HomePageState>();
 
 void installDiagnosticErrorLogging() {
   final logs = LogsProvider(runDefaultClear: false);
@@ -173,6 +179,9 @@ Future<void> loadTranslations() async {
 
 /// Unique task name used by WorkManager for periodic background update checks.
 const _workManagerTaskName = 'obtainiumBgUpdateCheck';
+
+/// WorkManager refuses anything shorter, and silently clamps to it.
+const int _minimumWorkManagerIntervalMinutes = 15;
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
@@ -288,6 +297,10 @@ class Obtainium extends StatefulWidget {
 class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   var existingUpdateInterval = -1;
 
+  /// Interval the periodic task is currently registered for, so [build] does
+  /// not re-register it on every rebuild.
+  int? _scheduledIntervalMinutes;
+
   // Guards the lazy, one-shot attempt to adopt the device's explicit system
   // font family. Kicked off from [build] off the cold-start critical path; the
   // app renders with the OS default font (fontFamily: null) until/unless it
@@ -341,22 +354,32 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _scheduleWorkManager() async {
+  Future<void> _scheduleWorkManager(int intervalMinutes) async {
+    // Wake on the user's own interval rather than every 15 minutes only to find
+    // nothing is due. Android still decides when within the period to run, and
+    // clamps anything below its floor.
+    if (_scheduledIntervalMinutes == intervalMinutes) return;
+    _scheduledIntervalMinutes = intervalMinutes;
     await Workmanager().registerPeriodicTask(
       _workManagerTaskName,
       _workManagerTaskName,
-      frequency: const Duration(minutes: 15),
+      frequency: Duration(
+        minutes: max(_minimumWorkManagerIntervalMinutes, intervalMinutes),
+      ),
       constraints: Constraints(
         networkType: NetworkType.connected,
         requiresBatteryNotLow: false,
         requiresDeviceIdle: false,
         requiresStorageNotLow: false,
       ),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      // `keep` pins the task to whatever frequency it was first registered
+      // with, so a changed interval would never reach an existing install.
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
     );
   }
 
   Future<void> _cancelWorkManager() async {
+    _scheduledIntervalMinutes = null;
     await Workmanager().cancelByUniqueName(_workManagerTaskName);
   }
 
@@ -606,10 +629,10 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   // settings help icons, IconButton tooltips on toolbars) to a consistent,
   // M3-themed look without any per-call-site changes.
   //
-  // Uses `inverseSurface` / `onInverseSurface` per the M3 spec for plain
-  // tooltips: a high-contrast block of colour against the surrounding app
-  // surface. Auto-flips with light/dark mode because [inverseSurface] is dark in
-  // light themes and light in dark themes.
+  // Same tinted-surface palette as the app's toasts/snackbars (see
+  // buildAppSnackBar / showAppToast in app_toast.dart) rather than the M3-spec
+  // high-contrast `inverseSurface` block, so tooltips read as theme-colored
+  // feedback consistent with the rest of the app's transient UI.
   //
   // Default [triggerMode] is manual so Flutter does not attach a global pointer
   // listener on every [Tooltip] (long-press mode). Rebuilding the tree during
@@ -617,14 +640,22 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   // tickers" framework errors. Call sites that need visible tooltips (e.g.
   // [HelpHintIcon]) set triggerMode explicitly.
   TooltipThemeData _tooltipThemeFor(ColorScheme scheme) {
+    final Color background = Color.lerp(
+      scheme.surfaceContainerHighest,
+      scheme.inverseSurface,
+      0.18,
+    )!;
     return TooltipThemeData(
       triggerMode: TooltipTriggerMode.manual,
-      decoration: BoxDecoration(
-        color: scheme.inverseSurface,
-        borderRadius: BorderRadius.circular(12),
+      decoration: ShapeDecoration(
+        color: background,
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
       ),
       textStyle: TextStyle(
-        color: scheme.onInverseSurface,
+        color: scheme.onSurface,
         fontSize: 13,
         fontWeight: FontWeight.w500,
         height: 1.4,
@@ -743,7 +774,7 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
         startForegroundService(false);
       } else {
         stopForegroundService();
-        unawaited(_scheduleWorkManager());
+        unawaited(_scheduleWorkManager(settingsProvider.updateInterval));
       }
     }
     if (settingsProvider.prefs == null) {
@@ -817,11 +848,27 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
               ? lightColorScheme
               : darkColorScheme;
 
+          // easy_localization's setLocale() swaps its controller's locale
+          // synchronously but loads the matching JSON afterwards, and its
+          // Localizations delegate publishes whatever translations the
+          // controller happens to hold at the instant the locale reaches the
+          // widget tree - with no later correction, because the delegate
+          // reports shouldReload == false and only reads from disk when its
+          // cache is empty. Handing MaterialApp context.locale (the live,
+          // already-swapped value) therefore freezes the *previous* language's
+          // strings under the newly selected locale whenever anything rebuilds
+          // during the load, which is exactly what writing
+          // SettingsProvider.forcedLocale does. The provider's currentLocale is
+          // captured when EasyLocalization itself rebuilds, which happens only
+          // once the new translations are in place, so it is the locale that is
+          // actually renderable right now.
+          final Locale renderableLocale =
+              EasyLocalization.of(context)?.currentLocale ?? context.locale;
           // Keep the locale-aware English detection in custom_errors.dart in
           // sync (drives lowerCaseIfEnglish / list2FriendlyString). Without
           // this, isEnglish() is stuck false and English strings never get
           // lowercased — parity with fork main.
-          setAppLocale(context.locale);
+          setAppLocale(renderableLocale);
           // Default to the OS system font (null lets Flutter resolve the
           // platform font with real weights). Once an explicit multi-weight
           // device family is loaded, switch to it so a user-picked OEM font is
@@ -848,25 +895,26 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             scrollBehavior: const AppScrollBehavior(),
             localizationsDelegates: context.localizationDelegates,
             supportedLocales: context.supportedLocales,
-            locale: context.locale,
+            locale: renderableLocale,
             navigatorKey: globalNavigatorKey,
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
             themeAnimationDuration: Duration.zero,
-            // Cap the system scaler globally before applying the in-app UI
-            // scale. The default preserves Flutter's non-linear curve; a
-            // custom app scale uses a bounded linear approximation.
+            // Scale the complete app viewport while independently capping the
+            // system text scaler. This keeps text, controls, icons, spacing,
+            // overlays, and touch targets at the same user-selected scale.
+            //
+            // Nothing else belongs in this builder. It used to also install
+            // FToastBuilder's app-wide Overlay around this MediaQuery, and an
+            // Overlay consumes [Overlay.initialEntries] exactly once in
+            // initState — so the entry kept serving the child instance it was
+            // first handed and every later rebuild of this builder was dropped.
+            // That froze MediaQuery at the launch size and pinned the
+            // phone/tablet layout to whichever one the app started in. The
+            // toast host now lives under [home] instead; see [AppToastHost].
             builder: (BuildContext context, Widget? child) {
-              final MediaQueryData mq = MediaQuery.of(context);
-              return MediaQuery(
-                data: mq.copyWith(
-                  textScaler: cappedAppTextScaler(
-                    systemTextScaler: mq.textScaler,
-                    userScale: settingsProvider.appUiScale,
-                    minimumEffectiveScale: SettingsProvider.appUiScaleMin,
-                    maximumEffectiveScale: SettingsProvider.appUiScaleMax,
-                  ),
-                ),
+              return AppUiScaler(
+                scale: settingsProvider.appUiScale,
                 child: child ?? const SizedBox.shrink(),
               );
             },
@@ -876,12 +924,19 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // nav/switch/segmented/tooltip themes.
             theme: lightTheme,
             darkTheme: darkTheme,
-            home: Shortcuts(
-              shortcuts: <LogicalKeySet, Intent>{
-                LogicalKeySet(LogicalKeyboardKey.select):
-                    const ActivateIntent(),
-              },
-              child: const HomePage(),
+            // The toast host sits here, inside the route, rather than in
+            // [builder]: it only needs a context whose ancestor is an Overlay
+            // (FToast looks one up), and the root navigator already provides
+            // one. Wrapping the app in a second, app-wide Overlay from the
+            // builder is what used to freeze MediaQuery — see the note there.
+            home: AppToastHost(
+              child: Shortcuts(
+                shortcuts: <LogicalKeySet, Intent>{
+                  LogicalKeySet(LogicalKeyboardKey.select):
+                      const ActivateIntent(),
+                },
+                child: HomePage(key: homePageKey),
+              ),
             ),
           );
         },

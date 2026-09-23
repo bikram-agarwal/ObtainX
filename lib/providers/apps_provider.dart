@@ -3,12 +3,16 @@
 // Exposes related functions such as those used to add, remove, download, and install Apps.
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:android_package_manager/android_package_manager.dart';
+// Uses the pinned plugin's wire format for queries dispatched on our worker.
+// ignore: implementation_imports
+import 'package:android_package_manager/src/entities/impl/package_info.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
@@ -18,6 +22,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/io_client.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
+import 'package:obtainium/http/response_bytes.dart';
+import 'package:obtainium/services/app_check_store.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -36,7 +43,10 @@ import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/version/app_version.dart';
+export 'package:obtainium/version/app_version.dart';
 
+export 'apps_provider_icon_backup.dart';
 export 'apps_provider_import_export.dart';
 export 'apps_provider_install.dart';
 export 'apps_provider_lifecycle.dart';
@@ -50,16 +60,50 @@ const int _partialHashCheckLowerLimit = 128;
 const int _partialHashCheckDecrement = 256;
 const int _maxDownloadPolls = 43;
 const int _downloadPollIntervalSeconds = 7;
-const int _progressUpdateIntervalMs = 500;
+const int _progressUpdateIntervalMs = 1000;
 const int _downloadBufferSize = 32 * 1024;
 const int _downloadProgressFallback = 30;
 const int _bgUpdateMaxAttempts = 4;
 const int _bgUpdateMaxRetryWaitSeconds = 30;
 const int _bgClientExceptionRetryWaitSeconds = 15 * 60;
 
+/// Legacy key written by ObtainX 2.9.7's reset-install-status action.
+///
+/// Reconciliation removes it and restores the actual device version so affected
+/// apps are not pinned to "not installed" until their next reinstall.
+const String installStatusResetKey = 'installStatusResetAtInstallTime';
+
+/// Set when the user explicitly marks a track-only app as installed.
+///
+/// Track-only apps are often watched without being installed through ObtainX at
+/// all (or under a package ID that never matches anything on the device), so
+/// absence from the device is not evidence of an uninstall once the user has
+/// asserted otherwise. Reconciliation treats this like a temporary package ID
+/// and leaves the recorded version alone; it is cleared when the package turns
+/// up on the device or the app is uninstalled through ObtainX.
+const String trackOnlyUserMarkedInstalledKey = 'trackOnlyUserMarkedInstalled';
+
 final packageManager = AndroidPackageManager();
 final packageInfoFlags = PackageInfoFlags({PMFlag.getSigningCertificates});
 final packageInfoFlagsLight = PackageInfoFlags({});
+
+App resetInstallStatusToDeviceVersion(App app, PackageInfo? installedInfo) {
+  final Map<String, dynamic> additionalSettings =
+      Map<String, dynamic>.from(app.additionalSettings)
+        ..remove(installStatusResetKey)
+        ..remove(pendingInstallReleaseKey)
+        ..remove(confirmedInstallReleaseKey)
+        ..remove(acknowledgedSourceReleaseKey)
+        ..remove(trackOnlyUserMarkedInstalledKey)
+        ..remove('trackOnlyUndeterminedInstalledVersion');
+  final String? installedVersion = app.usesVersionCodeAsOsVersion
+      ? installedInfo?.versionCode?.toString()
+      : installedInfo?.versionName;
+  return app.copyWith(
+    installedVersion: installedVersion,
+    additionalSettings: additionalSettings,
+  );
+}
 
 List<String> certificateHashesFromSignatures(Iterable<List<int>> signatures) {
   return signatures
@@ -135,6 +179,12 @@ class AppInMemory {
     download: download,
   );
 
+  String get listingKey => app.listingKey;
+
+  /// Store this listing currently tracks, resolved live when the cached
+  /// [sourceType] has not been filled in yet.
+  String get sourceIdentifier => sourceType ?? sourceIdentifierForApp(app);
+
   String get name => app.finalName;
   String get author => app.overrideAuthor ?? app.finalAuthor;
 
@@ -156,10 +206,80 @@ class AppInMemory {
   }
 }
 
+/// In-memory library keyed by [App.listingKey], so one Android package can be
+/// tracked from several stores at once.
+///
+/// A package's only listing is keyed by its package ID, which keeps every
+/// existing caller (and record file name) working unchanged. Lookups by
+/// package ID also resolve while that package has exactly one listing.
+class AppListings extends MapBase<String, AppInMemory> {
+  final Map<String, AppInMemory> _byListingKey = {};
+
+  @override
+  AppInMemory? operator [](Object? key) {
+    if (key is! String) return null;
+    final AppInMemory? direct = _byListingKey[key];
+    if (direct != null) return direct;
+    final List<AppInMemory> packageListings = listingsForPackage(key).toList();
+    return packageListings.length == 1 ? packageListings.first : null;
+  }
+
+  @override
+  void operator []=(String key, AppInMemory value) {
+    value.sourceType ??= sourceIdentifierForApp(value.app);
+    final String listingKey = value.listingKey;
+    if (key != listingKey) {
+      // A package-ID rename legitimately re-keys a listing, and it carries the
+      // same listing ID across the move, so the stale key has to go. Any other
+      // mismatch means [key] holds a *different* store's listing of this
+      // package, which must survive - dropping it silently destroyed the
+      // second listing of every multi-store app on load.
+      final AppInMemory? occupant = _byListingKey[key];
+      if (occupant != null &&
+          occupant.app.listingId == value.app.listingId &&
+          occupant.app.id != value.app.id) {
+        _byListingKey.remove(key);
+      }
+    }
+    _byListingKey[listingKey] = value;
+  }
+
+  @override
+  void clear() => _byListingKey.clear();
+
+  @override
+  Iterable<String> get keys => _byListingKey.keys;
+
+  @override
+  AppInMemory? remove(Object? key) {
+    if (key is! String) return null;
+    final AppInMemory? direct = _byListingKey.remove(key);
+    if (direct != null) return direct;
+    final List<AppInMemory> packageListings = listingsForPackage(key).toList();
+    if (packageListings.length != 1) return null;
+    return _byListingKey.remove(packageListings.first.listingKey);
+  }
+
+  @override
+  bool containsKey(Object? key) {
+    if (key is! String) return false;
+    return _byListingKey.containsKey(key) || listingsForPackage(key).isNotEmpty;
+  }
+
+  /// Exact-key membership, ignoring the package-ID fallback in [containsKey].
+  bool containsListingKey(String listingKey) =>
+      _byListingKey.containsKey(listingKey);
+
+  /// Every tracked listing of [packageId], one per store.
+  Iterable<AppInMemory> listingsForPackage(String packageId) =>
+      _byListingKey.values.where((listing) => listing.app.id == packageId);
+}
+
 class DownloadedApk {
   String appId;
   File file;
-  DownloadedApk(this.appId, this.file);
+  final InstallReleaseSnapshot? release;
+  DownloadedApk(this.appId, this.file, {this.release});
 }
 
 enum DownloadedDirType { xapk, zip, tarball }
@@ -169,88 +289,14 @@ class DownloadedDir {
   File file;
   Directory extracted;
   DownloadedDirType type;
-  DownloadedDir(this.appId, this.file, this.extracted, this.type);
-}
-
-/// Delegates to [VersionService.findStandardFormatsForVersion].
-Set<String> findStandardFormatsForVersion(String version, bool strict) =>
-    VersionService().findStandardFormatsForVersion(version, strict);
-
-// Version reconciliation helpers (fork feature) used by additional_options and
-// pseudo-version handling. [doStringsMatchUnderRegEx] already lives elsewhere.
-MapEntry<bool, String>? reconcileVersionDifferences(
-  String templateVersion,
-  String comparisonVersion,
-) {
-  // Returns null if the versions don't share a common standard format
-  // Returns <true, comparisonVersion> if they share a common format and are equal
-  // Returns <false, templateVersion> if they share a common format but are not equal
-  final templateVersionFormats = findStandardFormatsForVersion(
-    templateVersion,
-    true,
-  );
-  var comparisonVersionFormats = findStandardFormatsForVersion(
-    comparisonVersion,
-    true,
-  );
-  if (comparisonVersionFormats.isEmpty) {
-    comparisonVersionFormats = findStandardFormatsForVersion(
-      comparisonVersion,
-      false,
-    );
-  }
-  final commonStandardFormats = templateVersionFormats.intersection(
-    comparisonVersionFormats,
-  );
-  if (commonStandardFormats.isEmpty) {
-    return reconcileVersionDifferencesByShape(
-      templateVersion,
-      comparisonVersion,
-    );
-  }
-  for (String pattern in commonStandardFormats) {
-    if (VersionService().doStringsMatchUnderRegEx(
-      pattern,
-      comparisonVersion,
-      templateVersion,
-    )) {
-      return MapEntry(true, comparisonVersion);
-    }
-  }
-  return MapEntry(false, templateVersion);
-}
-
-MapEntry<bool, String>? reconcileVersionDifferencesByShape(
-  String templateVersion,
-  String comparisonVersion,
-) {
-  final String templateShape = versionShapeForReconciliation(templateVersion);
-  final String comparisonShape = versionShapeForReconciliation(
-    comparisonVersion,
-  );
-  if (templateShape.isEmpty || templateShape != comparisonShape) {
-    return null;
-  }
-  final templateTokens = numericVersionTokens(templateVersion);
-  final comparisonTokens = numericVersionTokens(comparisonVersion);
-  if (templateTokens.isEmpty ||
-      templateTokens.length != comparisonTokens.length) {
-    return null;
-  }
-  if (listEquals(templateTokens, comparisonTokens)) {
-    return MapEntry(true, comparisonVersion);
-  }
-  return MapEntry(false, templateVersion);
-}
-
-String versionShapeForReconciliation(String version) {
-  return version.trim().toLowerCase().replaceAll(RegExp(r'\d+'), '#');
-}
-
-List<int> numericVersionTokens(String version) {
-  return RegExp(
-    r'\d+',
-  ).allMatches(version).map((m) => int.tryParse(m.group(0)!) ?? 0).toList();
+  final InstallReleaseSnapshot? release;
+  DownloadedDir(
+    this.appId,
+    this.file,
+    this.extracted,
+    this.type, {
+    this.release,
+  });
 }
 
 /// Removes all matching elements and appends the last match to the end.
@@ -333,9 +379,113 @@ Future<File> downloadFileWithRetry(
   }
 }
 
-String hashListOfLists(List<List<int>> data) {
-  final bytes = utf8.encode(jsonEncode(data));
-  return sha256.convert(bytes).toString().substring(0, 8);
+class DownloadResponseMetadata {
+  const DownloadResponseMetadata({
+    required this.finalUri,
+    required this.headers,
+  });
+
+  final Uri finalUri;
+  final Map<String, String> headers;
+
+  String? get suggestedFileName =>
+      extractDownloadFileNameFromContentDisposition(
+        headers['content-disposition'],
+      );
+}
+
+Uri _finalResponseUri(StreamedResponse response, Uri originalUri) {
+  if (response case BaseResponseWithUrl(:final Uri url)) {
+    return url;
+  }
+  return response.request?.url ?? originalUri;
+}
+
+String? sanitizeDownloadFileName(String? rawFileName) {
+  if (rawFileName == null) {
+    return null;
+  }
+  String fileName = rawFileName.trim();
+  if (fileName.length >= 2 &&
+      ((fileName.startsWith('"') && fileName.endsWith('"')) ||
+          (fileName.startsWith("'") && fileName.endsWith("'")))) {
+    fileName = fileName.substring(1, fileName.length - 1);
+  }
+  try {
+    fileName = Uri.decodeComponent(fileName);
+  } on FormatException {
+    // Keep the server-provided text when percent encoding is malformed.
+  }
+  fileName = fileName.replaceAll(r'\', '/').split('/').last.trim();
+  fileName = fileName
+      .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
+      .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+      .replaceAll(RegExp(r'[. ]+$'), '');
+  return fileName.isEmpty || fileName == '.' || fileName == '..'
+      ? null
+      : fileName;
+}
+
+/// Extracts and sanitizes an RFC 6266/RFC 5987 response filename.
+String? extractDownloadFileNameFromContentDisposition(
+  String? contentDisposition,
+) {
+  if (contentDisposition == null || contentDisposition.trim().isEmpty) {
+    return null;
+  }
+  final RegExpMatch? encodedMatch = RegExp(
+    r'(?:^|;)\s*filename\*\s*=\s*([^;]+)',
+    caseSensitive: false,
+  ).firstMatch(contentDisposition);
+  if (encodedMatch != null) {
+    String encodedFileName = encodedMatch.group(1)!.trim();
+    encodedFileName = encodedFileName.replaceFirst(
+      RegExp(r"^[^']*'[^']*'"),
+      '',
+    );
+    final String? normalized = sanitizeDownloadFileName(encodedFileName);
+    if (normalized != null) {
+      return normalized;
+    }
+  }
+
+  final RegExpMatch? plainMatch = RegExp(
+    r'(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;]*))',
+    caseSensitive: false,
+  ).firstMatch(contentDisposition);
+  return sanitizeDownloadFileName(plainMatch?.group(1) ?? plainMatch?.group(2));
+}
+
+DownloadResponseMetadata _downloadResponseMetadata(
+  StreamedResponse response,
+  Uri originalUri,
+) => DownloadResponseMetadata(
+  finalUri: _finalResponseUri(response, originalUri),
+  headers: response.headers,
+);
+
+/// Fetches only enough of a download response to inspect headers and redirects.
+Future<DownloadResponseMetadata?> probeDownloadResponseMetadata(
+  String url, {
+  Map<String, String>? headers,
+  bool allowInsecure = false,
+}) async {
+  final Uri originalUri = Uri.parse(url);
+  final Request request = Request('GET', originalUri);
+  request.headers.addAll(withDefaultObtainXUserAgent(headers));
+  request.headers[HttpHeaders.rangeHeader] = 'bytes=0-0';
+  final IOClient client = IOClient(createHttpClient(allowInsecure));
+  try {
+    final StreamedResponse response = await client
+        .send(request)
+        .timeout(sourceResponseTimeout);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
+    }
+    return _downloadResponseMetadata(response, originalUri);
+  } finally {
+    client.close();
+  }
 }
 
 Future<String> checkPartialDownloadHashDynamic(
@@ -344,7 +494,16 @@ Future<String> checkPartialDownloadHashDynamic(
   int lowerLimit = _partialHashCheckLowerLimit,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
+  bool metadataReported = false;
+  void reportMetadata(DownloadResponseMetadata metadata) {
+    if (!metadataReported) {
+      metadataReported = true;
+      onResponseMetadata?.call(metadata);
+    }
+  }
+
   for (int i = startingSize; i >= lowerLimit; i -= _partialHashCheckDecrement) {
     // Both requests fetch the same byte range to confirm the hash is
     // stable. The loop decrements on mismatch; when two consecutive
@@ -355,12 +514,14 @@ Future<String> checkPartialDownloadHashDynamic(
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        onResponseMetadata: reportMetadata,
       ),
       checkPartialDownloadHash(
         url,
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        onResponseMetadata: reportMetadata,
       ),
     ]);
     if (ab[0] == ab[1]) {
@@ -375,23 +536,24 @@ Future<String> checkPartialDownloadHash(
   int bytesToGrab, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final req = Request('GET', Uri.parse(url));
-  if (headers != null) {
-    req.headers.addAll(headers);
-  }
-  req.headers[HttpHeaders.rangeHeader] = 'bytes=0-$bytesToGrab';
+  final Uri originalUri = Uri.parse(url);
+  final req = Request('GET', originalUri);
+  req.headers.addAll(withDefaultObtainXUserAgent(headers));
+  if (bytesToGrab <= 0) throw ArgumentError.value(bytesToGrab, 'bytesToGrab');
+  req.headers[HttpHeaders.rangeHeader] = 'bytes=0-${bytesToGrab - 1}';
   final client = IOClient(createHttpClient(allowInsecure));
   try {
-    final response = await client.send(req);
+    final response = await client.send(req).timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
       throw ObtainiumError(response.reasonPhrase ?? tr('unexpectedError'))
         ..url = url;
     }
-    final List<List<int>> bytes = await response.stream
-        .take(bytesToGrab)
-        .toList();
-    return hashListOfLists(bytes);
+    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
+    final bytes = await readBytePrefix(response.stream, bytesToGrab);
+    if (bytes.isEmpty) throw NoVersionError();
+    return 'sha256:$bytesToGrab:${sha256.convert(bytes)}';
   } finally {
     client.close();
   }
@@ -401,16 +563,21 @@ Future<String?> checkETagHeader(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final reqHeaders = headers ?? {};
-  final req = Request('GET', Uri.parse(url));
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
+  final Uri originalUri = Uri.parse(url);
+  final req = Request('GET', originalUri);
   req.headers.addAll(reqHeaders);
   final client = IOClient(createHttpClient(allowInsecure));
   try {
-    final StreamedResponse response = await client.send(req);
+    final StreamedResponse response = await client
+        .send(req)
+        .timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
+    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
     final etag = response.headers[HttpHeaders.etagHeader]?.replaceAll('"', '');
     return etag != null
         ? sha256.convert(utf8.encode(etag)).toString().substring(0, 12)
@@ -436,6 +603,7 @@ Future<File?> _waitForConcurrentDownload(
   File tempDownloadedFile,
   File downloadedFile,
   LogsProvider? logs,
+  CancellationToken? cancellationToken,
 ) async {
   unawaited(
     logs?.add(
@@ -446,7 +614,14 @@ Future<File?> _waitForConcurrentDownload(
   int pollCount = 0;
   while (pollCount < _maxDownloadPolls) {
     pollCount++;
-    await Future.delayed(const Duration(seconds: _downloadPollIntervalSeconds));
+    cancellationToken?.throwIfCancelled();
+    await Future.any([
+      Future<void>.delayed(
+        const Duration(seconds: _downloadPollIntervalSeconds),
+      ),
+      if (cancellationToken != null) cancellationToken.whenCancelled,
+    ]);
+    cancellationToken?.throwIfCancelled();
     if (tempDownloadedFile.existsSync()) {
       final int newTempFileSize;
       try {
@@ -536,124 +711,169 @@ Future<File> _downloadFile(
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
-  final reqHeaders = headers ?? {};
-  final headersClient = IOClient(createHttpClient(allowInsecure));
-
-  final getReq = Request('GET', Uri.parse(url));
-  getReq.headers.addAll(reqHeaders);
-  final headersResponse = await headersClient.send(getReq);
-
-  final resHeaders = headersResponse.headers;
-
-  // Use the headers to decide what the file extension is, and
-  // whether it supports partial downloads (range request), and
-  // what the total size of the file is (if provided)
-  String ext = resHeaders['content-disposition']?.split('.').last ?? 'apk';
-  if (ext.endsWith('"')) {
-    ext = ext.substring(0, ext.length - 1);
-  }
-  final urlPath = Uri.tryParse(url)?.path ?? url;
-  if (AppSource.isApkOrContainerFile(urlPath)) {
-    // Preserve the real extension (.apk/.xapk/.apkm/.apks) so XAPK/APKS
-    // bundles are still detected and extracted downstream rather than forced
-    // to .apk and handed to the APK parser.
-    ext = urlPath.split('.').last.toLowerCase();
-  } else if (ext == 'attachment') {
-    ext = 'apk';
-  }
-  fileName = fileNameHasExt
-      ? fileName
-      : fileName.split('/').last; // Ensure the fileName is a file name
-  File downloadedFile = File('$destDir/$fileName.$ext');
-  if (fileNameHasExt) {
-    // If the user says the filename already has an ext, ignore whatever you inferred from above
-    downloadedFile = File('$destDir/$fileName');
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
+  final responseClient = createHttpClient(allowInsecure);
+  IOSink? sink;
+  void abortDownload() {
+    responseClient.close(force: true);
   }
 
-  bool rangeFeatureEnabled = false;
-  if (resHeaders['accept-ranges']?.isNotEmpty == true) {
-    rangeFeatureEnabled =
-        resHeaders['accept-ranges']?.trim().toLowerCase() == 'bytes';
-  }
-  headersClient.close();
+  cancellationToken?.addListener(abortDownload);
+  try {
+    cancellationToken?.throwIfCancelled();
+    var response = (await HttpService().sourceRequestStreamResponse(
+      'GET',
+      url,
+      reqHeaders,
+      {'allowInsecure': allowInsecure},
+      sharedClient: responseClient,
+    )).value.value;
+    final resHeaders = <String, String>{};
+    response.headers.forEach((name, values) {
+      resHeaders[name] = values.join(', ');
+    });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ObtainiumError(
+        response.reasonPhrase,
+        code: 'HTTP_ERROR',
+        data: {'statusCode': response.statusCode},
+      )..url = url;
+    }
 
-  // If you have an existing file that is usable,
-  // decide whether you can use it (either return full or resume partial)
-  final fullContentLength = headersResponse.contentLength;
-  if (useExisting && downloadedFile.existsSync()) {
-    final length = downloadedFile.lengthSync();
-    if (fullContentLength == null || !rangeFeatureEnabled) {
-      return downloadedFile;
-    } else {
-      if (length == fullContentLength) {
+    // Use the headers to decide what the file extension is, and
+    // whether it supports partial downloads (range request), and
+    // what the total size of the file is (if provided)
+    final String? suggestedFileName =
+        extractDownloadFileNameFromContentDisposition(
+          resHeaders['content-disposition'],
+        );
+    String ext =
+        suggestedFileName != null &&
+            AppSource.isApkOrContainerFile(
+              suggestedFileName,
+              includeArchives: true,
+              includeTarballs: true,
+            )
+        ? suggestedFileName.split('.').last
+        : 'apk';
+    if (ext.endsWith('"')) {
+      ext = ext.substring(0, ext.length - 1);
+    }
+    final urlPath = Uri.tryParse(url)?.path ?? url;
+    if (AppSource.isApkOrContainerFile(urlPath)) {
+      // Preserve the real extension (.apk/.xapk/.apkm/.apks) so XAPK/APKS
+      // bundles are still detected and extracted downstream rather than forced
+      // to .apk and handed to the APK parser.
+      ext = urlPath.split('.').last.toLowerCase();
+    } else if (ext == 'attachment') {
+      ext = 'apk';
+    }
+    fileName = fileNameHasExt
+        ? fileName
+        : fileName.split('/').last; // Ensure the fileName is a file name
+    File downloadedFile = File('$destDir/$fileName.$ext');
+    if (fileNameHasExt) {
+      // If the user says the filename already has an ext, ignore whatever you inferred from above
+      downloadedFile = File('$destDir/$fileName');
+    }
+
+    bool rangeFeatureEnabled = false;
+    if (resHeaders['accept-ranges']?.isNotEmpty == true) {
+      rangeFeatureEnabled =
+          resHeaders['accept-ranges']?.trim().toLowerCase() == 'bytes';
+    }
+    // If you have an existing file that is usable,
+    // decide whether you can use it (either return full or resume partial)
+    int? fullContentLength =
+        response.contentLength < 0 ||
+            response.compressionState ==
+                HttpClientResponseCompressionState.decompressed
+        ? null
+        : response.contentLength;
+    if (useExisting && await downloadedFile.exists()) {
+      final length = await downloadedFile.length();
+      if (fullContentLength == null || length == fullContentLength) {
         return downloadedFile;
-      }
-      if (length > fullContentLength) {
+      } else {
         useExisting = false;
       }
     }
-  }
 
-  final File tempDownloadedFile = File('${downloadedFile.path}.part');
+    final File tempDownloadedFile = File('${downloadedFile.path}.part');
 
-  // If there is already a temp file, a download may already be in progress - account for this (see #2073)
-  final bool tempFileExists = tempDownloadedFile.existsSync();
-  if (tempFileExists && useExisting) {
-    final result = await _waitForConcurrentDownload(
-      tempDownloadedFile,
-      downloadedFile,
-      logs,
-    );
-    if (result != null) return result;
-  }
-
-  // If the range feature is not available (or you need to start a ranged req from 0),
-  // complete the already-started request, else cancel it and start a ranged request,
-  // and open the file for writing in the appropriate mode
-  final targetFileLength = () {
-    if (!useExisting) return null;
-    try {
-      if (tempDownloadedFile.existsSync()) {
-        return tempDownloadedFile.lengthSync();
-      }
-    } on FileSystemException {
-      // File disappeared between existsSync and lengthSync
+    // If there is already a temp file, a download may already be in progress - account for this (see #2073)
+    final bool tempFileExists = await tempDownloadedFile.exists();
+    if (tempFileExists && useExisting) {
+      final result = await _waitForConcurrentDownload(
+        tempDownloadedFile,
+        downloadedFile,
+        logs,
+        cancellationToken,
+      );
+      if (result != null) return result;
     }
-    return null;
-  }();
-  int rangeStart = targetFileLength ?? 0;
-  IOSink? sink;
-  bool sentRangeRequest = false;
-  if (rangeFeatureEnabled && fullContentLength != null && rangeStart > 0) {
-    reqHeaders.addAll({'range': 'bytes=$rangeStart-${fullContentLength - 1}'});
-    sink = tempDownloadedFile.openWrite(mode: FileMode.writeOnlyAppend);
-    sentRangeRequest = true;
-  } else if (tempDownloadedFile.existsSync()) {
-    deleteFile(tempDownloadedFile);
-  }
-  final responseWithClient = await sourceRequestStreamResponse(
-    'GET',
-    url,
-    reqHeaders,
-    {'allowInsecure': allowInsecure},
-  );
-  final HttpClient responseClient = responseWithClient.value.key;
-  final HttpClientResponse response = responseWithClient.value.value;
-  try {
+
+    // If the range feature is not available (or you need to start a ranged req from 0),
+    // complete the already-started request, else cancel it and start a ranged request,
+    // and open the file for writing in the appropriate mode
+    int rangeStart = 0;
+    if (useExisting && rangeFeatureEnabled && fullContentLength != null) {
+      try {
+        rangeStart = await tempDownloadedFile.length();
+      } on FileSystemException {
+        // No resumable partial file.
+      }
+    }
+    if (fullContentLength != null && rangeStart >= fullContentLength) {
+      rangeStart = 0;
+    }
+    bool sentRangeRequest = false;
+    if (rangeFeatureEnabled && fullContentLength != null && rangeStart > 0) {
+      reqHeaders.addAll({
+        'range': 'bytes=$rangeStart-${fullContentLength - 1}',
+      });
+      // Only a resume needs a second request. Cancel the initial body without
+      // downloading it, then reopen at the partial file's byte offset.
+      await response.listen((_) {}).cancel();
+      response = (await HttpService().sourceRequestStreamResponse(
+        'GET',
+        url,
+        reqHeaders,
+        {'allowInsecure': allowInsecure},
+        sharedClient: responseClient,
+      )).value.value;
+      sentRangeRequest = true;
+    }
     // If we requested a byte range to resume a partial download but the server
     // ignored it and returned the full file (200 instead of 206 Partial
     // Content), appending would corrupt the file - discard the partial data and
     // start the download over from the beginning.
     if (sentRangeRequest && response.statusCode == HttpStatus.ok) {
-      await sink?.close();
-      sink = null;
       rangeStart = 0;
-      if (tempDownloadedFile.existsSync()) {
-        deleteFile(tempDownloadedFile);
+      fullContentLength =
+          response.contentLength < 0 ||
+              response.compressionState ==
+                  HttpClientResponseCompressionState.decompressed
+          ? null
+          : response.contentLength;
+    }
+    if (sentRangeRequest && response.statusCode == HttpStatus.partialContent) {
+      final contentRange = response.headers.value(
+        HttpHeaders.contentRangeHeader,
+      );
+      final range = contentRange == null
+          ? null
+          : RegExp(r'^bytes (\d+)-(\d+)/(\d+)$').firstMatch(contentRange);
+      if (range == null ||
+          int.tryParse(range.group(1)!) != rangeStart ||
+          int.tryParse(range.group(3)!) != fullContentLength ||
+          int.tryParse(range.group(2)!) != fullContentLength! - 1) {
+        throw ObtainiumError(
+          tr('downloadFailed'),
+          code: 'INVALID_CONTENT_RANGE',
+        );
       }
     }
-    sink ??= tempDownloadedFile.openWrite(mode: FileMode.writeOnly);
-
     var received = 0;
     double? progress;
     DateTime? lastProgressUpdate; // Track last progress update time
@@ -670,16 +890,6 @@ Future<File> _downloadFile(
     // abort early on errors and avoid wasting bandwidth reading a body
     // the server already rejected.
     if (response.statusCode < 200 || response.statusCode > 299) {
-      await sink.close();
-      sink = null;
-      await response.drain<void>().catchError((_) {
-        unawaited(
-          logs?.add('Failed to drain response body', level: LogLevel.warning),
-        );
-      });
-      if (tempDownloadedFile.existsSync()) {
-        deleteFile(tempDownloadedFile);
-      }
       throw ObtainiumError(
         response.reasonPhrase.isNotEmpty
             ? response.reasonPhrase
@@ -687,12 +897,18 @@ Future<File> _downloadFile(
                 'errorWithHttpStatusCode',
                 args: [response.statusCode.toString()],
               ),
+        code: 'HTTP_ERROR',
+        data: <String, dynamic>{'statusCode': response.statusCode},
       )..url = url;
     }
 
+    sink = tempDownloadedFile.openWrite(
+      mode: rangeStart > 0 ? FileMode.writeOnlyAppend : FileMode.writeOnly,
+    );
     final downloadBuffer = BytesBuilder();
     try {
       await response
+          .timeout(sourceResponseTimeout)
           .map((chunk) {
             cancellationToken?.throwIfCancelled();
             received += chunk.length;
@@ -739,12 +955,16 @@ Future<File> _downloadFile(
       // a file/socket error caused by the abort) so callers handle it silently.
       if (e is CancellationException ||
           (cancellationToken?.isCancelled ?? false)) {
-        throw CancellationException();
+        throw const CancellationException();
       }
       rethrow;
     }
     await sink.close();
     sink = null;
+    cancellationToken?.throwIfCancelled();
+    if (fullContentLength != null && received != fullContentLength) {
+      throw ObtainiumError(tr('downloadFailed'), code: 'INCOMPLETE_DOWNLOAD');
+    }
     progress = null;
     if (onProgress != null) {
       onProgress(progress, null, null);
@@ -781,8 +1001,12 @@ Future<File> _downloadFile(
       }
     }
     return downloadedFile;
+  } catch (_) {
+    cancellationToken?.throwIfCancelled();
+    rethrow;
   } finally {
-    responseClient.close();
+    cancellationToken?.removeListener(abortDownload);
+    responseClient.close(force: true);
     unawaited(
       sink?.close().catchError((_) {
         logs?.add('Failed to close download sink', level: LogLevel.warning);
@@ -799,12 +1023,12 @@ Future<int?> getDownloadSize(
   Map<String, String>? headers,
   bool allowInsecure = false,
 }) async {
-  final reqHeaders = headers ?? {};
+  final reqHeaders = withDefaultObtainXUserAgent(headers);
   final client = IOClient(createHttpClient(allowInsecure));
   try {
     final getReq = Request('GET', Uri.parse(url));
     getReq.headers.addAll(reqHeaders);
-    final response = await client.send(getReq);
+    final response = await client.send(getReq).timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
@@ -871,10 +1095,22 @@ String? formatDownloadSize(int? receivedBytes, int? totalBytes) {
 }
 
 Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
-  return await packageManager.getInstalledPackages(
-        flags: light ? packageInfoFlagsLight : packageInfoFlags,
-      ) ??
-      [];
+  try {
+    final packages = await NativeFeatures._deviceAppsChannel.invokeListMethod(
+      'getInstalledPackageInfos',
+      {'includeSigningCertificates': !light},
+    );
+    return packages
+            ?.map((entry) => PackageInfoImpl(Map<String, dynamic>.from(entry)))
+            .toList() ??
+        [];
+  } on MissingPluginException {
+    // Headless engines do not have MainActivity's channel.
+    return await packageManager.getInstalledPackages(
+          flags: light ? packageInfoFlagsLight : packageInfoFlags,
+        ) ??
+        [];
+  }
 }
 
 Future<PackageInfo?> getInstalledInfo(
@@ -882,6 +1118,7 @@ Future<PackageInfo?> getInstalledInfo(
   bool printErr = true,
   bool light = true,
   bool includeOwnDebugBuild = false,
+  bool throwOnError = false,
 }) async {
   if (packageName != null) {
     // In debug builds the running app is `<id>.debug`; when asked, try that
@@ -891,20 +1128,36 @@ Future<PackageInfo?> getInstalledInfo(
       namesToTry.insert(0, '$obtainiumId.debug');
     }
     try {
-      final List<PackageInfo> installedPackages = await getAllInstalledInfo(
-        light: light,
-      );
       for (final String name in namesToTry) {
-        for (final PackageInfo info in installedPackages) {
-          if (info.packageName == name) {
-            return info;
+        PackageInfo? info;
+        try {
+          final data = await NativeFeatures._deviceAppsChannel.invokeMapMethod(
+            'getInstalledPackageInfo',
+            {'packageName': name, 'includeSigningCertificates': !light},
+          );
+          if (data != null) {
+            info = PackageInfoImpl(Map<String, dynamic>.from(data));
           }
+        } on MissingPluginException {
+          // Preserve the headless-engine fallback: this pinned plugin's
+          // getPackageInfo does not catch native NameNotFoundException.
+          // MainActivity's worker handles absence safely and uses targeted
+          // queries; without it, enumerate once for all candidate names.
+          final installed = await getAllInstalledInfo(light: light);
+          for (final candidate in namesToTry) {
+            for (final package in installed) {
+              if (package.packageName == candidate) return package;
+            }
+          }
+          return null;
         }
+        if (info != null) return info;
       }
     } catch (e) {
       if (printErr) {
         debugPrint('getInstalledInfo($packageName): $e');
       }
+      if (throwOnError) rethrow;
     }
   }
   return null;
@@ -964,6 +1217,53 @@ Future<Directory> getAppStorageDir() async {
   return await getApplicationDocumentsDirectory();
 }
 
+/// The listing in [listings] that already tracks [app]'s package from the same
+/// store, or null when that store is free.
+///
+/// The same package from a *different* store is allowed, so this - not the
+/// package ID alone - is what decides whether adding, renaming, or swapping an
+/// app would duplicate a listing. [ignoreKey] drops one listing from the
+/// comparison, for when an existing listing is being edited and so must not
+/// collide with itself.
+///
+/// Only [ignoreKey] excuses a listing: an app being *added* carries no listing
+/// ID yet, so its key is the bare package ID, which is also the key of the
+/// package's first listing. Excusing that key implicitly (rather than only when
+/// a caller asks for it) hid the one listing every duplicate add collides with,
+/// so re-adding an already tracked store silently created a second record.
+AppInMemory? sameStoreListingIn(
+  AppListings listings,
+  App app, {
+  String? ignoreKey,
+}) {
+  final String storeIdentity = storeIdentityForApp(app);
+  for (final AppInMemory listing in listings.listingsForPackage(app.id)) {
+    if (ignoreKey != null && listing.listingKey == ignoreKey) continue;
+    if (storeIdentityForApp(listing.app) == storeIdentity) return listing;
+  }
+  return null;
+}
+
+/// Null requests a full reconciliation; an empty list means no reload work.
+List<String>? appIdsForResumeReload({
+  required DateTime now,
+  required DateTime? lastFullLoad,
+  required bool diskChanged,
+  required bool backgroundSaved,
+  required List<String>? changedPackages,
+  required Set<String> trackedIds,
+}) {
+  if (backgroundSaved ||
+      diskChanged ||
+      changedPackages == null ||
+      lastFullLoad == null ||
+      now.difference(lastFullLoad) >=
+          AppsProvider.fullResumeReconciliationInterval) {
+    return null;
+  }
+  return changedPackages.toSet().where(trackedIds.contains).toList();
+}
+
 class AppsProvider with ChangeNotifier {
   // Static, app-lifetime cross-instance save-notification bus; intentionally
   // never closed. The foreground instance subscribes so it can detect saves
@@ -973,7 +1273,7 @@ class AppsProvider with ChangeNotifier {
       StreamController<void>.broadcast();
 
   // In memory App state (should always be kept in sync with local storage versions)
-  Map<String, AppInMemory> apps = {};
+  final AppListings apps = AppListings();
   bool loadingApps = false;
 
   // Active per-app download cancellation tokens, keyed by app ID.
@@ -1001,6 +1301,8 @@ class AppsProvider with ChangeNotifier {
 
   // Coalesces bursts of saveApps()/removeApps() into a single auto-export.
   Timer? _autoExportDebounce;
+  DateTime? _autoExportFirstPendingAt;
+  bool _autoExportRunning = false;
 
   // Set in dispose() to guard against deferred callbacks running post-disposal.
   bool _disposed = false;
@@ -1012,12 +1314,14 @@ class AppsProvider with ChangeNotifier {
   // Variables to keep track of the app foreground status (installs can't run in the background)
   bool isForeground = true;
   bool _isBg = false;
-  static const Duration _foregroundLoadCooldown = Duration(seconds: 5);
-  DateTime? _lastForegroundLoadAt;
+  int _foregroundResumeGeneration = 0;
 
   /// Watermark used by incremental full-directory loads. Public so the
   /// lifecycle extension can reuse unchanged JSON files across resumes.
   DateTime? lastFullDiskLoadAt;
+  DateTime? appDirectoryModifiedAt;
+  DateTime? appCheckStoreModifiedAt;
+  static const fullResumeReconciliationInterval = Duration(minutes: 5);
 
   /// Whether this provider runs in the background (WorkManager) isolate rather
   /// than the main UI isolate.
@@ -1028,7 +1332,9 @@ class AppsProvider with ChangeNotifier {
   Directory? _apkDir;
   Directory? _iconsCacheDir;
   Directory? _userAppIconsDir;
+  Directory? _deducedAppIconsDir;
   Directory? cachedAppsDir;
+  AppCheckStore? appCheckStore;
 
   // Per-app-detail-page transient error banners, keyed by app ID. Populated by
   // [setAppPageError]/[clearAppPageError]; read by the app detail page.
@@ -1047,6 +1353,13 @@ class AppsProvider with ChangeNotifier {
   // the lifecycle extension can reach them across library files.
   final Map<String, Timer> deferredObtainiumTimers = {};
   final Map<String, AppInMemory> deferredObtainiumSnapshots = {};
+
+  // Apps handed to a third-party installer that returned without confirming the
+  // install. Each timer only bounds how long the row keeps showing "Installing"
+  // so a dismissed installer can't leave it spinning forever - it is purely
+  // cosmetic. Confirmation arrives on the system package broadcast and never
+  // waits on these. Public so the install extension can reach them.
+  final Map<String, Timer> thirdPartyInstallIndicatorTimers = {};
 
   Directory get apkDir {
     if (_apkDir == null) {
@@ -1077,6 +1390,19 @@ class AppsProvider with ChangeNotifier {
     return _userAppIconsDir!;
   }
 
+  /// Icons deduced for apps whose source publishes none: extracted from a
+  /// downloaded APK, or fetched from another store's listing. Lives under app
+  /// storage (not [iconsCacheDir]) because re-deriving one costs a download or
+  /// a network round-trip, so Android "clear cache" must not wipe it.
+  Directory get deducedAppIconsDir {
+    if (_deducedAppIconsDir == null) {
+      throw StateError(
+        'deducedAppIconsDir not initialized - wait for async init to complete',
+      );
+    }
+    return _deducedAppIconsDir!;
+  }
+
   /// Count of installed apps with an actionable or attention-needed update.
   /// Data mutations invalidate the cache; download/icon progress notifications
   /// do not need to rescan the entire collection.
@@ -1095,6 +1421,9 @@ class AppsProvider with ChangeNotifier {
   void markAppsChanged() {
     appsListRevision++;
     _pendingUpdateCountDirty = true;
+    // Any change to the app set or its check timestamps invalidates the cached
+    // due time; the next background wake-up recomputes it from the real apps.
+    settingsProvider.bgNextCheckDue = null;
   }
 
   /// Records a transient error banner for [appId]'s detail page.
@@ -1126,6 +1455,46 @@ class AppsProvider with ChangeNotifier {
         ),
       );
     });
+  }
+
+  Future<void> refreshAppsOnResume() async {
+    await waitForAppsToLoad();
+    final directory = await getAppsDir();
+    final modified = (await directory.stat()).modified;
+    final checkStoreModified = await appCheckStore?.modified();
+    List<String>? changedPackages;
+    try {
+      changedPackages = await NativeFeatures._deviceAppsChannel
+          .invokeListMethod<String>('consumePackageChanges');
+    } on MissingPluginException {
+      // Older native hosts and background engines retain full reconciliation.
+    } on PlatformException {
+      // A failed journal read is not evidence that no packages changed.
+    }
+    final reloadIds = appIdsForResumeReload(
+      now: DateTime.now(),
+      lastFullLoad: lastFullDiskLoadAt,
+      diskChanged:
+          appDirectoryModifiedAt != modified ||
+          appCheckStoreModifiedAt != checkStoreModified,
+      backgroundSaved: _needsBgReload,
+      changedPackages: changedPackages,
+      trackedIds: apps.values.map((listing) => listing.app.id).toSet(),
+    );
+    try {
+      if (reloadIds == null) {
+        _needsBgReload = false;
+        await loadApps(silent: true);
+        return;
+      }
+      for (final id in reloadIds) {
+        await loadApps(singleId: id, silent: true);
+      }
+    } catch (_) {
+      // The native journal was consumed. Retry with a full scan next time.
+      _needsBgReload = true;
+      rethrow;
+    }
   }
 
   /// Public wrapper around the protected [notifyListeners] so the provider's
@@ -1168,17 +1537,37 @@ class AppsProvider with ChangeNotifier {
   /// save/remove operations that happen in bursts into a single export.
   /// No-op (cheaply returns) if auto-export is disabled inside [export].
   void scheduleAutoExport() {
+    if (_disposed || !settingsProvider.autoExportOnChanges) return;
+    final now = DateTime.now();
+    _autoExportFirstPendingAt ??= now;
     _autoExportDebounce?.cancel();
-    _autoExportDebounce = Timer(const Duration(seconds: 2), () {
-      if (!_disposed) {
-        export(isAuto: true).catchError((e) {
-          unawaited(
-            logs.add('Auto-export failed: $e', level: LogLevel.warning),
-          );
-          return null;
-        });
+    // Save batches arrive every three seconds during a refresh. Wait until the
+    // operation finishes, but still checkpoint at least every thirty seconds.
+    final remaining =
+        const Duration(seconds: 30) -
+        now.difference(_autoExportFirstPendingAt!);
+    final delay = updateCheckCompleter == null
+        ? const Duration(seconds: 2)
+        : (remaining.isNegative ? Duration.zero : remaining);
+    _autoExportDebounce = Timer(delay, () async {
+      if (_disposed || _autoExportRunning) return;
+      _autoExportFirstPendingAt = null;
+      _autoExportRunning = true;
+      try {
+        await export(isAuto: true);
+      } catch (error) {
+        unawaited(
+          logs.add('Auto-export failed: $error', level: LogLevel.warning),
+        );
+      } finally {
+        _autoExportRunning = false;
+        if (_autoExportFirstPendingAt != null) scheduleAutoExport();
       }
     });
+  }
+
+  void finishPendingAutoExport() {
+    if (_autoExportFirstPendingAt != null) scheduleAutoExport();
   }
 
   AppsProvider({
@@ -1193,18 +1582,24 @@ class AppsProvider with ChangeNotifier {
     foregroundStream = FGBGEvents.instance.stream.asBroadcastStream();
     foregroundSubscription = foregroundStream?.listen((event) async {
       isForeground = event == FGBGType.foreground;
+      final generation = ++_foregroundResumeGeneration;
       if (isForeground) {
-        final DateTime now = DateTime.now();
-        final DateTime? previousLoad = _lastForegroundLoadAt;
-        if (previousLoad == null ||
-            now.difference(previousLoad) >= _foregroundLoadCooldown) {
-          _lastForegroundLoadAt = now;
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-          if (!isForeground) {
-            _lastForegroundLoadAt = previousLoad;
-            return;
-          }
-          await loadApps(silent: true);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (!isForeground ||
+            _disposed ||
+            generation != _foregroundResumeGeneration) {
+          return;
+        }
+        try {
+          await refreshAppsOnResume();
+        } catch (error) {
+          _needsBgReload = true;
+          unawaited(
+            logs.add(
+              'Foreground reconciliation failed: $error',
+              level: LogLevel.warning,
+            ),
+          );
         }
       }
     });
@@ -1217,6 +1612,13 @@ class AppsProvider with ChangeNotifier {
       NativeFeatures.registerDownloadCancelHandler(cancelDownload);
       NotificationsProvider.onDownloadCancelRequested = cancelDownload;
       NotificationsProvider.listenForDownloadCancelFromMain();
+      // Let the download-complete notification's Install action hand the
+      // release asset it just downloaded off to the system installer.
+      NotificationsProvider.onInstallDownloadedFileRequested =
+          installDownloadedAssetFile;
+      // Record third-party installs as soon as the system confirms them, instead
+      // of only when the handoff session manages to report success (#222).
+      listenForThirdPartyInstallResults();
     }
     () async {
       await this.settingsProvider.initializeSettings();
@@ -1247,6 +1649,12 @@ class AppsProvider with ChangeNotifier {
       );
       if (!_userAppIconsDir!.existsSync()) {
         _userAppIconsDir!.createSync(recursive: true);
+      }
+      _deducedAppIconsDir = Directory(
+        '${(await getAppStorageDir()).path}/deduced_icons',
+      );
+      if (!_deducedAppIconsDir!.existsSync()) {
+        _deducedAppIconsDir!.createSync(recursive: true);
       }
       if (!isBg) {
         await loadApps();
@@ -1281,14 +1689,39 @@ class AppsProvider with ChangeNotifier {
     foregroundSubscription?.cancel();
     _autoExportDebounce?.cancel();
     _eventSubscription?.cancel();
+    if (!_isBg) {
+      stopListeningForThirdPartyInstallResults();
+    }
     for (final Timer timer in deferredObtainiumTimers.values) {
       timer.cancel();
     }
     deferredObtainiumTimers.clear();
+    for (final Timer timer in thirdPartyInstallIndicatorTimers.values) {
+      timer.cancel();
+    }
+    thirdPartyInstallIndicatorTimers.clear();
     refreshProgressNotifier.dispose();
     // Pending JSON under app_data/pending_removal is intentionally left on disk;
     // the next loadApps commits the removal for any id without a live deferral.
     super.dispose();
+  }
+
+  /// Returns [app] carrying the listing ID it should be stored under.
+  ///
+  /// The first listing of a package keeps a null listing ID (key = package ID).
+  /// Any further store for that package gets a stable `package@Source` ID,
+  /// suffixed if that is somehow taken, so the two records never collide.
+  App withAllocatedListingId(App app) {
+    if (app.listingId != null) return app;
+    if (!apps.containsListingKey(app.id)) return app;
+    final String base = appListingKey(app.id, sourceIdentifierForApp(app));
+    if (!apps.containsListingKey(base)) return app.copyWith(listingId: base);
+    for (int suffix = 2; ; suffix++) {
+      final String candidate = '$base$appListingKeySeparator$suffix';
+      if (!apps.containsListingKey(candidate)) {
+        return app.copyWith(listingId: candidate);
+      }
+    }
   }
 
   Future<List<List<String>>> addAppsByURL(
@@ -1303,10 +1736,10 @@ class AppsProvider with ChangeNotifier {
     final List<App> pps = results[0];
     final Map<String, dynamic> errorsMap = results[1];
     for (var app in pps) {
-      if (apps.containsKey(app.id)) {
+      if (sameStoreListingIn(apps, app) != null) {
         errorsMap.addAll({app.id: tr('appAlreadyAdded')});
       } else {
-        await saveApps([app], onlyIfExists: false);
+        await saveApps([withAllocatedListingId(app)], onlyIfExists: false);
       }
     }
     final List<List<String>> errors = errorsMap.keys
@@ -1420,8 +1853,25 @@ Future<void> bgUpdateCheck(
     settingsProvider: settings,
     logsProvider: bgLogs,
   );
-  await appsProvider.loadApps();
   await appsProvider.settingsProvider.initializeSettings();
+
+  // Android wakes this task on its own cadence, not the user's check interval,
+  // so most wake-ups have nothing due. Returning here keeps those from reading
+  // every app record and opening the check timestamp database - the contention
+  // that made a concurrent foreground load wait on a database lock. An explicit
+  // request (manual check, or a retry carrying its own list) always proceeds.
+  final DateTime? nextDue = appsProvider.settingsProvider.bgNextCheckDue;
+  if (!forceAll &&
+      params['toCheck'] == null &&
+      nextDue != null &&
+      DateTime.now().isBefore(nextDue)) {
+    unawaited(
+      bgLogs.add('BG update task: Nothing due before $nextDue; skipped load.'),
+    );
+    return;
+  }
+
+  await appsProvider.loadApps();
 
   final netResult = await (Connectivity().checkConnectivity());
   if (netResult.contains(ConnectivityResult.none) ||
@@ -1431,15 +1881,9 @@ Future<void> bgUpdateCheck(
     return;
   }
 
-  if (!appsProvider.settingsProvider.enableBackgroundUpdates ||
-      appsProvider.settingsProvider.updateInterval == 0) {
+  if (appsProvider.settingsProvider.updateInterval == 0) {
     if (!forceAll) {
-      unawaited(
-        bgLogs.add(
-          'BG update task: Skipped (enabled=${appsProvider.settingsProvider.enableBackgroundUpdates}, '
-          'interval=${appsProvider.settingsProvider.updateInterval})',
-        ),
-      );
+      unawaited(bgLogs.add('BG update task: Skipped (interval=0)'));
       return;
     }
     unawaited(
@@ -1499,24 +1943,53 @@ Future<void> bgUpdateCheck(
 
     final List<App> trackOnlyToNotify = [];
     final List<App> toNotify = [];
+    final List<App> reviewToNotify = [];
     for (var i = 0; i < result.updates.length; i++) {
+      // checkUpdates reports "the source's version string changed", not "the
+      // device is behind". Re-read the post-save app so the verdict is computed
+      // from the same state the app list renders, then apply the shared update
+      // predicate: without it a version reformat notifies (and silently
+      // installs) an update the UI itself does not show.
+      final App update =
+          appsProvider.apps[result.updates[i].id]?.app ?? result.updates[i];
+      final bool installable = appUpdateIsUserVisible(update);
+      final bool notifiable = appUpdateIsUserVisible(
+        update,
+        includeVersionOrderUncertain: true,
+      );
+      if (!installable && !notifiable) {
+        unawaited(
+          bgLogs.add(
+            'BG update task: ${update.id} version string changed '
+            '(${update.installedVersion} → ${update.latestVersion}) but no update '
+            'is available for the installed build; not notifying or installing.',
+          ),
+        );
+        continue;
+      }
+      if (!installable) {
+        if (!update.settings.getBool('skipUpdateNotifications')) {
+          reviewToNotify.add(update);
+        }
+        continue;
+      }
       final willInstallInBackground = await appsProvider
-          .canInstallSilentlyInBackground(result.updates[i]);
+          .canInstallSilentlyInBackground(update);
       if (!canInstall || !willInstallInBackground) {
-        if (!result.updates[i].settings.getBool('skipUpdateNotifications')) {
+        if (notifiable && !update.settings.getBool('skipUpdateNotifications')) {
           unawaited(
             bgLogs.add(
-              'BG update task notifying for ${result.updates[i].id} (canInstall $canInstall, canInstallSilentlyInBackground $willInstallInBackground).',
+              'BG update task notifying for ${update.id} (canInstall $canInstall, canInstallSilentlyInBackground $willInstallInBackground).',
             ),
           );
-          if (result.updates[i].settings.getBool('trackOnly')) {
-            trackOnlyToNotify.add(result.updates[i]);
+          if (update.settings.getBool('trackOnly')) {
+            trackOnlyToNotify.add(update);
           } else {
-            toNotify.add(result.updates[i]);
+            toNotify.add(update);
           }
         }
       } else {
-        silentlyInstallable.add(result.updates[i].id);
+        silentlyInstallable.add(update.id);
       }
     }
 
@@ -1530,11 +2003,17 @@ Future<void> bgUpdateCheck(
         ),
       );
     }
+    if (reviewToNotify.isNotEmpty) {
+      unawaited(
+        notificationsProvider.notify(VersionReviewNotification(reviewToNotify)),
+      );
+    }
 
     unawaited(
       bgLogs.add(
         'BG update task: Notified ${toNotify.length} updates, '
         '${trackOnlyToNotify.length} track-only, '
+        '${reviewToNotify.length} releases needing review, '
         '${result.toThrow.rawErrors.length} errors',
       ),
     );
@@ -1585,6 +2064,13 @@ Future<void> bgUpdateCheck(
       bgLogs,
     );
   }
+  // Recorded after every save this run has made, so the next wake-up can skip
+  // its load. Cleared by [AppsProvider.markAppsChanged] on any later change.
+  appsProvider.settingsProvider.bgNextCheckDue = appsProvider
+      .earliestNextUpdateCheckDue();
+  // This engine is about to go away. Leaving the handle open left a connection
+  // holding the file against the next engine and the UI isolate.
+  await appsProvider.appCheckStore?.close();
   unawaited(bgLogs.add('BG task completed $taskId.'));
   AppsProvider._eventsController.add(null);
 }
@@ -1694,16 +2180,37 @@ _bgRunUpdateCheck(
   return (updates: updates, errors: errors, toThrow: toThrow);
 }
 
-class CancellationException implements Exception {}
-
 class CancellationToken {
   bool _cancelled = false;
   bool get isCancelled => _cancelled;
+  final Set<VoidCallback> _listeners = {};
+  final _cancellation = Completer<void>();
+  Future<void> get whenCancelled => _cancellation.future;
 
-  void cancel() => _cancelled = true;
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    _cancellation.complete();
+    for (final listener in _listeners.toList()) {
+      listener();
+    }
+    _listeners.clear();
+  }
+
+  void addListener(VoidCallback listener) {
+    if (_cancelled) {
+      listener();
+    } else {
+      _listeners.add(listener);
+    }
+  }
+
+  void removeListener(VoidCallback listener) {
+    _listeners.remove(listener);
+  }
 
   void throwIfCancelled() {
-    if (_cancelled) throw CancellationException();
+    if (_cancelled) throw const CancellationException();
   }
 }
 
@@ -1802,6 +2309,23 @@ class NativeFeatures {
     }
   }
 
+  /// Launcher icon of a downloaded, not-yet-installed APK, as PNG bytes.
+  ///
+  /// Rendered natively from the archive (adaptive icons composited, size-capped)
+  /// so an app from a source that publishes no icon still gets one.
+  static Future<Uint8List?> getApkArchiveIcon(String archiveFilePath) async {
+    try {
+      return await _deviceAppsChannel.invokeMethod<Uint8List>(
+        'getApkArchiveIcon',
+        {'archiveFilePath': archiveFilePath},
+      );
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   static Future<ByteData> _readFileBytes(String path) async {
     final bytes = await File(path).readAsBytes();
     return ByteData.view(bytes.buffer);
@@ -1845,6 +2369,23 @@ class NativeFeatures {
       );
       if (log == null || log.trim().isEmpty) return null;
       return log;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  /// Raw display densities from the platform, or null when unavailable.
+  ///
+  /// Keys: stableDensityDpi, systemDensityDpi, effectiveDensityDpi,
+  /// isInMultiWindowMode. See MainActivity.displayDiagnostics().
+  static Future<Map<String, Object?>?> getDisplayDiagnostics() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return (await _diagnosticsChannel.invokeMapMethod<String, Object?>(
+        'getDisplayDiagnostics',
+      ));
     } on PlatformException {
       return null;
     } on MissingPluginException {
