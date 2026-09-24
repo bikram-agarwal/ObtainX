@@ -324,10 +324,8 @@ class HomePageState extends State<HomePage> {
     }
 
     Future<void> handleAddUrl(String data) async {
-      // Ensure apps are loaded
-      while (appsProvider.loadingApps) {
-        await Future.delayed(const Duration(milliseconds: 10));
-      }
+      // A link can arrive on a cold start, before the library has loaded.
+      await appsProvider.waitForInitialLoad();
 
       // See if we already have this app
       final String standardizedUrl = SourceProvider()
@@ -339,7 +337,9 @@ class HomePageState extends State<HomePage> {
           .firstOrNull;
 
       if (existingApp != null) {
-        await goToExistingApp(existingApp.app.id);
+        // The listing key, not the package ID, which picks the wrong listing
+        // when the package is tracked from more than one store.
+        await goToExistingApp(existingApp.listingKey);
       } else {
         await goToAddApp(data);
       }
@@ -368,6 +368,24 @@ class HomePageState extends State<HomePage> {
           await handleAddUrl(data);
         } else if (action == 'app' || action == 'apps') {
           final dataStr = Uri.decodeComponent(data);
+          final String payload = action == 'app'
+              ? '{ "apps": [$dataStr] }'
+              : '{ "apps": $dataStr }';
+          // A link only adds (see planLinkImport). Settle that before asking,
+          // so a link for an app that is already tracked opens it instead.
+          await appsProvider.waitForInitialLoad();
+          final List<App> linkedApps = appsProvider
+              .parseBackupContent(payload)
+              .apps;
+          final LinkImportPlan plan = planLinkImport(
+            appsProvider.apps,
+            linkedApps,
+          );
+          if (plan.toAdd.isEmpty && plan.alreadyTracked.isNotEmpty) {
+            showMessage(tr('appAlreadyAdded'));
+            await goToExistingApp(plan.alreadyTracked.first.listingKey);
+            return;
+          }
           if (!navigator.mounted) return;
           if (await showDialog(
                 context: navigator.context,
@@ -396,16 +414,26 @@ class HomePageState extends State<HomePage> {
                 },
               ) !=
               null) {
+            // import() re-plans against the library as it is now, in case it
+            // changed while the dialog was open. A link never carries
+            // settings; the payload is spliced as text, so a crafted one could
+            // smuggle a "settings" block in.
             final result = await appsProvider.import(
-              action == 'app'
-                  ? '{ "apps": [$dataStr] }'
-                  : '{ "apps": $dataStr }',
+              payload,
+              importSettings: false,
+              skipAlreadyTracked: true,
             );
+            final int imported = result.key.length;
             showMessage(
-              tr(
-                'importedX',
-                args: [plural('apps', result.key.length).toLowerCase()],
-              ),
+              imported < linkedApps.length
+                  ? tr(
+                      'importedXOfYApps',
+                      args: [imported.toString(), linkedApps.length.toString()],
+                    )
+                  : tr(
+                      'importedX',
+                      args: [plural('apps', imported).toLowerCase()],
+                    ),
             );
           }
         } else {

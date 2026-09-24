@@ -8,6 +8,7 @@ import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -160,9 +161,65 @@ void main() {
     );
   }
 
-  testWidgets('alternate F-Droid icon long-press offers swap menu', (
-    tester,
-  ) async {
+  group('with the package confirmed on F-Droid', () {
+    // A store chip only shows once a scan has confirmed the store, so seed
+    // the scan cache the way a finished scan leaves it.
+    setUp(() {
+      BulkScanCache.setCacheForTesting({
+        'com.google.android.aicore': {
+          'F-Droid': 'https://f-droid.org/packages/com.google.android.aicore/',
+        },
+      });
+    });
+    tearDown(() => BulkScanCache.setCacheForTesting({}));
+
+    testWidgets('alternate F-Droid icon long-press offers swap menu', (
+      tester,
+    ) async {
+      final settings = SettingsProvider()..prefs = preferences;
+      Localization.load(
+        const Locale('en'),
+        translations: Translations(translations),
+      );
+      final provider = _Apps();
+      final model = _app('1.0.0', '1.0.0', trackOnly: false);
+      provider.apps[model.id] = AppInMemory(model, null, null, icon);
+      addTearDown(provider.dispose);
+      addTearDown(settings.dispose);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(480, 1600);
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<AppsProvider>.value(value: provider),
+            ChangeNotifierProvider<SettingsProvider>.value(value: settings),
+          ],
+          child: MaterialApp(home: AppPage(appId: model.id)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Finder fdroidIcon = find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is StoreSourceIconImage &&
+            widget.assetPath == StoreSourceIconPaths.fdroid,
+      );
+      expect(fdroidIcon, findsOneWidget);
+      await tester.longPress(fdroidIcon);
+      await tester.pumpAndSettle();
+      expect(find.text(tr('swapToThisSource')), findsOneWidget);
+      expect(find.text(tr('trackHereToo')), findsOneWidget);
+      expect(find.text(tr('copyLink')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
+
+  testWidgets('an unconfirmed store shows no chip', (tester) async {
+    // Nothing has scanned this package, so F-Droid and APKMirror are not
+    // listed on a guess - the tracked source is the only chip.
     final settings = SettingsProvider()..prefs = preferences;
     Localization.load(
       const Locale('en'),
@@ -188,17 +245,18 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final Finder fdroidIcon = find.byWidgetPredicate(
-      (Widget widget) =>
-          widget is StoreSourceIconImage &&
-          widget.assetPath == StoreSourceIconPaths.fdroid,
-    );
-    expect(fdroidIcon, findsOneWidget);
-    await tester.longPress(fdroidIcon);
-    await tester.pumpAndSettle();
-    expect(find.text(tr('swapToThisSource')), findsOneWidget);
-    expect(find.text(tr('trackHereToo')), findsOneWidget);
-    expect(find.text(tr('copyLink')), findsOneWidget);
+    for (final String assetPath in [
+      StoreSourceIconPaths.fdroid,
+      StoreSourceIconPaths.apkmirror,
+    ]) {
+      expect(
+        find.byWidgetPredicate(
+          (Widget widget) =>
+              widget is StoreSourceIconImage && widget.assetPath == assetPath,
+        ),
+        findsNothing,
+      );
+    }
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

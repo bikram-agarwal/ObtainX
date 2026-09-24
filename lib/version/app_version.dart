@@ -14,6 +14,45 @@ const sourceBuildComparisonKey = 'sourceBuildComparison';
 const acknowledgedSourceReleaseKey = 'acknowledgedSourceRelease';
 const trackedDeviceStateVersionKey = 'trackedDeviceStateVersion';
 
+/// Set while the source's last answer had no release or APK matching the app's
+/// settings - its filters, most often. See [appWithNoMatchingRelease]; the next
+/// check that finds one drops it.
+const noMatchingReleaseKey = 'noMatchingRelease';
+
+bool appHasNoMatchingRelease(App app) =>
+    app.additionalSettings[noMatchingReleaseKey] == true;
+
+/// [app] as its source last answered, at [checkedAt]: with nothing matching.
+///
+/// Clears what an earlier check found. Kept, it went on showing - and offering
+/// to install - a release the current filters exclude, and a new listing kept
+/// its "Unknown" placeholder even though the source had been asked.
+App appWithNoMatchingRelease(App app, DateTime checkedAt) {
+  return app.copyWith(
+    latestVersion: '',
+    apkUrls: const [],
+    otherAssetUrls: const [],
+    lastUpdateCheck: checkedAt,
+    releaseDate: null,
+    changeLog: null,
+    apkSizeBytes: null,
+    rawLatestVersionFromSource: null,
+    rawApkNamesFromSource: null,
+    rawReleaseTitlesFromSource: null,
+    latestIsReproducible: null,
+    latestReproducibleStatus: null,
+    latestReproducibleVersionCode: null,
+    latestAttestationStatus: null,
+    latestMalwareScanStatus: null,
+    latestMalwareScanDetail: null,
+    latestMalwareScanReportUrl: null,
+    additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+      ..remove(sourceVersionCodesKey)
+      ..remove(sourceBuildComparisonKey)
+      ..[noMatchingReleaseKey] = true,
+  );
+}
+
 String _versionSettingsIdentity(App app) {
   return jsonEncode([
     getVersionStringSource(app.additionalSettings),
@@ -330,6 +369,11 @@ App normalizeSelectedSourceVersion(App app) {
 /// Publication timestamps are intentionally absent: uploading is not installing.
 VersionDecision versionDecisionForApp(App app) {
   final installed = app.installedVersion;
+  if (installed != null && appHasNoMatchingRelease(app)) {
+    // Nothing on the source matches, so there is nothing to update to: the
+    // installed build is the newest this listing can offer.
+    return const VersionDecision(VersionRelation.newer, 'noMatchingRelease');
+  }
   if (installed == null || app.latestVersion.isEmpty) {
     return VersionDecision(
       VersionRelation.unknown,

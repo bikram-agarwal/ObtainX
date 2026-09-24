@@ -54,6 +54,25 @@ enum AppVersionDisplayVerdict {
   updateAvailable,
 }
 
+/// Settings that narrow which releases or files count, across sources. Only
+/// ones the user types: the automatic by-architecture filter is on for most
+/// apps, and flagging it would put the chip on nearly every page.
+const List<String> _releaseFilterSettingKeys = [
+  'apkFilterRegEx',
+  'filterReleaseTitlesByRegEx',
+  'filterReleaseNotesByRegEx',
+  'filterVersionsByRegEx',
+  'customLinkFilterRegex',
+  'zippedApkFilterRegEx',
+  'tarballedApkFilterRegEx',
+];
+
+/// Whether the Latest row shows a filtered view of the source.
+bool appHasActiveReleaseFilter(App app) => _releaseFilterSettingKeys.any(
+  (String key) =>
+      app.additionalSettings[key]?.toString().trim().isNotEmpty ?? false,
+);
+
 /// Version meaning shown by the details stripe, independent of Skip or whether
 /// the user has enabled background installation.
 AppVersionDisplayVerdict appVersionVerdictForDisplay(App? app) {
@@ -232,19 +251,18 @@ String? _storeSlotNameForUrl(String url) {
 /// Resolves the URL to display for a store chip, consulting the bulk-scan cache.
 /// Returns null when the chip should be hidden.
 ///
-/// Logic:
+/// A store only shows once something has confirmed the package is on it:
 /// - [alreadyTracked] → hide (user already tracks this store)
 /// - [siblingListingUrl] != null → another listing of this same package tracks
 ///   this store → show its URL (known-good, outranks any scan result)
-/// - [storeData] == null → app never scanned → show [fallbackUrl] (unverified)
+/// - no cache entry for this store (never scanned, or its check couldn't
+///   answer) → hide. Guessed URLs used to show here as if confirmed, listing
+///   F-Droid and APKMirror for packages on neither.
 /// - cache entry == `""` → confirmed absent → hide
 /// - cache entry is a non-empty URL → show with that URL
-/// - cache entry missing for this store (but app was scanned for others) → hide
-///   (we have scan data for this app; don't surface unconfirmed stores)
 String? _resolveStoreUrl({
   required Map<String, String>? storeData,
   required String storeName,
-  required String? fallbackUrl,
   required bool alreadyTracked,
   String? siblingListingUrl,
 }) {
@@ -256,12 +274,7 @@ String? _resolveStoreUrl({
   if (siblingListingUrl != null && siblingListingUrl.isNotEmpty) {
     return siblingListingUrl;
   }
-  // Key absent means this store was never explicitly checked for this app
-  // (either no scan at all, or a different store's check ran first).
-  // In both cases show the fallback URL — don't suppress unverified stores.
-  if (storeData == null || !storeData.containsKey(storeName)) {
-    return fallbackUrl;
-  }
+  if (storeData == null || !storeData.containsKey(storeName)) return null;
   final entry = storeData[storeName]!;
   if (entry.isEmpty) return null; // confirmed absent (empty string sentinel)
   if (storeName == 'APKPure' && !isWellFormedApkPureUrl(entry)) {
@@ -277,13 +290,14 @@ String? _resolveStoreUrl({
 /// 302 (redirect to search) for non-existent packages.
 ///
 /// Returns the Play Store URL if the app is present, or null if absent.
-/// Returns null also on network error — caller should not cache the result.
+/// Throws when the package's own ID can't be checked (network error or
+/// timeout): that is "couldn't ask", which the caller must not cache as absent.
 Future<String?> _checkPlayStoreAvailability(String packageId) async {
   final candidates = BulkImportService.getPackageIdCandidates(packageId);
   for (final candidate in candidates) {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
     try {
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 10);
       final uri = Uri.parse(
         'https://play.google.com/store/apps/details?id=$candidate&hl=en&gl=US',
       );
@@ -297,14 +311,13 @@ Future<String?> _checkPlayStoreAvailability(String packageId) async {
         const Duration(seconds: 10),
       );
       await response.drain<void>();
-      client.close();
       if (response.statusCode == 200) {
         return 'https://play.google.com/store/apps/details?id=$candidate';
       }
     } catch (_) {
-      if (candidate == packageId) {
-        return null; // network error on primary -> skip caching
-      }
+      if (candidate == packageId) rethrow;
+    } finally {
+      client.close();
     }
   }
   return null;
@@ -670,6 +683,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   bool _webViewCanGoBack = false;
   bool _scheduledDetailPageRefresh = false;
   bool _requestedMissingIconLoad = false;
+  // One-shot per page mount (reset in [didUpdateWidget]): whether the page has
+  // looked for a package that has never been store-scanned.
+  bool _checkedForUnscannedPackage = false;
   // Once true, the lazy APKMirror size resolver has fired for this AppPage
   // mount and won't run again until the user navigates to a different app.
   // Re-resets in [didUpdateWidget] when [widget.appId] changes.
@@ -848,6 +864,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _webViewCanGoBack = false;
       _scheduledDetailPageRefresh = false;
       _requestedMissingIconLoad = false;
+      _checkedForUnscannedPackage = false;
       _attemptedApkMirrorSizeResolution = false;
       _lastWebViewSurfaceColorApplied = null;
       _scheduledOpenInEditMode = false;
@@ -2291,8 +2308,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     );
   }
 
-  /// After a pull-to-refresh, checks all 4 stores (APKMirror, F-Droid, APKPure,
-  /// Play Store) for this single app concurrently. Cached stores are skipped,
+  /// Checks all 4 stores (APKMirror, F-Droid, APKPure, Play Store) for this
+  /// single app concurrently: after every update check on this page, whether
+  /// or not it succeeded, and on page open when the app has no icon or its
+  /// package has never been scanned. Each store's answer stands on its own
+  /// (see [settleStoreLookups]); one that couldn't answer is left uncached, not
+  /// recorded as absent. Cached stores are skipped,
   /// except that APKMirror is rechecked when its existing availability response
   /// can also fill a missing app icon. Presence always runs for every store
   /// that is still uncached. Icon resolution is separate: APKMirror API icon
@@ -2350,96 +2371,117 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     }
     final apkMirrorIconUrls = <String, String>{};
 
-    final futures = <Future<MapEntry<String, String?>>>[];
+    final lookups = <String, Future<Map<String, String?>>>{};
 
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkmirror.com') &&
         ((storeData['APKMirror'] ?? '').isEmpty || shouldResolveMissingIcon)) {
-      futures.add(
-        BulkImportService.checkApkMirror(
-          [appId],
-          resolvedIconUrls: apkMirrorIconUrls,
-        ).then((result) => MapEntry('APKMirror', result[appId])),
-      );
+      lookups['APKMirror'] = BulkImportService.checkApkMirror([
+        appId,
+      ], resolvedIconUrls: apkMirrorIconUrls);
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
         (storeData['F-Droid'] ?? '').isEmpty) {
-      futures.add(
-        BulkImportService.checkFDroid([
-          appId,
-        ]).then((result) => MapEntry('F-Droid', result[appId])),
-      );
+      lookups['F-Droid'] = BulkImportService.checkFDroid([appId]);
     }
     final String cachedApkPureUrl = storeData['APKPure'] ?? '';
     if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
         (cachedApkPureUrl.isEmpty ||
             !isWellFormedApkPureUrl(cachedApkPureUrl))) {
-      futures.add(
-        BulkImportService.checkApkPure([
-          appId,
-        ]).then((result) => MapEntry('APKPure', result[appId])),
-      );
+      // Its own-ID failures re-throw by design; settleStoreLookups is what
+      // keeps one of those from costing the other stores their answers.
+      lookups['APKPure'] = BulkImportService.checkApkPure([appId]);
     }
     if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
         (storeData['PlayStore'] ?? '').isEmpty) {
-      futures.add(
-        _checkPlayStoreAvailability(
-          appId,
-        ).then((url) => MapEntry('PlayStore', url)),
-      );
+      lookups['PlayStore'] = _checkPlayStoreAvailability(
+        appId,
+      ).then((url) => <String, String?>{appId: url});
     }
 
+    if (lookups.isEmpty && !shouldResolveMissingIcon) return;
     final entry = Map<String, String>.from(storeData);
-    if (futures.isNotEmpty) {
-      final results = await Future.wait(futures);
-      final changedStores = <String, String>{};
-      for (final result in results) {
-        final String existing = entry[result.key] ?? '';
-        // A malformed cached APKPure entry is never usable - a fresh "not
-        // found" (null) result must be allowed to overwrite it with the
-        // empty-string sentinel, not just a fresh URL. Every other store's
-        // cached value is trusted as-is once non-empty.
-        final bool existingIsUsable = result.key == 'APKPure'
-            ? existing.isNotEmpty && isWellFormedApkPureUrl(existing)
-            : existing.isNotEmpty;
-        if (result.value != null || !existingIsUsable) {
-          entry[result.key] = result.value ?? '';
-          changedStores[result.key] = result.value ?? '';
+    try {
+      if (lookups.isNotEmpty) {
+        final Map<String, String?> answers = await settleStoreLookups(
+          appId,
+          lookups,
+          onError: (String store, Object error) => unawaited(
+            appsProvider.logs.add(
+              'Store check failed for $appId on $store: $error',
+              level: LogLevel.warning,
+            ),
+          ),
+        );
+        final changedStores = <String, String>{};
+        for (final MapEntry<String, String?> result in answers.entries) {
+          final String existing = entry[result.key] ?? '';
+          // A malformed cached APKPure entry is never usable - a fresh "not
+          // found" (null) result must be allowed to overwrite it with the
+          // empty-string sentinel, not just a fresh URL. Every other store's
+          // cached value is trusted as-is once non-empty.
+          final bool existingIsUsable = result.key == 'APKPure'
+              ? existing.isNotEmpty && isWellFormedApkPureUrl(existing)
+              : existing.isNotEmpty;
+          if (result.value != null || !existingIsUsable) {
+            entry[result.key] = result.value ?? '';
+            changedStores[result.key] = result.value ?? '';
+          }
+        }
+        if (changedStores.isNotEmpty) {
+          await BulkScanCache.save({appId: changedStores});
         }
       }
-      if (changedStores.isNotEmpty) {
-        await BulkScanCache.save({appId: changedStores});
+
+      String? resolvedIconUrl;
+      if (shouldResolveMissingIcon) {
+        resolvedIconUrl = await resolveIconUrlFromOtherStores(
+          apkMirrorIconUrl: apkMirrorIconUrls[appId],
+          apkMirrorListingUrl: entry['APKMirror'],
+          fdroidListingUrl: entry['F-Droid'],
+          apkPureListingUrl: entry['APKPure'],
+          playStoreListingUrl: entry['PlayStore'],
+        );
       }
-    } else if (!shouldResolveMissingIcon) {
-      return;
-    }
-
-    String? resolvedIconUrl;
-    if (shouldResolveMissingIcon) {
-      resolvedIconUrl = await resolveIconUrlFromOtherStores(
-        apkMirrorIconUrl: apkMirrorIconUrls[appId],
-        apkMirrorListingUrl: entry['APKMirror'],
-        fdroidListingUrl: entry['F-Droid'],
-        apkPureListingUrl: entry['APKPure'],
-        playStoreListingUrl: entry['PlayStore'],
+      final AppInMemory? currentApp = appsProvider.apps[listingKey];
+      if (resolvedIconUrl != null &&
+          currentApp != null &&
+          currentApp.icon == null &&
+          currentApp.app.iconUrl?.isNotEmpty != true &&
+          currentApp.app.url == trackedUrl) {
+        await appsProvider.saveApps([
+          currentApp.app.copyWith(iconUrl: resolvedIconUrl),
+        ], updateInstalledInfo: false);
+        await appsProvider.updateAppIcon(listingKey);
+      }
+    } catch (error) {
+      // Callers don't await this, so an error would otherwise go unseen.
+      unawaited(
+        appsProvider.logs.add(
+          'Store scan failed for $appId: $error',
+          level: LogLevel.warning,
+        ),
       );
+    } finally {
+      // Whatever settled before a failure is still worth showing.
+      if (mounted && widget.appId == listingKey) {
+        setState(() {
+          _storeAvailabilityCacheFuture = Future.value(entry);
+        });
+      }
     }
-    final AppInMemory? currentApp = appsProvider.apps[listingKey];
-    if (resolvedIconUrl != null &&
-        currentApp != null &&
-        currentApp.icon == null &&
-        currentApp.app.iconUrl?.isNotEmpty != true &&
-        currentApp.app.url == trackedUrl) {
-      await appsProvider.saveApps([
-        currentApp.app.copyWith(iconUrl: resolvedIconUrl),
-      ], updateInstalledInfo: false);
-      await appsProvider.updateAppIcon(listingKey);
-    }
+  }
 
-    if (mounted && widget.appId == listingKey) {
-      setState(() {
-        _storeAvailabilityCacheFuture = Future.value(entry);
-      });
-    }
+  /// Scans the stores for a package that has never had a scan, so its Sources
+  /// row answers on first open instead of after a pull-to-refresh. The
+  /// missing-icon trigger alone never fired for installed apps, whose icon
+  /// comes from the device.
+  Future<void> _scanStoresIfNeverScanned(
+    String listingKey,
+    String packageId,
+  ) async {
+    if (await BulkScanCache.loadForApp(packageId) != null) return;
+    if (!mounted || widget.appId != listingKey) return;
+    await _maybeCheckAndCacheAllStores(listingKey);
   }
 
   /// Lazily fills in [App.apkSizeBytes] for APKMirror apps the first time
@@ -2535,10 +2577,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           appsProvider.apps[listingKey]?.app.id ?? listingKey,
         );
       });
-      // Independently check Play Store in the background so other store
-      // buttons (F-Droid, APKPure, APKMirror) appear immediately from cache
-      // without waiting for the Play Store network round-trip.
-      unawaited(_maybeCheckAndCacheAllStores(listingKey));
       // The version may have just bumped, in which case [SourceProvider.getApp]
       // cleared the cached size and we need to walk APKMirror again. The
       // resolver is a no-op when the size is still present.
@@ -2560,12 +2598,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         _showPageError(err, title: tr('errorCheckingUpdates'));
       }
     } finally {
-      if (mounted &&
-          widget.appId == listingKey &&
-          _updateCheckRunToken == updateCheckRunToken) {
-        setState(() {
-          updating = false;
-        });
+      if (mounted && widget.appId == listingKey) {
+        // Here rather than after checkUpdate: which stores carry the package
+        // doesn't depend on this source answering, and a failed check (no
+        // matching release yet, say) used to skip the scan altogether. It runs
+        // in the background, so the row fills in from cache first.
+        unawaited(_maybeCheckAndCacheAllStores(listingKey));
+        if (_updateCheckRunToken == updateCheckRunToken) {
+          setState(() {
+            updating = false;
+          });
+        }
       }
     }
   }
@@ -2956,6 +2999,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     }
     if (!_requestedMissingIconLoad && app != null && app.icon == null) {
       _requestedMissingIconLoad = true;
+      // The store scan below covers the never-scanned case too.
+      _checkedForUnscannedPackage = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         Provider.of<AppsProvider>(
@@ -2968,6 +3013,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         // pulls to refresh (which is what actually resolves iconUrl via the
         // other stores below).
         unawaited(_maybeCheckAndCacheAllStores(widget.appId));
+      });
+    }
+    if (!_checkedForUnscannedPackage && app != null) {
+      _checkedForUnscannedPackage = true;
+      final String listingKey = widget.appId;
+      final String packageId = app.app.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_scanStoresIfNeverScanned(listingKey, packageId));
       });
     }
     if (widget.openInEditMode &&
@@ -3200,6 +3253,28 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
+    // The tag chip beside a version value (pseudo, version code, skipped,
+    // filtered), shared so every version row's chips look the same.
+    Widget versionChip(BuildContext ctx, String text) {
+      final ColorScheme scheme = Theme.of(ctx).colorScheme;
+      return AppSmoothRoundedSurface(
+        backgroundColor: Color.alphaBlend(
+          scheme.primary.withValues(alpha: 0.12),
+          scheme.surfaceContainerHighest,
+        ),
+        borderColor: null,
+        borderRadius: 999,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Text(
+          text,
+          style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      );
+    }
+
     Widget versionRow(
       BuildContext ctx,
       String label,
@@ -3208,26 +3283,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       bool versionCode = false,
       String? osInstalledVersion,
     }) {
-      Widget versionChip(String text) {
-        final ColorScheme scheme = Theme.of(ctx).colorScheme;
-        return AppSmoothRoundedSurface(
-          backgroundColor: Color.alphaBlend(
-            scheme.primary.withValues(alpha: 0.12),
-            scheme.surfaceContainerHighest,
-          ),
-          borderColor: null,
-          borderRadius: 999,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: Text(
-            text,
-            style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        );
-      }
-
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(
@@ -3262,8 +3317,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       fontStyle: pseudoVersion ? FontStyle.italic : null,
                     ),
                   ),
-                  if (pseudoVersion) versionChip(tr('pseudoVersion')),
-                  if (versionCode) versionChip(tr('versionCode')),
+                  if (pseudoVersion) versionChip(ctx, tr('pseudoVersion')),
+                  if (versionCode) versionChip(ctx, tr('versionCode')),
                   if (pseudoVersion &&
                       osInstalledVersion != null &&
                       osInstalledVersion.isNotEmpty)
@@ -3287,6 +3342,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       BuildContext ctx,
       String value, {
       required bool skipActive,
+      bool filtered = false,
     }) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
@@ -3321,26 +3377,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       fontSize: 14,
                     ),
                   ),
-                  if (skipActive)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          ctx,
-                        ).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        tr('latestVersionSkipped'),
-                        style: Theme.of(ctx).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
+                  if (skipActive) versionChip(ctx, tr('latestVersionSkipped')),
+                  if (filtered) versionChip(ctx, tr('filtered')),
                 ],
               ),
             ),
@@ -3597,6 +3635,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               VersionRelation.sourceChanged;
       final bool primaryActionEnabled =
           !installActionBlocked &&
+          // The source's last answer had nothing matching: there is no
+          // release to install or mark, installed or not.
+          !appHasNoMatchingRelease(app.app) &&
           (installedVersionIsNull ||
               ((actionableUpdate || uncertainUpdate) && !skipActive));
       final bool trackedFromApkMirror =
@@ -4267,8 +4308,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         versionCardChildren.add(
           versionLatestRow(
             pageThemeContext,
-            latestVerStr.isEmpty ? '-' : latestVerStr,
+            app != null && appHasNoMatchingRelease(app.app)
+                ? tr('none')
+                : latestVerStr.isEmpty
+                ? '-'
+                : latestVerStr,
             skipActive: app != null && isSkipActiveForCurrentLatest(app.app),
+            filtered: app != null && appHasActiveReleaseFilter(app.app),
           ),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
@@ -4938,12 +4984,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               final trackedUrl = alternateStoresTrackedUrl;
               final alternateSourceIcons = <Widget>[];
               if (pid != null && pid.isNotEmpty) {
-                // Play Store: only show when confirmed present in cache.
-                // Populated by _maybeCheckAndCachePlayStore on pull-to-refresh.
+                // Every store shows only once confirmed (see _resolveStoreUrl);
+                // _maybeCheckAndCacheAllStores fills the cache.
                 final playStoreUrl = _resolveStoreUrl(
                   storeData: storeData,
                   storeName: 'PlayStore',
-                  fallbackUrl: null,
                   alreadyTracked: _trackedUrlIsFromHost(
                     trackedUrl,
                     'play.google.com',
@@ -4952,7 +4997,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 final fdroidUrl = _resolveStoreUrl(
                   storeData: storeData,
                   storeName: 'F-Droid',
-                  fallbackUrl: 'https://f-droid.org/packages/$pid/',
                   alreadyTracked: _trackedUrlIsFromHost(
                     trackedUrl,
                     'f-droid.org',
@@ -4962,15 +5006,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 final apkpureUrl = _resolveStoreUrl(
                   storeData: storeData,
                   storeName: 'APKPure',
-                  fallbackUrl: null,
                   alreadyTracked: _trackedUrlIsFromHost(trackedUrl, 'apkpure.'),
                   siblingListingUrl: siblingListingUrlsByStore['APKPure'],
                 );
                 final apkmirrorUrl = _resolveStoreUrl(
                   storeData: storeData,
                   storeName: 'APKMirror',
-                  fallbackUrl:
-                      'https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=${Uri.encodeComponent(pid)}',
                   alreadyTracked: _trackedUrlIsFromHost(
                     trackedUrl,
                     'apkmirror.com',
@@ -4980,7 +5021,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 final githubUrl = _resolveStoreUrl(
                   storeData: storeData,
                   storeName: 'GitHub',
-                  fallbackUrl: null,
                   alreadyTracked: _trackedUrlIsFromHost(
                     trackedUrl,
                     'github.com',

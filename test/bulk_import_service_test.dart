@@ -5,8 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 
 class _LocalStoreHttpOverrides extends HttpOverrides {
-  _LocalStoreHttpOverrides(this.port);
+  _LocalStoreHttpOverrides(this.port, {this.host = 'tapi.pureapk.com'});
   final int port;
+  final String host;
   int clientsCreated = 0;
   int clientsClosed = 0;
 
@@ -29,7 +30,7 @@ class _LocalStoreHttpClient implements HttpClient {
 
   @override
   Future<HttpClientRequest> openUrl(String method, Uri url) {
-    expect(url.host, 'tapi.pureapk.com');
+    expect(url.host, overrides.host);
     return client.openUrl(
       method,
       url.replace(scheme: 'http', host: '127.0.0.1', port: overrides.port),
@@ -179,6 +180,140 @@ void main() {
         }, overrides);
       },
     );
+  });
+
+  group('F-Droid scans', () {
+    late HttpServer server;
+    late _LocalStoreHttpOverrides overrides;
+
+    setUp(() async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      overrides = _LocalStoreHttpOverrides(server.port, host: 'f-droid.org');
+    });
+    tearDown(() async {
+      await server.close(force: true);
+    });
+
+    test(
+      'only a 404 is absent; a lookup that could not tell is left out',
+      () async {
+        server.listen((request) async {
+          final String packageName = request.uri.pathSegments.last;
+          switch (packageName) {
+            case 'org.example.present':
+              request.response.write('{}');
+            case 'org.example.flaky':
+              request.response.statusCode = 503;
+            case 'org.example.dropped':
+              // The connection dies before any answer.
+              (await request.response.detachSocket()).destroy();
+              return;
+            default:
+              // org.example.absent, and the base ID org.example that the
+              // '.gh' flavor is also looked up under.
+              request.response.statusCode = 404;
+          }
+          await request.response.close();
+        });
+
+        final result = await HttpOverrides.runWithHttpOverrides(
+          () => BulkImportService.checkFDroid([
+            'org.example.present',
+            'org.example.absent',
+            'org.example.flaky',
+            'org.example.dropped',
+            'org.example.gh',
+          ]),
+          overrides,
+        );
+
+        expect(result, {
+          'org.example.present':
+              'https://f-droid.org/packages/org.example.present/',
+          'org.example.absent': null,
+          // Its own ID and its base ID both got a 404.
+          'org.example.gh': null,
+        });
+      },
+    );
+
+    test('a failed flavor lookup leaves the package unknown', () async {
+      // The package's own ID is not on F-Droid, but its base ID couldn't be
+      // checked, so there may still be a listing to show.
+      server.listen((request) async {
+        request.response.statusCode =
+            request.uri.pathSegments.last == 'org.example.gh' ? 404 : 503;
+        await request.response.close();
+      });
+
+      final result = await HttpOverrides.runWithHttpOverrides(
+        () => BulkImportService.checkFDroid(['org.example.gh']),
+        overrides,
+      );
+
+      expect(result, isEmpty);
+    });
+  });
+
+  group('IzzyOnDroid scans', () {
+    late HttpServer server;
+    late _LocalStoreHttpOverrides overrides;
+
+    setUp(() async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      overrides = _LocalStoreHttpOverrides(
+        server.port,
+        host: 'apt.izzysoft.de',
+      );
+    });
+    tearDown(() async {
+      await server.close(force: true);
+    });
+
+    test('the per-package fallback leaves a failed lookup out', () async {
+      server.listen((request) async {
+        final String last = request.uri.pathSegments.last;
+        if (last == 'index.xml') {
+          // Forces the per-package API fallback.
+          request.response.statusCode = 503;
+        } else if (last == 'org.example.present') {
+          request.response.write('{"suggestedVersionCode": 5}');
+        } else if (last == 'org.example.flaky') {
+          request.response.statusCode = 503;
+        } else {
+          request.response.statusCode = 404;
+        }
+        await request.response.close();
+      });
+
+      final result = await HttpOverrides.runWithHttpOverrides(
+        () => BulkImportService.checkIzzyOnDroid([
+          'org.example.present',
+          'org.example.absent',
+          'org.example.flaky',
+        ]),
+        overrides,
+      );
+
+      expect(result, {
+        'org.example.present':
+            'https://apt.izzysoft.de/fdroid/repo/org.example.present_5.apk',
+        'org.example.absent': null,
+      });
+    });
+
+    test('a cancelled scan records nothing for unchecked packages', () async {
+      final result = await HttpOverrides.runWithHttpOverrides(
+        () => BulkImportService.checkIzzyOnDroid(
+          ['org.example.unchecked', 'org.example.known'],
+          alreadyKnown: {'org.example.known': null},
+          shouldAbort: () => true,
+        ),
+        overrides,
+      );
+
+      expect(result, {'org.example.known': null});
+    });
   });
 
   group('APKMirror availability metadata', () {

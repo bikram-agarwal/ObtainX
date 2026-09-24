@@ -513,16 +513,6 @@ class BulkImportService {
     return result;
   }
 
-  /// Ensures [recordStoreCoverage] sees every package (null means not in store).
-  static void _putMissingPackageKeysAsNull(
-    Map<String, String?> result,
-    Iterable<String> packageNames,
-  ) {
-    for (final String packageName in packageNames) {
-      result.putIfAbsent(packageName, () => null);
-    }
-  }
-
   static Future<void> _runBulkPerPackageApiLookups({
     required List<String> toQuery,
     required List<String> allPackageNames,
@@ -576,15 +566,21 @@ class BulkImportService {
         }
       }
     } finally {
-      if (shouldAbort?.call() != true) {
-        _putMissingPackageKeysAsNull(result, toQuery);
-      }
+      // A lookup that failed leaves its package without an entry: unknown,
+      // never "absent".
       client.close();
     }
   }
 
   /// Checks F-Droid for a list of package names using their REST API.
   /// Returns a map of packageName -> fdroid URL (null if not found).
+  ///
+  /// A package F-Droid couldn't be asked about (network error, timeout, any
+  /// status but 200 or 404) gets no entry: "unknown", not "absent". Every
+  /// caller relies on that. The Sources row and the apps list's background scan
+  /// cache only the entries present, so an unknown package is asked again next
+  /// time. Bulk add files it as not fully scanned rather than "not found", and
+  /// the swap flow falls back to the package's F-Droid URL either way.
   static Future<Map<String, String?>> checkFDroid(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
@@ -605,7 +601,6 @@ class BulkImportService {
         .toList();
     if (toQuery.isEmpty) {
       onProgress?.call(result.length, packageNames.length);
-      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
@@ -616,6 +611,10 @@ class BulkImportService {
       onProgress: onProgress,
       shouldAbort: shouldAbort,
       runLookup: (http.Client client, String pkg) async {
+        // Absent only once every candidate got a definite 404. Anything else
+        // (a server error, a rate limit, a dropped connection) couldn't tell,
+        // and recording it as absent hid F-Droid until something re-asked.
+        bool everyCandidateAbsent = true;
         final candidates = getPackageIdCandidates(pkg);
         for (final candidate in candidates) {
           try {
@@ -629,18 +628,17 @@ class BulkImportService {
               result[pkg] = 'https://f-droid.org/packages/$candidate/';
               return;
             }
+            if (response.statusCode != 404) everyCandidateAbsent = false;
           } catch (_) {
             if (candidate == pkg) {
               rethrow;
             }
+            everyCandidateAbsent = false;
           }
         }
-        result[pkg] = null;
+        if (everyCandidateAbsent) result[pkg] = null;
       },
     );
-    if (shouldAbort?.call() != true) {
-      _putMissingPackageKeysAsNull(result, packageNames);
-    }
     return result;
   }
 
@@ -738,6 +736,12 @@ class BulkImportService {
   /// One [index.xml] fetch and in-memory lookups (fast). Parsing runs in an
   /// isolate via [compute]. Progress updates are throttled so the UI stays
   /// responsive. Falls back to the per-package API if the index path fails.
+  ///
+  /// As with [checkFDroid], a package that couldn't be checked (the fallback
+  /// lookup failed, or the scan was cancelled before reaching it) gets no
+  /// entry. Bulk add then files it as not fully scanned and leaves it
+  /// uncached, instead of recording "not on IzzyOnDroid" and never asking
+  /// again.
   static Future<Map<String, String?>> checkIzzyOnDroid(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
@@ -758,14 +762,12 @@ class BulkImportService {
         .toList();
     if (toQuery.isEmpty) {
       onProgress?.call(result.length, packageNames.length);
-      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
     onProgress?.call(result.length, packageNames.length);
 
     if (shouldAbort?.call() == true) {
-      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
@@ -834,6 +836,10 @@ class BulkImportService {
         onProgress: onProgress,
         shouldAbort: shouldAbort,
         runLookup: (http.Client client, String pkg) async {
+          // Settled only once every candidate got a definite answer: a 404,
+          // or a 200 (a listing with no version code can't be linked to, and
+          // asking again won't change that). Anything else couldn't tell.
+          bool everyCandidateAnswered = true;
           final candidates = getPackageIdCandidates(pkg);
           for (final candidate in candidates) {
             try {
@@ -868,19 +874,21 @@ class BulkImportService {
                       'https://apt.izzysoft.de/fdroid/repo/${candidate}_$versionCodeStr.apk';
                   return;
                 }
+              } else if (response.statusCode != 404) {
+                everyCandidateAnswered = false;
               }
             } catch (_) {
               if (candidate == pkg) {
                 rethrow;
               }
+              everyCandidateAnswered = false;
             }
           }
-          result[pkg] = null;
+          if (everyCandidateAnswered) result[pkg] = null;
         },
       );
       return result;
     } finally {
-      _putMissingPackageKeysAsNull(result, packageNames);
       indexClient.close();
     }
   }

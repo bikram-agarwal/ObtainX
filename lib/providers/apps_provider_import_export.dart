@@ -48,6 +48,59 @@ class BackupContent {
   const BackupContent({required this.apps, this.settingsMap, this.schema});
 }
 
+/// What a link import should do with each app in its payload.
+class LinkImportPlan {
+  /// Apps to save, each carrying the listing ID it will be stored under.
+  final List<App> toAdd;
+
+  /// Existing listings the payload duplicates (same package, same store).
+  final List<AppInMemory> alreadyTracked;
+
+  const LinkImportPlan({required this.toAdd, required this.alreadyTracked});
+}
+
+/// Sorts a link payload (`obtainium://app/` or `apps/`) into new listings and
+/// ones [listings] already has.
+///
+/// A link only ever adds. An app whose package is already tracked from the
+/// same store is left alone: saving the payload's bare record over it would
+/// wipe its latest version, pin, categories, folders and the user's settings
+/// edits. The same package from a different store becomes a further listing,
+/// as in every other add flow; replacing a listing's store is the swap-source
+/// flow's job.
+///
+/// A payload never names its own record: any listing ID it carries is dropped
+/// and one allocated, so a crafted link cannot aim at another store's listing.
+/// Payload entries are checked against each other too, so two for one store
+/// add one listing and two for different stores add two.
+LinkImportPlan planLinkImport(AppListings listings, List<App> incoming) {
+  // Accepted entries are added here as they are planned, so later entries
+  // collide with them and get distinct listing IDs.
+  final AppListings planned = AppListings();
+  for (final MapEntry<String, AppInMemory> entry in listings.entries) {
+    planned[entry.key] = entry.value;
+  }
+  final List<App> toAdd = [];
+  final List<AppInMemory> alreadyTracked = [];
+  for (final App linked in incoming) {
+    final App app = linked.copyWith(listingId: null);
+    final AppInMemory? existing = sameStoreListingIn(planned, app);
+    if (existing != null) {
+      // Only a listing already in the library is worth pointing the user at;
+      // a match on an earlier payload entry is just a duplicate to drop.
+      if (listings.containsListingKey(existing.listingKey) &&
+          !alreadyTracked.contains(existing)) {
+        alreadyTracked.add(existing);
+      }
+      continue;
+    }
+    final App allocated = allocateListingIdIn(planned, app);
+    planned[allocated.listingKey] = AppInMemory(allocated, null, null, null);
+    toAdd.add(allocated);
+  }
+  return LinkImportPlan(toAdd: toAdd, alreadyTracked: alreadyTracked);
+}
+
 /// Import/export of app configurations for [AppsProvider].
 extension AppsProviderImportExport on AppsProvider {
   /// Builds an exportable JSON map containing app data and optionally settings.
@@ -245,12 +298,23 @@ extension AppsProviderImportExport on AppsProvider {
   /// the result is OOTB-ObtainX-plus-whatever-the-backup-contains rather than
   /// the backup merged on top of whatever was there before. It never touches
   /// installed apps or their on-device data — only ObtainX's own state.
+  ///
+  /// [skipAlreadyTracked] makes the import add-only, for links: apps already
+  /// tracked from the same store are dropped and the rest get listing IDs of
+  /// their own (see [planLinkImport]), and only the apps actually saved are
+  /// returned. File import and restore leave it off, because they overwrite on
+  /// purpose and their sheet lists already-tracked apps separately.
   Future<MapEntry<List<App>, bool>> import(
     String appsJSON, {
     Set<String>? selectedAppIds,
     bool importSettings = true,
     bool replaceExisting = false,
+    bool skipAlreadyTracked = false,
   }) async {
+    assert(
+      !(replaceExisting && skipAlreadyTracked),
+      'A restore replaces the library, so there is nothing to skip.',
+    );
     final backupContent = parseBackupContent(appsJSON);
     List<App> importedApps = backupContent.apps;
     final settingsMap = backupContent.settingsMap;
@@ -259,6 +323,12 @@ extension AppsProviderImportExport on AppsProvider {
       importedApps = importedApps
           .where((a) => selectedAppIds.contains(a.id))
           .toList();
+    }
+
+    // Before folder reconciliation, so a skipped app's folders aren't created.
+    if (skipAlreadyTracked) {
+      await waitForAppsToLoad();
+      importedApps = planLinkImport(apps, importedApps).toAdd;
     }
 
     // Reset settings to OOTB before folder reconciliation reads

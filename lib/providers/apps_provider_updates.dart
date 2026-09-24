@@ -194,7 +194,9 @@ App? mergeFetchedUpdateWithLiveState({
   final bool malwareScanStillMatchesRelease =
       liveApp.latestVersion == fetchedApp.latestVersion;
   final settings = Map<String, dynamic>.from(liveApp.additionalSettings)
-    ..remove(sourceVersionCodesKey);
+    ..remove(sourceVersionCodesKey)
+    // This answer found a release.
+    ..remove(noMatchingReleaseKey);
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
@@ -468,9 +470,11 @@ App? mergeTrackedSourceSwap({
       liveApp.preferredApkIndex < fetchedApp.apkUrls.length
       ? liveApp.preferredApkIndex
       : fetchedApp.preferredApkIndex;
-  final Map<String, dynamic> settings = Map<String, dynamic>.from(
-    requestedApp.additionalSettings,
-  )..remove(sourceVersionCodesKey);
+  final Map<String, dynamic> settings =
+      Map<String, dynamic>.from(requestedApp.additionalSettings)
+        ..remove(sourceVersionCodesKey)
+        // The new source found a release.
+        ..remove(noMatchingReleaseKey);
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
@@ -522,6 +526,25 @@ App? mergeTrackedSourceSwap({
 }
 
 typedef _FetchedAppUpdate = ({App requestedApp, App fetchedApp});
+
+/// Whether [error] means the source was reached and answered, just with
+/// nothing usable: no release, APK or version matching the app's settings.
+///
+/// That still counts as a check, so it moves the app's check time. A network
+/// failure, rate limit or anything unclassified doesn't: the source was never
+/// heard from, and leaving the time alone keeps the app first in line for the
+/// next check.
+bool sourceAnsweredWithoutUpdate(Object error) =>
+    error is NoReleasesError || error is NoAPKError || error is NoVersionError;
+
+/// [app] as saved after its source answered with [error] (one that
+/// [sourceAnsweredWithoutUpdate] accepts) at [checkedAt].
+App appAfterAnswerWithoutUpdate(App app, Object error, DateTime checkedAt) {
+  // A release exists and only its version couldn't be read, so keep what is
+  // known instead of claiming the source has nothing.
+  if (error is NoVersionError) return app.copyWith(lastUpdateCheck: checkedAt);
+  return appWithNoMatchingRelease(app, checkedAt);
+}
 
 /// Update checking and pending-update bookkeeping for [AppsProvider].
 extension AppsProviderUpdates on AppsProvider {
@@ -636,7 +659,20 @@ extension AppsProviderUpdates on AppsProvider {
   }
 
   Future<App?> _checkUpdateInSession(String appId) async {
-    final _FetchedAppUpdate? update = await _fetchUpdateSnapshot(appId);
+    final _FetchedAppUpdate? update;
+    try {
+      update = await _fetchUpdateSnapshot(appId);
+    } catch (error) {
+      if (sourceAnsweredWithoutUpdate(error)) {
+        final App? app = apps[appId]?.app;
+        if (app != null) {
+          await saveApps([
+            appAfterAnswerWithoutUpdate(app, error, DateTime.now()),
+          ], updateInstalledInfo: false);
+        }
+      }
+      rethrow;
+    }
     if (update == null) return null;
     final App? mergedApp = mergeFetchedUpdateWithLiveState(
       requestedApp: update.requestedApp,
@@ -904,6 +940,10 @@ extension AppsProviderUpdates on AppsProvider {
       }
       total = appIds.length;
       final List<_FetchedAppUpdate> pendingResults = [];
+      // Checked, but the source had nothing usable (see
+      // sourceAnsweredWithoutUpdate), keyed to that answer. Saved with the
+      // next flush, the same as a found release.
+      final Map<String, Object> pendingAnswered = {};
       DateTime lastSaveTime = DateTime.now();
       bool saveInProgress = false;
       const Duration saveInterval = Duration(seconds: 3);
@@ -939,15 +979,26 @@ extension AppsProviderUpdates on AppsProvider {
       }
 
       Future<void> flushFetchedResults({bool force = false}) async {
-        if (saveInProgress || pendingResults.isEmpty) return;
+        if (saveInProgress ||
+            (pendingResults.isEmpty && pendingAnswered.isEmpty)) {
+          return;
+        }
         final DateTime now = DateTime.now();
         if (!force && now.difference(lastSaveTime) < saveInterval) return;
 
         saveInProgress = true;
         final List<_FetchedAppUpdate> batch = List.from(pendingResults);
         pendingResults.clear();
+        final Map<String, Object> answered = Map.from(pendingAnswered);
+        pendingAnswered.clear();
         try {
           final List<App> fetched = [];
+          answered.forEach((String appId, Object error) {
+            final App? liveApp = apps[appId]?.app;
+            if (liveApp != null) {
+              fetched.add(appAfterAnswerWithoutUpdate(liveApp, error, now));
+            }
+          });
           for (final _FetchedAppUpdate result in batch) {
             final App? mergedApp = mergeFetchedUpdateWithLiveState(
               requestedApp: result.requestedApp,
@@ -994,6 +1045,7 @@ extension AppsProviderUpdates on AppsProvider {
               await updatePendingRepoRename(appId, e.newUrl);
             } else {
               errors.add(appId, e, appName: apps[appId]?.name);
+              if (sourceAnsweredWithoutUpdate(e)) pendingAnswered[appId] = e;
             }
           } finally {
             completed++;

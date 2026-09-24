@@ -662,6 +662,7 @@
     "effectivelyEqual": "Same build (Different labels)",
     "sameVersion": "Up to date",
     "newerOnDevice": "Newer on device",
+    "filtered": "Filtered",
     "versionOrderUnclear": "Version order unclear",
     "versionOrderUnclearSubtitle": "The app cannot tell which build is newer. Open the source or try Update if you want this release; use Skip if you are fine staying on the current version.",
     "uncertainUpdateTooltip": "Version order unclear - open the release or try update from the app page",

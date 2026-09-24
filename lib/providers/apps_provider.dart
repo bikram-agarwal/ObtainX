@@ -1244,6 +1244,25 @@ AppInMemory? sameStoreListingIn(
   return null;
 }
 
+/// Returns [app] carrying the listing ID it should be stored under in
+/// [listings].
+///
+/// The first listing of a package keeps a null listing ID (key = package ID).
+/// Any further store for that package gets a stable `package@Source` ID,
+/// suffixed if that is somehow taken, so the two records never collide.
+App allocateListingIdIn(AppListings listings, App app) {
+  if (app.listingId != null) return app;
+  if (!listings.containsListingKey(app.id)) return app;
+  final String base = appListingKey(app.id, sourceIdentifierForApp(app));
+  if (!listings.containsListingKey(base)) return app.copyWith(listingId: base);
+  for (int suffix = 2; ; suffix++) {
+    final String candidate = '$base$appListingKeySeparator$suffix';
+    if (!listings.containsListingKey(candidate)) {
+      return app.copyWith(listingId: candidate);
+    }
+  }
+}
+
 /// Null requests a full reconciliation; an empty list means no reload work.
 List<String>? appIdsForResumeReload({
   required DateTime now,
@@ -1298,6 +1317,10 @@ class AppsProvider with ChangeNotifier {
 
   // Serializes concurrent loadApps() calls without busy-waiting.
   Completer<void>? appsLoadingCompleter;
+
+  // Completes once the launch-time loadApps() has run, or init has finished or
+  // failed without one. See [waitForInitialLoad].
+  final Completer<void> _initialLoadDone = Completer<void>();
 
   // Coalesces bursts of saveApps()/removeApps() into a single auto-export.
   Timer? _autoExportDebounce;
@@ -1533,6 +1556,17 @@ class AppsProvider with ChangeNotifier {
     }
   }
 
+  /// Waits for the launch-time [loadApps], including the stretch of init
+  /// before it starts, when [waitForAppsToLoad] has nothing to wait on yet.
+  ///
+  /// For UI entry points that can run on a cold start - a deep link above
+  /// all - which would otherwise read the still-empty library as the real one.
+  /// Not for anything that init itself awaits, which would deadlock.
+  Future<void> waitForInitialLoad() async {
+    await _initialLoadDone.future;
+    await waitForAppsToLoad();
+  }
+
   /// Schedules a debounced automatic export. Coalesces the many per-app
   /// save/remove operations that happen in bursts into a single export.
   /// No-op (cheaply returns) if auto-export is disabled inside [export].
@@ -1658,6 +1692,7 @@ class AppsProvider with ChangeNotifier {
       }
       if (!isBg) {
         await loadApps();
+        _completeInitialLoad();
         // One-shot legacy user-icon migration: kept OFF the cold-start critical
         // path so it never delays the first app-list render. It also self-skips
         // on later launches via a prefs flag (see the method).
@@ -1675,12 +1710,18 @@ class AppsProvider with ChangeNotifier {
       } else {
         await migrateUserIconsFromLegacyCacheDir();
       }
+      _completeInitialLoad();
     }().catchError((e) {
       initError = e.toString();
+      _completeInitialLoad();
       unawaited(
         logs.add('AppsProvider async init error: $e', level: LogLevel.error),
       );
     });
+  }
+
+  void _completeInitialLoad() {
+    if (!_initialLoadDone.isCompleted) _initialLoadDone.complete();
   }
 
   @override
@@ -1706,23 +1747,9 @@ class AppsProvider with ChangeNotifier {
     super.dispose();
   }
 
-  /// Returns [app] carrying the listing ID it should be stored under.
-  ///
-  /// The first listing of a package keeps a null listing ID (key = package ID).
-  /// Any further store for that package gets a stable `package@Source` ID,
-  /// suffixed if that is somehow taken, so the two records never collide.
-  App withAllocatedListingId(App app) {
-    if (app.listingId != null) return app;
-    if (!apps.containsListingKey(app.id)) return app;
-    final String base = appListingKey(app.id, sourceIdentifierForApp(app));
-    if (!apps.containsListingKey(base)) return app.copyWith(listingId: base);
-    for (int suffix = 2; ; suffix++) {
-      final String candidate = '$base$appListingKeySeparator$suffix';
-      if (!apps.containsListingKey(candidate)) {
-        return app.copyWith(listingId: candidate);
-      }
-    }
-  }
+  /// Returns [app] carrying the listing ID it should be stored under in the
+  /// library; see [allocateListingIdIn].
+  App withAllocatedListingId(App app) => allocateListingIdIn(apps, app);
 
   Future<List<List<String>>> addAppsByURL(
     List<String> urls, {
