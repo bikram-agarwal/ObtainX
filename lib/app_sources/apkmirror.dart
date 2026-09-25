@@ -85,38 +85,51 @@ Future<void> _logApkMirrorSizeDebug(String message) async {
   }
 }
 
-/// Image and static asset URL suffixes that appear in page HTML after a string
-/// that looks like `com.vendor.app`, e.g. `com.google.android.calendar.png`.
-const _apkMirrorTrailingNonPackageSegments = <String>{
-  'avif',
-  'bmp',
-  'gif',
-  'ico',
-  'jpeg',
-  'jpg',
-  'png',
-  'svg',
-  'webp',
-};
-
 const _apkMirrorCanonicalAppSlugByAlias = <String, String>{
   'youtube-music-android-automotive': 'youtube-music',
   'youtube-music-wear-os': 'youtube-music',
 };
 
-String _apkMirrorNormalizeInferredPackageCandidate(String rawCandidate) {
-  var normalized = rawCandidate;
-  while (true) {
-    final lastDotIndex = normalized.lastIndexOf('.');
-    if (lastDotIndex <= 0) break;
-    final tailSegment = normalized.substring(lastDotIndex + 1).toLowerCase();
-    if (_apkMirrorTrailingNonPackageSegments.contains(tailSegment)) {
-      normalized = normalized.substring(0, lastDotIndex);
-    } else {
-      break;
-    }
+final RegExp _apkMirrorPackagePattern = RegExp(
+  r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$',
+);
+
+/// The package an APKMirror listing page is for, or null if it doesn't say.
+///
+/// Read from the page's "View on Play Store" button (`details?id=<package>`).
+/// Checked on live pages 2026-09-24: it's there even for apps Google doesn't
+/// list on the store (Pixel Launcher). Every page also carries an ad linking
+/// to another app's store page (ML Manager), so only the button counts.
+///
+/// The fallback is the `og:image` filename, which ends in `_<package>` for
+/// newer icons. Older ones are just a hash (Play Store, WebView, Firefox).
+Future<String?> apkMirrorPackageFromListingPageHtml(String html) async {
+  final doc = await parseHtmlOffIsolate(html);
+  final String? storeHref = doc
+      .querySelector('a[title="View on Play Store"]')
+      ?.attributes['href'];
+  final Uri? storeUri = Uri.tryParse(storeHref?.trim() ?? '');
+  final String? storeId = storeUri?.host == 'play.google.com'
+      ? storeUri!.queryParameters['id']
+      : null;
+  if (storeId != null && _apkMirrorPackagePattern.hasMatch(storeId)) {
+    return storeId;
   }
-  return normalized;
+  final String? iconUrl = doc
+      .querySelector('meta[property="og:image"]')
+      ?.attributes['content'];
+  final List<String> iconPath =
+      Uri.tryParse(iconUrl?.trim() ?? '')?.pathSegments ?? const [];
+  if (iconPath.isEmpty) return null;
+  final String fileName = iconPath.last;
+  final int extension = fileName.lastIndexOf('.');
+  final String stem = extension > 0
+      ? fileName.substring(0, extension)
+      : fileName;
+  final int underscore = stem.indexOf('_');
+  if (underscore < 0) return null;
+  final String iconId = stem.substring(underscore + 1);
+  return _apkMirrorPackagePattern.hasMatch(iconId) ? iconId : null;
 }
 
 /// RSS puts the release URL in `<link>https://...</link>`. The HTML parser
@@ -560,6 +573,7 @@ class APKMirror extends AppSource {
     naiveStandardVersionDetection = true;
     showReleaseDateAsVersionToggle = true;
     appIdInferIsOptional = true;
+    inferAppIdEvenWhenTrackOnly = true;
   }
 
   @override
@@ -623,49 +637,28 @@ class APKMirror extends AppSource {
   String? changeLogPageFromStandardUrl(String standardUrl) =>
       '$standardUrl/#whatsnew';
 
-  /// UNSOUND — do not rely on this without replacing the scrape first.
+  /// Reads the listing page: see [apkMirrorPackageFromListingPageHtml]. Runs
+  /// only when an app is added, since [SourceProvider._resolveAppId] keeps a
+  /// known ID. A failed read means a temporary ID, not a failed add.
   ///
-  /// Unreachable today: [SourceProvider._resolveAppId] only infers when the app
-  /// is not track-only, and this source enforces track-only. Verified against a
-  /// live listing page 2026-08-18, it fails two ways if that ever changes:
-  /// the `com.` prefix cannot express ids like `org.thoughtcrime.securesms`,
-  /// and the first match on a page is usually a *different* app's icon filename
-  /// from a sidebar/related-apps widget — Signal's page yields
-  /// `com.google.android.youtube`.
-  ///
-  /// The fix is not a better regex, but it is not the `app_exists` API either:
-  /// that endpoint is a *reverse* lookup (you post `pnames` and it returns app
-  /// links), so it cannot answer "which package is this URL?". Two forward
-  /// routes were verified against live pages on 2026-08-18:
-  ///  * the listing page's `og:image` filename carries `_<pname>` for newer
-  ///    uploads — exact when present (chrome/whatsapp/spotify/signal all
-  ///    matched the API's `pname`), but absent on older icons, which are just
-  ///    `<hash>.png` (firefox, termux, vlc);
-  ///  * authoritative: walk to `download.php` and read the **302 `Location`**
-  ///    header without fetching a body. The R2 filename encodes package,
-  ///    version and version code, e.g.
-  ///    `com.android.chrome_151.0.7922.139-792213933_25lang_2feat_<md5>_apkmirror.com.apkm`.
+  /// The `app_exists` API can't do this: it's a *reverse* lookup (you post
+  /// `pnames` and get app links back). The authoritative route, measured
+  /// 2026-08-18, is the **302 `Location`** of `download.php`, whose filename
+  /// encodes the package, e.g.
+  /// `com.android.chrome_151.0.7922.139-792213933_25lang_2feat_<md5>_apkmirror.com.apkm`,
+  /// but reaching it takes a request per page on the way.
   @override
   Future<String?> tryInferringAppId(
     String standardUrl, {
     Map<String, dynamic> additionalSettings = const {},
   }) async {
-    final Response res = await sourceRequest(standardUrl, additionalSettings);
-    if (res.statusCode != 200) return null;
-    const packagePattern = r'com(?:\.[a-zA-Z0-9_]+){2,}';
-    final packageFullMatch = RegExp('^$packagePattern\$');
-    for (final match in RegExp(packagePattern).allMatches(res.body)) {
-      final candidate = _apkMirrorNormalizeInferredPackageCandidate(
-        match.group(0)!,
-      );
-      if (candidate.length >= 10 &&
-          !candidate.startsWith('com.apkmirror') &&
-          !candidate.contains('apkmirror') &&
-          packageFullMatch.hasMatch(candidate)) {
-        return candidate;
-      }
+    try {
+      final Response res = await sourceRequest(standardUrl, additionalSettings);
+      if (res.statusCode != 200) return null;
+      return await apkMirrorPackageFromListingPageHtml(res.body);
+    } catch (_) {
+      return null;
     }
-    return null;
   }
 
   @override

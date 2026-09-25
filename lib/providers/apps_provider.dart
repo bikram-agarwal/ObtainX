@@ -1113,6 +1113,54 @@ Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
   }
 }
 
+/// How an app about to be added will be named and drawn once saved; see
+/// [AppsProviderLifecycle.newAppLook].
+class NewAppLook {
+  const NewAppLook({required this.name, this.icon, this.downloadedIcon});
+
+  final String name;
+  final Uint8List? icon;
+
+  /// [icon], when it was downloaded for this and isn't stored yet. Adding the
+  /// app stores it ([AppsProviderLifecycle.storeDeducedAppIcon]) rather than
+  /// downloading it again.
+  final Uint8List? downloadedIcon;
+}
+
+/// [app], just fetched, with how its installed version is read recorded, as
+/// Add app has always saved it (see [AppsProvider.addNewListing]).
+///
+/// A track-only app takes its installed version from the device, or is marked
+/// as not knowing its package yet. Otherwise, an app whose version can't be
+/// compared with the installed one starts as up to date.
+Future<App> appPreparedForAdding(App app) async {
+  app.additionalSettings['useVersionCodeAsOSVersion'] =
+      app.versionDetectionMode == VersionDetectionMode.versionCode;
+  if (app.additionalSettings['trackOnly'] == true) {
+    app = app.copyWith(installedVersion: null);
+    if (isTempId(app)) {
+      app.additionalSettings['trackOnlyTemporaryPackageId'] = true;
+      app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = true;
+    } else {
+      app.additionalSettings['trackOnlyTemporaryPackageId'] = false;
+      final installedInfo = await getInstalledInfo(app.id, printErr: false);
+      if (installedInfo != null) {
+        app = app.copyWith(
+          installedVersion: app.usesVersionCodeAsOsVersion
+              ? installedInfo.versionCode.toString()
+              : installedInfo.versionName,
+        );
+        app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = false;
+      } else {
+        app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = true;
+      }
+    }
+  } else if (!app.usesStandardVersionDetection) {
+    app = app.copyWith(installedVersion: app.latestVersion);
+  }
+  return app;
+}
+
 Future<PackageInfo?> getInstalledInfo(
   String? packageName, {
   bool printErr = true,
@@ -1773,6 +1821,44 @@ class AppsProvider with ChangeNotifier {
         .map((e) => [e, errorsMap[e].toString()])
         .toList();
     return errors;
+  }
+
+  /// Saves [app], just fetched by [SourceProvider.getApp], as a new listing,
+  /// and returns it as saved. Add app's own steps, shared so that every way of
+  /// adding an app ends the same: [appPreparedForAdding], then saved under its
+  /// own listing ID and put in any matching smart folders.
+  Future<App> addNewListing(App app) async {
+    // Tracking this package from a second store needs its own listing ID
+    // so the two records never overwrite each other.
+    app = withAllocatedListingId(await appPreparedForAdding(app));
+    await saveApps([app], onlyIfExists: false);
+    final App? liveApp = apps[app.listingKey]?.app;
+    if (liveApp != null) {
+      await assignMatchingFoldersToAppIfNeeded(liveApp);
+    }
+    return app;
+  }
+
+  /// Saves apps already fetched for an add ([SourceProvider.getAppByURLNaive])
+  /// through [addNewListing], skipping any whose store listing is tracked by
+  /// now. Returns those saved.
+  ///
+  /// [downloadedIcons], by package ID, are the icons already downloaded to
+  /// show them ([NewAppLook.downloadedIcon]); they're kept as the apps' icons
+  /// instead of being downloaded again.
+  Future<List<App>> addFetchedApps(
+    List<App> fetched, {
+    Map<String, Uint8List> downloadedIcons = const {},
+  }) async {
+    final List<App> added = [];
+    for (final App app in fetched) {
+      if (sameStoreListingIn(apps, app) != null) continue;
+      final App listing = await addNewListing(app);
+      final Uint8List? icon = downloadedIcons[listing.id];
+      if (icon != null) await storeDeducedAppIcon(listing.id, icon);
+      added.add(listing);
+    }
+    return added;
   }
 }
 

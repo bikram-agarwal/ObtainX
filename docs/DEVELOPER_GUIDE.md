@@ -244,14 +244,30 @@ URI host as the **action** and dispatches accordingly:
 | Action (`uri.host`) | Data source | Behaviour |
 | --- | --- | --- |
 | `add` | `uri.queryParameters['url']` or `uri.path.substring(1)` | Standardizes the URL, checks for duplicates, navigates to Add App page |
-| `app` / `apps` | URI-decoded query or path | Opens the backup-import sheet in link mode (`showLinkImportPickerSheet`), then imports only the ticked apps; already-tracked apps are never overwritten (`planLinkImport`) |
+| `app` / `apps` | URI-decoded query or path | Adds the link's apps exactly as Import from URL list adds what's typed into it (`importUrlListEntries`, below). A link for one app that's already tracked opens that app instead; a single app added opens its page |
 
-**Import from URL list** also takes `app` / `apps` links, one per line, including ones
-wrapped in the "Share app configuration" redirect page. It also takes the JSON a link carries,
-or an export's JSON (its apps, each with its own settings, but not its ObtainX-wide
-`settings` block). `linkImportIn` turns what's pasted into one link. It goes
-through the same `interpretLink` via `HomePageState.openObtainiumLink`, which `AddAppPage`
-passes in because the page is pushed above the home page on phones.
+**Import from URL list** takes URLs, `app` / `apps` links (including ones wrapped in the
+"Share app configuration" redirect page), the JSON a link carries, or an export's JSON (its
+apps, but not its ObtainX-wide `settings` block), and adds them all the same way.
+`urlImportEntriesIn` turns the box's text into `UrlImportEntry`s: a URL, or a URL plus the
+app a link or JSON described (its `seed`). The sheet then fetches every entry with
+`fetchUrlImportEntry`, which does what `getAppByURLNaive` does for a typed URL. The
+package ID is looked up, and a seed fills in what Add app's fields would: its settings over
+the source's defaults, its package ID as the custom App ID unless it's temporary, a forced
+source, and categories. Its folder memberships are dropped, since they name folders on
+another phone. An entry that can't be fetched shows why and isn't added. Everything chosen is
+saved by `addFetchedApps` through Add app's own `addNewListing`. `importUrlListEntries` is
+that whole flow, and links another app sends go through it too (`urlImportEntriesFromLink`).
+Nothing adds apps through the backup `import()`, which overwrites on purpose.
+
+Its **Import from file** button imports the picked file on its own, straight to the same
+sheet; the box is left alone, and the two are never combined. It picks the file as backup
+import and restore do (`pickTextFile`, opening in the export folder). `urlListTextInFile`
+turns the file into text the box could hold, which then goes the box's way. A file that
+could have been typed in (app JSON or an export, links, or a list with a URL or link on each
+line) is taken as it is. From any other file (an OPML feed list, say) it picks out app links
+and only the addresses a host-based source takes, standardized. `getSource` alone can't
+filter them: the HTML source is a catch-all that takes any address with a dot in it.
 
 Inbound links arrive via `AppLinks` (Android App Links / intent filters) — the
 `obtainium://` scheme is registered in `AndroidManifest.xml`. Both `getInitialLink()`
@@ -475,6 +491,16 @@ Source credentials (e.g. `github-creds`, `gitlab-creds`) are stored in
   `assets/translations/*.json` (at minimum `en.json`).
 - Reuse `ConnectedCard`/`SettingsTile`/`positionalTileShape` for grouped tiles instead of
   hand-rolling `Material(shape: ...)`.
+- A button or switch that can't do anything right now is off (`onPressed`/`onChanged` null),
+  so it looks muted, and still says why when tapped: wrap it in `ExplainedWhenOff`
+  (`components/ui_widgets.dart`) with the reason, as Settings' switches do. Don't leave a
+  control that looks on but does nothing, and don't hard-code a style's colours for every
+  state (`WidgetStateProperty.all`), which hides that it's off.
+- Pick files with `pickFile` (`lib/services/pick_file.dart`), or `pickTextFile` for text
+  opened in the export folder. It's Android's document picker for backups, Import from
+  URL list, app icons and fonts alike; only the MIME type passed differs. It takes a single
+  type, so a kind of file with no type every phone agrees on (JSON, fonts) is picked as any
+  file and checked once read.
 
 ---
 

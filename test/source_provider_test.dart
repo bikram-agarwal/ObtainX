@@ -62,9 +62,8 @@ class _StubAPKMirror extends APKMirror {
   }
 
   // tryInferringAppId hits the network in the real APKMirror; short-circuit
-  // it so tests never reach out. We always pass an explicit appId via the
-  // currentApp/additionalSettings path anyway, so this never fires — it's
-  // here as a safety net.
+  // it so tests never reach out. Adding an app without an explicit appId
+  // reaches it.
   @override
   Future<String?> tryInferringAppId(
     String standardUrl, {
@@ -116,6 +115,15 @@ class _StubSource extends AppSource {
   }) async {
     return 'org.example.app';
   }
+}
+
+/// Like GitHub: offers the per-app "Include prereleases" switch.
+class _StubPrereleaseSource extends _StubSource {
+  @override
+  List<List<GeneratedFormItem>>
+  get additionalSourceAppSpecificSettingFormItems => [
+    [GeneratedFormSwitch('includePrereleases', label: 'Include prereleases')],
+  ];
 }
 
 class _StubFDroid extends FDroid {
@@ -1519,6 +1527,104 @@ void main() {
       expect(app.latestVersion, '4.8.3');
     },
   );
+
+  test('a URL-list fetch looks up the package ID only when asked', () async {
+    // Like GitHub: the URL carries no package ID, and finding it is optional.
+    final source = _StubSource()..appIdInferIsOptional = true;
+    Future<App> fetched({required bool inferAppIds}) =>
+        SourceProvider().getAppByURLNaive(
+          'https://example.com/app',
+          sourceOverride: source,
+          inferAppIds: inferAppIds,
+        );
+
+    expect((await fetched(inferAppIds: true)).id, 'org.example.app');
+    // Without the lookup (GitHub stars, batch search), a temporary ID.
+    expect(
+      (await fetched(inferAppIds: false)).id,
+      matches(RegExp(r'^[0-9a-f]{12}$')),
+    );
+    final List<dynamic> batch = await SourceProvider().getAppsByURLNaive([
+      'https://example.com/app',
+    ], sourceOverride: source);
+    expect(
+      (batch[0] as List<App>).single.id,
+      matches(RegExp(r'^[0-9a-f]{12}$')),
+    );
+  });
+
+  test(
+    'a URL-list fetch includes prereleases when that is the default',
+    () async {
+      final source = _StubPrereleaseSource();
+      Future<App> fetched({required bool includePrereleases}) =>
+          SourceProvider().getAppByURLNaive(
+            'https://example.com/app',
+            sourceOverride: source,
+            includePrereleases: includePrereleases,
+          );
+
+      expect(
+        (await fetched(
+          includePrereleases: true,
+        )).additionalSettings['includePrereleases'],
+        true,
+      );
+      expect(
+        (await fetched(
+          includePrereleases: false,
+        )).additionalSettings['includePrereleases'],
+        false,
+      );
+      // A source without the option doesn't gain it.
+      final App plain = await SourceProvider().getAppByURLNaive(
+        'https://example.com/app',
+        sourceOverride: _StubSource(),
+        includePrereleases: true,
+      );
+      expect(plain.additionalSettings.containsKey('includePrereleases'), false);
+    },
+  );
+
+  test("a link's settings go over the defaults, its package ID over the "
+      'lookup', () async {
+    final App app = await SourceProvider().getAppByURLNaive(
+      'https://example.com/app',
+      sourceOverride: _StubPrereleaseSource(),
+      inferAppIds: true,
+      includePrereleases: true,
+      settings: {
+        'includePrereleases': false,
+        'apkFilterRegEx': r'^example\.apk$',
+        'appId': 'org.from.link',
+      },
+    );
+
+    expect(app.id, 'org.from.link');
+    expect(app.additionalSettings['includePrereleases'], false);
+    expect(app.additionalSettings['apkFilterRegEx'], r'^example\.apk$');
+  });
+
+  test('a track-only source looks up the package ID only if it says '
+      'so', () async {
+    // Like APKMirror: every app is track-only, and the store page names the
+    // package.
+    Future<App> fetched({required bool evenWhenTrackOnly}) =>
+        SourceProvider().getAppByURLNaive(
+          'https://example.com/app',
+          sourceOverride: _StubSource()
+            ..enforceTrackOnly = true
+            ..appIdInferIsOptional = true
+            ..inferAppIdEvenWhenTrackOnly = evenWhenTrackOnly,
+          inferAppIds: true,
+        );
+
+    expect((await fetched(evenWhenTrackOnly: true)).id, 'org.example.app');
+    expect(
+      (await fetched(evenWhenTrackOnly: false)).id,
+      matches(RegExp(r'^[0-9a-f]{12}$')),
+    );
+  });
 
   test(
     'source codes follow the filtered and selected APK through reload',

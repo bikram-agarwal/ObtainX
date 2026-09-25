@@ -2393,8 +2393,13 @@ extension AppsProviderInstall on AppsProvider {
   ) async {
     // Feature OFF (or non-Android): keep the bundle after a failed install so a
     // retry can reuse it — delete only when something installed or the version
-    // was skipped (parity with main's !saveApkCopies branch).
-    if (!Platform.isAndroid || !settingsProvider.saveDownloadedApkCopies) {
+    // was skipped (parity with main's !saveApkCopies branch). With no save
+    // folder ever picked, the feature is off too, as the Import/Export page
+    // shows it; keeping bundles for recovery is for a folder that can't be
+    // reached.
+    if (!Platform.isAndroid ||
+        !settingsProvider.saveDownloadedApkCopies ||
+        await settingsProvider.getApkSaveDir(requireAccess: false) == null) {
       final App? appForSave = apps[dir.appId]?.app;
       final bool skipLatest =
           appForSave != null && isSkipActiveForCurrentLatest(appForSave);

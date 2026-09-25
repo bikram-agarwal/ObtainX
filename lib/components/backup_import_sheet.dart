@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -15,10 +18,19 @@ class BackupImportSelection {
   const BackupImportSelection({
     required this.selectedAppIds,
     required this.importSettings,
+    this.fetchedApps = const [],
+    this.downloadedIcons = const {},
   });
 
   final Set<String> selectedAppIds;
   final bool importSettings;
+
+  /// For Import from URL list: the chosen apps, as the sheet fetched them.
+  final List<App> fetchedApps;
+
+  /// The icons downloaded to show [fetchedApps], by package ID, for the add
+  /// to keep ([NewAppLook.downloadedIcon]).
+  final Map<String, Uint8List> downloadedIcons;
 }
 
 Future<BackupImportSelection?> showBackupImportPickerSheet({
@@ -43,37 +55,55 @@ Future<BackupImportSelection?> showBackupImportPickerSheet({
   );
 }
 
-/// The picker for a link import (`obtainium://app/` or `apps/`).
+/// The picker for adding apps: Import from URL list, whatever its box held,
+/// and `obtainium://` links another app sends.
 ///
-/// [newApps] are the listings the link would add ([LinkImportPlan.toAdd]),
-/// all selected to start with. [alreadyTracked] are shown for reference only:
-/// a link never overwrites a tracked app. [rawJson] is the link's payload,
-/// shown collapsed. Returns the listing keys chosen, or null when cancelled.
-Future<Set<String>?> showLinkImportPickerSheet({
+/// [alreadyTracked] show at once, for reference: they are skipped. Each of
+/// [urls] is fetched with [fetchApp] while the sheet is open, and selected once
+/// it arrives; one that fails shows why. [trackedListingFor] catches an app
+/// that is tracked under a different URL, which only its fetch can reveal.
+/// [lookFor] names and draws each fetched app as it will be once added.
+/// [urls] are really keys: [urlFor] gives the URL a row shows until its app
+/// arrives (two links can share one URL), the key itself by default.
+/// [rawJson], a link's or pasted JSON, is shown collapsed.
+/// Returns the fetched apps chosen ([BackupImportSelection.fetchedApps]) and
+/// the icons downloaded for them, or null when cancelled.
+Future<BackupImportSelection?> showUrlListImportPickerSheet({
   required BuildContext context,
-  required List<App> newApps,
+  required List<String> urls,
   required List<App> alreadyTracked,
   required Map<String, AppInMemory> existingApps,
+  required Future<App> Function(String url) fetchApp,
+  required AppInMemory? Function(App app) trackedListingFor,
+  Future<NewAppLook> Function(App app)? lookFor,
+  String Function(String url)? urlFor,
   String? rawJson,
-}) async {
-  final BackupImportSelection? selection =
-      await showAppModalSheet<BackupImportSelection>(
-        context: context,
-        builder: (BuildContext sheetContext) {
-          return BackupImportSheet(
-            backupApps: newApps,
-            hasSettings: false,
-            hasSecrets: false,
-            existingApps: existingApps,
-            linkAlreadyTrackedApps: alreadyTracked,
-            linkRawJson: rawJson,
-          );
-        },
+}) {
+  return showAppModalSheet<BackupImportSelection>(
+    context: context,
+    builder: (BuildContext sheetContext) {
+      return BackupImportSheet(
+        backupApps: const [],
+        hasSettings: false,
+        hasSecrets: false,
+        existingApps: existingApps,
+        alreadyTrackedApps: alreadyTracked,
+        rawJson: rawJson,
+        urlsToFetch: urls,
+        fetchUrlApp: fetchApp,
+        trackedListingFor: trackedListingFor,
+        lookFor: lookFor,
+        urlFor: urlFor,
       );
-  return selection?.selectedAppIds;
+    },
+  );
 }
 
 enum _BackupImportSectionId { settings, existingApps, newApps, rawJson }
+
+/// How many URL-list apps are fetched at once: enough that a long list isn't
+/// fetched one app at a time, few enough not to flood a source.
+const int _urlFetchConcurrency = 4;
 
 class BackupImportSheet extends StatefulWidget {
   const BackupImportSheet({
@@ -83,8 +113,13 @@ class BackupImportSheet extends StatefulWidget {
     required this.hasSecrets,
     required this.existingApps,
     this.isRestore = false,
-    this.linkAlreadyTrackedApps,
-    this.linkRawJson,
+    this.alreadyTrackedApps,
+    this.rawJson,
+    this.urlsToFetch,
+    this.fetchUrlApp,
+    this.trackedListingFor,
+    this.lookFor,
+    this.urlFor,
   });
 
   final List<App> backupApps;
@@ -96,14 +131,29 @@ class BackupImportSheet extends StatefulWidget {
   /// plain additive "Import" — only changes the action button's label.
   final bool isRestore;
 
-  /// Set for a link import (see [showLinkImportPickerSheet]): the listings
-  /// the link duplicates. Unlike a backup's, they can't be selected.
-  final List<App>? linkAlreadyTrackedApps;
+  /// For an add ([showUrlListImportPickerSheet]): the listings it duplicates.
+  /// Unlike a backup's, they can't be selected.
+  final List<App>? alreadyTrackedApps;
 
-  /// The link's payload, for a link import.
-  final String? linkRawJson;
+  /// For an add from a link or JSON: that JSON, shown collapsed.
+  final String? rawJson;
 
-  bool get isLinkImport => linkAlreadyTrackedApps != null;
+  /// For an add ([showUrlListImportPickerSheet]): the URLs whose apps the
+  /// sheet fetches, and how.
+  final List<String>? urlsToFetch;
+  final Future<App> Function(String url)? fetchUrlApp;
+  final AppInMemory? Function(App app)? trackedListingFor;
+
+  /// For an add: how each new app will be named and drawn once saved
+  /// ([AppsProviderLifecycle.newAppLook]), so that this sheet shows what the
+  /// apps list then shows. Without it, rows show the app as it arrived.
+  final Future<NewAppLook> Function(App app)? lookFor;
+
+  /// The URL a row of [urlsToFetch] shows until its app arrives.
+  final String Function(String url)? urlFor;
+
+  /// Adding apps, rather than importing a backup.
+  bool get isUrlImport => urlsToFetch != null;
 
   @override
   State<BackupImportSheet> createState() => _BackupImportSheetState();
@@ -118,10 +168,20 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
   // the footer FilledButton below) against double-taps while it's up.
   bool _isConfirmingRestore = false;
 
-  // What a row's selection is keyed by. A backup restores by package ID; a
-  // link can carry one package from two stores, and each becomes a listing of
-  // its own, so link rows are keyed by the listing key they will be saved as.
-  String _key(App app) => widget.isLinkImport ? app.listingKey : app.id;
+  // What a row's selection is keyed by. A backup restores by package ID. A
+  // URL-list row is keyed by its URL instead, which it has before its app.
+  String _key(App app) => app.id;
+
+  // Import from URL list only: each URL's app once fetched, or why it wasn't.
+  // A fetched app that turns out to be tracked under another URL joins the
+  // already-tracked group instead (as its listing), and its URL leaves.
+  final Map<String, App> _fetchedApps = {};
+  final Map<String, Object> _fetchErrors = {};
+  final List<App> _foundTrackedApps = [];
+  final Set<String> _foundTrackedUrls = {};
+
+  // Each new row's [NewAppLook], by its selection key, once known.
+  final Map<String, NewAppLook> _looks = {};
 
   @override
   void initState() {
@@ -133,13 +193,75 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
       _BackupImportSectionId.existingApps,
       _BackupImportSectionId.newApps,
     };
+    if (widget.isUrlImport) unawaited(_fetchUrlApps());
   }
 
+  Future<NewAppLook?> _lookFor(App app) async {
+    try {
+      return await widget.lookFor?.call(app);
+    } catch (_) {
+      // The row shows the app as it arrived instead.
+      return null;
+    }
+  }
+
+  Future<void> _fetchUrlApps() async {
+    final List<String> queue = List<String>.from(widget.urlsToFetch!);
+    Future<void> fetchNext() async {
+      while (queue.isNotEmpty && mounted) {
+        final String url = queue.removeAt(0);
+        App? app;
+        Object? error;
+        try {
+          app = await widget.fetchUrlApp!(url);
+        } catch (e) {
+          error = e;
+        }
+        final AppInMemory? tracked = app == null
+            ? null
+            : widget.trackedListingFor?.call(app);
+        // Part of the fetch: the row arrives with its name and icon final.
+        final NewAppLook? look = app != null && tracked == null
+            ? await _lookFor(app)
+            : null;
+        // Closed, or imported with what had arrived: the rest isn't wanted.
+        if (!mounted) return;
+        setState(() {
+          if (app == null) {
+            _fetchErrors[url] = error!;
+            return;
+          }
+          if (tracked == null) {
+            _fetchedApps[url] = app;
+            if (look != null) _looks[url] = look;
+            selectedAppIds.add(url);
+            return;
+          }
+          _foundTrackedUrls.add(url);
+          final bool shown = [
+            ...widget.alreadyTrackedApps!,
+            ..._foundTrackedApps,
+          ].any((App shown) => shown.listingKey == tracked.listingKey);
+          if (!shown) _foundTrackedApps.add(tracked.app);
+        });
+      }
+    }
+
+    await Future.wait([
+      for (int i = 0; i < _urlFetchConcurrency; i++) fetchNext(),
+    ]);
+  }
+
+  /// The URL-list rows still new: fetching, fetched or failed, as typed.
+  List<String> get _newUrls => widget.urlsToFetch!
+      .where((String url) => !_foundTrackedUrls.contains(url))
+      .toList();
+
   List<App> get existingBackupApps {
-    // For a link, "already tracked" means the same package from the same
-    // store (see planLinkImport), which a package ID lookup can't tell.
-    final list = widget.isLinkImport
-        ? List<App>.from(widget.linkAlreadyTrackedApps!)
+    // For an add, "already tracked" means the same package from the same store
+    // (see planUrlImport), which a package ID lookup can't tell.
+    final list = widget.isUrlImport
+        ? [...widget.alreadyTrackedApps!, ..._foundTrackedApps]
         : widget.backupApps
               .where((a) => widget.existingApps.containsKey(a.id))
               .toList();
@@ -147,17 +269,19 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     return list;
   }
 
+  // An add's new apps are its URL rows ([buildUrlSection]), not these.
   List<App> get newBackupApps {
-    final list = widget.isLinkImport
-        ? List<App>.from(widget.backupApps)
-        : widget.backupApps
-              .where((a) => !widget.existingApps.containsKey(a.id))
-              .toList();
+    final list = widget.backupApps
+        .where((a) => !widget.existingApps.containsKey(a.id))
+        .toList();
     list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return list;
   }
 
-  int get totalItems => widget.backupApps.length + (widget.hasSettings ? 1 : 0);
+  // A URL that failed can never be selected, so it isn't counted.
+  int get totalItems => widget.isUrlImport
+      ? _newUrls.where((String url) => !_fetchErrors.containsKey(url)).length
+      : widget.backupApps.length + (widget.hasSettings ? 1 : 0);
 
   int get totalSelected =>
       selectedAppIds.length + (widget.hasSettings && importSettings ? 1 : 0);
@@ -180,9 +304,8 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     });
   }
 
-  void toggleAppGroup(List<App> groupApps) {
+  void toggleAppGroup(Iterable<String> groupIds) {
     hapticSelection();
-    final groupIds = groupApps.map(_key).toList();
     setState(() {
       final bool allSelected = groupIds.every(selectedAppIds.contains);
       if (allSelected) {
@@ -211,16 +334,14 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     required double itemOuterRadius,
     required double itemInnerRadius,
     bool selectable = true,
+    String? selectionKey,
   }) {
     final AppInMemory? existingApp = widget.existingApps[app.id];
-    final bool isSelected = selectable && selectedAppIds.contains(_key(app));
-    // A link's apps have no version yet; what matters is where each one will
-    // be tracked from.
-    final String versionLabel = widget.isLinkImport
-        ? app.url
-        : app.latestVersion.isNotEmpty
-        ? app.latestVersion
-        : (app.installedVersion ?? '');
+    final String key = selectionKey ?? _key(app);
+    final bool isSelected = selectable && selectedAppIds.contains(key);
+    // A new app, drawn as the apps list will draw it once it's added.
+    final bool showsLook = selectable && widget.lookFor != null;
+    final NewAppLook? look = showsLook ? _looks[key] : null;
     final BorderRadius cardBorderRadius = m3eListGroupItemRadius(
       position,
       flatListBody: false,
@@ -243,47 +364,91 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
         tileColor: Colors.transparent,
         selectedTileColor: Colors.transparent,
         contentPadding: const EdgeInsets.only(left: 12, right: 16),
-        leading: _BackupAppIconWidget(
-          app: app,
-          existingApp: existingApp,
-          // A link comes from another app, and fetching its iconUrl would tell
-          // that URL's server the link was opened, before the user agreed to
-          // anything. Link rows use only icons already on the device.
-          allowNetworkIcon: !widget.isLinkImport,
-        ),
+        leading: showsLook
+            ? _AppIconImage(look?.icon)
+            : _BackupAppIconWidget(app: app, existingApp: existingApp),
         title: Text(
-          app.name,
+          look?.name ?? app.name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        subtitle: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (app.author.isNotEmpty)
-              Text(
+        // Two lines only, name and author. A version here would be the one
+        // the backup or link recorded, which is neither installed nor latest.
+        subtitle: app.author.isEmpty
+            ? null
+            : Text(
                 tr('byX', args: [app.author]),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-            if (versionLabel.isNotEmpty)
-              Text(versionLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ],
-        ),
         trailing: selectable
             ? Checkbox(
                 value: isSelected,
                 onChanged: (bool? selected) {
                   if (selected != null) {
-                    toggleAppSelected(_key(app), selected);
+                    toggleAppSelected(key, selected);
                   }
                 },
               )
             : null,
-        onTap: selectable
-            ? () => toggleAppSelected(_key(app), !isSelected)
-            : null,
+        onTap: selectable ? () => toggleAppSelected(key, !isSelected) : null,
+      ),
+    );
+  }
+
+  // A URL-list row whose app is still being fetched, or couldn't be.
+  Widget buildPendingUrlRow({
+    required String url,
+    required Object? error,
+    required ColorScheme colorScheme,
+    required M3eListGroupPosition position,
+    required double itemOuterRadius,
+    required double itemInnerRadius,
+  }) {
+    final BorderRadius cardBorderRadius = m3eListGroupItemRadius(
+      position,
+      flatListBody: false,
+      outerRadius: itemOuterRadius,
+      innerRadius: itemInnerRadius,
+    );
+    return Material(
+      color: m3eGroupedListRowFill(colorScheme),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: cardBorderRadius,
+        side: m3ePureBlackOutlineSide(colorScheme),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        shape: RoundedRectangleBorder(borderRadius: cardBorderRadius),
+        contentPadding: const EdgeInsets.only(left: 12, right: 16),
+        leading: const _FallbackAppIcon(),
+        // Not an app yet, so not styled as one: muted and regular weight, where
+        // an app's name is semi-bold.
+        title: Text(
+          (widget.urlFor?.call(url) ?? url).replaceFirst(
+            RegExp(r'^https?://'),
+            '',
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: colorScheme.onSurfaceVariant),
+        ),
+        subtitle: error == null
+            ? null
+            : Text(
+                // Its URL is the row's title already.
+                error is ObtainiumError ? error.message : error.toString(),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: colorScheme.error),
+              ),
+        trailing: error == null
+            ? const ExpressiveLoadingIndicator(
+                constraints: BoxConstraints.tightFor(width: 24, height: 24),
+              )
+            : Icon(Icons.error_outline_rounded, color: colorScheme.error),
       ),
     );
   }
@@ -362,14 +527,92 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     bool selectable = true,
   }) {
     if (apps.isEmpty) return const SizedBox.shrink();
-
-    final bool isExpanded = expandedSectionIds.contains(sectionId);
-    final int selectedInGroup = apps
-        .where((a) => selectedAppIds.contains(_key(a)))
-        .length;
-    final bool allSelected = apps.every(
-      (a) => selectedAppIds.contains(_key(a)),
+    return buildGroup(
+      sectionId: sectionId,
+      title: title,
+      count: apps.length,
+      selectableKeys: selectable ? apps.map(_key).toList() : null,
+      rowCount: apps.length,
+      buildRow: (int index, M3eListGroupPosition position) => buildAppRow(
+        app: apps[index],
+        colorScheme: colorScheme,
+        position: position,
+        itemOuterRadius: itemOuterRadius,
+        itemInnerRadius: itemInnerRadius,
+        selectable: selectable,
+      ),
+      colorScheme: colorScheme,
+      groupCardRadius: groupCardRadius,
+      collapsedHeaderRadius: collapsedHeaderRadius,
     );
+  }
+
+  // The URL list's new apps, in the order typed: each row starts out fetching,
+  // then shows its app, or why it couldn't be fetched.
+  Widget buildUrlSection({
+    required ColorScheme colorScheme,
+    required double groupCardRadius,
+    required double collapsedHeaderRadius,
+    required double itemOuterRadius,
+    required double itemInnerRadius,
+  }) {
+    final List<String> urls = _newUrls;
+    if (urls.isEmpty) return const SizedBox.shrink();
+    return buildGroup(
+      sectionId: _BackupImportSectionId.newApps,
+      title: tr('newApps'),
+      count: urls.length,
+      selectableKeys: urls.where(_fetchedApps.containsKey).toList(),
+      countTotal: totalItems,
+      rowCount: urls.length,
+      buildRow: (int index, M3eListGroupPosition position) {
+        final String url = urls[index];
+        final App? app = _fetchedApps[url];
+        if (app == null) {
+          return buildPendingUrlRow(
+            url: url,
+            error: _fetchErrors[url],
+            colorScheme: colorScheme,
+            position: position,
+            itemOuterRadius: itemOuterRadius,
+            itemInnerRadius: itemInnerRadius,
+          );
+        }
+        return buildAppRow(
+          app: app,
+          selectionKey: url,
+          colorScheme: colorScheme,
+          position: position,
+          itemOuterRadius: itemOuterRadius,
+          itemInnerRadius: itemInnerRadius,
+        );
+      },
+      colorScheme: colorScheme,
+      groupCardRadius: groupCardRadius,
+      collapsedHeaderRadius: collapsedHeaderRadius,
+    );
+  }
+
+  // A collapsible group of rows. [selectableKeys] are the rows its header's
+  // checkbox selects (null: a read-only group); [countTotal] is what their
+  // count reads out of, when not every row can be selected.
+  Widget buildGroup({
+    required _BackupImportSectionId sectionId,
+    required String title,
+    required int count,
+    required List<String>? selectableKeys,
+    int? countTotal,
+    required int rowCount,
+    required Widget Function(int index, M3eListGroupPosition position) buildRow,
+    required ColorScheme colorScheme,
+    required double groupCardRadius,
+    required double collapsedHeaderRadius,
+  }) {
+    final bool isExpanded = expandedSectionIds.contains(sectionId);
+    final List<String> keys = selectableKeys ?? const [];
+    final int selectedInGroup = keys.where(selectedAppIds.contains).length;
+    final bool allSelected =
+        keys.isNotEmpty && keys.every(selectedAppIds.contains);
     final bool someSelected = selectedInGroup > 0 && !allSelected;
 
     return Column(
@@ -377,24 +620,29 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
       children: [
         M3eCollapsibleGroupHeader(
           title: title,
-          count: apps.length,
-          countText: selectable ? '$selectedInGroup/${apps.length}' : null,
+          count: count,
+          countText: selectableKeys == null
+              ? null
+              : '$selectedInGroup/${countTotal ?? count}',
           isExpanded: isExpanded,
           onTap: () => toggleSectionExpanded(sectionId),
           collapsedRadius: collapsedHeaderRadius,
           colorScheme: colorScheme,
-          trailingAction: selectable
-              ? Semantics(
+          trailingAction: selectableKeys == null
+              ? null
+              : Semantics(
                   label: allSelected
-                      ? tr('deselectX', args: [apps.length.toString()])
+                      ? tr('deselectX', args: [keys.length.toString()])
                       : tr('selectAll'),
                   child: Checkbox(
                     value: allSelected ? true : (someSelected ? null : false),
                     tristate: true,
-                    onChanged: (_) => toggleAppGroup(apps),
+                    // Nothing to select until a row's app has arrived.
+                    onChanged: keys.isEmpty
+                        ? null
+                        : (_) => toggleAppGroup(keys),
                   ),
-                )
-              : null,
+                ),
         ),
         SizedBox(
           width: double.infinity,
@@ -414,25 +662,21 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        for (int i = 0; i < apps.length; i++) ...[
+                        for (int i = 0; i < rowCount; i++) ...[
                           SizedBox(
                             height: i == 0
                                 ? kM3eHeaderToFirstCardGap
                                 : kM3eItemGap,
                           ),
-                          buildAppRow(
-                            app: apps[i],
-                            colorScheme: colorScheme,
-                            position: apps.length == 1
+                          buildRow(
+                            i,
+                            rowCount == 1
                                 ? M3eListGroupPosition.only
                                 : i == 0
                                 ? M3eListGroupPosition.first
-                                : i == apps.length - 1
+                                : i == rowCount - 1
                                 ? M3eListGroupPosition.last
                                 : M3eListGroupPosition.middle,
-                            itemOuterRadius: itemOuterRadius,
-                            itemInnerRadius: itemInnerRadius,
-                            selectable: selectable,
                           ),
                         ],
                       ],
@@ -526,7 +770,7 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     required double itemOuterRadius,
     required double itemInnerRadius,
   }) {
-    final String? rawJson = widget.linkRawJson;
+    final String? rawJson = widget.rawJson;
     if (rawJson == null || rawJson.isEmpty) return const SizedBox.shrink();
     final bool isExpanded = expandedSectionIds.contains(
       _BackupImportSectionId.rawJson,
@@ -628,8 +872,8 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
             child: SizedBox.square(
               dimension: 40,
               child: Icon(
-                widget.isLinkImport
-                    ? Icons.link_rounded
+                widget.isUrlImport
+                    ? Icons.playlist_add_rounded
                     : Icons.restore_rounded,
                 color: colorScheme.onTertiaryContainer,
                 size: 24,
@@ -674,8 +918,19 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                 collapsedHeaderRadius: collapsedHeaderRadius,
                 itemOuterRadius: itemOuterRadius,
                 itemInnerRadius: itemInnerRadius,
-                // A link never overwrites a tracked app.
-                selectable: !widget.isLinkImport,
+                // An add never overwrites a tracked app.
+                selectable: !widget.isUrlImport,
+              ),
+            ],
+            if (widget.isUrlImport && _newUrls.isNotEmpty) ...[
+              if (existingAppsList.isNotEmpty)
+                const SizedBox(height: SettingsProvider.collapsedHeaderGap),
+              buildUrlSection(
+                colorScheme: colorScheme,
+                groupCardRadius: groupCardRadius,
+                collapsedHeaderRadius: collapsedHeaderRadius,
+                itemOuterRadius: itemOuterRadius,
+                itemInnerRadius: itemInnerRadius,
               ),
             ],
             if (newAppsList.isNotEmpty) ...[
@@ -692,7 +947,7 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                 itemInnerRadius: itemInnerRadius,
               ),
             ],
-            if (widget.isLinkImport) ...[
+            if (widget.rawJson != null) ...[
               const SizedBox(height: SettingsProvider.collapsedHeaderGap),
               buildRawJsonSection(
                 colorScheme: colorScheme,
@@ -762,6 +1017,22 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                       BackupImportSelection(
                         selectedAppIds: selectedAppIds,
                         importSettings: importSettings,
+                        fetchedApps: widget.isUrlImport
+                            ? [
+                                for (final String url in _newUrls)
+                                  if (selectedAppIds.contains(url))
+                                    _fetchedApps[url]!,
+                              ]
+                            : const [],
+                        downloadedIcons: widget.isUrlImport
+                            ? {
+                                for (final String url in _newUrls)
+                                  if (selectedAppIds.contains(url) &&
+                                      _looks[url]?.downloadedIcon != null)
+                                    _fetchedApps[url]!.id:
+                                        _looks[url]!.downloadedIcon!,
+                              }
+                            : const {},
                       ),
                     );
                   },
@@ -774,15 +1045,10 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
 }
 
 class _BackupAppIconWidget extends StatefulWidget {
-  const _BackupAppIconWidget({
-    required this.app,
-    required this.existingApp,
-    this.allowNetworkIcon = true,
-  });
+  const _BackupAppIconWidget({required this.app, required this.existingApp});
 
   final App app;
   final AppInMemory? existingApp;
-  final bool allowNetworkIcon;
 
   @override
   State<_BackupAppIconWidget> createState() => _BackupAppIconWidgetState();
@@ -839,28 +1105,10 @@ class _BackupAppIconWidgetState extends State<_BackupAppIconWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (_iconBytes != null) {
-      final double devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-      final int iconCachePx = (40 * devicePixelRatio).round();
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Image.memory(
-          _iconBytes!,
-          width: 40,
-          height: 40,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          cacheWidth: iconCachePx,
-          cacheHeight: iconCachePx,
-          filterQuality: FilterQuality.low,
-        ),
-      );
-    }
+    if (_iconBytes != null) return _AppIconImage(_iconBytes);
 
     final String? iconUrl = widget.app.iconUrl;
-    if (widget.allowNetworkIcon &&
-        iconUrl != null &&
-        iconUrl.startsWith('http')) {
+    if (iconUrl != null && iconUrl.startsWith('http')) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: Image.network(
@@ -870,15 +1118,49 @@ class _BackupAppIconWidgetState extends State<_BackupAppIconWidget> {
           fit: BoxFit.cover,
           gaplessPlayback: true,
           errorBuilder: (imageContext, imageError, imageStackTrace) =>
-              _buildFallbackIcon(context),
+              const _FallbackAppIcon(),
         ),
       );
     }
 
-    return _buildFallbackIcon(context);
+    return const _FallbackAppIcon();
   }
+}
 
-  Widget _buildFallbackIcon(BuildContext context) {
+/// An app's icon from its bytes, or [_FallbackAppIcon] without them.
+class _AppIconImage extends StatelessWidget {
+  const _AppIconImage(this.bytes);
+
+  final Uint8List? bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final Uint8List? iconBytes = bytes;
+    if (iconBytes == null) return const _FallbackAppIcon();
+    final double devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final int iconCachePx = (40 * devicePixelRatio).round();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Image.memory(
+        iconBytes,
+        width: 40,
+        height: 40,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        cacheWidth: iconCachePx,
+        cacheHeight: iconCachePx,
+        filterQuality: FilterQuality.low,
+      ),
+    );
+  }
+}
+
+/// The ObtainX mark, for an app with no icon to show (yet).
+class _FallbackAppIcon extends StatelessWidget {
+  const _FallbackAppIcon();
+
+  @override
+  Widget build(BuildContext context) {
     return SizedBox(
       width: 40,
       height: 40,

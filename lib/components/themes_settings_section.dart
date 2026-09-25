@@ -6,22 +6,11 @@ import 'package:obtainium/components/theme_accent_settings_section.dart'
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/components/ui_widgets.dart'
-    show AppSwitch, AppSwitchListTile;
+    show AppSwitch, AppSwitchListTile, ExplainedWhenOff;
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
-import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
-
-void _showBlackThemeSurfaceSettingDisabledSnackbar(BuildContext context) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    buildAppSnackBar(
-      context,
-      tr('settingsGradientDisabledInBlackTheme'),
-      type: ToastType.warning,
-    ),
-  );
-}
 
 /// One M3E row each (for [settingsCard] item list).
 List<Widget> buildThemesSettingsCardItems(
@@ -213,12 +202,11 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
     final double sliderValue = _dragValue ?? widget.settings.shadingIntensity;
     final isTV = context.read<SettingsProvider>().isTV;
 
-    return InkWell(
-      onTap: enabled
-          ? null
-          : () {
-              _showBlackThemeSurfaceSettingDisabledSnackbar(context);
-            },
+    final Color textColor = enabled
+        ? colorScheme.onSurface
+        : colorScheme.onSurface.withValues(alpha: 0.38);
+    return ExplainedWhenOff(
+      reason: enabled ? null : tr('settingsGradientDisabledInBlackTheme'),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           kM3eSettingsCardHorizontalInset,
@@ -234,16 +222,16 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
                 Expanded(
                   child: Text(
                     tr('settingsShadingIntensity'),
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: colorScheme.onSurface,
-                    ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyLarge?.copyWith(color: textColor),
                   ),
                 ),
                 Text(
                   _shadingIntensityLabel(sliderValue),
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: colorScheme.onSurface,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: textColor),
                 ),
               ],
             ),

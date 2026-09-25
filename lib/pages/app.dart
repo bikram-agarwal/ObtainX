@@ -5,7 +5,6 @@ import 'dart:math' as math;
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'
     show Factory, Listenable, listEquals, visibleForTesting;
 import 'package:flutter/gestures.dart';
@@ -39,6 +38,7 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/store_source_icons.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:obtainium/services/pick_file.dart';
 import 'package:obtainium/services/store_icon_resolver.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -331,6 +331,29 @@ String? gitHubRepoUrlFromSourceCodeLink(String? href) =>
     ? GitHub().standardizeUrl(href)
     : null;
 
+/// The F-Droid page to read the package's source repo from, for an app
+/// tracked from [trackedUrl] with the store entries [stores]: its tracked
+/// listing, or the one a scan found. Null while the package isn't known to be
+/// on F-Droid.
+String? fdroidPageUrlFor(String trackedUrl, Map<String, String> stores) {
+  if (_trackedUrlIsFromHost(trackedUrl, 'f-droid.org')) return trackedUrl;
+  final String? found = stores['F-Droid'];
+  return found == null || found.isEmpty ? null : found;
+}
+
+/// Whether the store scan should read the package's F-Droid page for its
+/// GitHub listing: it's on F-Droid, isn't tracked from GitHub, has no GitHub
+/// listing yet, and that page hasn't been read before. A page that named no
+/// GitHub repo is remembered ([BulkScanCache.fdroidSourceCodeReadFromKey]),
+/// so it isn't downloaded again on every scan.
+bool needsGitHubFromFDroid(String trackedUrl, Map<String, String> stores) {
+  final String? fdroidPage = fdroidPageUrlFor(trackedUrl, stores);
+  return fdroidPage != null &&
+      !_trackedUrlIsFromHost(trackedUrl, 'github.com') &&
+      (stores['GitHub'] ?? '').isEmpty &&
+      stores[BulkScanCache.fdroidSourceCodeReadFromKey] != fdroidPage;
+}
+
 /// Checks all 4 stores (APKMirror, F-Droid, APKPure, Play Store) for
 /// [listingKey]'s package concurrently and caches the answers. Returns the
 /// package's store entries as they now stand, or null when there was nothing
@@ -349,6 +372,31 @@ String? gitHubRepoUrlFromSourceCodeLink(String? href) =>
 /// the first hit - and skipped entirely for installed apps or when an icon was
 /// already extracted from a downloaded APK.
 ///
+/// For apps added together, whose pages don't open, what an app's page does
+/// when it first opens: load each one's icon, then scan the stores for it (see
+/// [checkAndCacheStoresForListing]), which finds an icon for an app whose own
+/// source has none. One app at a time. Meant for the background.
+Future<void> loadIconsAndScanStoresFor(
+  AppsProvider appsProvider,
+  List<String> listingKeys,
+) async {
+  for (final String listingKey in listingKeys) {
+    try {
+      await appsProvider.updateAppIcon(listingKey);
+    } catch (error) {
+      unawaited(
+        appsProvider.logs.add(
+          'Icon load failed for $listingKey: $error',
+          level: LogLevel.warning,
+        ),
+      );
+    }
+  }
+  for (final String listingKey in listingKeys) {
+    await checkAndCacheStoresForListing(appsProvider, listingKey);
+  }
+}
+
 /// Never throws. Callers run it in the background, so a failure is logged, and
 /// whatever settled before it is still returned.
 Future<Map<String, String>?> checkAndCacheStoresForListing(
@@ -427,20 +475,6 @@ Future<Map<String, String>?> checkAndCacheStoresForListing(
     ).then((url) => <String, String?>{appId: url});
   }
 
-  // The F-Droid page to read the package's source repo from: its tracked
-  // listing, or the one a scan found. Null while the package isn't known to
-  // be on F-Droid.
-  String? fdroidPageUrlIn(Map<String, String> stores) {
-    if (_trackedUrlIsFromHost(trackedUrl, 'f-droid.org')) return trackedUrl;
-    final String? found = stores['F-Droid'];
-    return found == null || found.isEmpty ? null : found;
-  }
-
-  bool needsGitHubFromFDroid(Map<String, String> stores) =>
-      !_trackedUrlIsFromHost(trackedUrl, 'github.com') &&
-      (stores['GitHub'] ?? '').isEmpty &&
-      fdroidPageUrlIn(stores) != null;
-
   void logStoreError(String store, Object error) => unawaited(
     appsProvider.logs.add(
       'Store check failed for $appId on $store: $error',
@@ -450,7 +484,7 @@ Future<Map<String, String>?> checkAndCacheStoresForListing(
 
   if (lookups.isEmpty &&
       !shouldResolveMissingIcon &&
-      !needsGitHubFromFDroid(storeData)) {
+      !needsGitHubFromFDroid(trackedUrl, storeData)) {
     return null;
   }
   final entry = Map<String, String>.from(storeData);
@@ -482,27 +516,29 @@ Future<Map<String, String>?> checkAndCacheStoresForListing(
     }
 
     // After the F-Droid lookup above, which may just have found the package.
-    if (needsGitHubFromFDroid(entry)) {
-      final Map<String, String?> gitHubAnswer =
-          await settleStoreLookups(appId, {
-            'GitHub':
-                BulkImportService.checkFDroidSourceCodeLink(
-                  appId,
-                  fdroidPageUrlIn(entry)!,
-                ).then(
-                  (Map<String, String?> links) => links.map(
-                    (String packageId, String? href) => MapEntry(
-                      packageId,
-                      gitHubRepoUrlFromSourceCodeLink(href),
-                    ),
-                  ),
-                ),
-          }, onError: logStoreError);
+    if (needsGitHubFromFDroid(trackedUrl, entry)) {
+      final String fdroidPage = fdroidPageUrlFor(trackedUrl, entry)!;
+      final Map<String, String?>
+      gitHubAnswer = await settleStoreLookups(appId, {
+        'GitHub': BulkImportService.checkFDroidSourceCodeLink(appId, fdroidPage)
+            .then(
+              (Map<String, String?> links) => links.map(
+                (String packageId, String? href) =>
+                    MapEntry(packageId, gitHubRepoUrlFromSourceCodeLink(href)),
+              ),
+            ),
+      }, onError: logStoreError);
+      // Only once the page was read: one that couldn't be fetched is asked
+      // again next time.
       if (gitHubAnswer.containsKey('GitHub')) {
         final String gitHubUrl = gitHubAnswer['GitHub'] ?? '';
         entry['GitHub'] = gitHubUrl;
+        entry[BulkScanCache.fdroidSourceCodeReadFromKey] = fdroidPage;
         await BulkScanCache.save({
-          appId: {'GitHub': gitHubUrl},
+          appId: {
+            'GitHub': gitHubUrl,
+            BulkScanCache.fdroidSourceCodeReadFromKey: fdroidPage,
+          },
         });
       }
     }
@@ -1496,25 +1532,16 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickEditIcon(AppsProvider appsProvider) async {
-    final PlatformFile? picked;
+    final PickedDocument? picked;
     try {
-      picked = await FilePicker.pickFile(
-        type: FileType.custom,
-        allowedExtensions: const ['png'],
-      );
+      picked = await pickFile(type: 'image/png');
     } catch (e) {
-      if (mounted) {
-        _showPageError(
-          ObtainiumError(tr('noFilePickerAvailable')),
-          title: tr('errorChangingIcon'),
-        );
-      }
+      if (mounted) _showPageError(e, title: tr('errorChangingIcon'));
       return;
     }
     if (!mounted) return;
     if (picked == null) return;
-    final Uint8List? bytes = await _readPickedFileBytes(picked);
-    if (bytes == null) return;
+    final Uint8List bytes = picked.bytes;
     if (!appsProvider.validateUserAppIconPngBytes(bytes)) {
       if (mounted) {
         _showPageError(
@@ -1529,20 +1556,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       _editStagedClearOverride = false;
       _editNonUserIconPreview = null;
     });
-  }
-
-  Future<Uint8List?> _readPickedFileBytes(PlatformFile picked) async {
-    try {
-      return await picked.readAsBytes();
-    } catch (_) {
-      final String? path = picked.path;
-      if (path == null) return null;
-      try {
-        return await File(path).readAsBytes();
-      } catch (_) {
-        return null;
-      }
-    }
   }
 
   Future<void> _onResetEditIconPressed(AppsProvider appsProvider) async {

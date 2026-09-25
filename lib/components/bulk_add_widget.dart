@@ -2370,8 +2370,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       final settings = getDefaultValuesFromFormItems(
         source.combinedAppSpecificSettingFormItems,
       );
-      // Force the known package name so store inference can't substitute a
-      // wrong ID (e.g. APKMirror scraping the wrong package from page HTML).
+      // Force the known package name: it's the one the stores were scanned
+      // for, so a store's own lookup can only cost a request or disagree.
       settings['appId'] = app.info.packageName;
 
       try {

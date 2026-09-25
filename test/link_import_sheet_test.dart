@@ -25,7 +25,6 @@ class _Apps extends ChangeNotifier implements AppsProvider {
 
 const String _packageId = 'dev.bikram.remember.gh';
 const String _githubUrl = 'https://github.com/bikram-agarwal/Remember';
-const String _fdroidUrl = 'https://f-droid.org/packages/dev.bikram.remember.gh';
 
 App _app({
   String id = _packageId,
@@ -33,6 +32,8 @@ App _app({
   required String url,
   String name = 'Remember',
   String? iconUrl,
+  // What a link's app reads before its first check.
+  String latestVersion = 'Unknown',
 }) {
   return App(
     id: id,
@@ -41,7 +42,7 @@ App _app({
     author: 'bikram-agarwal',
     name: name,
     iconUrl: iconUrl,
-    latestVersion: 'Unknown',
+    latestVersion: latestVersion,
     preferredApkIndex: 0,
     additionalSettings: {},
   );
@@ -81,33 +82,26 @@ void main() {
     expect(readableLinkPayload('not json'), 'not json');
   });
 
-  testWidgets('the link picker keys rows by listing and never re-imports a '
-      'tracked app', (tester) async {
+  /// Opens the add sheet (Import from URL list's, which links use too) for a
+  /// link whose apps are all [tracked]: nothing to fetch. [onClosed] gets
+  /// what was chosen.
+  Future<void> openLinkSheet(
+    WidgetTester tester, {
+    required List<App> tracked,
+    String? rawJson,
+    required void Function(BackupImportSelection? chosen) onClosed,
+  }) async {
     final SettingsProvider settings = SettingsProvider()..prefs = preferences;
     Localization.load(
       const Locale('en'),
       translations: Translations(translations),
     );
     final _Apps provider = _Apps();
-    final App tracked = _app(
-      id: 'dev.bikram.filepipe',
-      url: 'https://github.com/bikram-agarwal/FilePipe',
-      name: 'FilePipe',
-    );
-    provider.apps[tracked.listingKey] = AppInMemory(tracked, null, null, icon);
+    for (final App app in tracked) {
+      provider.apps[app.listingKey] = AppInMemory(app, null, null, icon);
+    }
     addTearDown(provider.dispose);
     addTearDown(settings.dispose);
-
-    // One package from two stores: two listings, which must stay separate.
-    final App github = _app(
-      url: _githubUrl,
-      iconUrl: 'https://tracker.example/pixel.png',
-    );
-    final App fdroid = _app(
-      listingId: appListingKey(_packageId, 'FDroid'),
-      url: _fdroidUrl,
-    );
-    Set<String>? chosen;
     await tester.pumpWidget(
       MultiProvider(
         providers: [
@@ -118,12 +112,17 @@ void main() {
           home: Builder(
             builder: (BuildContext context) => TextButton(
               onPressed: () async {
-                chosen = await showLinkImportPickerSheet(
-                  context: context,
-                  newApps: [github, fdroid],
-                  alreadyTracked: [tracked],
-                  existingApps: provider.apps,
-                  rawJson: '{"raw": "payload"}',
+                onClosed(
+                  await showUrlListImportPickerSheet(
+                    context: context,
+                    urls: const [],
+                    alreadyTracked: tracked,
+                    existingApps: provider.apps,
+                    fetchApp: (String url) async =>
+                        throw StateError('Nothing to fetch'),
+                    trackedListingFor: (App app) => null,
+                    rawJson: rawJson,
+                  ),
                 );
               },
               child: const Text('open'),
@@ -134,37 +133,120 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
+  }
 
-    expect(find.text('${tr('selectAppsToImport')} (2/2)'), findsOneWidget);
-    // Each listing shows the source it will be tracked from.
-    expect(find.text(_githubUrl), findsOneWidget);
-    expect(find.text(_fdroidUrl), findsOneWidget);
-    // The tracked app is listed, but has no checkbox: only the new section's
-    // header and its two rows do.
-    expect(find.text('FilePipe'), findsOneWidget);
-    expect(find.byType(Checkbox), findsNWidgets(3));
-    // A link's iconUrl is never fetched: opening the sheet must not contact
-    // a server the link chose.
-    expect(
-      find.byWidgetPredicate(
-        (Widget widget) => widget is Image && widget.image is NetworkImage,
-      ),
-      findsNothing,
+  testWidgets("a link's JSON shows collapsed under its apps", (tester) async {
+    final App tracked = _app(
+      id: 'dev.bikram.filepipe',
+      url: 'https://github.com/bikram-agarwal/FilePipe',
+      name: 'FilePipe',
+      latestVersion: '2.4.0',
     );
+    BackupImportSelection? chosen;
+    await openLinkSheet(
+      tester,
+      tracked: [tracked],
+      rawJson: '{"raw": "payload"}',
+      onClosed: (BackupImportSelection? selection) => chosen = selection,
+    );
+
+    // Listed with no checkbox, in two lines: name and author.
+    expect(find.text('FilePipe'), findsOneWidget);
+    expect(find.text('2.4.0'), findsNothing);
+    expect(find.byType(Checkbox), findsNothing);
     // Raw JSON starts collapsed.
     expect(find.text('{"raw": "payload"}'), findsNothing);
-
-    await tester.tap(find.text(_fdroidUrl));
-    await tester.pumpAndSettle();
-    expect(find.text('${tr('selectAppsToImport')} (1/2)'), findsOneWidget);
 
     await tester.tap(find.text(tr('rawJson')));
     await tester.pumpAndSettle();
     expect(find.text('{"raw": "payload"}'), findsOneWidget);
 
-    await tester.tap(find.text(tr('import')));
+    await tester.tap(find.text(tr('cancel')));
     await tester.pumpAndSettle();
-    expect(chosen, {github.listingKey});
+    expect(chosen, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a backup row shows name and author only', (tester) async {
+    final SettingsProvider settings = SettingsProvider()..prefs = preferences;
+    Localization.load(
+      const Locale('en'),
+      translations: Translations(translations),
+    );
+    final _Apps provider = _Apps();
+    addTearDown(provider.dispose);
+    addTearDown(settings.dispose);
+    // The version a backup recorded is neither the installed nor the latest.
+    final App backedUp = _app(url: _githubUrl, latestVersion: '3.1.4');
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AppsProvider>.value(value: provider),
+          ChangeNotifierProvider<SettingsProvider>.value(value: settings),
+        ],
+        child: MaterialApp(
+          home: Builder(
+            builder: (BuildContext context) => TextButton(
+              onPressed: () => showBackupImportPickerSheet(
+                context: context,
+                backupApps: [backedUp],
+                hasSettings: false,
+                hasSecrets: false,
+                existingApps: provider.apps,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Remember'), findsOneWidget);
+    expect(find.text(tr('byX', args: ['bikram-agarwal'])), findsOneWidget);
+    expect(find.text('3.1.4'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a link whose apps are all tracked lists them with nothing to '
+      'import', (tester) async {
+    final List<App> tracked = [
+      for (final String name in ['Alpha', 'Bravo', 'Charlie'])
+        _app(
+          id: 'org.${name.toLowerCase()}',
+          url: 'https://github.com/x/$name',
+          name: name,
+        ),
+    ];
+    bool closed = false;
+    BackupImportSelection? chosen;
+    await openLinkSheet(
+      tester,
+      tracked: tracked,
+      onClosed: (BackupImportSelection? selection) {
+        closed = true;
+        chosen = selection;
+      },
+    );
+
+    expect(find.text(tr('alreadyTrackedApps')), findsOneWidget);
+    for (final App app in tracked) {
+      expect(find.text(app.name), findsOneWidget);
+    }
+    expect(find.text(tr('newApps')), findsNothing);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, tr('import')))
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.text(tr('cancel')));
+    await tester.pumpAndSettle();
+    expect(closed, isTrue);
+    expect(chosen, isNull);
     expect(tester.takeException(), isNull);
   });
 }

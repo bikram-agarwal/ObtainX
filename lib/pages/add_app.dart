@@ -1007,12 +1007,7 @@ class AddAppPageState extends State<AddAppPage> {
               ),
             );
           } else {
-            // Pushed above the home page, so it can't reach the home page's
-            // link import itself.
-            openPage(
-              (_) =>
-                  ImportFromUrlListPage(openLink: homeState?.openObtainiumLink),
-            );
+            openPage((_) => const ImportFromUrlListPage());
           }
         },
       ),
@@ -1104,7 +1099,6 @@ class AddAppPageState extends State<AddAppPage> {
         _AddAppLauncherDestination.importUrlList => ImportFromUrlListPage(
           embedded: true,
           onImportCompleted: resetLauncherAndSwitchToAppsPage,
-          openLink: homeState?.openObtainiumLink,
         ),
         _AddAppLauncherDestination.githubStars => ImportGitHubStarsContent(
           embedded: true,
@@ -1502,45 +1496,9 @@ class AddAppPageState extends State<AddAppPage> {
           if (sameStoreListingIn(appsProvider.apps, app) != null) {
             throw ObtainiumError(tr('appAlreadyAdded'));
           }
-          app.additionalSettings['useVersionCodeAsOSVersion'] =
-              app.versionDetectionMode == VersionDetectionMode.versionCode;
-          if (app.additionalSettings['trackOnly'] == true) {
-            app = app.copyWith(installedVersion: null);
-            if (isTempId(app)) {
-              app.additionalSettings['trackOnlyTemporaryPackageId'] = true;
-              app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
-                  true;
-            } else {
-              app.additionalSettings['trackOnlyTemporaryPackageId'] = false;
-              final installedInfo = await getInstalledInfo(
-                app.id,
-                printErr: false,
-              );
-              if (installedInfo != null) {
-                app = app.copyWith(
-                  installedVersion: app.usesVersionCodeAsOsVersion
-                      ? installedInfo.versionCode.toString()
-                      : installedInfo.versionName,
-                );
-                app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
-                    false;
-              } else {
-                app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] =
-                    true;
-              }
-            }
-          } else if (!app.usesStandardVersionDetection) {
-            app = app.copyWith(installedVersion: app.latestVersion);
-          }
-          app = app.copyWith(categories: pickedCategories);
-          // Tracking this package from a second store needs its own listing ID
-          // so the two records never overwrite each other.
-          app = appsProvider.withAllocatedListingId(app);
-          await appsProvider.saveApps([app], onlyIfExists: false);
-          final liveApp = appsProvider.apps[app.listingKey]?.app;
-          if (liveApp != null) {
-            await appsProvider.assignMatchingFoldersToAppIfNeeded(liveApp);
-          }
+          app = await appsProvider.addNewListing(
+            app.copyWith(categories: pickedCategories),
+          );
           appWasAdded = true;
         }
         if (app != null) {
@@ -1666,10 +1624,10 @@ class AddAppPageState extends State<AddAppPage> {
       final bool showAppIdField =
           pickedSource!.appIdInferIsOptional || pickedSource!.enforceTrackOnly;
       final List<List<GeneratedFormItem>> appIdRows = [
-        // Omitted where it would be inert: inference is skipped for track-only
-        // apps, so for e.g. APKMirror this switch used to sit there, on by
-        // default, doing nothing — and labelled 'from source code' for a store
-        // that has none. The manual field below stays, as the only way in.
+        // Omitted for sources that are always track-only. Their apps either
+        // skip the lookup, so the switch would sit there doing nothing, or
+        // always do it (APKMirror reads its store page, where 'from source
+        // code' is wrong). The manual field below overrides either.
         if (showInferToggle)
           [
             GeneratedFormSwitch(

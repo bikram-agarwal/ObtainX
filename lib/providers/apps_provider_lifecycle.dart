@@ -882,22 +882,105 @@ extension AppsProviderLifecycle on AppsProvider {
       if (archiveIcon == null || !_bytesLookLikeRasterImage(archiveIcon)) {
         return;
       }
-      final Uint8List icon = await _resizeIconForStorage(archiveIcon);
-      await _deducedAppIconPngFile(appId).writeAsBytes(icon);
-      unawaited(mirrorIconToIconsDir(appId, isUserIcon: false));
-      if (!_userAppIconPngFile(appId).existsSync()) {
-        bool iconApplied = false;
-        for (final AppInMemory listing
-            in apps.listingsForPackage(appId).toList()) {
-          if (listing.installedInfo != null) continue;
-          apps[listing.listingKey] = listing.copyWith(icon: icon);
-          iconApplied = true;
-        }
-        if (iconApplied) notify();
-      }
+      await storeDeducedAppIcon(
+        appId,
+        await _resizeIconForStorage(archiveIcon),
+      );
     } catch (e) {
       unawaited(logs.add('APK icon extraction failed for $appId: $e'));
     }
+  }
+
+  /// Stores [icon], already sized for storage, as [appId]'s deduced icon, and
+  /// shows it on each listing of the package that isn't installed, unless the
+  /// user has set their own icon.
+  Future<void> storeDeducedAppIcon(String appId, Uint8List icon) async {
+    await _deducedAppIconPngFile(appId).writeAsBytes(icon);
+    unawaited(mirrorIconToIconsDir(appId, isUserIcon: false));
+    if (_userAppIconPngFile(appId).existsSync()) return;
+    bool iconApplied = false;
+    for (final AppInMemory listing in apps.listingsForPackage(appId).toList()) {
+      if (listing.installedInfo != null) continue;
+      apps[listing.listingKey] = listing.copyWith(icon: icon);
+      iconApplied = true;
+    }
+    if (iconApplied) notify();
+  }
+
+  /// The icon at a store's [url], sized for storage, or null.
+  Future<Uint8List?> fetchStoreIcon(String url) async {
+    final Uint8List? fetched = await _fetchIconFromUrl(url);
+    return fetched == null ? null : await _resizeIconForStorage(fetched);
+  }
+
+  /// The icon and name an installed package has on the phone. A saved listing
+  /// of it takes both over ([saveApps]). Null where [info] is null or the
+  /// phone can't say.
+  Future<({Uint8List? icon, String? name})> installedIconAndName(
+    String appId,
+    PackageInfo? info,
+  ) async {
+    Uint8List? icon;
+    String? name;
+    final applicationInfo = info?.applicationInfo;
+    if (applicationInfo != null) {
+      try {
+        icon = await applicationInfo.getAppIcon();
+        name = await applicationInfo.getAppLabel();
+      } catch (e) {
+        unawaited(
+          logs.add('Installed package details unavailable for $appId: $e'),
+        );
+      }
+    }
+    return (icon: icon, name: name);
+  }
+
+  /// How [app], fetched for adding but not saved yet, will look once it is,
+  /// so an import sheet shows what the apps list will.
+  ///
+  /// An installed package is named and drawn as it is on the phone (see
+  /// [installedIconAndName]). The icon is otherwise found as [updateAppIcon]
+  /// finds it: the user's own icon, then one deduced before, then
+  /// [App.iconUrl]. A downloaded icon is kept until the app is added, as
+  /// [NewAppLook.downloadedIcon].
+  Future<NewAppLook> newAppLook(App app) async {
+    final String packageId = app.id;
+    final PackageInfo? info = isTempId(app)
+        ? null
+        : await getInstalledInfo(packageId, printErr: false);
+    final installed = await installedIconAndName(packageId, info);
+    Future<Uint8List?> readIcon(File file) async {
+      if (!file.existsSync()) return null;
+      try {
+        return await file.readAsBytes();
+      } catch (e) {
+        unawaited(logs.add('Icon read failed for $packageId: $e'));
+        return null;
+      }
+    }
+
+    final Uint8List? userIcon = await readIcon(_userAppIconPngFile(packageId));
+    Uint8List? icon = userIcon != null && _bytesLookLikePng(userIcon)
+        ? userIcon
+        : null;
+    if (info != null) {
+      return NewAppLook(
+        name: installed.name ?? app.name,
+        icon: icon ?? installed.icon,
+      );
+    }
+    icon ??= await readIcon(_deducedAppIconPngFile(packageId));
+    if (icon != null) return NewAppLook(name: app.name, icon: icon);
+    final String? url = app.iconUrl;
+    final Uint8List? downloaded = url != null && url.isNotEmpty
+        ? await fetchStoreIcon(url)
+        : null;
+    return NewAppLook(
+      name: app.name,
+      icon: downloaded,
+      downloadedIcon: downloaded,
+    );
   }
 
   Future<void> updateAppIcon(String? appId, {bool ignoreCache = false}) async {
@@ -973,9 +1056,8 @@ extension AppsProviderLifecycle on AppsProvider {
     if (!isInstalled && icon == null) {
       final url = listing.app.iconUrl;
       if (url != null && url.isNotEmpty) {
-        final Uint8List? fetchedIcon = await _fetchIconFromUrl(url);
-        if (fetchedIcon != null) {
-          icon = await _resizeIconForStorage(fetchedIcon);
+        icon = await fetchStoreIcon(url);
+        if (icon != null) {
           await deducedIcon.writeAsBytes(icon);
           unawaited(mirrorIconToIconsDir(packageId, isUserIcon: false));
         }
@@ -1243,20 +1325,9 @@ extension AppsProviderLifecycle on AppsProvider {
               if (installedPackageUnchanged) {
                 installedAppName = info == null ? null : cached.app.name;
               } else {
-                icon = null;
-                final applicationInfo = info?.applicationInfo;
-                if (applicationInfo != null) {
-                  try {
-                    icon = await applicationInfo.getAppIcon();
-                    installedAppName = await applicationInfo.getAppLabel();
-                  } catch (e) {
-                    unawaited(
-                      logs.add(
-                        'Installed package details unavailable for ${app.id}: $e',
-                      ),
-                    );
-                  }
-                }
+                final installed = await installedIconAndName(app.id, info);
+                icon = installed.icon;
+                installedAppName = installed.name;
               }
             }
             app = app.copyWith(name: installedAppName ?? app.name);

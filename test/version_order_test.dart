@@ -1063,6 +1063,42 @@ void main() {
     );
   });
 
+  test('apk mirror listing page names its package', () async {
+    // Shaped like the live page: an ad for another app's store page comes
+    // first, then the listing's own "View on Play Store" button.
+    const String adLink =
+        '<a href="https://play.google.com/store/apps/details?id=com.javiersantos.mlmanager" target="_blank" class="external" rel="nofollow">ML Manager</a>';
+    const String hashIcon =
+        '<meta property="og:image" content="https://downloadr2.apkmirror.com/wp-content/uploads/2022/08/26/630d0e65afd4f.png" />';
+    expect(
+      await apkMirrorPackageFromListingPageHtml('''
+<html><head>$hashIcon</head><body>
+$adLink
+<a target="_blank" title="View on Play Store" alt="View on Play Store" href="https://play.google.com/store/apps/details?id=com.android.vending" class="accent_color tab-button" rel="nofollow"></a>
+</body></html>
+'''),
+      'com.android.vending',
+    );
+    // No button: a newer icon's filename still names the package.
+    expect(
+      await apkMirrorPackageFromListingPageHtml('''
+<html><head><meta property="og:image" content="https://downloadr2.apkmirror.com/wp-content/uploads/2024/01/65a71d34ecd19_org.thoughtcrime.securesms.png" /></head>
+<body>$adLink</body></html>
+'''),
+      'org.thoughtcrime.securesms',
+    );
+    // Neither: the ad's package must not be taken for the listing's.
+    expect(
+      await apkMirrorPackageFromListingPageHtml(
+        '<html><head>$hashIcon</head><body>$adLink</body></html>',
+      ),
+      isNull,
+    );
+    // Every APKMirror app is track-only, and the lookup must still run.
+    expect(APKMirror().enforceTrackOnly, isTrue);
+    expect(APKMirror().inferAppIdEvenWhenTrackOnly, isTrue);
+  });
+
   test('apk mirror release page download urls strip duplicate fragments', () async {
     expect(
       await apkMirrorDownloadPageUrlsFromReleasePageHtml(

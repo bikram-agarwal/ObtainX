@@ -6,6 +6,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
 
 const String _filter = r'-offline\.apk$';
 
@@ -147,6 +148,53 @@ void main() {
     );
     expect(gitHubRepoUrlFromSourceCodeLink('https://github.com/owner'), isNull);
     expect(gitHubRepoUrlFromSourceCodeLink(null), isNull);
+  });
+
+  test("an F-Droid page that named no GitHub repo isn't read again", () {
+    const String tracked = 'https://apt.izzysoft.de/fdroid/index/apk/a.b';
+    const String page = 'https://f-droid.org/packages/a.b/';
+    const String read = BulkScanCache.fdroidSourceCodeReadFromKey;
+
+    // On F-Droid, and its page never read.
+    expect(needsGitHubFromFDroid(tracked, {'F-Droid': page}), isTrue);
+    // Read, and it named no GitHub repo.
+    expect(
+      needsGitHubFromFDroid(tracked, {
+        'F-Droid': page,
+        'GitHub': '',
+        read: page,
+      }),
+      isFalse,
+    );
+    // Bulk add's code search found nothing, but the page may still name one.
+    expect(
+      needsGitHubFromFDroid(tracked, {'F-Droid': page, 'GitHub': ''}),
+      isTrue,
+    );
+    // Another F-Droid page is read afresh.
+    expect(
+      needsGitHubFromFDroid(tracked, {
+        'F-Droid': page,
+        read: 'https://f-droid.org/packages/a.b.old/',
+      }),
+      isTrue,
+    );
+    // Nothing to look for.
+    expect(
+      needsGitHubFromFDroid(tracked, {
+        'F-Droid': page,
+        'GitHub': 'https://github.com/a/b',
+      }),
+      isFalse,
+    );
+    expect(needsGitHubFromFDroid(tracked, {'F-Droid': ''}), isFalse);
+    expect(
+      needsGitHubFromFDroid('https://github.com/a/b', {'F-Droid': page}),
+      isFalse,
+    );
+    // Tracked from F-Droid itself: its own page.
+    expect(needsGitHubFromFDroid(page, {}), isTrue);
+    expect(needsGitHubFromFDroid(page, {read: page}), isFalse);
   });
 
   test('a typed filter marks the latest version as filtered', () {

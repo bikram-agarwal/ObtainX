@@ -29,6 +29,14 @@ class BulkScanCache {
   static const String _relativeDir = 'bulk_scan_data';
   static const String _fileName = 'store_url_map.json';
 
+  /// Not a store: the F-Droid page whose "Source Code" link was read for the
+  /// package's GitHub listing. Kept so a page that names no GitHub repo isn't
+  /// downloaded again on every scan. The "GitHub" slot alone can't say that:
+  /// bulk add's GitHub code search also records "not found" there, and can
+  /// miss a repo the F-Droid page names. Cleared with the GitHub or F-Droid
+  /// store ([clearStores]), so a rescan of either reads the page again.
+  static const String fdroidSourceCodeReadFromKey = 'fdroidSourceCodeReadFrom';
+
   static Map<String, Map<String, String>>? _cache;
   static Future<Map<String, Map<String, String>>>? _pendingLoad;
 
@@ -210,12 +218,17 @@ class BulkScanCache {
   /// stores intact.
   static Future<void> clearStores(Set<String> storeNames) async {
     if (storeNames.isEmpty) return;
+    final Set<String> keys = {
+      ...storeNames,
+      if (storeNames.contains('GitHub') || storeNames.contains('F-Droid'))
+        fdroidSourceCodeReadFromKey,
+    };
     try {
       await _enqueueWrite((Map<String, Map<String, String>> disk) {
         var changed = false;
         for (final Map<String, String> storeMap in disk.values) {
-          for (final String store in storeNames) {
-            if (storeMap.remove(store) != null) changed = true;
+          for (final String key in keys) {
+            if (storeMap.remove(key) != null) changed = true;
           }
         }
         return changed;
@@ -232,7 +245,7 @@ class BulkScanCache {
     for (final Map<String, String> storeMap in cache.values) {
       stores.addAll(storeMap.keys);
     }
-    return stores;
+    return stores..remove(fdroidSourceCodeReadFromKey);
   }
 
   /// Merges [storeResults] into [cache] (the caller's in-memory snapshot,

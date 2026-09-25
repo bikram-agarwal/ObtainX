@@ -945,6 +945,10 @@ abstract class AppSource {
   bool changeLogPageIsStandardUrl = false;
   bool appIdInferIsOptional = false;
   bool inferAppIdFromUrlPath = false;
+
+  /// Look the package ID up for track-only apps too (upstream's flag). A
+  /// track-only app is still matched to the installed package by its ID.
+  bool inferAppIdEvenWhenTrackOnly = false;
   bool allowSubDomains = false;
   bool naiveStandardVersionDetection = false;
   bool allowOverride = true;
@@ -1849,7 +1853,7 @@ class SourceProvider {
     if (currentApp?.id != null) return currentApp!.id;
     final String? explicitId = explicitAppIdFromSettings(additionalSettings);
     if (explicitId != null) return explicitId;
-    if (!trackOnly &&
+    if ((!trackOnly || source.inferAppIdEvenWhenTrackOnly) &&
         (!source.appIdInferIsOptional ||
             (source.appIdInferIsOptional && inferAppIdIfOptional))) {
       final inferred = await source.tryInferringAppId(
@@ -2066,6 +2070,39 @@ class SourceProvider {
     return source.resolveVersionComparison(source.postProcessApp(finalApp));
   }
 
+  /// Fetches the app at [url] with its source's default settings.
+  ///
+  /// [inferAppIds] looks up the package ID where the URL doesn't carry one
+  /// (GitHub, GitLab, Codeberg, SourceHut read the repo's build files), as
+  /// the Add app page does. Off, such apps get a temporary ID instead, which
+  /// is cheaper for a long list: each lookup costs API requests.
+  ///
+  /// [includePrereleases] turns on the source's "Include prereleases" option,
+  /// as Add app does when that's the default in settings. [settings] go on top
+  /// of the defaults, as the values filled in on Add app would.
+  Future<App> getAppByURLNaive(
+    String url, {
+    AppSource? sourceOverride,
+    bool inferAppIds = false,
+    bool includePrereleases = false,
+    Map<String, dynamic> settings = const {},
+  }) {
+    final source = sourceOverride ?? getSource(url);
+    final Map<String, dynamic> defaults = getDefaultValuesFromFormItems(
+      source.combinedAppSpecificSettingFormItems,
+    );
+    if (includePrereleases && defaults.containsKey('includePrereleases')) {
+      defaults['includePrereleases'] = true;
+    }
+    return getApp(
+      source,
+      url,
+      sourceIsOverriden: sourceOverride != null,
+      inferAppIdIfOptional: inferAppIds,
+      {...defaults, ...settings},
+    );
+  }
+
   // Returns errors in [results, errors] instead of throwing them
   Future<List<dynamic>> getAppsByURLNaive(
     List<String> urls, {
@@ -2084,15 +2121,7 @@ class SourceProvider {
             if (alreadyAddedUrls.contains(url)) {
               throw ObtainiumError(tr('appAlreadyAdded'));
             }
-            final source = sourceOverride ?? getSource(url);
-            return await getApp(
-              source,
-              url,
-              sourceIsOverriden: sourceOverride != null,
-              getDefaultValuesFromFormItems(
-                source.combinedAppSpecificSettingFormItems,
-              ),
-            );
+            return await getAppByURLNaive(url, sourceOverride: sourceOverride);
           } catch (e) {
             return e;
           }

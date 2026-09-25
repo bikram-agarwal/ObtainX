@@ -127,6 +127,29 @@ android {
     );
   });
 
+  // Real shape of InstallerX-Revived's app/build.gradle.kts (checked
+  // 2026-09-24). The namespace differs, and used to be taken instead.
+  test("an expression's elvis fallback is the id", () {
+    expect(
+      appIdFromGradleFileContents('''
+android {
+    namespace = "com.rosan.installer"
+    defaultConfig {
+        // Please change the applicationId to one that does not conflict with any official release.
+        applicationId = project.findProperty("APP_ID") as String? ?: "com.rosan.installer.x.revived"
+    }
+}
+'''),
+      'com.rosan.installer.x.revived',
+    );
+    expect(
+      appIdFromGradleFileContents(
+        "        applicationId System.getenv('APP_ID') ?: 'org.example.app'",
+      ),
+      'org.example.app',
+    );
+  });
+
   test('an unquoted expression that is not a variable yields null', () {
     expect(
       appIdFromGradleFileContents(

@@ -3873,6 +3873,13 @@ class AppsPageState extends State<AppsPage> {
       final listTiming = PerformanceRecorder.instance.startOperation();
       _lastListBuildToken = listBuildToken;
       var workingList = appsProvider.apps.values.toList();
+      // A package deleted and then added again must load its icon again.
+      final Set<String> trackedPackageIds = {
+        for (final AppInMemory listing in workingList) listing.app.id,
+      };
+      _appListIconWarmFutures.removeWhere(
+        (String packageId, _) => !trackedPackageIds.contains(packageId),
+      );
 
       if (widget.onDemandOnlyList) {
         workingList = workingList

@@ -50,7 +50,6 @@ dependencies:
   permission_handler: ^13.0.0
   fluttertoast: ^10.0.0
   device_info_plus: ^13.2.0
-  file_picker: ^13.0.0
   animations: ^3.0.0
   android_package_installer: # TODO: Upstream PR pending; if not accepted, keep fork maintained
     git:
