@@ -118,6 +118,7 @@
     "importFromURLList": "Import from URL list",
     "searchQuery": "Search query",
     "appURLList": "App URL list",
+    "appURLListTakesLinks": "Also takes app links (obtainium://app/…), shared app configuration links, or exported app JSON. Apps already tracked from the same source are skipped.",
     "line": "Line",
     "searchX": "Search {}",
     "noResults": "No results found",

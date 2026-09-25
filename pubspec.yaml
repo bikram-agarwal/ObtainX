@@ -15,7 +15,7 @@ publish_to: 'none'
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # ObtainX uses its own version line, independent of upstream Obtainium's.
-version: 2.20.0+22000
+version: 2.21.0+22100
 
 environment:
   sdk: ^3.12.0
@@ -55,11 +55,11 @@ dependencies:
   android_package_installer: # TODO: Upstream PR pending; if not accepted, keep fork maintained
     git:
       url: https://github.com/ImranR98/android_package_installer
-      ref: c0a7e4759b20a0c2cd1b4d40a41ff395e5f3d0e4
+      ref: 94525707bd1fba8cba4d19b4cb2b928580913510
   android_package_manager: # TODO: Submit PR to upstream and switch back when merged
     git:
       url: https://github.com/ImranR98/android_package_manager
-      ref: 98661a5824c94ae990ae0f7bf0bdb1478300c4f7
+      ref: b5bc0365bd7faab6f51f6ec8baf4a9dab0df9117
   share_plus: ^13.2.0
   sqflite: ^2.4.3
   easy_localization: ^3.0.8
@@ -80,8 +80,8 @@ dependencies:
   equations: ^6.0.0
   shizuku_apk_installer: # TODO: Forked dependency; watch upstream for releases
     git:
-      url: https://github.com/re7gog/shizuku_apk_installer
-      ref: d9fb008fa4735a517986369b8aa7a025db9a43de
+      url: https://github.com/ImranR98/shizuku_apk_installer
+      ref: 03a3a0cf1b0398ab4a3050078bb4d274ee4c27be
   markdown: ^7.3.1
   flutter_typeahead: ^6.0.0
   battery_plus: ^7.1.0

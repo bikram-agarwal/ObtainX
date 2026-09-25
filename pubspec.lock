@@ -21,8 +21,8 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: c0a7e4759b20a0c2cd1b4d40a41ff395e5f3d0e4
-      resolved-ref: c0a7e4759b20a0c2cd1b4d40a41ff395e5f3d0e4
+      ref: "94525707bd1fba8cba4d19b4cb2b928580913510"
+      resolved-ref: "94525707bd1fba8cba4d19b4cb2b928580913510"
       url: "https://github.com/ImranR98/android_package_installer"
     source: git
     version: "0.0.1"
@@ -30,8 +30,8 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "98661a5824c94ae990ae0f7bf0bdb1478300c4f7"
-      resolved-ref: "98661a5824c94ae990ae0f7bf0bdb1478300c4f7"
+      ref: b5bc0365bd7faab6f51f6ec8baf4a9dab0df9117
+      resolved-ref: b5bc0365bd7faab6f51f6ec8baf4a9dab0df9117
       url: "https://github.com/ImranR98/android_package_manager"
     source: git
     version: "0.7.1"
@@ -1084,9 +1084,9 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: d9fb008fa4735a517986369b8aa7a025db9a43de
-      resolved-ref: d9fb008fa4735a517986369b8aa7a025db9a43de
-      url: "https://github.com/re7gog/shizuku_apk_installer"
+      ref: "03a3a0cf1b0398ab4a3050078bb4d274ee4c27be"
+      resolved-ref: "03a3a0cf1b0398ab4a3050078bb4d274ee4c27be"
+      url: "https://github.com/ImranR98/shizuku_apk_installer"
     source: git
     version: "1.3.0"
   sky_engine:

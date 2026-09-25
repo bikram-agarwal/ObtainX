@@ -133,6 +133,22 @@ void main() {
     });
   });
 
+  test('an F-Droid source link on GitHub becomes a GitHub listing', () {
+    expect(
+      gitHubRepoUrlFromSourceCodeLink(
+        'https://github.com/bikram-agarwal/Remember',
+      ),
+      'https://github.com/bikram-agarwal/Remember',
+    );
+    // F-Droid's own client, which lives on GitLab.
+    expect(
+      gitHubRepoUrlFromSourceCodeLink('https://gitlab.com/fdroid/fdroidclient'),
+      isNull,
+    );
+    expect(gitHubRepoUrlFromSourceCodeLink('https://github.com/owner'), isNull);
+    expect(gitHubRepoUrlFromSourceCodeLink(null), isNull);
+  });
+
   test('a typed filter marks the latest version as filtered', () {
     expect(appHasActiveReleaseFilter(_previouslyFetched()), isTrue);
     expect(

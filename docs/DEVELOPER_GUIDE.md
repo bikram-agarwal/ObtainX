@@ -244,7 +244,14 @@ URI host as the **action** and dispatches accordingly:
 | Action (`uri.host`) | Data source | Behaviour |
 | --- | --- | --- |
 | `add` | `uri.queryParameters['url']` or `uri.path.substring(1)` | Standardizes the URL, checks for duplicates, navigates to Add App page |
-| `app` / `apps` | URI-decoded query or path | Shows a confirmation dialog with the raw JSON, then imports via `AppsProvider` |
+| `app` / `apps` | URI-decoded query or path | Opens the backup-import sheet in link mode (`showLinkImportPickerSheet`), then imports only the ticked apps; already-tracked apps are never overwritten (`planLinkImport`) |
+
+**Import from URL list** also takes `app` / `apps` links, one per line, including ones
+wrapped in the "Share app configuration" redirect page. It also takes the JSON a link carries,
+or an export's JSON (its apps, each with its own settings, but not its ObtainX-wide
+`settings` block). `linkImportIn` turns what's pasted into one link. It goes
+through the same `interpretLink` via `HomePageState.openObtainiumLink`, which `AddAppPage`
+passes in because the page is pushed above the home page on phones.
 
 Inbound links arrive via `AppLinks` (Android App Links / intent filters) — the
 `obtainium://` scheme is registered in `AndroidManifest.xml`. Both `getInitialLink()`

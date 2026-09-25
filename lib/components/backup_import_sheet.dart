@@ -43,7 +43,37 @@ Future<BackupImportSelection?> showBackupImportPickerSheet({
   );
 }
 
-enum _BackupImportSectionId { settings, existingApps, newApps }
+/// The picker for a link import (`obtainium://app/` or `apps/`).
+///
+/// [newApps] are the listings the link would add ([LinkImportPlan.toAdd]),
+/// all selected to start with. [alreadyTracked] are shown for reference only:
+/// a link never overwrites a tracked app. [rawJson] is the link's payload,
+/// shown collapsed. Returns the listing keys chosen, or null when cancelled.
+Future<Set<String>?> showLinkImportPickerSheet({
+  required BuildContext context,
+  required List<App> newApps,
+  required List<App> alreadyTracked,
+  required Map<String, AppInMemory> existingApps,
+  String? rawJson,
+}) async {
+  final BackupImportSelection? selection =
+      await showAppModalSheet<BackupImportSelection>(
+        context: context,
+        builder: (BuildContext sheetContext) {
+          return BackupImportSheet(
+            backupApps: newApps,
+            hasSettings: false,
+            hasSecrets: false,
+            existingApps: existingApps,
+            linkAlreadyTrackedApps: alreadyTracked,
+            linkRawJson: rawJson,
+          );
+        },
+      );
+  return selection?.selectedAppIds;
+}
+
+enum _BackupImportSectionId { settings, existingApps, newApps, rawJson }
 
 class BackupImportSheet extends StatefulWidget {
   const BackupImportSheet({
@@ -53,6 +83,8 @@ class BackupImportSheet extends StatefulWidget {
     required this.hasSecrets,
     required this.existingApps,
     this.isRestore = false,
+    this.linkAlreadyTrackedApps,
+    this.linkRawJson,
   });
 
   final List<App> backupApps;
@@ -63,6 +95,15 @@ class BackupImportSheet extends StatefulWidget {
   /// Whether this picker is being shown for a "Restore" (wipe + replace) vs a
   /// plain additive "Import" — only changes the action button's label.
   final bool isRestore;
+
+  /// Set for a link import (see [showLinkImportPickerSheet]): the listings
+  /// the link duplicates. Unlike a backup's, they can't be selected.
+  final List<App>? linkAlreadyTrackedApps;
+
+  /// The link's payload, for a link import.
+  final String? linkRawJson;
+
+  bool get isLinkImport => linkAlreadyTrackedApps != null;
 
   @override
   State<BackupImportSheet> createState() => _BackupImportSheetState();
@@ -77,10 +118,15 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
   // the footer FilledButton below) against double-taps while it's up.
   bool _isConfirmingRestore = false;
 
+  // What a row's selection is keyed by. A backup restores by package ID; a
+  // link can carry one package from two stores, and each becomes a listing of
+  // its own, so link rows are keyed by the listing key they will be saved as.
+  String _key(App app) => widget.isLinkImport ? app.listingKey : app.id;
+
   @override
   void initState() {
     super.initState();
-    selectedAppIds = widget.backupApps.map((a) => a.id).toSet();
+    selectedAppIds = widget.backupApps.map(_key).toSet();
     importSettings = widget.hasSettings;
     expandedSectionIds = {
       if (widget.hasSettings) _BackupImportSectionId.settings,
@@ -90,17 +136,23 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
   }
 
   List<App> get existingBackupApps {
-    final list = widget.backupApps
-        .where((a) => widget.existingApps.containsKey(a.id))
-        .toList();
+    // For a link, "already tracked" means the same package from the same
+    // store (see planLinkImport), which a package ID lookup can't tell.
+    final list = widget.isLinkImport
+        ? List<App>.from(widget.linkAlreadyTrackedApps!)
+        : widget.backupApps
+              .where((a) => widget.existingApps.containsKey(a.id))
+              .toList();
     list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return list;
   }
 
   List<App> get newBackupApps {
-    final list = widget.backupApps
-        .where((a) => !widget.existingApps.containsKey(a.id))
-        .toList();
+    final list = widget.isLinkImport
+        ? List<App>.from(widget.backupApps)
+        : widget.backupApps
+              .where((a) => !widget.existingApps.containsKey(a.id))
+              .toList();
     list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return list;
   }
@@ -130,7 +182,7 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
 
   void toggleAppGroup(List<App> groupApps) {
     hapticSelection();
-    final groupIds = groupApps.map((a) => a.id).toList();
+    final groupIds = groupApps.map(_key).toList();
     setState(() {
       final bool allSelected = groupIds.every(selectedAppIds.contains);
       if (allSelected) {
@@ -158,10 +210,15 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     required M3eListGroupPosition position,
     required double itemOuterRadius,
     required double itemInnerRadius,
+    bool selectable = true,
   }) {
     final AppInMemory? existingApp = widget.existingApps[app.id];
-    final bool isSelected = selectedAppIds.contains(app.id);
-    final String versionLabel = app.latestVersion.isNotEmpty
+    final bool isSelected = selectable && selectedAppIds.contains(_key(app));
+    // A link's apps have no version yet; what matters is where each one will
+    // be tracked from.
+    final String versionLabel = widget.isLinkImport
+        ? app.url
+        : app.latestVersion.isNotEmpty
         ? app.latestVersion
         : (app.installedVersion ?? '');
     final BorderRadius cardBorderRadius = m3eListGroupItemRadius(
@@ -186,7 +243,14 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
         tileColor: Colors.transparent,
         selectedTileColor: Colors.transparent,
         contentPadding: const EdgeInsets.only(left: 12, right: 16),
-        leading: _BackupAppIconWidget(app: app, existingApp: existingApp),
+        leading: _BackupAppIconWidget(
+          app: app,
+          existingApp: existingApp,
+          // A link comes from another app, and fetching its iconUrl would tell
+          // that URL's server the link was opened, before the user agreed to
+          // anything. Link rows use only icons already on the device.
+          allowNetworkIcon: !widget.isLinkImport,
+        ),
         title: Text(
           app.name,
           maxLines: 1,
@@ -207,15 +271,19 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
               Text(versionLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
           ],
         ),
-        trailing: Checkbox(
-          value: isSelected,
-          onChanged: (bool? selected) {
-            if (selected != null) {
-              toggleAppSelected(app.id, selected);
-            }
-          },
-        ),
-        onTap: () => toggleAppSelected(app.id, !isSelected),
+        trailing: selectable
+            ? Checkbox(
+                value: isSelected,
+                onChanged: (bool? selected) {
+                  if (selected != null) {
+                    toggleAppSelected(_key(app), selected);
+                  }
+                },
+              )
+            : null,
+        onTap: selectable
+            ? () => toggleAppSelected(_key(app), !isSelected)
+            : null,
       ),
     );
   }
@@ -291,14 +359,17 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     required double collapsedHeaderRadius,
     required double itemOuterRadius,
     required double itemInnerRadius,
+    bool selectable = true,
   }) {
     if (apps.isEmpty) return const SizedBox.shrink();
 
     final bool isExpanded = expandedSectionIds.contains(sectionId);
     final int selectedInGroup = apps
-        .where((a) => selectedAppIds.contains(a.id))
+        .where((a) => selectedAppIds.contains(_key(a)))
         .length;
-    final bool allSelected = apps.every((a) => selectedAppIds.contains(a.id));
+    final bool allSelected = apps.every(
+      (a) => selectedAppIds.contains(_key(a)),
+    );
     final bool someSelected = selectedInGroup > 0 && !allSelected;
 
     return Column(
@@ -307,21 +378,23 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
         M3eCollapsibleGroupHeader(
           title: title,
           count: apps.length,
-          countText: '$selectedInGroup/${apps.length}',
+          countText: selectable ? '$selectedInGroup/${apps.length}' : null,
           isExpanded: isExpanded,
           onTap: () => toggleSectionExpanded(sectionId),
           collapsedRadius: collapsedHeaderRadius,
           colorScheme: colorScheme,
-          trailingAction: Semantics(
-            label: allSelected
-                ? tr('deselectX', args: [apps.length.toString()])
-                : tr('selectAll'),
-            child: Checkbox(
-              value: allSelected ? true : (someSelected ? null : false),
-              tristate: true,
-              onChanged: (_) => toggleAppGroup(apps),
-            ),
-          ),
+          trailingAction: selectable
+              ? Semantics(
+                  label: allSelected
+                      ? tr('deselectX', args: [apps.length.toString()])
+                      : tr('selectAll'),
+                  child: Checkbox(
+                    value: allSelected ? true : (someSelected ? null : false),
+                    tristate: true,
+                    onChanged: (_) => toggleAppGroup(apps),
+                  ),
+                )
+              : null,
         ),
         SizedBox(
           width: double.infinity,
@@ -359,6 +432,7 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                                 : M3eListGroupPosition.middle,
                             itemOuterRadius: itemOuterRadius,
                             itemInnerRadius: itemInnerRadius,
+                            selectable: selectable,
                           ),
                         ],
                       ],
@@ -443,6 +517,74 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
     );
   }
 
+  // The link's payload as sent, collapsed by default: the summary rows above
+  // show what gets imported, and this is there for anyone who wants every
+  // field (filters and other settings included).
+  Widget buildRawJsonSection({
+    required ColorScheme colorScheme,
+    required double collapsedHeaderRadius,
+    required double itemOuterRadius,
+    required double itemInnerRadius,
+  }) {
+    final String? rawJson = widget.linkRawJson;
+    if (rawJson == null || rawJson.isEmpty) return const SizedBox.shrink();
+    final bool isExpanded = expandedSectionIds.contains(
+      _BackupImportSectionId.rawJson,
+    );
+    final BorderRadius cardBorderRadius = m3eListGroupItemRadius(
+      M3eListGroupPosition.only,
+      flatListBody: false,
+      outerRadius: itemOuterRadius,
+      innerRadius: itemInnerRadius,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        M3eCollapsibleGroupHeader(
+          title: tr('rawJson'),
+          count: 1,
+          countText: '',
+          isExpanded: isExpanded,
+          onTap: () => toggleSectionExpanded(_BackupImportSectionId.rawJson),
+          collapsedRadius: collapsedHeaderRadius,
+          colorScheme: colorScheme,
+        ),
+        SizedBox(
+          width: double.infinity,
+          child: AnimatedSize(
+            duration: kM3eGroupExpandDuration,
+            reverseDuration: kM3eGroupCollapseDuration,
+            curve: kM3eGroupTransitionCurve,
+            alignment: Alignment.topCenter,
+            child: isExpanded
+                ? Padding(
+                    padding: const EdgeInsets.only(
+                      top: kM3eHeaderToFirstCardGap,
+                    ),
+                    child: Material(
+                      color: m3eGroupedListRowFill(colorScheme),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: cardBorderRadius,
+                        side: m3ePureBlackOutlineSide(colorScheme),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: SelectableText(
+                          rawJson,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(fontFamily: 'monospace'),
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -486,7 +628,9 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
             child: SizedBox.square(
               dimension: 40,
               child: Icon(
-                Icons.restore_rounded,
+                widget.isLinkImport
+                    ? Icons.link_rounded
+                    : Icons.restore_rounded,
                 color: colorScheme.onTertiaryContainer,
                 size: 24,
               ),
@@ -530,6 +674,8 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                 collapsedHeaderRadius: collapsedHeaderRadius,
                 itemOuterRadius: itemOuterRadius,
                 itemInnerRadius: itemInnerRadius,
+                // A link never overwrites a tracked app.
+                selectable: !widget.isLinkImport,
               ),
             ],
             if (newAppsList.isNotEmpty) ...[
@@ -541,6 +687,15 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                 apps: newAppsList,
                 colorScheme: colorScheme,
                 groupCardRadius: groupCardRadius,
+                collapsedHeaderRadius: collapsedHeaderRadius,
+                itemOuterRadius: itemOuterRadius,
+                itemInnerRadius: itemInnerRadius,
+              ),
+            ],
+            if (widget.isLinkImport) ...[
+              const SizedBox(height: SettingsProvider.collapsedHeaderGap),
+              buildRawJsonSection(
+                colorScheme: colorScheme,
                 collapsedHeaderRadius: collapsedHeaderRadius,
                 itemOuterRadius: itemOuterRadius,
                 itemInnerRadius: itemInnerRadius,
@@ -619,10 +774,15 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
 }
 
 class _BackupAppIconWidget extends StatefulWidget {
-  const _BackupAppIconWidget({required this.app, required this.existingApp});
+  const _BackupAppIconWidget({
+    required this.app,
+    required this.existingApp,
+    this.allowNetworkIcon = true,
+  });
 
   final App app;
   final AppInMemory? existingApp;
+  final bool allowNetworkIcon;
 
   @override
   State<_BackupAppIconWidget> createState() => _BackupAppIconWidgetState();
@@ -698,7 +858,9 @@ class _BackupAppIconWidgetState extends State<_BackupAppIconWidget> {
     }
 
     final String? iconUrl = widget.app.iconUrl;
-    if (iconUrl != null && iconUrl.startsWith('http')) {
+    if (widget.allowNetworkIcon &&
+        iconUrl != null &&
+        iconUrl.startsWith('http')) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: Image.network(

@@ -6,8 +6,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // The Flutter Gradle Plugin must be applied after the Android Gradle plugin.
+    // Kotlin is provided by AGP Built-in Kotlin (android.builtInKotlin=true).
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -35,7 +35,7 @@ android {
     if (sdkVersion == 37) {
         compileSdk {
             version = release(37) {
-                minorApiLevel = 0
+                minorApiLevel = 2
             }
         }
     } else {

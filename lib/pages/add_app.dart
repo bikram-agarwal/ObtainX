@@ -1007,7 +1007,12 @@ class AddAppPageState extends State<AddAppPage> {
               ),
             );
           } else {
-            openPage((_) => const ImportFromUrlListPage());
+            // Pushed above the home page, so it can't reach the home page's
+            // link import itself.
+            openPage(
+              (_) =>
+                  ImportFromUrlListPage(openLink: homeState?.openObtainiumLink),
+            );
           }
         },
       ),
@@ -1099,6 +1104,7 @@ class AddAppPageState extends State<AddAppPage> {
         _AddAppLauncherDestination.importUrlList => ImportFromUrlListPage(
           embedded: true,
           onImportCompleted: resetLauncherAndSwitchToAppsPage,
+          openLink: homeState?.openObtainiumLink,
         ),
         _AddAppLauncherDestination.githubStars => ImportGitHubStarsContent(
           embedded: true,

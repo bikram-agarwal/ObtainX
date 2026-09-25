@@ -12,6 +12,7 @@ import 'package:http/io_client.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:obtainium/services/store_lookup_queue.dart';
 
 const _deviceAppsChannel = MethodChannel('dev.imranr.obtainium/device_apps');
@@ -640,6 +641,30 @@ class BulkImportService {
       },
     );
     return result;
+  }
+
+  /// The "Source Code" link on [packageId]'s F-Droid package page at
+  /// [fdroidPageUrl], keyed by [packageId]. It's null when the page lists no
+  /// source link. There's no entry when the page couldn't be fetched, meaning
+  /// unknown, as with the store checks above; a network failure throws.
+  ///
+  /// F-Droid metadata names each app's source repo, which is the one way to
+  /// find a package's GitHub listing: a repo can't be derived from a package
+  /// ID.
+  static Future<Map<String, String?>> checkFDroidSourceCodeLink(
+    String packageId,
+    String fdroidPageUrl,
+  ) async {
+    final http.Response response = await http
+        .get(Uri.parse(fdroidPageUrl), headers: {'User-Agent': 'ObtainX/1.4.0'})
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode != 200) return {};
+    final html_dom.Document doc = await parseHtmlOffIsolate(response.body);
+    final String? href = doc
+        .querySelector('#source_code a')
+        ?.attributes['href']
+        ?.trim();
+    return {packageId: href == null || href.isEmpty ? null : href};
   }
 
   static const String _izzyOnDroidRepoIndexUrl =

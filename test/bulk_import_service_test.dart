@@ -237,6 +237,44 @@ void main() {
       },
     );
 
+    test('the package page names its source repo', () async {
+      server.listen((request) async {
+        final String packageName = request.uri.pathSegments
+            .where((String segment) => segment.isNotEmpty)
+            .last;
+        switch (packageName) {
+          case 'org.example.github':
+            // The shape of the live page's link list.
+            request.response.write(
+              '<ul class="package-links" id="links">'
+              '<li class="package-link" id="source_code">\n\t\t\t'
+              '<a href="https://github.com/example/app">Source Code</a>'
+              '</li></ul>',
+            );
+          case 'org.example.nolink':
+            request.response.write('<ul class="package-links"></ul>');
+          default:
+            request.response.statusCode = 503;
+        }
+        await request.response.close();
+      });
+
+      Future<Map<String, String?>> linkFor(String packageId) =>
+          HttpOverrides.runWithHttpOverrides(
+            () => BulkImportService.checkFDroidSourceCodeLink(
+              packageId,
+              'https://f-droid.org/packages/$packageId/',
+            ),
+            overrides,
+          );
+
+      expect(await linkFor('org.example.github'), {
+        'org.example.github': 'https://github.com/example/app',
+      });
+      expect(await linkFor('org.example.nolink'), {'org.example.nolink': null});
+      expect(await linkFor('org.example.flaky'), isEmpty);
+    });
+
     test('a failed flavor lookup leaves the package unknown', () async {
       // The package's own ID is not on F-Droid, but its base ID couldn't be
       // checked, so there may still be a listing to show.

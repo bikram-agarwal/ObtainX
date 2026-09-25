@@ -59,6 +59,37 @@ class LinkImportPlan {
   const LinkImportPlan({required this.toAdd, required this.alreadyTracked});
 }
 
+/// A link's payload laid out for reading: indented, with each app's
+/// `additionalSettings` expanded. The format carries that as a JSON string
+/// inside the JSON, which reads as a wall of escapes. Display only; a payload
+/// that doesn't decode comes back as it was.
+String readableLinkPayload(String payload) {
+  Object? expand(Object? value) {
+    if (value is List) return value.map(expand).toList();
+    if (value is Map) {
+      return value.map((Object? key, Object? field) {
+        if (key == 'additionalSettings' && field is String) {
+          try {
+            return MapEntry(key, jsonDecode(field));
+          } catch (_) {
+            // Shown as the string it is.
+          }
+        }
+        return MapEntry(key, expand(field));
+      });
+    }
+    return value;
+  }
+
+  try {
+    return const JsonEncoder.withIndent(
+      '  ',
+    ).convert(expand(jsonDecode(payload)));
+  } catch (_) {
+    return payload;
+  }
+}
+
 /// Sorts a link payload (`obtainium://app/` or `apps/`) into new listings and
 /// ones [listings] already has.
 ///

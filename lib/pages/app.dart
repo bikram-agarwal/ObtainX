@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
+import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'
     show Factory, Listenable, listEquals, visibleForTesting;
@@ -321,6 +322,221 @@ Future<String?> _checkPlayStoreAvailability(String packageId) async {
     }
   }
   return null;
+}
+
+/// The GitHub listing an F-Droid "Source Code" link names, or null when the
+/// link points anywhere else (GitLab, Codeberg, a project site, ...).
+String? gitHubRepoUrlFromSourceCodeLink(String? href) =>
+    href != null && isSwappableGitHubRepoUrl(href)
+    ? GitHub().standardizeUrl(href)
+    : null;
+
+/// Checks all 4 stores (APKMirror, F-Droid, APKPure, Play Store) for
+/// [listingKey]'s package concurrently and caches the answers. Returns the
+/// package's store entries as they now stand, or null when there was nothing
+/// to check.
+///
+/// Runs after every update check on the app's page, whether or not it
+/// succeeded; on page open when the app has no icon or its package has never
+/// been scanned; and after a link import. Each store's answer stands on its
+/// own (see [settleStoreLookups]): one that couldn't answer is left uncached,
+/// not recorded as absent. GitHub, which no package-ID lookup can find, comes
+/// from the F-Droid page's "Source Code" link whenever the package is on
+/// F-Droid. Cached stores are skipped, except that APKMirror is
+/// rechecked when its existing availability response can also fill a missing
+/// app icon. Icon resolution is separate: APKMirror API icon first, then
+/// listing-page icons APKMirror -> F-Droid -> APKPure -> Play Store, stopping at
+/// the first hit - and skipped entirely for installed apps or when an icon was
+/// already extracted from a downloaded APK.
+///
+/// Never throws. Callers run it in the background, so a failure is logged, and
+/// whatever settled before it is still returned.
+Future<Map<String, String>?> checkAndCacheStoresForListing(
+  AppsProvider appsProvider,
+  String listingKey,
+) async {
+  if (listingKey.isEmpty) return null;
+  final AppInMemory? appBeforeStoreCheck = appsProvider.apps[listingKey];
+  if (appBeforeStoreCheck == null) return null;
+  // Store availability and icons belong to the Android package, so they are
+  // shared by every listing of it - only the library lookups above are keyed
+  // by listing.
+  final String appId = appBeforeStoreCheck.app.id;
+  final trackedUrl = appBeforeStoreCheck.app.url;
+  // No icon to hunt for when the device already supplies one (app is
+  // installed), or when one was deduced from a downloaded APK and stored
+  // permanently - that one is authoritative and needs no improving on.
+  final shouldResolveMissingIcon =
+      appBeforeStoreCheck.icon == null &&
+      appBeforeStoreCheck.installedInfo == null &&
+      appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true &&
+      !appsProvider.hasDeducedAppIcon(appId);
+
+  final storeData = await BulkScanCache.loadForApp(appId) ?? {};
+  // Resolve cheapest-first: the library, then the scan cache, and only then
+  // the network. Another listing of this same package is the most
+  // authoritative answer available and costs nothing, so fold those URLs in
+  // before deciding what still needs looking up - every store a sibling
+  // already tracks then falls out of the checks below instead of being
+  // fetched again. Persisting them also means the answer outlives that
+  // sibling being deleted, which for GitHub is the difference between
+  // knowing the repo URL and never being able to derive it again.
+  final Map<String, String> siblingStoreUrls = <String, String>{};
+  for (final AppInMemory sibling in appsProvider.apps.listingsForPackage(
+    appId,
+  )) {
+    if (sibling.listingKey == listingKey || sibling.app.url.isEmpty) continue;
+    final String? slotName = _storeSlotNameForUrl(sibling.app.url);
+    if (slotName == null || storeData[slotName] == sibling.app.url) continue;
+    if (slotName == 'GitHub' && !isSwappableGitHubRepoUrl(sibling.app.url)) {
+      continue;
+    }
+    siblingStoreUrls[slotName] = sibling.app.url;
+    storeData[slotName] = sibling.app.url;
+  }
+  if (siblingStoreUrls.isNotEmpty) {
+    await BulkScanCache.save(<String, Map<String, String>>{
+      appId: siblingStoreUrls,
+    });
+  }
+  final apkMirrorIconUrls = <String, String>{};
+
+  final lookups = <String, Future<Map<String, String?>>>{};
+
+  if (!_trackedUrlIsFromHost(trackedUrl, 'apkmirror.com') &&
+      ((storeData['APKMirror'] ?? '').isEmpty || shouldResolveMissingIcon)) {
+    lookups['APKMirror'] = BulkImportService.checkApkMirror([
+      appId,
+    ], resolvedIconUrls: apkMirrorIconUrls);
+  }
+  if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
+      (storeData['F-Droid'] ?? '').isEmpty) {
+    lookups['F-Droid'] = BulkImportService.checkFDroid([appId]);
+  }
+  final String cachedApkPureUrl = storeData['APKPure'] ?? '';
+  if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
+      (cachedApkPureUrl.isEmpty || !isWellFormedApkPureUrl(cachedApkPureUrl))) {
+    // Its own-ID failures re-throw by design; settleStoreLookups is what
+    // keeps one of those from costing the other stores their answers.
+    lookups['APKPure'] = BulkImportService.checkApkPure([appId]);
+  }
+  if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
+      (storeData['PlayStore'] ?? '').isEmpty) {
+    lookups['PlayStore'] = _checkPlayStoreAvailability(
+      appId,
+    ).then((url) => <String, String?>{appId: url});
+  }
+
+  // The F-Droid page to read the package's source repo from: its tracked
+  // listing, or the one a scan found. Null while the package isn't known to
+  // be on F-Droid.
+  String? fdroidPageUrlIn(Map<String, String> stores) {
+    if (_trackedUrlIsFromHost(trackedUrl, 'f-droid.org')) return trackedUrl;
+    final String? found = stores['F-Droid'];
+    return found == null || found.isEmpty ? null : found;
+  }
+
+  bool needsGitHubFromFDroid(Map<String, String> stores) =>
+      !_trackedUrlIsFromHost(trackedUrl, 'github.com') &&
+      (stores['GitHub'] ?? '').isEmpty &&
+      fdroidPageUrlIn(stores) != null;
+
+  void logStoreError(String store, Object error) => unawaited(
+    appsProvider.logs.add(
+      'Store check failed for $appId on $store: $error',
+      level: LogLevel.warning,
+    ),
+  );
+
+  if (lookups.isEmpty &&
+      !shouldResolveMissingIcon &&
+      !needsGitHubFromFDroid(storeData)) {
+    return null;
+  }
+  final entry = Map<String, String>.from(storeData);
+  try {
+    if (lookups.isNotEmpty) {
+      final Map<String, String?> answers = await settleStoreLookups(
+        appId,
+        lookups,
+        onError: logStoreError,
+      );
+      final changedStores = <String, String>{};
+      for (final MapEntry<String, String?> result in answers.entries) {
+        final String existing = entry[result.key] ?? '';
+        // A malformed cached APKPure entry is never usable - a fresh "not
+        // found" (null) result must be allowed to overwrite it with the
+        // empty-string sentinel, not just a fresh URL. Every other store's
+        // cached value is trusted as-is once non-empty.
+        final bool existingIsUsable = result.key == 'APKPure'
+            ? existing.isNotEmpty && isWellFormedApkPureUrl(existing)
+            : existing.isNotEmpty;
+        if (result.value != null || !existingIsUsable) {
+          entry[result.key] = result.value ?? '';
+          changedStores[result.key] = result.value ?? '';
+        }
+      }
+      if (changedStores.isNotEmpty) {
+        await BulkScanCache.save({appId: changedStores});
+      }
+    }
+
+    // After the F-Droid lookup above, which may just have found the package.
+    if (needsGitHubFromFDroid(entry)) {
+      final Map<String, String?> gitHubAnswer =
+          await settleStoreLookups(appId, {
+            'GitHub':
+                BulkImportService.checkFDroidSourceCodeLink(
+                  appId,
+                  fdroidPageUrlIn(entry)!,
+                ).then(
+                  (Map<String, String?> links) => links.map(
+                    (String packageId, String? href) => MapEntry(
+                      packageId,
+                      gitHubRepoUrlFromSourceCodeLink(href),
+                    ),
+                  ),
+                ),
+          }, onError: logStoreError);
+      if (gitHubAnswer.containsKey('GitHub')) {
+        final String gitHubUrl = gitHubAnswer['GitHub'] ?? '';
+        entry['GitHub'] = gitHubUrl;
+        await BulkScanCache.save({
+          appId: {'GitHub': gitHubUrl},
+        });
+      }
+    }
+
+    String? resolvedIconUrl;
+    if (shouldResolveMissingIcon) {
+      resolvedIconUrl = await resolveIconUrlFromOtherStores(
+        apkMirrorIconUrl: apkMirrorIconUrls[appId],
+        apkMirrorListingUrl: entry['APKMirror'],
+        fdroidListingUrl: entry['F-Droid'],
+        apkPureListingUrl: entry['APKPure'],
+        playStoreListingUrl: entry['PlayStore'],
+      );
+    }
+    final AppInMemory? currentApp = appsProvider.apps[listingKey];
+    if (resolvedIconUrl != null &&
+        currentApp != null &&
+        currentApp.icon == null &&
+        currentApp.app.iconUrl?.isNotEmpty != true &&
+        currentApp.app.url == trackedUrl) {
+      await appsProvider.saveApps([
+        currentApp.app.copyWith(iconUrl: resolvedIconUrl),
+      ], updateInstalledInfo: false);
+      await appsProvider.updateAppIcon(listingKey);
+    }
+  } catch (error) {
+    unawaited(
+      appsProvider.logs.add(
+        'Store scan failed for $appId: $error',
+        level: LogLevel.warning,
+      ),
+    );
+  }
+  return entry;
 }
 
 void _toastUrl(BuildContext context, String url) {
@@ -2308,166 +2524,19 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     );
   }
 
-  /// Checks all 4 stores (APKMirror, F-Droid, APKPure, Play Store) for this
-  /// single app concurrently: after every update check on this page, whether
-  /// or not it succeeded, and on page open when the app has no icon or its
-  /// package has never been scanned. Each store's answer stands on its own
-  /// (see [settleStoreLookups]); one that couldn't answer is left uncached, not
-  /// recorded as absent. Cached stores are skipped,
-  /// except that APKMirror is rechecked when its existing availability response
-  /// can also fill a missing app icon. Presence always runs for every store
-  /// that is still uncached. Icon resolution is separate: APKMirror API icon
-  /// first, then listing-page icons APKMirror -> F-Droid -> APKPure -> Play
-  /// Store, stopping at the first hit - and skipped entirely for installed apps
-  /// or when an icon was already extracted from a downloaded APK. Caches results
-  /// and triggers a FutureBuilder rebuild so the Other Sources row updates in
-  /// place.
+  /// Runs [checkAndCacheStoresForListing] and refreshes the Sources row with
+  /// its answer - including a partial one, since the scan returns whatever
+  /// settled before a failure.
   Future<void> _maybeCheckAndCacheAllStores(String listingKey) async {
-    if (listingKey.isEmpty || !mounted) return;
-
-    final appsProvider = Provider.of<AppsProvider>(context, listen: false);
-    final AppInMemory? appBeforeStoreCheck = appsProvider.apps[listingKey];
-    if (appBeforeStoreCheck == null) return;
-    // Store availability and icons belong to the Android package, so they are
-    // shared by every listing of it - only the library lookups above are keyed
-    // by listing.
-    final String appId = appBeforeStoreCheck.app.id;
-    final trackedUrl = appBeforeStoreCheck.app.url;
-    // No icon to hunt for when the device already supplies one (app is
-    // installed), or when one was deduced from a downloaded APK and stored
-    // permanently - that one is authoritative and needs no improving on.
-    final shouldResolveMissingIcon =
-        appBeforeStoreCheck.icon == null &&
-        appBeforeStoreCheck.installedInfo == null &&
-        appBeforeStoreCheck.app.iconUrl?.isNotEmpty != true &&
-        !appsProvider.hasDeducedAppIcon(appId);
-
-    final storeData = await BulkScanCache.loadForApp(appId) ?? {};
-    // Resolve cheapest-first: the library, then the scan cache, and only then
-    // the network. Another listing of this same package is the most
-    // authoritative answer available and costs nothing, so fold those URLs in
-    // before deciding what still needs looking up - every store a sibling
-    // already tracks then falls out of the checks below instead of being
-    // fetched again. Persisting them also means the answer outlives that
-    // sibling being deleted, which for GitHub is the difference between
-    // knowing the repo URL and never being able to derive it again.
-    final Map<String, String> siblingStoreUrls = <String, String>{};
-    for (final AppInMemory sibling in appsProvider.apps.listingsForPackage(
-      appId,
-    )) {
-      if (sibling.listingKey == listingKey || sibling.app.url.isEmpty) continue;
-      final String? slotName = _storeSlotNameForUrl(sibling.app.url);
-      if (slotName == null || storeData[slotName] == sibling.app.url) continue;
-      if (slotName == 'GitHub' && !isSwappableGitHubRepoUrl(sibling.app.url)) {
-        continue;
-      }
-      siblingStoreUrls[slotName] = sibling.app.url;
-      storeData[slotName] = sibling.app.url;
-    }
-    if (siblingStoreUrls.isNotEmpty) {
-      await BulkScanCache.save(<String, Map<String, String>>{
-        appId: siblingStoreUrls,
+    if (!mounted) return;
+    final Map<String, String>? entry = await checkAndCacheStoresForListing(
+      Provider.of<AppsProvider>(context, listen: false),
+      listingKey,
+    );
+    if (entry != null && mounted && widget.appId == listingKey) {
+      setState(() {
+        _storeAvailabilityCacheFuture = Future.value(entry);
       });
-    }
-    final apkMirrorIconUrls = <String, String>{};
-
-    final lookups = <String, Future<Map<String, String?>>>{};
-
-    if (!_trackedUrlIsFromHost(trackedUrl, 'apkmirror.com') &&
-        ((storeData['APKMirror'] ?? '').isEmpty || shouldResolveMissingIcon)) {
-      lookups['APKMirror'] = BulkImportService.checkApkMirror([
-        appId,
-      ], resolvedIconUrls: apkMirrorIconUrls);
-    }
-    if (!_trackedUrlIsFromHost(trackedUrl, 'f-droid.org') &&
-        (storeData['F-Droid'] ?? '').isEmpty) {
-      lookups['F-Droid'] = BulkImportService.checkFDroid([appId]);
-    }
-    final String cachedApkPureUrl = storeData['APKPure'] ?? '';
-    if (!_trackedUrlIsFromHost(trackedUrl, 'apkpure.') &&
-        (cachedApkPureUrl.isEmpty ||
-            !isWellFormedApkPureUrl(cachedApkPureUrl))) {
-      // Its own-ID failures re-throw by design; settleStoreLookups is what
-      // keeps one of those from costing the other stores their answers.
-      lookups['APKPure'] = BulkImportService.checkApkPure([appId]);
-    }
-    if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
-        (storeData['PlayStore'] ?? '').isEmpty) {
-      lookups['PlayStore'] = _checkPlayStoreAvailability(
-        appId,
-      ).then((url) => <String, String?>{appId: url});
-    }
-
-    if (lookups.isEmpty && !shouldResolveMissingIcon) return;
-    final entry = Map<String, String>.from(storeData);
-    try {
-      if (lookups.isNotEmpty) {
-        final Map<String, String?> answers = await settleStoreLookups(
-          appId,
-          lookups,
-          onError: (String store, Object error) => unawaited(
-            appsProvider.logs.add(
-              'Store check failed for $appId on $store: $error',
-              level: LogLevel.warning,
-            ),
-          ),
-        );
-        final changedStores = <String, String>{};
-        for (final MapEntry<String, String?> result in answers.entries) {
-          final String existing = entry[result.key] ?? '';
-          // A malformed cached APKPure entry is never usable - a fresh "not
-          // found" (null) result must be allowed to overwrite it with the
-          // empty-string sentinel, not just a fresh URL. Every other store's
-          // cached value is trusted as-is once non-empty.
-          final bool existingIsUsable = result.key == 'APKPure'
-              ? existing.isNotEmpty && isWellFormedApkPureUrl(existing)
-              : existing.isNotEmpty;
-          if (result.value != null || !existingIsUsable) {
-            entry[result.key] = result.value ?? '';
-            changedStores[result.key] = result.value ?? '';
-          }
-        }
-        if (changedStores.isNotEmpty) {
-          await BulkScanCache.save({appId: changedStores});
-        }
-      }
-
-      String? resolvedIconUrl;
-      if (shouldResolveMissingIcon) {
-        resolvedIconUrl = await resolveIconUrlFromOtherStores(
-          apkMirrorIconUrl: apkMirrorIconUrls[appId],
-          apkMirrorListingUrl: entry['APKMirror'],
-          fdroidListingUrl: entry['F-Droid'],
-          apkPureListingUrl: entry['APKPure'],
-          playStoreListingUrl: entry['PlayStore'],
-        );
-      }
-      final AppInMemory? currentApp = appsProvider.apps[listingKey];
-      if (resolvedIconUrl != null &&
-          currentApp != null &&
-          currentApp.icon == null &&
-          currentApp.app.iconUrl?.isNotEmpty != true &&
-          currentApp.app.url == trackedUrl) {
-        await appsProvider.saveApps([
-          currentApp.app.copyWith(iconUrl: resolvedIconUrl),
-        ], updateInstalledInfo: false);
-        await appsProvider.updateAppIcon(listingKey);
-      }
-    } catch (error) {
-      // Callers don't await this, so an error would otherwise go unseen.
-      unawaited(
-        appsProvider.logs.add(
-          'Store scan failed for $appId: $error',
-          level: LogLevel.warning,
-        ),
-      );
-    } finally {
-      // Whatever settled before a failure is still worth showing.
-      if (mounted && widget.appId == listingKey) {
-        setState(() {
-          _storeAvailabilityCacheFuture = Future.value(entry);
-        });
-      }
     }
   }
 
@@ -2481,6 +2550,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   ) async {
     if (await BulkScanCache.loadForApp(packageId) != null) return;
     if (!mounted || widget.appId != listingKey) return;
+    // An automatic update check on open scans once it finishes (see
+    // _runCheckUpdate), so a second scan racing it would only duplicate work.
+    if (_scheduledDetailPageRefresh) return;
     await _maybeCheckAndCacheAllStores(listingKey);
   }
 
@@ -5657,8 +5729,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               body: Stack(
                 fit: StackFit.expand,
                 children: [
-                  RefreshIndicator(
-                    displacement: 20,
+                  // The same pull-to-refresh as the apps list (M3 Expressive
+                  // morphing shape, same default placement), so refreshing
+                  // looks the same on both pages.
+                  ExpressiveRefreshIndicator(
                     child: Stack(
                       fit: StackFit.expand,
                       children: [

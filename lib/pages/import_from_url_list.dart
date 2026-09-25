@@ -6,6 +6,7 @@ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/pages/home.dart' show HomePageState, linkImportIn;
 import 'package:obtainium/pages/import_export.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -19,10 +20,15 @@ class ImportFromUrlListPage extends StatefulWidget {
     super.key,
     this.embedded = false,
     this.onImportCompleted,
+    this.openLink,
   });
 
   final bool embedded;
   final Future<void> Function()? onImportCompleted;
+
+  /// The home page's link import ([HomePageState.openObtainiumLink]). With
+  /// it, the box also takes app links and their JSON (see [linkImportIn]).
+  final Future<void> Function(Uri link, {VoidCallback? onLeave})? openLink;
 
   @override
   State<ImportFromUrlListPage> createState() => _ImportFromUrlListPageState();
@@ -39,8 +45,12 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
     super.dispose();
   }
 
+  Uri? _linkImport(String text) =>
+      widget.openLink == null ? null : linkImportIn(text);
+
   String? _validateUrls(String? value) {
     if (value == null || value.trim().isEmpty) return null;
+    if (_linkImport(value) != null) return null;
     final List<String> lines = value.trim().split('\n');
     for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
       try {
@@ -88,7 +98,43 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
     }
   }
 
+  // Goes through the same import as a link another app sent: the picker sheet,
+  // and never overwriting a tracked app. The text stays until the import goes
+  // ahead, so cancelling the sheet loses nothing.
+  Future<void> _importLink(Uri link) async {
+    final bool embedded = widget.embedded;
+    final Future<void> Function()? onImportCompleted = widget.onImportCompleted;
+    final NavigatorState navigator = Navigator.of(context);
+    final ModalRoute<dynamic>? hostRoute = ModalRoute.of(context);
+    setState(() {
+      _isImporting = true;
+    });
+    try {
+      await widget.openLink!(
+        link,
+        onLeave: () {
+          if (embedded) {
+            unawaited(onImportCompleted?.call());
+          } else if (navigator.mounted && hostRoute?.isCurrent == true) {
+            navigator.pop();
+          }
+        },
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isImporting = false;
+        });
+      }
+    }
+  }
+
   Future<void> _import() async {
+    final Uri? link = _linkImport(_urlController.text);
+    if (link != null) {
+      await _importLink(link);
+      return;
+    }
     final List<String> urls = _urls();
     if (urls.isEmpty || _validateUrls(_urlController.text) != null) return;
     final AppsProvider appsProvider = context.read<AppsProvider>();
@@ -190,6 +236,10 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
                                 enabled: !_isImporting,
                                 decoration: InputDecoration(
                                   labelText: tr('appURLList'),
+                                  helperText: widget.openLink == null
+                                      ? null
+                                      : tr('appURLListTakesLinks'),
+                                  helperMaxLines: 3,
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(24),
                                   ),
