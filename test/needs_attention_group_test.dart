@@ -4,6 +4,7 @@ import 'package:easy_localization/src/translations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -92,6 +93,31 @@ void main() {
       null,
       icon,
     );
+    const App blockedBase = App(
+      id: 'org.example.blocked',
+      url: 'https://github.com/example/blocked',
+      name: 'Blocked',
+      author: 'Example',
+      installedVersion: '1.0',
+      latestVersion: '1.0',
+      preferredApkIndex: 0,
+      additionalSettings: {'apkFilterRegEx': r'-arm64\.apk$'},
+      categories: ['Tools'],
+    );
+    final Map<String, dynamic> blockedSettings = Map<String, dynamic>.from(
+      blockedBase.additionalSettings,
+    );
+    setNeedsAttention(
+      blockedSettings,
+      needsAttentionVersionFilter,
+      detail: releaseFilterFingerprint(blockedBase),
+    );
+    provider.apps['blocked'] = AppInMemory(
+      blockedBase.copyWith(additionalSettings: blockedSettings),
+      null,
+      null,
+      icon,
+    );
   });
 
   tearDown(() {
@@ -131,13 +157,18 @@ void main() {
         )
         .toList();
     expect(groupHeaders.first.title, tr('needsAttention'));
-    expect(groupHeaders.first.count, 1);
+    expect(groupHeaders.first.count, 2);
     expect(
       groupHeaders.map((header) => header.title),
       isNot(contains('Tools')),
     );
     expect(find.text('Media'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('needsAttentionListDivider')),
+      findsNothing,
+    );
     expect(find.text('Moved'), findsOneWidget);
+    expect(find.text('Blocked'), findsOneWidget);
     expect(find.text('Steady'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Moved')).dy,
@@ -159,17 +190,42 @@ void main() {
         .toList();
     expect(groupHeaders, hasLength(1));
     expect(groupHeaders.single.title, tr('needsAttention'));
-    expect(groupHeaders.single.count, 1);
+    expect(groupHeaders.single.count, 2);
     expect(find.text('Moved'), findsOneWidget);
+    expect(find.text('Blocked'), findsOneWidget);
     expect(find.text('Steady'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Needs attention')).dy,
       lessThan(tester.getTopLeft(find.text('Moved')).dy),
     );
+    final divider = find.byKey(const ValueKey('needsAttentionListDivider'));
+    expect(divider, findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Moved')).dy,
+      lessThan(tester.getTopLeft(divider).dy),
+    );
+    expect(
+      tester.getTopLeft(divider).dy,
       lessThan(tester.getTopLeft(find.text('Steady')).dy),
     );
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test('a stored filter miss explains itself', () {
+    final App blocked = provider.apps['org.example.blocked']!.app;
+    final notice = needsAttentionPageNotice(blocked);
+    expect(notice?.title, tr('needsAttention'));
+    expect(notice?.message, tr('needsAttentionVersionFilter'));
+    expect(
+      needsAttentionPageNotice(
+        blocked.copyWith(
+          additionalSettings: {
+            ...blocked.additionalSettings,
+            'apkFilterRegEx': r'-other\.apk$',
+          },
+        ),
+      ),
+      isNull,
+    );
   });
 }

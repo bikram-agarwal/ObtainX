@@ -851,6 +851,24 @@ class _DownloadProgressAction extends StatelessWidget {
 
 enum _UnsavedAction { keepEditing, discard, saveAndExit }
 
+({String title, String message})? needsAttentionPageNotice(App? app) {
+  if (app == null || !appHasBlockingAttention(app)) return null;
+  final String code =
+      app.additionalSettings[needsAttentionCodeKey]?.toString() ?? '';
+  final String detail =
+      app.additionalSettings[needsAttentionDetailKey]?.toString() ?? '';
+  final String message = switch (code) {
+    needsAttentionVersionFilter => tr('needsAttentionVersionFilter'),
+    needsAttentionIdChanged => tr('needsAttentionIdChanged', args: [detail]),
+    needsAttentionInstallIncompatible => tr(
+      'needsAttentionInstallIncompatible',
+    ),
+    _ => '',
+  };
+  if (message.isEmpty) return null;
+  return (title: tr('needsAttention'), message: message);
+}
+
 class AppPage extends StatefulWidget {
   const AppPage({
     super.key,
@@ -1602,7 +1620,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   }
 
   void _showPageMessage(dynamic message) {
-    showMessage(message, theme: _cachedPageTheme);
+    showMessage(
+      message,
+      theme: _cachedPageTheme,
+      scaffoldHasBottomBar: !widget.isEmbedded,
+    );
   }
 
   Widget _buildPersistentPageError(
@@ -2041,76 +2063,25 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 // Min tap target has a height of 48dp
                 vertical: 10 - 4,
               ),
-              child: Row(
-                spacing: 12,
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      style: ButtonStyle(
-                        backgroundColor: WidgetStateProperty.fromMap({
-                          WidgetState.disabled: colorScheme.onSurface
-                              .withValues(alpha: 0.10),
-                          WidgetState.any: Colors.transparent,
-                        }),
-                        side: WidgetStatePropertyAll(
-                          BorderSide(
-                            width: 1,
-                            strokeAlign: BorderSide.strokeAlignInside,
-                            color: colorScheme.outlineVariant,
-                          ),
-                        ),
-                        elevation: const WidgetStatePropertyAll(0),
-                        overlayColor: WidgetStateProperty.fromMap({
-                          WidgetState.disabled: colorScheme.onSurfaceVariant
-                              .withAlpha(0),
-                          WidgetState.pressed: colorScheme.onSurfaceVariant
-                              .withValues(alpha: 0.10),
-                          WidgetState.focused: colorScheme.onSurfaceVariant
-                              .withValues(alpha: 0.10),
-                          WidgetState.hovered: colorScheme.onSurfaceVariant
-                              .withValues(alpha: 0.08),
-                          WidgetState.any: colorScheme.onSurfaceVariant
-                              .withAlpha(0),
-                        }),
-                        foregroundColor: WidgetStateProperty.fromMap({
-                          WidgetState.disabled: colorScheme.onSurface
-                              .withValues(alpha: 0.38),
-                          WidgetState.any: colorScheme.onSurfaceVariant,
-                        }),
-                        textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
-                      ),
-                      onPressed: () async {
-                        await appsProvider.updatePendingRepoRename(
-                          appValue.listingKey,
-                          null,
-                        );
-                      },
-                      child: Text(tr('dismiss')),
-                    ),
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  elevation: 0,
+                  backgroundColor: colorScheme.primary,
+                  foregroundColor: colorScheme.onPrimary,
+                  textStyle: textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
                   ),
-                  Expanded(
-                    child: FilledButton.tonal(
-                      style: ButtonStyle(
-                        elevation: const WidgetStatePropertyAll(0),
-                        textStyle: WidgetStatePropertyAll(
-                          textTheme.labelLarge?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      onPressed: () async {
-                        await appsProvider.acceptRepoRename(
-                          appValue.listingKey,
-                          pendingUrl,
-                        );
-                        if (mounted) {
-                          unawaited(onUpdate(appValue.listingKey));
-                        }
-                      },
-                      child: Text(tr('updateUrl')),
-                    ),
-                  ),
-                ],
+                ),
+                onPressed: () async {
+                  await appsProvider.acceptRepoRename(
+                    appValue.listingKey,
+                    pendingUrl,
+                  );
+                  if (mounted) {
+                    unawaited(onUpdate(appValue.listingKey));
+                  }
+                },
+                child: Text(tr('updateUrl')),
               ),
             ),
           ),
@@ -3151,10 +3122,20 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             settingsProvider,
           )
         : null;
+    final ({String title, String message})? storedAttention =
+        needsAttentionPageNotice(app?.app);
+    final bool showingStoredAttention =
+        buildVerificationPersistentPageError == null &&
+        persistentPageError == null &&
+        storedAttention != null;
     final String? effectivePersistentPageError =
-        buildVerificationPersistentPageError ?? persistentPageError?.message;
+        buildVerificationPersistentPageError ??
+        persistentPageError?.message ??
+        storedAttention?.message;
     final String? effectivePersistentPageErrorTitle =
-        buildVerificationPersistentPageError ?? persistentPageError?.title;
+        buildVerificationPersistentPageError ??
+        persistentPageError?.title ??
+        (showingStoredAttention ? storedAttention.title : null);
 
     final Uint8List? iconBytes = app?.icon;
     final Brightness themeBrightness = Theme.of(context).brightness;
@@ -5351,7 +5332,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         ),
       );
       return Padding(
-        padding: const EdgeInsets.only(right: 16, bottom: 8),
+        padding: const EdgeInsets.only(right: 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -5422,17 +5403,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 ),
               ],
             ),
-            if (!_editMode && app?.app.hasPendingRepoRename == true)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: _buildRepoRenameWarning(
-                  app: app,
-                  appsProvider: appsProvider,
-                  onUpdate: (String listingKey) async {
-                    await _runCheckUpdate(listingKey);
-                  },
-                ),
-              ),
           ],
         ),
       );
@@ -5811,6 +5781,27 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                                           ),
                                         ],
                                       ),
+                                      const SizedBox(height: 8),
+                                      if (!_editMode &&
+                                          app?.app.hasPendingRepoRename == true)
+                                        Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            16,
+                                            0,
+                                            16,
+                                            8,
+                                          ),
+                                          child: _buildRepoRenameWarning(
+                                            app: app,
+                                            appsProvider: appsProvider,
+                                            onUpdate:
+                                                (String listingKey) async {
+                                                  await _runCheckUpdate(
+                                                    listingKey,
+                                                  );
+                                                },
+                                          ),
+                                        ),
                                       if (_editMode && app != null)
                                         _buildEditMetadataSection(
                                           themedPageContext,

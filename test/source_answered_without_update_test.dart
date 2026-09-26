@@ -79,6 +79,11 @@ void main() {
       expect(app.lastUpdateCheck, checkedAt);
       // The user's own settings survive.
       expect(app.additionalSettings['apkFilterRegEx'], _filter);
+      expect(appNeedsAttention(app), isTrue);
+      expect(
+        app.additionalSettings[needsAttentionCodeKey],
+        needsAttentionVersionFilter,
+      );
     });
 
     test('reads as newer on device, with nothing to install', () {
@@ -118,6 +123,7 @@ void main() {
       expect(appHasNoMatchingRelease(found!), isFalse);
       expect(found.latestVersion, 'v1.9.1');
       expect(found.apkUrls, hasLength(2));
+      expect(appNeedsAttention(found), isFalse);
     });
 
     test('an unreadable version only moves the check time', () {
@@ -131,6 +137,55 @@ void main() {
       expect(appHasNoMatchingRelease(app), isFalse);
       expect(app.latestVersion, 'v1.8.0');
       expect(app.lastUpdateCheck, checkedAt);
+      expect(appNeedsAttention(app), isFalse);
+    });
+
+    test('a version extraction regex miss stays flagged', () {
+      final App source = _previouslyFetched().copyWith(
+        additionalSettings: {
+          'apkFilterRegEx': _filter,
+          'versionExtractionRegEx': r'v(\d+)',
+        },
+      );
+      final App app = appAfterAnswerWithoutUpdate(
+        source,
+        NoVersionError(),
+        checkedAt,
+      );
+
+      expect(appNeedsAttention(app), isTrue);
+      expect(app.latestVersion, 'v1.8.0');
+    });
+
+    test('editing the filter drops the app before the next check', () {
+      final App flagged = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(),
+        NoReleasesError(),
+        checkedAt,
+      );
+      final App edited = flagged.copyWith(
+        additionalSettings: {
+          ...flagged.additionalSettings,
+          'apkFilterRegEx': r'-other\.apk$',
+        },
+      );
+
+      expect(appNeedsAttention(edited), isFalse);
+    });
+
+    test('allowing a package id change drops a stored mismatch', () {
+      final App mismatched = _previouslyFetched().copyWith(
+        additionalSettings: {
+          needsAttentionCodeKey: needsAttentionIdChanged,
+          needsAttentionDetailKey: 'dev.bikram.remember',
+        },
+      );
+
+      expect(appNeedsAttention(mismatched), isTrue);
+      expect(
+        appNeedsAttention(mismatched.copyWith(allowIdChange: true)),
+        isFalse,
+      );
     });
   });
 

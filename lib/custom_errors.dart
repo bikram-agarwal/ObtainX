@@ -335,13 +335,23 @@ class CancellationException implements Exception {
 
 // Fork-only UI helpers: surface an error/message as a snackbar (recoverable)
 // or a copyable dialog (unexpected). Used across the fork's pages.
-void showMessage(dynamic e, {bool isError = false, ThemeData? theme}) {
+void showMessage(
+  dynamic e, {
+  bool isError = false,
+  ThemeData? theme,
+  bool scaffoldHasBottomBar = false,
+}) {
   final ScaffoldMessengerState? messenger = scaffoldMessengerKey.currentState;
   if (e is CancellationException) {
     unawaited(LogsProvider().add(e.toString(), level: LogLevel.info));
     if (messenger != null) {
       messenger.showSnackBar(
-        buildAppSnackBar(messenger.context, e.toString(), theme: theme),
+        buildAppSnackBar(
+          messenger.context,
+          e.toString(),
+          theme: theme,
+          scaffoldHasBottomBar: scaffoldHasBottomBar,
+        ),
       );
     }
     return;
@@ -360,6 +370,7 @@ void showMessage(dynamic e, {bool isError = false, ThemeData? theme}) {
           e.toString(),
           type: isError ? ToastType.error : ToastType.info,
           theme: theme,
+          scaffoldHasBottomBar: scaffoldHasBottomBar,
         ),
       );
     }

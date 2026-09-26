@@ -408,6 +408,40 @@ extension AppsProviderInstall on AppsProvider {
     }
   }
 
+  Future<void> _rememberBlockingAttention(
+    String listingKey,
+    String code, {
+    String? detail,
+  }) async {
+    final AppInMemory? listing = apps[listingKey];
+    if (listing == null) return;
+    final Map<String, dynamic> settings = Map<String, dynamic>.from(
+      listing.app.additionalSettings,
+    );
+    setNeedsAttention(settings, code, detail: detail);
+    listing.app = listing.app.copyWith(additionalSettings: settings);
+    await saveApps(
+      [listing.app],
+      attemptToCorrectInstallStatus: false,
+      updateInstalledInfo: false,
+    );
+  }
+
+  Future<Never> _throwRecordedInstallError(
+    String listingKey,
+    int errorCode,
+  ) async {
+    final InstallError installError = InstallError(errorCode);
+    final String message = installError.data['message']?.toString() ?? '';
+    if (message.contains('INCOMPATIBLE')) {
+      await _rememberBlockingAttention(
+        listingKey,
+        needsAttentionInstallIncompatible,
+      );
+    }
+    throw installError;
+  }
+
   /// Returns the renamed file and the resolved app; callers must use the
   /// returned app's ID since [App] is immutable.
   Future<(File, App)> handleAPKIDChange(
@@ -425,6 +459,11 @@ extension AppsProviderInstall on AppsProvider {
         throw ObtainiumError(tr('couldNotGetIdFromApk'))..url = app.url;
       }
       if (apps[app.listingKey] != null && !isTempIdBool && !app.allowIdChange) {
+        await _rememberBlockingAttention(
+          app.listingKey,
+          needsAttentionIdChanged,
+          detail: actualPackageName,
+        );
         throw IDChangedError(actualPackageName)..url = app.url;
       }
       final idChangeWasAllowed = app.allowIdChange;
@@ -987,7 +1026,7 @@ extension AppsProviderInstall on AppsProvider {
             _awaitThirdPartyInstallConfirmation(dir.appId);
           }
           if (result.isError) {
-            throw InstallError(result.errorCode ?? -1);
+            await _throwRecordedInstallError(dir.appId, result.errorCode ?? -1);
           }
           if (result.isSuccess) {
             somethingInstalled = true;
@@ -1222,7 +1261,7 @@ extension AppsProviderInstall on AppsProvider {
       }
     }
     if (result.isError) {
-      throw InstallError(result.errorCode!);
+      await _throwRecordedInstallError(file.appId, result.errorCode!);
     }
     final AppInMemory? entryToSave = apps[file.appId];
     if (installed && entryToSave != null) {

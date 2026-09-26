@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:crypto/crypto.dart';
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
 const observedVersionNameKey = 'observedVersionName';
@@ -19,8 +20,98 @@ const trackedDeviceStateVersionKey = 'trackedDeviceStateVersion';
 /// check that finds one drops it.
 const noMatchingReleaseKey = 'noMatchingRelease';
 
+/// Last blocking problem that should keep the app in Needs attention.
+/// Cleared when a later check or install resolves it, or when the setting
+/// that caused a filter miss is edited.
+const needsAttentionCodeKey = 'needsAttentionCode';
+const needsAttentionDetailKey = 'needsAttentionDetail';
+
+const needsAttentionVersionFilter = 'versionFilter';
+const needsAttentionIdChanged = 'idChanged';
+const needsAttentionInstallIncompatible = 'installIncompatible';
+
+const List<String> _releaseFilterSettingKeys = [
+  'apkFilterRegEx',
+  'filterReleaseTitlesByRegEx',
+  'filterReleaseNotesByRegEx',
+  'filterVersionsByRegEx',
+  'customLinkFilterRegex',
+  'zippedApkFilterRegEx',
+  'tarballedApkFilterRegEx',
+  'versionExtractionRegEx',
+];
+
 bool appHasNoMatchingRelease(App app) =>
     app.additionalSettings[noMatchingReleaseKey] == true;
+
+String releaseFilterFingerprint(App app) => _releaseFilterSettingKeys
+    .map((String key) => app.additionalSettings[key]?.toString() ?? '')
+    .join('\n');
+
+/// A check error caused by the user's version or file filter, not by the
+/// source simply having nothing yet.
+bool checkErrorNeedsAttention(App app, Object error) {
+  if (error is NoVersionError) {
+    final String extraction =
+        app.additionalSettings['versionExtractionRegEx']?.toString().trim() ??
+        '';
+    final String versionFilter =
+        app.additionalSettings['filterVersionsByRegEx']?.toString().trim() ??
+        '';
+    return extraction.isNotEmpty || versionFilter.isNotEmpty;
+  }
+  if (error is NoAPKError || error is NoReleasesError) {
+    for (final String key in _releaseFilterSettingKeys) {
+      if (key == 'versionExtractionRegEx') continue;
+      final String value = app.additionalSettings[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return true;
+    }
+  }
+  return false;
+}
+
+void setNeedsAttention(
+  Map<String, dynamic> settings,
+  String code, {
+  String? detail,
+}) {
+  settings[needsAttentionCodeKey] = code;
+  if (detail == null || detail.isEmpty) {
+    settings.remove(needsAttentionDetailKey);
+  } else {
+    settings[needsAttentionDetailKey] = detail;
+  }
+}
+
+void clearNeedsAttentionCode(Map<String, dynamic> settings, String code) {
+  if (settings[needsAttentionCodeKey] != code) return;
+  settings.remove(needsAttentionCodeKey);
+  settings.remove(needsAttentionDetailKey);
+}
+
+void clearNeedsAttention(Map<String, dynamic> settings) {
+  settings.remove(needsAttentionCodeKey);
+  settings.remove(needsAttentionDetailKey);
+}
+
+bool appHasBlockingAttention(App app) {
+  final String? code = app.additionalSettings[needsAttentionCodeKey]
+      ?.toString();
+  switch (code) {
+    case needsAttentionVersionFilter:
+      return app.additionalSettings[needsAttentionDetailKey]?.toString() ==
+          releaseFilterFingerprint(app);
+    case needsAttentionIdChanged:
+      return app.allowIdChange != true;
+    case needsAttentionInstallIncompatible:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool appNeedsAttention(App app) =>
+    app.hasPendingRepoRename || appHasBlockingAttention(app);
 
 /// [app] as its source last answered, at [checkedAt]: with nothing matching.
 ///
@@ -564,6 +655,7 @@ App recordConfirmedInstall(
     ..[observedVersionCodeKey] = info.versionCode
     ..remove(confirmedInstallReleaseKey)
     ..remove('unreconciledVersionComparison');
+  clearNeedsAttention(settings);
   final pending = InstallReleaseSnapshot.fromJson(
     settings[pendingInstallReleaseKey],
   );

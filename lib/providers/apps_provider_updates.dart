@@ -197,6 +197,7 @@ App? mergeFetchedUpdateWithLiveState({
     ..remove(sourceVersionCodesKey)
     // This answer found a release.
     ..remove(noMatchingReleaseKey);
+  clearNeedsAttentionCode(settings, needsAttentionVersionFilter);
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
@@ -475,6 +476,7 @@ App? mergeTrackedSourceSwap({
         ..remove(sourceVersionCodesKey)
         // The new source found a release.
         ..remove(noMatchingReleaseKey);
+  clearNeedsAttentionCode(settings, needsAttentionVersionFilter);
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
@@ -542,8 +544,22 @@ bool sourceAnsweredWithoutUpdate(Object error) =>
 App appAfterAnswerWithoutUpdate(App app, Object error, DateTime checkedAt) {
   // A release exists and only its version couldn't be read, so keep what is
   // known instead of claiming the source has nothing.
-  if (error is NoVersionError) return app.copyWith(lastUpdateCheck: checkedAt);
-  return appWithNoMatchingRelease(app, checkedAt);
+  final App updated = error is NoVersionError
+      ? app.copyWith(lastUpdateCheck: checkedAt)
+      : appWithNoMatchingRelease(app, checkedAt);
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    updated.additionalSettings,
+  );
+  if (checkErrorNeedsAttention(app, error)) {
+    setNeedsAttention(
+      settings,
+      needsAttentionVersionFilter,
+      detail: releaseFilterFingerprint(app),
+    );
+  } else {
+    clearNeedsAttentionCode(settings, needsAttentionVersionFilter);
+  }
+  return updated.copyWith(additionalSettings: settings);
 }
 
 /// Update checking and pending-update bookkeeping for [AppsProvider].

@@ -4263,7 +4263,7 @@ class AppsPageState extends State<AppsPage> {
     final separateUpdates = _effectiveGroupUpdatesSeparately(settingsProvider);
     bool isInUpdatesGroup(AppInMemory entry) =>
         separateUpdates &&
-        !entry.app.hasPendingRepoRename &&
+        !appNeedsAttention(entry.app) &&
         _existingUpdatesCache.contains(entry.listingKey) &&
         (widget.onDemandOnlyList ||
             entry.app.additionalSettings['onDemandOnly'] != true);
@@ -4339,7 +4339,7 @@ class AppsPageState extends State<AppsPage> {
     List<AppInMemory> appsForGroups(List<AppInMemory> source) => source
         .where(
           (e) =>
-              !e.app.hasPendingRepoRename &&
+              !appNeedsAttention(e.app) &&
               !(segregateNonInstalled && e.app.installedVersion == null) &&
               !(segregateTrackOnly &&
                   e.app.additionalSettings['trackOnly'] == true) &&
@@ -4393,7 +4393,7 @@ class AppsPageState extends State<AppsPage> {
             listingIndex++
           ) {
             final AppInMemory row = listedApps[listingIndex];
-            if (row.app.hasPendingRepoRename) continue;
+            if (appNeedsAttention(row.app)) continue;
             if (segregateNonInstalled && row.app.installedVersion == null) {
               continue;
             }
@@ -4450,7 +4450,7 @@ class AppsPageState extends State<AppsPage> {
             listingIndex++
           ) {
             final AppInMemory row = listedApps[listingIndex];
-            if (row.app.hasPendingRepoRename) continue;
+            if (appNeedsAttention(row.app)) continue;
             if (segregateNonInstalled && row.app.installedVersion == null) {
               continue;
             }
@@ -4495,7 +4495,7 @@ class AppsPageState extends State<AppsPage> {
             listingIndex++
           ) {
             final AppInMemory row = listedApps[listingIndex];
-            if (row.app.hasPendingRepoRename) continue;
+            if (appNeedsAttention(row.app)) continue;
             if (segregateNonInstalled && row.app.installedVersion == null) {
               continue;
             }
@@ -4528,7 +4528,7 @@ class AppsPageState extends State<AppsPage> {
           listingIndex++
         ) {
           final AppInMemory row = listedApps[listingIndex];
-          if (row.app.hasPendingRepoRename) continue;
+          if (appNeedsAttention(row.app)) continue;
           if (segregateNonInstalled && row.app.installedVersion == null) {
             continue;
           }
@@ -4550,10 +4550,10 @@ class AppsPageState extends State<AppsPage> {
         _updateStatusGroupListedIndices = const {};
       }
 
-      // Group membership is a strict hierarchy — each app lands in at most one
+      // Group membership is a strict hierarchy - each app lands in at most one
       // of these groups: Needs attention > Updates > Track-only > Not-installed.
-      // A pending repository move therefore never also shows under Updates,
-      // Track-only, or Not-installed.
+      // A pending repository move or stored blocking error therefore never
+      // also shows under Updates, Track-only, or Not-installed.
       final nonInstalled = <int>[];
       final trackOnlyList = <int>[];
       for (
@@ -4563,7 +4563,7 @@ class AppsPageState extends State<AppsPage> {
       ) {
         final AppInMemory row = listedApps[listingIndex];
         // Needs attention and Updates outrank Track-only and Not-installed.
-        if (row.app.hasPendingRepoRename || isInUpdatesGroup(row)) continue;
+        if (appNeedsAttention(row.app) || isInUpdatesGroup(row)) continue;
         final isTrackOnly = row.app.additionalSettings['trackOnly'] == true;
         if (isTrackOnly) {
           if (segregateTrackOnly) {
@@ -4598,7 +4598,7 @@ class AppsPageState extends State<AppsPage> {
         listingIndex < listedApps.length;
         listingIndex++
       ) {
-        if (listedApps[listingIndex].app.hasPendingRepoRename) {
+        if (appNeedsAttention(listedApps[listingIndex].app)) {
           needsAttentionIndices.add(listingIndex);
         }
       }
@@ -6080,7 +6080,7 @@ class AppsPageState extends State<AppsPage> {
           listingIndex < listedApps.length;
           listingIndex++
         )
-          if (!listedApps[listingIndex].app.hasPendingRepoRename &&
+          if (!appNeedsAttention(listedApps[listingIndex].app) &&
               !isInUpdatesGroup(listedApps[listingIndex]))
             listingIndex,
       ];
@@ -6096,16 +6096,25 @@ class AppsPageState extends State<AppsPage> {
           ),
         ];
       }
-      final bool groupAboveFlatList =
-          showNeedsAttentionGroupSection ||
-          (showUpdatesGroupSection && pinUpdatesEnabled);
+      final String folderPrefix = widget.folderId != null
+          ? 'folder_${widget.folderId}_'
+          : '';
+      final bool needsAttentionExpanded = !_collapsedGroups.contains(
+        '${folderPrefix}__needsAttention__',
+      );
+      final bool showNeedsAttentionDivider =
+          groupBy == AppsListGroupBy.none &&
+          showNeedsAttentionGroupSection &&
+          needsAttentionExpanded &&
+          (flatIndices.isNotEmpty || showUpdatesGroupSection);
       final flatSliverList = SliverList(
         delegate: SliverChildBuilderDelegate((context, index) {
           return flatListAppRow(
             flatIndices[index],
             index,
             flatIndices.length,
-            spacerBeforeFirstRow: groupAboveFlatList && index == 0,
+            spacerBeforeFirstRow:
+                showUpdatesGroupSection && pinUpdatesEnabled && index == 0,
             spacerAfterLastRow:
                 showUpdatesGroupSection &&
                 !pinUpdatesEnabled &&
@@ -6115,6 +6124,18 @@ class AppsPageState extends State<AppsPage> {
       );
       return [
         if (showNeedsAttentionGroupSection) getNeedsAttentionCollapsibleTile(),
+        if (showNeedsAttentionDivider)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+              child: Divider(
+                key: const ValueKey('needsAttentionListDivider'),
+                height: 1,
+                thickness: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+          ),
         if (showUpdatesGroupSection && pinUpdatesEnabled)
           getUpdatesCollapsibleTile(),
         if (flatIndices.isNotEmpty) flatSliverList,
@@ -7196,6 +7217,9 @@ class AppsPageState extends State<AppsPage> {
         }
       } else if (!isCollapsed) {
         offset += _needsAttentionListedIndices.length * itemHeight;
+        if (groupBy == AppsListGroupBy.none) {
+          offset += 19;
+        }
       }
     }
 
