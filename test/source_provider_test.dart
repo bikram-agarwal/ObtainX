@@ -149,6 +149,66 @@ class _StubFDroid extends FDroid {
   }
 }
 
+class _CountingFDroid extends FDroid {
+  _CountingFDroid(this.pageHtml, {this.pageStatusCode = 200});
+
+  final String pageHtml;
+  final int pageStatusCode;
+  int pageRequestCount = 0;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    pageRequestCount++;
+    return Response(pageHtml, pageStatusCode);
+  }
+}
+
+const String _rethinkAbiPageHtml = '''
+<ul>
+<li class="package-version">
+  <div class="package-version-header">
+    <a name="v0.5.7"></a>
+    <a name="699"></a>
+  </div>
+  <code class="package-nativecode">x86_64</code>
+</li>
+<li class="package-version">
+  <div class="package-version-header">
+    <a name="v0.5.7"></a>
+    <a name="693"></a>
+  </div>
+  <code class="package-nativecode">arm64-v8a</code>
+</li>
+<li class="package-version">
+  <div class="package-version-header">
+    <a name="v0.5.7"></a>
+    <a name="692"></a>
+  </div>
+  <code class="package-nativecode">armeabi-v7a</code>
+</li>
+</ul>
+''';
+
+Response _rethinkPackagesResponse() {
+  return Response(
+    jsonEncode({
+      'packageName': 'com.celzero.bravedns',
+      'suggestedVersionCode': 699,
+      'packages': [
+        {'versionName': 'v0.5.7', 'versionCode': 699},
+        {'versionName': 'v0.5.7', 'versionCode': 693},
+        {'versionName': 'v0.5.7', 'versionCode': 692},
+      ],
+    }),
+    200,
+  );
+}
+
 class _StubFDroidVerification extends FDroid {
   _StubFDroidVerification(this.verificationResponses);
 
@@ -1248,6 +1308,130 @@ void main() {
           );
 
       expect(details.names.name, 'NewPipe');
+    },
+  );
+
+  test(
+    'F-Droid prefers the device ABI over the suggested version code',
+    () async {
+      final details = await _CountingFDroid(_rethinkAbiPageHtml)
+          .getAPKUrlsFromFDroidPackagesAPIResponse(
+            _rethinkPackagesResponse(),
+            'https://f-droid.org/repo/com.celzero.bravedns',
+            'https://f-droid.org/packages/com.celzero.bravedns',
+            'F-Droid',
+            additionalSettings: <String, dynamic>{
+              'trySelectingSuggestedVersionCode': true,
+            },
+          );
+
+      expect(details.apkUrls, hasLength(1));
+      expect(
+        details.apkUrls.single.value,
+        'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+      );
+      expect(details.versionCode, 693);
+    },
+  );
+
+  test('F-Droid rechecks ABI when the version name is unchanged', () async {
+    final source = _CountingFDroid(_rethinkAbiPageHtml);
+    source.previouslyCheckedApp = const App(
+      id: 'com.celzero.bravedns',
+      url: 'https://f-droid.org/packages/com.celzero.bravedns',
+      author: 'F-Droid',
+      name: 'Rethink',
+      latestVersion: 'v0.5.7',
+      apkUrls: <MapEntry<String, String>>[
+        MapEntry(
+          'com.celzero.bravedns_699.apk',
+          'https://f-droid.org/repo/com.celzero.bravedns_699.apk',
+        ),
+      ],
+      preferredApkIndex: 0,
+      additionalSettings: <String, dynamic>{
+        'trySelectingSuggestedVersionCode': true,
+      },
+      rawLatestVersionFromSource: 'v0.5.7',
+    );
+
+    final details = await source.getAPKUrlsFromFDroidPackagesAPIResponse(
+      _rethinkPackagesResponse(),
+      'https://f-droid.org/repo/com.celzero.bravedns',
+      'https://f-droid.org/packages/com.celzero.bravedns',
+      'F-Droid',
+      additionalSettings: <String, dynamic>{
+        'trySelectingSuggestedVersionCode': true,
+      },
+    );
+
+    expect(source.pageRequestCount, 1);
+    expect(
+      details.apkUrls.single.value,
+      'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+    );
+  });
+
+  test(
+    'F-Droid does not replace a saved APK with the suggested build when ABI data is missing',
+    () async {
+      final source = _CountingFDroid('', pageStatusCode: 404);
+      source.previouslyCheckedApp = const App(
+        id: 'com.celzero.bravedns',
+        url: 'https://f-droid.org/packages/com.celzero.bravedns',
+        author: 'F-Droid',
+        name: 'Rethink',
+        latestVersion: 'v0.5.7',
+        apkUrls: <MapEntry<String, String>>[
+          MapEntry(
+            'com.celzero.bravedns_693.apk',
+            'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+          ),
+        ],
+        preferredApkIndex: 0,
+        additionalSettings: <String, dynamic>{},
+        rawLatestVersionFromSource: 'v0.5.7',
+      );
+
+      final details = await source.getAPKUrlsFromFDroidPackagesAPIResponse(
+        _rethinkPackagesResponse(),
+        'https://f-droid.org/repo/com.celzero.bravedns',
+        'https://f-droid.org/packages/com.celzero.bravedns',
+        'F-Droid',
+        additionalSettings: <String, dynamic>{
+          'trySelectingSuggestedVersionCode': true,
+        },
+      );
+
+      expect(
+        details.apkUrls.single.value,
+        'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+      );
+    },
+  );
+
+  test(
+    'F-Droid keeps every ABI choice when suggested selection has no architecture data',
+    () async {
+      final details = await _CountingFDroid('', pageStatusCode: 404)
+          .getAPKUrlsFromFDroidPackagesAPIResponse(
+            _rethinkPackagesResponse(),
+            'https://f-droid.org/repo/com.celzero.bravedns',
+            'https://f-droid.org/packages/com.celzero.bravedns',
+            'F-Droid',
+            additionalSettings: <String, dynamic>{
+              'trySelectingSuggestedVersionCode': true,
+            },
+          );
+
+      expect(
+        details.apkUrls.map((apk) => apk.value),
+        containsAll(<String>[
+          'https://f-droid.org/repo/com.celzero.bravedns_699.apk',
+          'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+          'https://f-droid.org/repo/com.celzero.bravedns_692.apk',
+        ]),
+      );
     },
   );
 

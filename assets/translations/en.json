@@ -660,6 +660,7 @@
     "groupTrackOnlySeparately": "Group track-only apps separately",
     "groupUpdatesSeparately": "Group updates separately",
     "updatesGroup": "Updates",
+    "needsAttention": "Needs attention",
     "pickApkSaveDir": "Pick APK save folder",
     "saveDownloadedApkCopies": "Save downloaded assets to the folder",
     "apkSaveFolderDescription": "Downloaded update assets (e.g. APKs) will be saved here.",

@@ -590,11 +590,11 @@ class FDroid extends AppSource {
         throw NoReleasesError();
       }
       final App? prevApp = previouslyCheckedApp;
-      // Skip the per-check APK-size HEAD and the package-page fetch (icon/
-      // name/nativecode) when the upstream version is unchanged since the
-      // last check. getApp() reuses the previous apkSizeBytes / iconUrl /
-      // name / release selection in that case, so these network round-trips
-      // would just be wasted work on a no-op refresh.
+      // Skip the icon/name page work and the APK-size HEAD when the upstream
+      // version is unchanged. Several version codes can still share that
+      // version name (one per ABI), so the package page is fetched anyway in
+      // that case: its nativecode list is what stops F-Droid's suggested
+      // versionCode, often an x86_64 build, from replacing a compatible APK.
       final bool versionUnchanged =
           prevApp != null &&
           prevApp.rawLatestVersionFromSource != null &&
@@ -627,7 +627,8 @@ class FDroid extends AppSource {
           pageHost == 'f-droid.org' ||
           pageHost == 'www.f-droid.org';
       Map<int, List<String>>? nativecodeByVersionCode;
-      if (canUseOfficialPackagePage && !versionUnchanged) {
+      if (canUseOfficialPackagePage &&
+          (!versionUnchanged || releaseChoices.length > 1)) {
         try {
           final pkgName = packageLabel;
           if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {
@@ -674,51 +675,106 @@ class FDroid extends AppSource {
               nativecodeByVersionCode = _fdroidNativecodeByVersionCode(doc);
             }
           }
-        } catch (e) {
-          // Icon/nativecode are optional
+        } catch (error) {
+          unawaited(
+            LogsProvider().add(
+              'Failed to read F-Droid package page for ABI selection: $error',
+              level: LogLevel.warning,
+            ),
+          );
         }
       }
-      // Narrow to releases whose nativecode (if any) is compatible with this
-      // device before letting the auto-select toggles pick among what's
-      // left, so they can't silently land on an incompatible arch's build.
-      // If nativecode data isn't available (page fetch skipped/failed, or it
-      // covers none of these versionCodes) this is a no-op — the toggles
-      // below fall back to their original, arch-blind behavior rather than
-      // risk filtering everything out on a parsing miss.
+      // Prefer the device's first ABI that has its own build. A versionCode
+      // missing from the page is unknown, not universal: only an explicit
+      // empty nativecode list means the APK runs on every ABI. F-Droid's
+      // suggested versionCode is not ABI-aware (for Rethink it is the x86_64
+      // build), so it is applied only after a real ABI match.
+      List<dynamic>? abiMatchedReleases;
       if (releaseChoices.length > 1 &&
           nativecodeByVersionCode != null &&
           nativecodeByVersionCode.isNotEmpty) {
         List<String> supportedAbis = [];
         try {
           supportedAbis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
-        } catch (e) {
+        } catch (error) {
           unawaited(
             LogsProvider().add(
-              'Failed to get supported ABIs: $e',
+              'Failed to get supported ABIs: $error',
               level: LogLevel.error,
             ),
           );
         }
         if (supportedAbis.isNotEmpty) {
-          final List<dynamic> compatible = releaseChoices.where((element) {
-            final int? versionCode = int.tryParse(
-              element['versionCode']?.toString() ?? '',
-            );
-            final List<String>? archs = versionCode == null
-                ? null
-                : nativecodeByVersionCode![versionCode];
-            return archs == null ||
-                archs.isEmpty ||
-                archs.any(supportedAbis.contains);
-          }).toList();
-          if (compatible.isNotEmpty) {
-            releaseChoices = compatible;
+          for (final String abi in supportedAbis) {
+            final List<dynamic> explicitMatches = releaseChoices.where((
+              release,
+            ) {
+              final int? versionCode = int.tryParse(
+                release['versionCode']?.toString() ?? '',
+              );
+              final List<String>? architectures = versionCode == null
+                  ? null
+                  : nativecodeByVersionCode![versionCode];
+              return architectures != null && architectures.contains(abi);
+            }).toList();
+            if (explicitMatches.isNotEmpty) {
+              abiMatchedReleases = explicitMatches;
+              break;
+            }
+          }
+          if (abiMatchedReleases == null) {
+            final List<dynamic> universalReleases = releaseChoices.where((
+              release,
+            ) {
+              final int? versionCode = int.tryParse(
+                release['versionCode']?.toString() ?? '',
+              );
+              final List<String>? architectures = versionCode == null
+                  ? null
+                  : nativecodeByVersionCode![versionCode];
+              return architectures != null && architectures.isEmpty;
+            }).toList();
+            if (universalReleases.isNotEmpty) {
+              abiMatchedReleases = universalReleases;
+            }
           }
         }
       }
-      // For the remaining (now arch-safe) releases, use the toggles to
-      // auto-select one if possible
-      if (releaseChoices.length > 1) {
+      if (abiMatchedReleases != null) {
+        releaseChoices = abiMatchedReleases;
+      }
+      if (releaseChoices.length > 1 && abiMatchedReleases == null) {
+        int? previouslySelectedVersionCode;
+        if (prevApp != null && prevApp.apkUrls.isNotEmpty) {
+          final int previousIndex = prevApp.preferredApkIndex.clamp(
+            0,
+            prevApp.apkUrls.length - 1,
+          );
+          final RegExpMatch? versionCodeMatch = RegExp(
+            r'_(\d+)\.apk$',
+          ).firstMatch(prevApp.apkUrls[previousIndex].key);
+          previouslySelectedVersionCode = int.tryParse(
+            versionCodeMatch?.group(1) ?? '',
+          );
+        }
+        if (previouslySelectedVersionCode != null) {
+          final List<dynamic> previousRelease = releaseChoices.where((release) {
+            return release['versionCode']?.toString() ==
+                previouslySelectedVersionCode.toString();
+          }).toList();
+          if (previousRelease.isNotEmpty) {
+            releaseChoices = previousRelease;
+          }
+        }
+        if (releaseChoices.length > 1) {
+          unawaited(
+            LogsProvider().add(
+              'F-Droid ABI data unavailable for $packageLabel version $version; leaving architecture choices instead of suggested versionCode ${response['suggestedVersionCode']}',
+              level: LogLevel.warning,
+            ),
+          );
+        }
+      } else if (releaseChoices.length > 1) {
         if (autoSelectHighestVersionCode) {
           releaseChoices = [releaseChoices.first];
         } else if (trySelectingSuggestedVersionCode &&
@@ -726,8 +782,8 @@ class FDroid extends AppSource {
           final String suggestedVersionCodeText =
               response['suggestedVersionCode'].toString();
           final suggestedReleases = releaseChoices.where(
-            (element) =>
-                element['versionCode'].toString() == suggestedVersionCodeText,
+            (release) =>
+                release['versionCode'].toString() == suggestedVersionCodeText,
           );
           if (suggestedReleases.isNotEmpty) {
             releaseChoices = suggestedReleases;
