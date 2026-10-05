@@ -191,6 +191,16 @@ String visibilityFilterChipLabel(String label, CategoryFilterIntent intent) {
   };
 }
 
+/// The `obtainium://app/` link that shares [app]'s configuration. It leaves
+/// out the app's own tokens (per-app `*-creds`), as an export without secrets
+/// does: whoever receives the link must not get them.
+String appConfigLink(App app) {
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    app.additionalSettings,
+  )..removeWhere((String key, dynamic _) => isSecretSettingKey(key));
+  return 'obtainium://app/${Uri.encodeComponent(jsonEncode({'id': app.id, 'url': app.url, 'author': app.author, 'name': app.name, 'preferredApkIndex': app.preferredApkIndex, 'additionalSettings': jsonEncode(settings), 'overrideSource': app.overrideSource}))}';
+}
+
 class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
   final String title;
   final int count;
@@ -5546,7 +5556,7 @@ class AppsPageState extends State<AppsPage> {
       String urls = '';
       for (var a in appsToShare) {
         urls +=
-            'https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/${Uri.encodeComponent(jsonEncode({'id': a.id, 'url': a.url, 'author': a.author, 'name': a.name, 'preferredApkIndex': a.preferredApkIndex, 'additionalSettings': jsonEncode(a.additionalSettings), 'overrideSource': a.overrideSource}))}\n\n';
+            'https://apps.obtainium.imranr.dev/redirect?r=${appConfigLink(a)}\n\n';
       }
       SharePlus.instance.share(
         ShareParams(text: urls, subject: 'ObtainX - ${tr('appsString')}'),
@@ -6836,12 +6846,10 @@ class AppsPageState extends State<AppsPage> {
                                                             if (selectAll) {
                                                               for (final appInMem
                                                                   in listedApps) {
-                                                                selectedAppIds
-                                                                    .add(
-                                                                      appInMem
-                                                                          .app
-                                                                          .id,
-                                                                    );
+                                                                selectedAppIds.add(
+                                                                  appInMem
+                                                                      .listingKey,
+                                                                );
                                                               }
                                                             } else {
                                                               selectedAppIds

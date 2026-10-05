@@ -17,6 +17,7 @@ import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -600,6 +601,7 @@ class _FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
       'isLowRamDevice': false,
       'physicalRamSize': 1,
       'availableRamSize': 1,
+      'time': 0,
       'systemFeatures': const <String>[],
     });
   }
@@ -812,6 +814,42 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('a settings import reaches the global filter and haptics', () async {
+    final SettingsProvider settings = SettingsProvider();
+    await settings.initializeSettings();
+    addTearDown(() {
+      settings.globalApkFilterRegEx = null;
+      settings.tactileFeedbackEnabled = true;
+    });
+    // As an import or a restore does: prefs written directly, then the
+    // provider, already initialized, initialized again.
+    await settings.prefs!.setString('globalApkFilterRegEx', 'arm64');
+    await settings.prefs!.setBool('tactileFeedbackEnabled', false);
+    await settings.initializeSettings();
+    expect(activeGlobalApkFilterRegEx, 'arm64');
+
+    final List<MethodCall> haptics = [];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (
+      MethodCall call,
+    ) async {
+      if (call.method == 'HapticFeedback.vibrate') haptics.add(call);
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    hapticSelection();
+    await Future<void>.delayed(Duration.zero);
+    expect(haptics, isEmpty);
+    // The same call does reach the platform with haptics on.
+    settings.tactileFeedbackEnabled = true;
+    hapticSelection();
+    await Future<void>.delayed(Duration.zero);
+    expect(haptics, hasLength(1));
   });
 
   test('a Codeberg token goes only to its own host', () async {
@@ -1251,6 +1289,26 @@ void main() {
       }, _RealHttpOverrides());
     },
   );
+
+  test('an F-Droid repo URL pasted with its index file standardizes', () {
+    final FDroidRepo source = FDroidRepo();
+    expect(
+      source.sourceSpecificStandardizeURL(
+        'https://example.org/fdroid/repo/index.xml',
+      ),
+      'https://example.org/fdroid/repo',
+    );
+    expect(
+      source.sourceSpecificStandardizeURL(
+        'https://example.org/fdroid/repo/index-v2.json?appId=org.example.app',
+      ),
+      'https://example.org/fdroid/repo?appId=org.example.app',
+    );
+    expect(
+      source.sourceSpecificStandardizeURL('https://example.org/fdroid/repo'),
+      'https://example.org/fdroid/repo',
+    );
+  });
 
   test(
     'F-Droid repo source uses shared parser for valid releases and metadata',

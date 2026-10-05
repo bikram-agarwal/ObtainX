@@ -1771,11 +1771,25 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
       colorScheme: cs,
       items: [
         // Opt-in pinning for GitHub, Codeberg, GitLab and RuStore requests
-        // (upstream 39333d31).
-        AppSwitchListTile(
+        // (upstream #3065, requested in #2916).
+        ListTile(
           title: Text(tr('enableCertificatePinning')),
-          value: sp.enableCertificatePinning,
-          onChanged: (bool value) => sp.enableCertificatePinning = value,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              HelpHintIcon(
+                message: tr('enableCertificatePinningHelp'),
+                size: 20,
+                padding: EdgeInsets.zero,
+              ),
+              AppSwitch(
+                value: sp.enableCertificatePinning,
+                onChanged: (bool value) => sp.enableCertificatePinning = value,
+              ),
+            ],
+          ),
+          onTap: () =>
+              sp.enableCertificatePinning = !sp.enableCertificatePinning,
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -2755,6 +2769,7 @@ class _WarningsSection extends StatelessWidget {
     sp.hideBatteryOptimizationWarning,
     sp.hideTrackOnlyWarning,
     sp.hideAPKOriginWarning,
+    sp.verifySigningCertHashes,
     sp.showAppDowngradeError,
   );
 
@@ -2782,6 +2797,27 @@ class _WarningsSection extends StatelessWidget {
           title: Text(tr('showAPKOriginWarnings')),
           value: !sp.hideAPKOriginWarning,
           onChanged: (value) => sp.hideAPKOriginWarning = !value,
+        ),
+        // Upstream #2922. A warning, so it lives here, not in Integrations
+        // (no third-party tool involved). An app's own expected hashes block
+        // regardless of this toggle.
+        ListTile(
+          title: Text(tr('verifySigningCertHashes')),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              HelpHintIcon(
+                message: tr('verifySigningCertHashesHelp'),
+                size: 20,
+                padding: EdgeInsets.zero,
+              ),
+              AppSwitch(
+                value: sp.verifySigningCertHashes,
+                onChanged: (bool value) => sp.verifySigningCertHashes = value,
+              ),
+            ],
+          ),
+          onTap: () => sp.verifySigningCertHashes = !sp.verifySigningCertHashes,
         ),
         AppSwitchListTile(
           title: Text(tr('showAppDowngradeError')),
@@ -2985,7 +3021,6 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     sp.enableDowngradeModules,
     sp.installerMode,
     sp.shizukuPretendToBeGooglePlay,
-    sp.verifySigningCertHashes,
     // The API key drives the field text and, with its validation fingerprint,
     // the validated-shield state. An import can change either without the user
     // touching this page, and without these two the section would never be
@@ -3073,25 +3108,6 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
               ),
             ],
           ),
-        ),
-        // Upstream #2922; an app's own expected hashes always block regardless.
-        ListTile(
-          title: Text(tr('verifySigningCertHashes')),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              HelpHintIcon(
-                message: tr('verifySigningCertHashesHelp'),
-                size: 20,
-                padding: EdgeInsets.zero,
-              ),
-              AppSwitch(
-                value: sp.verifySigningCertHashes,
-                onChanged: (bool value) => sp.verifySigningCertHashes = value,
-              ),
-            ],
-          ),
-          onTap: () => sp.verifySigningCertHashes = !sp.verifySigningCertHashes,
         ),
         ExplainedWhenOff(
           reason: !_loading && !_downgradeModuleInstalled

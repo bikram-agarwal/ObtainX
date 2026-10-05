@@ -2024,6 +2024,10 @@ class AddAppPageState extends State<AddAppPage> {
           throw ObtainiumError(tr('noResults'));
         }
 
+        // A store that can't answer (credentials needed, the store down, a
+        // changed page) must not lose the other stores' results, so its error
+        // is kept and reported once they are shown.
+        final Map<String, Object> failures = {};
         final List<MapEntry<String, Map<String, List<String>>>?>
         results = (await Future.wait(
           sourceProvider.sources
@@ -2076,13 +2080,10 @@ class AddAppPageState extends State<AddAppPage> {
                     await e.search(searchQuery, querySettings: querySettings),
                   );
                 } catch (err) {
-                  if (err is! CredsNeededError) {
-                    rethrow;
-                  } else {
-                    err.unexpected = true;
-                    showError(err);
-                    return null;
-                  }
+                  // A dialog, as before: it says how to add the credentials.
+                  if (err is CredsNeededError) err.unexpected = true;
+                  failures[e.name] = err;
+                  return null;
                 }
               }),
         )).where((a) => a != null).toList();
@@ -2107,8 +2108,10 @@ class AddAppPageState extends State<AddAppPage> {
         if (!context.mounted) return;
         setState(() {
           _searchResults = res;
-          _searchHasSearched = true;
-          if (cacheable) {
+          // Not "no results" when no store could answer: the error says why.
+          _searchHasSearched = results.isNotEmpty || failures.isEmpty;
+          // Not cached when a store failed, so searching again asks it again.
+          if (cacheable && failures.isEmpty) {
             // Evict the oldest entry once the cache is full (insertion order).
             if (_searchCache.length >= _searchCacheMaxEntries &&
                 !_searchCache.containsKey(cacheKey)) {
@@ -2118,6 +2121,22 @@ class AddAppPageState extends State<AddAppPage> {
           }
         });
         _scrollEmbeddedSearchResultsToFilter();
+        if (failures.isNotEmpty) {
+          showError(
+            selectedSourceNames.length == 1
+                ? failures.values.single
+                : ObtainiumError(
+                    failures.entries
+                        .map((failure) => '${failure.key}: ${failure.value}')
+                        .join('\n'),
+                    // A dialog when any of them would be one on its own.
+                    unexpected: failures.values.any(
+                      (Object error) =>
+                          error is! ObtainiumError || error.unexpected,
+                    ),
+                  ),
+          );
+        }
       } catch (e) {
         showError(e);
       } finally {

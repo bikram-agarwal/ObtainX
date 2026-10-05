@@ -199,6 +199,7 @@ class FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
       'isLowRamDevice': false,
       'physicalRamSize': 8192,
       'availableRamSize': 4096,
+      'time': 0,
       'systemFeatures': <String>[],
     });
   }

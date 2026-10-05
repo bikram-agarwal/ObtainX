@@ -15,7 +15,7 @@ publish_to: 'none'
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # ObtainX uses its own version line, independent of upstream Obtainium's.
-version: 2.21.0+22100
+version: 2.22.0+22200
 
 environment:
   sdk: ^3.12.0
@@ -55,7 +55,10 @@ dependencies:
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.2
   permission_handler: ^13.0.2
-  fluttertoast: ^10.0.0
+  # Pinned: 10.0.1+ applies the org.jetbrains.kotlin.android plugin, which
+  # AGP 9's built-in Kotlin rejects, so the Android build fails. Unpin once
+  # a fluttertoast release drops that plugin.
+  fluttertoast: 10.0.0
   device_info_plus: ^13.2.0
   animations: ^3.0.0
   android_package_installer: # TODO: Upstream PR pending; if not accepted, keep fork maintained

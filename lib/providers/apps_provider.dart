@@ -2135,9 +2135,12 @@ Future<void> bgUpdateCheck(
       // device is behind". Re-read the post-save app so the verdict is computed
       // from the same state the app list renders, then apply the shared update
       // predicate: without it a version reformat notifies (and silently
-      // installs) an update the UI itself does not show.
+      // installs) an update the UI itself does not show. By listing key: an
+      // app tracked from two stores shares its package id with its other
+      // listing.
       final App update =
-          appsProvider.apps[result.updates[i].id]?.app ?? result.updates[i];
+          appsProvider.apps[result.updates[i].listingKey]?.app ??
+          result.updates[i];
       final bool installable = appUpdateIsUserVisible(update);
       final bool notifiable = appUpdateIsUserVisible(
         update,
@@ -2175,7 +2178,8 @@ Future<void> bgUpdateCheck(
           }
         }
       } else {
-        silentlyInstallable.add(update.id);
+        // Listing keys, as [AppsProvider.findExistingUpdates] gives below.
+        silentlyInstallable.add(update.listingKey);
       }
     }
 

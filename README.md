@@ -97,7 +97,9 @@ The same apps can be tracked from multiple stores — independently, simultaneou
 
 These features were also built from ground up and first released in ObtainX; and are now available in Obtainium too.
 
-- **📦 Third-Party Installer Support** — Hand off updates to third-party installers like InstallerX or App Manager to review APK metadata (trackers, permissions, target SDK etc.) before installing (data hidden by stock installers). Essential for devices running under Google _Advanced Protection_.
+- **📦 Third-Party Installer Support** — Hand off updates to third-party installers like InstallerX or App Manager to review APK metadata (trackers, permissions, target SDK etc.) before installing (data hidden by stock installers). Essential for devices running under Google _Advanced Protection_. ObtainX also notices when the other installer has actually installed the update (from Android's own package-installed signal), so the new version shows up as soon as it lands, even when the installer finishes in the background. Obtainium adopted this completion tracking in v1.6.16, crediting ObtainX.
+- **🏪 APKMirror tracking** — APKMirror apps are track-only, yet the update action still takes you somewhere useful: the exact release page of the new version, with that release's changelog and download size, and the package ID picked up from the listing. Obtainium adopted this in v1.6.16, crediting ObtainX.
+  - Feature still exclusive to ObtainX: Bulk import from device finds your apps on APKMirror too.
 - **⚖️ Know the update size beforehand** — See the exact download size for every update - across supported stores - before you even hit the update button.
 - **🛑 Stop download** — You can stop any ongoing download from the app, the notification, or the update queue.
 - **🏷️ Category customization** — Pick an exact color (hex or hue slider) and rename a category so every app carrying it updates automatically.
@@ -114,8 +116,6 @@ These features were also built from ground up and first released in ObtainX; and
 ## 🔧 Enhanced Features
 
 Optimizations made to legacy Obtainium features.
-
-- **🏪 APKMirror updates** — In Obtainium, APKMirror apps are track-only, so the update button has nowhere to take you — you can only mark a version as installed. ObtainX keeps tracking accurate but makes the update action functional, opening the specific release page for the new version. (Bulk Import is also supported.)
 
 - **🧠 Smarter version status** — ObtainX handles harmless version label differences more intelligently, so you're only notified when there's genuinely something new. Six distinct states instead of a binary "update / up to date" pair: *up to date*, *update available*, *device is ahead*, *same version shown differently*, *genuinely unclear* and *Not installed*.
 

@@ -216,9 +216,10 @@ class SettingsProvider with ChangeNotifier {
     if (_settingsInitialized) {
       // Already fully initialized on this instance — the migrations and native
       // lookups below are one-time work. Just notify so late listeners rebuild.
-      // An import writes prefs directly and then calls this, so the global
-      // APK filter's mirror is re-read here too.
+      // An import writes prefs directly and then calls this, so the
+      // top-level mirrors (the global APK filter, haptics) are re-read here too.
       _globalApkFilterRegExMirror = globalApkFilterRegEx;
+      _tactileFeedbackEnabled = tactileFeedbackEnabled;
       notifyListeners();
       return;
     }

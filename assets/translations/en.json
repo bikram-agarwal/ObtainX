@@ -892,6 +892,7 @@
     "cscCode": "CSC code",
     "deviceModel": "Device model",
     "enableCertificatePinning": "Enable certificate pinning",
+    "enableCertificatePinningHelp": "When connecting to GitHub, GitLab, Codeberg and RuStore, only accept certificates from the authorities those sites use, which ObtainX bundles. This stops a forged certificate from intercepting your tokens or downloads, but if one of these sites changes its certificate authority, it stops working until ObtainX is updated.",
     "expectedSigningCertHash": "Expected certificate hash",
     "forgejoTokenLabel": "Forgejo access token",
     "globalApkFilterRegEx": "Global APK filter regex",

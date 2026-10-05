@@ -301,12 +301,10 @@ class MultiAppMultiError extends ObtainiumError {
       entry.value.remove(appId);
     }
     idsByErrorString.removeWhere((k, v) => v.isEmpty);
-    var tempIds = idsByErrorString.remove(string);
-    if (tempIds == null) {
-      tempIds = [];
-      idsByErrorString[string] = tempIds;
-    }
-    tempIds.add(appId);
+    // Into the group's own list: taking an existing group out of the map and
+    // adding to it there lost the group (two apps failing the same way, while
+    // offline say, reported no error at all).
+    (idsByErrorString[string] ??= []).add(appId);
     if (appName != null) {
       appIdNames[appId] = appName;
     }
