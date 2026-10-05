@@ -3,7 +3,7 @@
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/services.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/material.dart';
 
 /// Converts the OS-provided core palette into a [ColorScheme] where every
 /// role is resolved from the OS tonal palettes.

@@ -6,8 +6,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const String _filter = r'-offline\.apk$';
 
@@ -302,5 +304,18 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('the global APK filter leaves no APK, never no release (D8)', () async {
+    SharedPreferences.setMockInitialValues({});
+    final SettingsProvider settings = SettingsProvider()
+      ..prefs = await SharedPreferences.getInstance();
+    settings.globalApkFilterRegEx = _filter;
+    addTearDown(() => settings.globalApkFilterRegEx = null);
+    final App app = _previouslyFetched().copyWith(additionalSettings: {});
+
+    expect(checkErrorNeedsAttention(app, NoAPKError()), isTrue);
+    // It runs after the source answered, so it can't hide every release.
+    expect(checkErrorNeedsAttention(app, NoReleasesError()), isFalse);
   });
 }

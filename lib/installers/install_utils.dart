@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:obtainium/providers/apps_provider.dart' show getInstalledInfo;
 
+/// Snapshot of a package's install state, taken before an install so that
+/// [waitForPackageInstall] can later tell whether the install landed.
 class InstallBaseline {
   final bool wasInstalled;
   final int? versionCode;
@@ -13,6 +15,7 @@ class InstallBaseline {
   });
 }
 
+/// Captures the current install state of [appId] to compare against later.
 Future<InstallBaseline> captureInstallBaseline(String appId) async {
   final info = await getInstalledInfo(appId);
   return InstallBaseline(
@@ -22,6 +25,14 @@ Future<InstallBaseline> captureInstallBaseline(String appId) async {
   );
 }
 
+/// Polls for an install that can't report completion synchronously (a silent
+/// background install, or a hand-off to an external installer). Returns true as
+/// soon as the package appears (when it wasn't installed before) or its update
+/// timestamp changes relative to [baseline] — a version-agnostic signal that
+/// also works with pseudo-versions — or false if neither happens within
+/// [attempts] × [interval]. Without a baseline timestamp the version code is
+/// compared instead, so an unknown timestamp no longer reads as "installed" on
+/// the first poll (upstream 65126176).
 Future<bool> waitForPackageInstall(
   String appId,
   InstallBaseline baseline, {

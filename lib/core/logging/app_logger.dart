@@ -1,67 +1,44 @@
+// Static logging API shared with upstream Obtainium.
+//
+// Upstream replaced LogsProvider with a static AppLogger backed by its own
+// AppLogDb (1b0810c4, 883f8584). ObtainX keeps LogsProvider as the only log
+// engine (VACUUM on large clears, the timestamp index, limit/orderBy reads,
+// LogsSheet, performance recording, and logging from every isolate without an
+// init call) and exposes upstream's static API on top of it, so upstream call
+// sites compile unchanged. Don't add a second database or a console logger.
+
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-import 'package:logger/logger.dart';
-import 'package:obtainium/core/logging/app_log_db.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 
 class AppLogger {
   AppLogger._();
 
-  static AppLogDb? _db;
+  /// No-op: [LogsProvider] opens logs.db lazily in whichever isolate logs
+  /// first and prunes entries older than 7 days once per process.
+  static Future<void> init() async {}
 
-  static final Logger _logger = Logger(
-    filter: ProductionFilter(),
-    printer: PrettyPrinter(
-      methodCount: 0,
-      errorMethodCount: 8,
-      lineLength: 100,
-      colors: !kReleaseMode,
-      printEmojis: false,
-      noBoxingByDefault: true,
-    ),
-  );
+  static Future<List<Log>> getLogs({DateTime? before, DateTime? after}) =>
+      LogsProvider().get(before: before, after: after);
 
-  static Future<void> init() async {
-    if (_db != null) return;
-    final db = AppLogDb();
-    try {
-      await db.purgeOlderThan(const Duration(days: 7));
-    } catch (e) {
-      // Logging must never prevent the app from starting. Keep the handle so
-      // later writes still attempt (they are individually guarded below).
-      debugPrint('Failed to initialize log database: $e');
-    }
-    _db = db;
-  }
-
-  static Future<List<LogEntry>> getLogs({
-    DateTime? before,
-    DateTime? after,
-  }) async {
-    if (_db == null) return [];
-    return _db!.query(before: before, after: after);
-  }
-
-  static Future<int> clearLogs({DateTime? before, DateTime? after}) async {
-    if (_db == null) return 0;
-    return _db!.delete(before: before, after: after);
-  }
+  static Future<int> clearLogs({DateTime? before, DateTime? after}) =>
+      LogsProvider().clear(before: before, after: after);
 
   static void debug(String message, {Object? error, StackTrace? stackTrace}) {
-    _log(AppLogLevel.debug, message, error: error, stackTrace: stackTrace);
+    _log(LogLevel.debug, message, error: error, stackTrace: stackTrace);
   }
 
   static void info(String message, {Object? error, StackTrace? stackTrace}) {
-    _log(AppLogLevel.info, message, error: error, stackTrace: stackTrace);
+    _log(LogLevel.info, message, error: error, stackTrace: stackTrace);
   }
 
   static void warn(String message, {Object? error, StackTrace? stackTrace}) {
-    _log(AppLogLevel.warning, message, error: error, stackTrace: stackTrace);
+    _log(LogLevel.warning, message, error: error, stackTrace: stackTrace);
   }
 
   static void error(Object error, {StackTrace? stackTrace, String? message}) {
     _log(
-      AppLogLevel.error,
+      LogLevel.error,
       message ?? 'Unexpected error',
       error: error,
       stackTrace: stackTrace,
@@ -69,67 +46,37 @@ class AppLogger {
   }
 
   static void _log(
-    AppLogLevel level,
+    LogLevel level,
     String message, {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    _logToConsole(level, message, error: error, stackTrace: stackTrace);
-    _persist(
-      LogEntry(message: _formatPersistedMessage(message, error), level: level),
-    );
-  }
-
-  static void _logToConsole(
-    AppLogLevel level,
-    String message, {
-    Object? error,
-    StackTrace? stackTrace,
-  }) {
-    // Avoid duplicating the message when the error's text is identical to it.
-    final includeError = error != null && error.toString() != message;
-    switch (level) {
-      case AppLogLevel.debug:
-        _logger.d(
-          message,
-          error: includeError ? error : null,
-          stackTrace: stackTrace,
-        );
-      case AppLogLevel.info:
-        _logger.i(
-          message,
-          error: includeError ? error : null,
-          stackTrace: stackTrace,
-        );
-      case AppLogLevel.warning:
-        _logger.w(
-          message,
-          error: includeError ? error : null,
-          stackTrace: stackTrace,
-        );
-      case AppLogLevel.error:
-        _logger.e(
-          message,
-          error: includeError ? error : null,
-          stackTrace: stackTrace,
-        );
-    }
-  }
-
-  static void _persist(LogEntry entry) {
-    final db = _db;
-    if (db == null) return;
+    // LogsProvider.add never throws, so a failing write can't re-enter the
+    // global error handler.
     unawaited(
-      db.insert(entry).catchError((Object e) {
-        // A failed logging write must not reach the global error handler:
-        // that handler logs, which would attempt the same failing write again.
-        debugPrint('Failed to persist log entry: $e');
-      }),
+      LogsProvider().add(
+        _formatPersistedMessage(level, message, error, stackTrace),
+        level: level,
+      ),
     );
   }
 
-  static String _formatPersistedMessage(String message, Object? error) {
-    if (error == null) return message;
-    return error.toString() == message ? message : '$message: $error';
+  /// Avoids repeating the error when its text equals the message (upstream
+  /// 545e871f), and keeps stack traces for warnings and errors.
+  static String _formatPersistedMessage(
+    LogLevel level,
+    String message,
+    Object? error,
+    StackTrace? stackTrace,
+  ) {
+    final StringBuffer buffer = StringBuffer(message);
+    if (error != null && error.toString() != message) {
+      buffer.write(': $error');
+    }
+    if (stackTrace != null &&
+        (level == LogLevel.warning || level == LogLevel.error)) {
+      buffer.write('\n$stackTrace');
+    }
+    return buffer.toString();
   }
 }

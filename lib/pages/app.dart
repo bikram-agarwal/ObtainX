@@ -25,6 +25,7 @@ import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/utils/format_utils.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
@@ -68,11 +69,15 @@ const List<String> _releaseFilterSettingKeys = [
   'tarballedApkFilterRegEx',
 ];
 
-/// Whether the Latest row shows a filtered view of the source.
-bool appHasActiveReleaseFilter(App app) => _releaseFilterSettingKeys.any(
-  (String key) =>
-      app.additionalSettings[key]?.toString().trim().isNotEmpty ?? false,
-);
+/// Whether the Latest row shows a filtered view of the source, including by
+/// the global APK filter standing in for an unset app filter.
+bool appHasActiveReleaseFilter(App app) =>
+    _releaseFilterSettingKeys.any(
+      (String key) =>
+          app.additionalSettings[key]?.toString().trim().isNotEmpty ?? false,
+    ) ||
+    (!appApkFilterRegExIsSet(app.additionalSettings) &&
+        activeGlobalApkFilterRegEx != null);
 
 /// Version meaning shown by the details stripe, independent of Skip or whether
 /// the user has enabled background installation.
@@ -1488,13 +1493,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       updatedApp = updatedApp.copyWith(allowIdChange: true, id: newId);
       // The same package from a different store is allowed, so only a listing
       // of the new package on *this* listing's store is a conflict.
-      if (sameStoreListingIn(
-            appsProvider.apps,
-            updatedApp,
-            ignoreKey: widget.appId,
-          ) !=
-          null) {
-        _showPageError(ObtainiumError(tr('appAlreadyAdded')));
+      final AppInMemory? sameStoreListing = sameStoreListingIn(
+        appsProvider.apps,
+        updatedApp,
+        ignoreKey: widget.appId,
+      );
+      if (sameStoreListing != null) {
+        _showPageError(appAlreadyAddedError(sameStoreListing));
         return;
       }
     }
@@ -2865,8 +2870,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       if (additionalListing.id != currentListing.app.id) {
         throw ObtainiumError(tr('appIdMismatch'));
       }
-      if (sameStoreListingIn(appsProvider.apps, additionalListing) != null) {
-        throw ObtainiumError(tr('appAlreadyAdded'));
+      final AppInMemory? sameStoreListing = sameStoreListingIn(
+        appsProvider.apps,
+        additionalListing,
+      );
+      if (sameStoreListing != null) {
+        throw appAlreadyAddedError(sameStoreListing);
       }
 
       additionalListing = additionalListing.copyWith(

@@ -857,6 +857,21 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
 
     final existingAppsList = existingBackupApps;
     final newAppsList = newBackupApps;
+    // What an import is about to overwrite, said beside its button (upstream
+    // 50054a0a asked in a dialog). A restore confirms on its own, and a
+    // URL-list add never overwrites a tracked app.
+    final int overwrittenAppCount = widget.isRestore || widget.isUrlImport
+        ? 0
+        : existingAppsList
+              .where((App app) => selectedAppIds.contains(_key(app)))
+              .length;
+    final bool replacesSettings =
+        !widget.isRestore && widget.hasSettings && importSettings;
+    final List<String> overwriteNotes = [
+      if (overwrittenAppCount > 0)
+        tr('importOverwritesTrackedApps', args: ['$overwrittenAppCount']),
+      if (replacesSettings) tr('importReplacesSettings'),
+    ];
 
     return AppSheetScaffold(
       expand: false,
@@ -959,84 +974,108 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
           ],
         ),
       ),
-      footer: Wrap(
-        alignment: WrapAlignment.end,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 8,
-        runSpacing: 4,
+      footer: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          TextButton(
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          if (overwriteNotes.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+              child: Text(
+                overwriteNotes.join(' '),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
             ),
-            autofocus: isTelevision,
-            onPressed: () => Navigator.of(context).pop(null),
-            child: Text(tr('cancel')),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            ),
-            onPressed: totalSelected == 0 || _isConfirmingRestore
-                ? null
-                : () async {
-                    hapticSelection();
-                    if (widget.isRestore) {
-                      // Shown as a dialog ON TOP of this still-open sheet
-                      // (not after popping it) so cancelling just dismisses
-                      // the dialog and leaves the selection intact, instead
-                      // of the sheet closing and a separate dialog popping
-                      // up after it - which read as the sheet crashing.
-                      setState(() => _isConfirmingRestore = true);
-                      final bool confirmed =
-                          (await showDialog<Map<String, dynamic>?>(
-                            context: context,
-                            builder: (BuildContext dialogContext) {
-                              return GeneratedFormModal(
-                                title: tr('restoreBackupConfirmTitle'),
-                                items: const [],
-                                initValid: true,
-                                message: tr('restoreBackupConfirmBody'),
-                                primaryActionColour: Theme.of(
-                                  dialogContext,
-                                ).colorScheme.error,
-                              );
-                            },
-                          )) !=
-                          null;
-                      if (!mounted) return;
-                      setState(() => _isConfirmingRestore = false);
-                      if (!confirmed) return;
-                    }
-                    if (!context.mounted) return;
-                    Navigator.of(context).pop(
-                      BackupImportSelection(
-                        selectedAppIds: selectedAppIds,
-                        importSettings: importSettings,
-                        fetchedApps: widget.isUrlImport
-                            ? [
-                                for (final String url in _newUrls)
-                                  if (selectedAppIds.contains(url))
-                                    _fetchedApps[url]!,
-                              ]
-                            : const [],
-                        downloadedIcons: widget.isUrlImport
-                            ? {
-                                for (final String url in _newUrls)
-                                  if (selectedAppIds.contains(url) &&
-                                      _looks[url]?.downloadedIcon != null)
-                                    _fetchedApps[url]!.id:
-                                        _looks[url]!.downloadedIcon!,
-                              }
-                            : const {},
-                      ),
-                    );
-                  },
-            child: Text(tr(widget.isRestore ? 'obtainiumRestore' : 'import')),
+          Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                ),
+                autofocus: isTelevision,
+                onPressed: () => Navigator.of(context).pop(null),
+                child: Text(tr('cancel')),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                ),
+                onPressed: totalSelected == 0 || _isConfirmingRestore
+                    ? null
+                    : () async {
+                        hapticSelection();
+                        if (widget.isRestore) {
+                          // Shown as a dialog ON TOP of this still-open sheet
+                          // (not after popping it) so cancelling just dismisses
+                          // the dialog and leaves the selection intact, instead
+                          // of the sheet closing and a separate dialog popping
+                          // up after it - which read as the sheet crashing.
+                          setState(() => _isConfirmingRestore = true);
+                          final bool confirmed =
+                              (await showDialog<Map<String, dynamic>?>(
+                                context: context,
+                                builder: (BuildContext dialogContext) {
+                                  return GeneratedFormModal(
+                                    title: tr('restoreBackupConfirmTitle'),
+                                    items: const [],
+                                    initValid: true,
+                                    message: tr('restoreBackupConfirmBody'),
+                                    primaryActionColour: Theme.of(
+                                      dialogContext,
+                                    ).colorScheme.error,
+                                  );
+                                },
+                              )) !=
+                              null;
+                          if (!mounted) return;
+                          setState(() => _isConfirmingRestore = false);
+                          if (!confirmed) return;
+                        }
+                        if (!context.mounted) return;
+                        Navigator.of(context).pop(
+                          BackupImportSelection(
+                            selectedAppIds: selectedAppIds,
+                            importSettings: importSettings,
+                            fetchedApps: widget.isUrlImport
+                                ? [
+                                    for (final String url in _newUrls)
+                                      if (selectedAppIds.contains(url))
+                                        _fetchedApps[url]!,
+                                  ]
+                                : const [],
+                            downloadedIcons: widget.isUrlImport
+                                ? {
+                                    for (final String url in _newUrls)
+                                      if (selectedAppIds.contains(url) &&
+                                          _looks[url]?.downloadedIcon != null)
+                                        _fetchedApps[url]!.id:
+                                            _looks[url]!.downloadedIcon!,
+                                  }
+                                : const {},
+                          ),
+                        );
+                      },
+                child: Text(
+                  tr(widget.isRestore ? 'obtainiumRestore' : 'import'),
+                ),
+              ),
+            ],
           ),
         ],
       ),

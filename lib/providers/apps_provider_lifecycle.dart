@@ -20,6 +20,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:obtainium/services/app_check_store.dart';
+import 'package:obtainium/utils/color_utils.dart';
 
 /// App persistence (load/save/remove), icons, and version-detection helpers.
 const _corruptFileSuffix = '.corrupt';
@@ -68,6 +69,29 @@ class RemoveAppsWithModalResult {
       deferredUndoAppIds.isNotEmpty || removedFromObtainiumImmediately;
 }
 
+/// Whether a cached app icon can be reused instead of re-reading it from the
+/// platform.
+///
+/// An app's icon is packaged in its APK, so it can only change when the app is
+/// updated. The cache is therefore only stale when the installed package's
+/// [PackageInfo.lastUpdateTime] is newer than the cache file (or when
+/// [ignoreCache] forces a refresh), keeping the relatively expensive
+/// `getAppIcon` platform call off the hot path (upstream #3306).
+bool isIconCacheUsable({
+  required bool cacheExists,
+  required DateTime? cacheModified,
+  int? packageLastUpdateTime,
+  bool ignoreCache = false,
+}) {
+  if (ignoreCache || !cacheExists) {
+    return false;
+  }
+  if (packageLastUpdateTime == null || cacheModified == null) {
+    return true;
+  }
+  return cacheModified.millisecondsSinceEpoch >= packageLastUpdateTime;
+}
+
 extension AppsProviderLifecycle on AppsProvider {
   String? _getRealInstalledVersion(App app, PackageInfo? installedInfo) {
     if (installedInfo == null) return null;
@@ -81,22 +105,28 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   Future<Directory> getAppsDir() async {
-    if (cachedAppsDir != null) return cachedAppsDir!;
+    final cached = cachedAppsDir;
+    if (cached != null && cached.existsSync()) return cached;
+    // The cached directory can disappear at runtime (external storage
+    // remounted after a system update, storage cleanup). Drop the stale
+    // reference and re-create it instead of renaming into a missing path
+    // (upstream #2860).
+    cachedAppsDir = null;
     final Directory appsDir = Directory(
       '${(await getAppStorageDir()).path}/app_data',
     );
-    if (!appsDir.existsSync()) {
-      try {
-        appsDir.createSync();
-      } catch (_) {
-        final fallbackDir = Directory(
-          '${(await getApplicationDocumentsDirectory()).path}/app_data',
-        );
-        if (!fallbackDir.existsSync()) {
-          fallbackDir.createSync(recursive: true);
-        }
-        return cachedAppsDir = fallbackDir;
+    try {
+      if (!appsDir.existsSync()) {
+        appsDir.createSync(recursive: true);
       }
+    } catch (_) {
+      final fallbackDir = Directory(
+        '${(await getApplicationDocumentsDirectory()).path}/app_data',
+      );
+      if (!fallbackDir.existsSync()) {
+        fallbackDir.createSync(recursive: true);
+      }
+      return cachedAppsDir = fallbackDir;
     }
     return cachedAppsDir = appsDir;
   }
@@ -1016,15 +1046,24 @@ extension AppsProviderLifecycle on AppsProvider {
 
     final File cachedIcon = File('${iconsCacheDir.path}/$packageId.png');
     final bool isInstalled = listing.installedInfo != null;
+    final bool cacheExists = cachedIcon.existsSync();
+    // An installed app's launcher icon ships in its APK, so the cached copy
+    // only goes stale when the package is updated (upstream #3306).
+    final bool cacheUsable = isIconCacheUsable(
+      ignoreCache: ignoreCache,
+      cacheExists: cacheExists,
+      cacheModified: cacheExists ? cachedIcon.lastModifiedSync() : null,
+      packageLastUpdateTime: listing.installedInfo?.lastUpdateTime,
+    );
     if (listing.icon != null && !ignoreCache) {
       // In-memory icons for non-installed apps (APK extract, store fetch) are
       // already the right answer. After a later install, that same in-memory
       // icon would otherwise stick forever and beat the device launcher icon.
       if (!isInstalled) return;
-      if (cachedIcon.existsSync()) return;
+      if (cacheUsable) return;
     }
 
-    if (ignoreCache && cachedIcon.existsSync()) {
+    if (ignoreCache && cacheExists) {
       await cachedIcon.delete();
     }
     Uint8List? icon;
@@ -1032,7 +1071,7 @@ extension AppsProviderLifecycle on AppsProvider {
     // ObtainX deduces can beat it. The launcher icon is re-derivable from the OS
     // for free, so it stays in the (disposable) cache. A non-installed app has
     // no launcher icon, so both of these come up empty and we fall through.
-    final bool alreadyCached = cachedIcon.existsSync() && !ignoreCache;
+    final bool alreadyCached = cacheUsable;
     if (alreadyCached) {
       icon = await cachedIcon.readAsBytes();
     } else {
@@ -1079,6 +1118,21 @@ extension AppsProviderLifecycle on AppsProvider {
         );
       }
       notify();
+    }
+  }
+
+  Future<void> _refreshCachedLauncherIcon(
+    String packageId,
+    Uint8List icon,
+  ) async {
+    // Not initialized until the provider's async init completes; the next
+    // [updateAppIcon] catches a stale cache by its timestamp anyway.
+    if (!iconsCacheDirReady) return;
+    try {
+      final Uint8List resized = await _resizeIconForStorage(icon);
+      await File('${iconsCacheDir.path}/$packageId.png').writeAsBytes(resized);
+    } catch (e) {
+      unawaited(logs.add('Icon cache refresh failed for $packageId: $e'));
     }
   }
 
@@ -1187,7 +1241,26 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   /// Atomically replaces one app record and invalidates older checkpoints.
+  ///
+  /// Re-resolves the apps directory and retries once if [directory] vanished
+  /// between the existence check and the rename, which otherwise fails the
+  /// save (upstream #2860). Any other failure (a blocked path, a full disk)
+  /// still fails it, so a record never lands outside its batch's directory.
   Future<void> _writeAppRecord(
+    Directory directory,
+    App app,
+    AppCheckStore checks,
+  ) async {
+    try {
+      await _writeAppRecordTo(directory, app, checks);
+    } on FileSystemException {
+      if (await directory.exists()) rethrow;
+      cachedAppsDir = null;
+      await _writeAppRecordTo(await getAppsDir(), app, checks);
+    }
+  }
+
+  Future<void> _writeAppRecordTo(
     Directory directory,
     App app,
     AppCheckStore checks,
@@ -1327,6 +1400,13 @@ extension AppsProviderLifecycle on AppsProvider {
                 final installed = await installedIconAndName(app.id, info);
                 icon = installed.icon;
                 installedAppName = installed.name;
+                // The package changed, so its launcher icon may have too:
+                // refresh the cached copy, not just the one in memory
+                // (upstream #3306).
+                final Uint8List? launcherIcon = installed.icon;
+                if (info != null && launcherIcon != null) {
+                  unawaited(_refreshCachedLauncherIcon(app.id, launcherIcon));
+                }
               }
             }
             app = app.copyWith(name: installedAppName ?? app.name);
@@ -1460,7 +1540,9 @@ extension AppsProviderLifecycle on AppsProvider {
               .listingsForPackage(packageId)
               .any((listing) => !removedKeys.contains(listing.listingKey)),
         );
-    final apkFiles = apkDir.listSync();
+    // Listed asynchronously so a large APK cache doesn't stall the UI isolate
+    // (upstream 8c33f251).
+    final apkFiles = await apkDir.list().toList();
     await Future.wait(
       listingKeys.map((listingKey) async {
         final String packageId = _packageIdForListingKey(listingKey);

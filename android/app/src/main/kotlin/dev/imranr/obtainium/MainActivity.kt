@@ -376,6 +376,21 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onDestroy() {
+        // An activity torn down mid-handoff (reclaimed or recreated while the
+        // installer runs) must still answer its Dart call and release its receiver.
+        // An unconfirmed install comes back as handedOff, so its receipt survives
+        // and the process-lifetime package receiver can record it later (adapted
+        // from upstream 65126176).
+        installWatcher?.let { watcher ->
+            completeThirdPartyInstallSession(
+                watcher,
+                InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
+            )
+        }
+        super.onDestroy()
+    }
+
     override fun onResume() {
         super.onResume()
         val watcher = installWatcher ?: return
@@ -1393,6 +1408,13 @@ class MainActivity : FlutterActivity() {
         // Third-party installers commonly expose the same "open file" entry point used
         // by file managers. Use ACTION_VIEW for every format so installers such as Thor
         // parse APKs as well as XAPK/APKM/ZIP bundles.
+        //
+        // Intentional divergence — do not "fix": this launch never requests a result
+        // (no Intent.EXTRA_RETURN_RESULT / startActivityForResult). Upstream Obtainium
+        // adopted that result-request handoff (#3091); ObtainX removed it (b9228270)
+        // because installers then close their own Open/Done screen. Completion comes
+        // from the package broadcast plus focus/resume below. See localdocs
+        // UPSTREAM_SYNC_GUIDE §3.10/§5.
         val intent = Intent(Intent.ACTION_VIEW).apply {
             if (contentUris.size == 1) {
                 setDataAndType(contentUris[0], primaryMime)
@@ -1492,6 +1514,15 @@ class MainActivity : FlutterActivity() {
             receiver,
             releaseFiles,
         )
+        // Settle a session still open from an earlier handoff before replacing it:
+        // its timeout bails on the identity check, so it would never answer Dart
+        // and its receiver would stay registered (adapted from upstream 65126176).
+        installWatcher?.let { stale ->
+            completeThirdPartyInstallSession(
+                stale,
+                InstallSessionOutcome.Success(stale.packageInstallBroadcastReceived),
+            )
+        }
         installWatcher = sessionWatcher
         registerReceiver(receiver, filter)
 

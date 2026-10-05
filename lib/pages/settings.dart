@@ -12,6 +12,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/installers/root_installer.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
@@ -22,7 +24,7 @@ import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/components/ui_widgets.dart'
-    show AppSwitch, AppSwitchListTile, ExplainedWhenOff;
+    show AppSwitch, AppSwitchListTile, ExplainedWhenOff, copyToClipboard;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/shizuku_plugin.dart';
 import 'package:obtainium/main.dart';
@@ -1052,6 +1054,9 @@ class _UpdatesSection extends StatelessWidget {
     sp.removeOnExternalUninstall,
     sp.parallelDownloads,
     sp.includePrereleasesByDefault,
+    sp.skipBulkUpdateConfirmation,
+    // The background rows below depend on the installer.
+    sp.installerMode,
   );
 
   @override
@@ -1086,11 +1091,13 @@ class _UpdatesSection extends StatelessWidget {
     AsyncSnapshot<AndroidDeviceInfo> snapshot,
   ) {
     final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
+    // Root installs silently on any Android version, like Shizuku and Dhizuku.
     final bool showBgControls =
         (sp.updateInterval > 0) &&
         (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
             sp.useShizuku ||
-            sp.useDhizuku);
+            sp.useDhizuku ||
+            sp.installerMode == InstallerMode.root.name);
     if (showBgControls) {
       rows
         ..add(
@@ -1135,25 +1142,27 @@ class _UpdatesSection extends StatelessWidget {
                 sp.enableBackgroundUpdates = !sp.enableBackgroundUpdates,
           ),
         );
-      if (sp.enableBackgroundUpdates) {
-        rows
-          ..add(
-            AppSwitchListTile(
-              key: const ValueKey<String>('background_install_wifi_only'),
-              title: Text(tr('bgUpdatesOnWiFiOnly')),
-              value: sp.bgUpdatesOnWiFiOnly,
-              onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
-            ),
-          )
-          ..add(
-            AppSwitchListTile(
-              key: const ValueKey<String>('background_install_charging_only'),
-              title: Text(tr('bgUpdatesWhileChargingOnly')),
-              value: sp.bgUpdatesWhileChargingOnly,
-              onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
-            ),
-          );
-      }
+    }
+    // The Wi-Fi and charging constraints hold back every background check,
+    // not just installs, so they show whenever checks run (upstream #3070).
+    if (sp.updateInterval > 0) {
+      rows
+        ..add(
+          AppSwitchListTile(
+            key: const ValueKey<String>('background_install_wifi_only'),
+            title: Text(tr('bgUpdatesOnWiFiOnly')),
+            value: sp.bgUpdatesOnWiFiOnly,
+            onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
+          ),
+        )
+        ..add(
+          AppSwitchListTile(
+            key: const ValueKey<String>('background_install_charging_only'),
+            title: Text(tr('bgUpdatesWhileChargingOnly')),
+            value: sp.bgUpdatesWhileChargingOnly,
+            onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
+          ),
+        );
     }
     rows.addAll(<Widget>[
       AppSwitchListTile(
@@ -1174,6 +1183,8 @@ class _UpdatesSection extends StatelessWidget {
         value: sp.includePrereleasesByDefault,
         onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
+      _MinimumUpdateAgeSlider(cs: cs),
+      const _GlobalApkFilterField(),
       AppSwitchListTile(
         key: const ValueKey<String>('only_check_installed_or_track_only_apps'),
         title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
@@ -1191,6 +1202,12 @@ class _UpdatesSection extends StatelessWidget {
         title: Text(tr('parallelDownloads')),
         value: sp.parallelDownloads,
         onChanged: (bool value) => sp.parallelDownloads = value,
+      ),
+      AppSwitchListTile(
+        key: const ValueKey<String>('skip_bulk_update_confirmation'),
+        title: Text(tr('skipBulkUpdateConfirmation')),
+        value: sp.skipBulkUpdateConfirmation,
+        onChanged: (bool value) => sp.skipBulkUpdateConfirmation = value,
       ),
     ]);
     return M3eExpressiveSettingsCard(colorScheme: cs, items: rows);
@@ -1417,6 +1434,215 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
   }
 }
 
+/// Global minimum update age (upstream #3004): a release is offered once it's
+/// this many days old; an app can set its own. Like [_UpdateIntervalSlider],
+/// a drag stays local and the setting is written when the finger lifts.
+class _MinimumUpdateAgeSlider extends StatefulWidget {
+  const _MinimumUpdateAgeSlider({required this.cs});
+
+  final ColorScheme cs;
+
+  @override
+  State<_MinimumUpdateAgeSlider> createState() =>
+      _MinimumUpdateAgeSliderState();
+}
+
+class _MinimumUpdateAgeSliderState extends State<_MinimumUpdateAgeSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  static const List<int> _options = minimumUpdateAgeOptions;
+
+  int _daysForVal(double val) =>
+      _options[val.round().clamp(0, _options.length - 1)];
+
+  /// The stored value is always an option ([snapMinimumUpdateAgeDays]).
+  double _valForDays(int days) => _options.indexOf(days).toDouble();
+
+  String _labelForVal(double val) {
+    final int days = _daysForVal(val);
+    return days == 0 ? tr('none') : plural('day', days);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double sliderVal =
+        _dragValue ??
+        _valForDays(
+          context.select<SettingsProvider, int>((s) => s.minimumUpdateAgeDays),
+        );
+    final String label = _labelForVal(sliderVal);
+    final bool isTV = context.read<SettingsProvider>().isTV;
+    final double max = (_options.length - 1).toDouble();
+    void save(double value) {
+      context.read<SettingsProvider>().minimumUpdateAgeDays = _daysForVal(
+        value,
+      );
+      setState(() => _dragValue = null);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.hourglass_bottom_rounded,
+            color: widget.cs.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(tr('minimumUpdateAgeDays'))),
+                      Text(label),
+                    ],
+                  ),
+                ),
+                TVSliderWrapper(
+                  value: sliderVal,
+                  min: 0,
+                  max: max,
+                  divisions: _options.length - 1,
+                  onChanged: (double value) {
+                    setState(() => _dragValue = value);
+                  },
+                  onChangeEnd: save,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 16,
+                      trackShape: const _GappedTrackShape(),
+                      thumbShape: const _VerticalBarThumbShape(),
+                      activeTickMarkColor: Theme.of(
+                        context,
+                      ).colorScheme.onPrimary,
+                      inactiveTickMarkColor: Theme.of(
+                        context,
+                      ).colorScheme.primary,
+                      overlayShape: SliderComponentShape.noOverlay,
+                    ),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      value: sliderVal.clamp(0, max),
+                      max: max,
+                      divisions: _options.length - 1,
+                      label: label,
+                      onChanged: (double value) {
+                        setState(() => _dragValue = value);
+                      },
+                      onChangeEnd: save,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Global APK filter (upstream #2979), used by apps without an APK filter of
+/// their own. Saved as typed while it's a valid regex or empty.
+class _GlobalApkFilterField extends StatefulWidget {
+  const _GlobalApkFilterField();
+
+  @override
+  State<_GlobalApkFilterField> createState() => _GlobalApkFilterFieldState();
+}
+
+class _GlobalApkFilterFieldState extends State<_GlobalApkFilterField> {
+  late final TextEditingController _controller;
+  String? _stored;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _stored = context.read<SettingsProvider>().globalApkFilterRegEx;
+    _controller = TextEditingController(text: _stored ?? '');
+  }
+
+  // An import can rewrite the pref while this stays mounted; see
+  // [_SourceSpecificSectionState.didChangeDependencies].
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String? stored = context
+        .read<SettingsProvider>()
+        .globalApkFilterRegEx;
+    if (stored != _stored) {
+      _stored = stored;
+      if (_controller.text.trim() != (stored ?? '')) {
+        _controller.text = stored ?? '';
+        _error = null;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String value) {
+    final String trimmed = value.trim();
+    final String? error = trimmed.isEmpty ? null : regExValidator(trimmed);
+    setState(() => _error = error);
+    if (error != null) return;
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    sp.globalApkFilterRegEx = trimmed;
+    _stored = sp.globalApkFilterRegEx;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Registers the dependency [didChangeDependencies] syncs from.
+    context.select<SettingsProvider, String?>((s) => s.globalApkFilterRegEx);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        12,
+        kM3eSettingsCardHorizontalInset,
+        12,
+      ),
+      child: TextField(
+        controller: _controller,
+        decoration: appPageOutlinedInputDecoration(
+          context,
+          labelText: tr('globalApkFilterRegEx'),
+          isDense: true,
+        ).copyWith(errorText: _error),
+        onChanged: _onChanged,
+      ),
+    );
+  }
+}
+
 /// Source-specific settings section — reads/writes generic source config.
 class _SourceSpecificSection extends StatefulWidget {
   const _SourceSpecificSection({super.key});
@@ -1429,12 +1655,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   late final TextEditingController _githubPatController;
   late final TextEditingController _hubProxyController;
   late final TextEditingController _gitlabPatController;
+  late final TextEditingController _codebergTokenController;
   // Stored pref values as of the last sync, so [didChangeDependencies] can tell
   // an external write (a backup import rewrites these keys with no user
   // involvement) apart from the user's own unsaved typing.
   String _storedGithubPat = '';
   String _storedHubProxy = '';
   String _storedGitlabPat = '';
+  String _storedCodebergToken = '';
   bool _githubChecking = false;
   bool _gitlabChecking = false;
 
@@ -1468,9 +1696,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
     _storedHubProxy = sp.getSettingString(GitHub.githubReqPrefixKey) ?? '';
     _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _storedCodebergToken = sp.getSettingString(Codeberg.tokenKey) ?? '';
     _githubPatController = TextEditingController(text: _storedGithubPat);
     _hubProxyController = TextEditingController(text: _storedHubProxy);
     _gitlabPatController = TextEditingController(text: _storedGitlabPat);
+    _codebergTokenController = TextEditingController(
+      text: _storedCodebergToken,
+    );
   }
 
   // Home keeps every tab mounted, so this section - and the controllers seeded
@@ -1511,6 +1743,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
         _gitlabPatController.text = storedGitlabPat;
       }
     }
+    final String storedCodebergToken =
+        sp.getSettingString(Codeberg.tokenKey) ?? '';
+    if (storedCodebergToken != _storedCodebergToken) {
+      _storedCodebergToken = storedCodebergToken;
+      if (_codebergTokenController.text != storedCodebergToken) {
+        _codebergTokenController.text = storedCodebergToken;
+      }
+    }
   }
 
   @override
@@ -1518,6 +1758,7 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     _githubPatController.dispose();
     _hubProxyController.dispose();
     _gitlabPatController.dispose();
+    _codebergTokenController.dispose();
     super.dispose();
   }
 
@@ -1529,6 +1770,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
+        // Opt-in pinning for GitHub, Codeberg, GitLab and RuStore requests
+        // (upstream 39333d31).
+        AppSwitchListTile(
+          title: Text(tr('enableCertificatePinning')),
+          value: sp.enableCertificatePinning,
+          onChanged: (bool value) => sp.enableCertificatePinning = value,
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
             kM3eSettingsCardHorizontalInset,
@@ -1569,9 +1817,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                           ).copyWith(
                             suffixIcon: IconButton(
                               icon: const Icon(Icons.open_in_new_rounded),
-                              onPressed: () => launchUrlString(
+                              onPressed: () => _openExternalUrl(
                                 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
-                                mode: LaunchMode.externalApplication,
                               ),
                               tooltip: tr('about'),
                             ),
@@ -1723,9 +1970,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                 ).copyWith(
                   suffixIcon: IconButton(
                     icon: const Icon(Icons.open_in_new_rounded),
-                    onPressed: () => launchUrlString(
+                    onPressed: () => _openExternalUrl(
                       'https://github.com/sky22333/hubproxy',
-                      mode: LaunchMode.externalApplication,
                     ),
                     tooltip: tr('about'),
                   ),
@@ -1770,9 +2016,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                       ).copyWith(
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.open_in_new_rounded),
-                          onPressed: () => launchUrlString(
+                          onPressed: () => _openExternalUrl(
                             'https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html#create-a-personal-access-token',
-                            mode: LaunchMode.externalApplication,
                           ),
                           tooltip: tr('about'),
                         ),
@@ -1893,6 +2138,38 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                 },
               ),
             ],
+          ),
+        ),
+        // codeberg.org only: a Forgejo instance's token is set per app, so
+        // this one never goes to another host (D15). Saved as typed, like the
+        // hub proxy; there's nothing to validate it against.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardHorizontalInset,
+            12,
+          ),
+          child: TextField(
+            controller: _codebergTokenController,
+            obscureText: true,
+            decoration:
+                appPageOutlinedInputDecoration(
+                  context,
+                  labelText: tr('codebergTokenLabel'),
+                  isDense: true,
+                ).copyWith(
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    onPressed: () => _openExternalUrl(Codeberg.tokenHelpUrl),
+                    tooltip: tr('about'),
+                  ),
+                ),
+            onChanged: (val) {
+              final String token = val.trim();
+              _storedCodebergToken = token;
+              sp.setSettingString(Codeberg.tokenKey, token);
+            },
           ),
         ),
       ],
@@ -2708,6 +2985,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
     sp.enableDowngradeModules,
     sp.installerMode,
     sp.shizukuPretendToBeGooglePlay,
+    sp.verifySigningCertHashes,
     // The API key drives the field text and, with its validation fingerprint,
     // the validated-shield state. An import can change either without the user
     // touching this page, and without these two the section would never be
@@ -2746,10 +3024,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 IconButton(
                   tooltip: tr('about'),
                   onPressed: () {
-                    launchUrlString(
-                      tr('aboutAppManagerUrl'),
-                      mode: LaunchMode.externalApplication,
-                    );
+                    _openExternalUrl(tr('aboutAppManagerUrl'));
                   },
                   style: IconButton.styleFrom(
                     foregroundColor: cs.onSurfaceVariant,
@@ -2798,6 +3073,25 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
               ),
             ],
           ),
+        ),
+        // Upstream #2922; an app's own expected hashes always block regardless.
+        ListTile(
+          title: Text(tr('verifySigningCertHashes')),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              HelpHintIcon(
+                message: tr('verifySigningCertHashesHelp'),
+                size: 20,
+                padding: EdgeInsets.zero,
+              ),
+              AppSwitch(
+                value: sp.verifySigningCertHashes,
+                onChanged: (bool value) => sp.verifySigningCertHashes = value,
+              ),
+            ],
+          ),
+          onTap: () => sp.verifySigningCertHashes = !sp.verifySigningCertHashes,
         ),
         ExplainedWhenOff(
           reason: !_loading && !_downgradeModuleInstalled
@@ -2895,9 +3189,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                       ).copyWith(
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.open_in_new_rounded),
-                          onPressed: () => launchUrlString(
+                          onPressed: () => _openExternalUrl(
                             'https://www.virustotal.com/gui/my-apikey',
-                            mode: LaunchMode.externalApplication,
                           ),
                           tooltip: tr('about'),
                         ),
@@ -3047,6 +3340,10 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                     value: 'external',
                     child: Text(tr('installerModeThirdParty')),
                   ),
+                  DropdownMenuItem<String>(
+                    value: 'root',
+                    child: Text(tr('installMethodRoot')),
+                  ),
                 ],
                 onChanged: (String? mode) async {
                   if (mode == null) return;
@@ -3082,12 +3379,24 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                           showError(ObtainiumError(tr('cancelled')));
                       }
                     }
+                  } else if (mode == 'root') {
+                    // Switches only once su grants it; a denial keeps the
+                    // current installer (upstream #3277 fell back to stock).
+                    final bool granted = await RootInstaller(
+                      sp,
+                    ).checkPermission();
+                    if (!context.mounted) return;
+                    if (granted) {
+                      sp.installerMode = mode;
+                    } else {
+                      showError(ObtainiumError(tr('rootNotGranted')));
+                    }
                   } else {
                     sp.installerMode = mode;
                   }
                 },
               ),
-              if (sp.installerMode == 'shizuku')
+              if (sp.installerMode == 'shizuku' || sp.installerMode == 'root')
                 AppSwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(tr('shizukuPretendToBeGooglePlay')),
@@ -3257,7 +3566,7 @@ class AboutSectionContent extends StatelessWidget {
                     assetPath: 'assets/graphics/me_600.webp',
                     borderRadius: 18,
                     semanticLabel: tr('aboutAuthorProfile'),
-                    onTap: () => _openAboutUrl(_aboutAuthorUrl),
+                    onTap: () => _openExternalUrl(_aboutAuthorUrl),
                     onLongPress: () => _copyAboutUrl(_aboutAuthorUrl),
                   ),
                 ],
@@ -3277,7 +3586,7 @@ class AboutSectionContent extends StatelessWidget {
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () => _openAboutUrl(sp.sourceUrl),
+                    onPressed: () => _openExternalUrl(sp.sourceUrl),
                     onLongPress: () => _copyAboutUrl(sp.sourceUrl),
                     icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
                     label: Text(tr('aboutStarOnGithub')),
@@ -3292,7 +3601,7 @@ class AboutSectionContent extends StatelessWidget {
                     Expanded(
                       child: FilledButton.tonalIcon(
                         style: _aboutSecondaryButtonStyle(colorScheme),
-                        onPressed: () => _openAboutUrl(_aboutWikiUrl),
+                        onPressed: () => _openExternalUrl(_aboutWikiUrl),
                         onLongPress: () => _copyAboutUrl(_aboutWikiUrl),
                         icon: const Icon(Icons.open_in_new_rounded),
                         label: Text(tr('aboutOpenWiki')),
@@ -3537,7 +3846,7 @@ class _AboutAppPromo extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () =>
-            appId != null ? _openPromoApp(appId!, url) : _openAboutUrl(url),
+            appId != null ? _openPromoApp(appId!, url) : _openExternalUrl(url),
         onLongPress: () => _copyAboutUrl(url),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -3643,7 +3952,7 @@ class _AboutTextLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TextButton(
-      onPressed: () => _openAboutUrl(url),
+      onPressed: () => _openExternalUrl(url),
       onLongPress: () => _copyAboutUrl(url),
       style: TextButton.styleFrom(
         foregroundColor: colorScheme.primary,
@@ -3666,8 +3975,14 @@ class _AboutLinkSeparator extends StatelessWidget {
   }
 }
 
-Future<void> _openAboutUrl(String url) async {
-  await launchUrlString(url, mode: LaunchMode.externalApplication);
+/// Opens [url] in another app. A failure (a bad link, nothing to open it)
+/// shows an error instead of vanishing (upstream 553f49b6).
+Future<void> _openExternalUrl(String url) async {
+  try {
+    await launchUrlString(url, mode: LaunchMode.externalApplication);
+  } catch (e) {
+    showError(e);
+  }
 }
 
 Future<void> _openPromoApp(String appId, String webUrl) async {
@@ -3679,13 +3994,13 @@ Future<void> _openPromoApp(String appId, String webUrl) async {
         mode: LaunchMode.externalNonBrowserApplication,
       );
       if (!launched) {
-        await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+        await _openExternalUrl(webUrl);
       }
     } catch (_) {
-      await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+      await _openExternalUrl(webUrl);
     }
   } else {
-    await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+    await _openExternalUrl(webUrl);
   }
 }
 
@@ -3806,6 +4121,17 @@ class _LogsSheetState extends State<LogsSheet> {
       );
     }
 
+    // Copies the logs with their diagnostics header: the TV action (TV has no
+    // share sheet), and the fallback when sharing fails (upstream 696551ed).
+    Future<void> copyLogs() async {
+      final String logs = logString ?? '';
+      final String diagnostics = await getDiagnosticsText(logs);
+      if (!context.mounted) return;
+      await copyToClipboard(context, '$diagnostics$logs');
+    }
+
+    final bool isTV = context.read<SettingsProvider>().isTV;
+
     return AppSheetScaffold(
       expand: true,
       header: Row(
@@ -3896,10 +4222,10 @@ class _LogsSheetState extends State<LogsSheet> {
                     context: context,
                     builder: (BuildContext modalContext) {
                       return GeneratedFormModal(
-                        title: tr('appLogs'),
+                        title: tr('clearLogs'),
                         items: const [],
                         initValid: true,
-                        message: tr('removeFromObtainX'),
+                        message: tr('clearLogsWarning'),
                         primaryActionColour: Theme.of(
                           modalContext,
                         ).colorScheme.error,
@@ -3912,6 +4238,7 @@ class _LogsSheetState extends State<LogsSheet> {
                 unawaited(logsProvider.clear());
                 if (!context.mounted) return;
                 Navigator.of(context).pop();
+                showMessage(tr('logsCleared'));
               }
             },
             style: TextButton.styleFrom(
@@ -3923,49 +4250,71 @@ class _LogsSheetState extends State<LogsSheet> {
             onPressed: () => Navigator.of(context).pop(),
             child: Text(tr('close')),
           ),
-          TextButton(
-            onPressed: () async {
-              final String logs = logString ?? '';
-              const int maxLogChars = 100000;
-              final String safeLogs = logs.length > maxLogChars
-                  ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
-                  : logs;
-              final String diagnostics = await getDiagnosticsText(safeLogs);
-              unawaited(
-                SharePlus.instance.share(
-                  ShareParams(
-                    text: '$diagnostics$safeLogs',
-                    subject: tr('appLogs'),
-                  ),
-                ),
-              );
-            },
-            child: Text(tr('share')),
-          ),
-          TextButton(
-            onPressed: () async {
-              final String logs = logString ?? '';
-              final String diagnostics = await getDiagnosticsText(logs);
-              final String timestampForFilename = DateTime.now()
-                  .toIso8601String()
-                  .replaceAll(':', '-');
-              final String logFileName =
-                  'obtainx-logs-$timestampForFilename.txt';
-              final XFile logFile = XFile.fromData(
-                Uint8List.fromList(utf8.encode('$diagnostics$logs')),
-                mimeType: 'text/plain',
-                name: logFileName,
-              );
-              await SharePlus.instance.share(
-                ShareParams(
-                  files: [logFile],
-                  fileNameOverrides: [logFileName],
-                  subject: tr('appLogs'),
-                ),
-              );
-            },
-            child: Text(tr('shareAsFile')),
-          ),
+          if (isTV)
+            TextButton(onPressed: copyLogs, child: Text(tr('copyToClipboard')))
+          else ...[
+            TextButton(
+              onPressed: () async {
+                final String logs = logString ?? '';
+                const int maxLogChars = 100000;
+                final String safeLogs = logs.length > maxLogChars
+                    ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
+                    : logs;
+                final String diagnostics = await getDiagnosticsText(safeLogs);
+                try {
+                  await SharePlus.instance.share(
+                    ShareParams(
+                      text: '$diagnostics$safeLogs',
+                      subject: tr('appLogs'),
+                    ),
+                  );
+                } catch (e) {
+                  unawaited(
+                    logsProvider.add(
+                      'Failed to share logs: $e',
+                      level: LogLevel.error,
+                    ),
+                  );
+                  await copyLogs();
+                }
+              },
+              child: Text(tr('share')),
+            ),
+            TextButton(
+              onPressed: () async {
+                final String logs = logString ?? '';
+                final String diagnostics = await getDiagnosticsText(logs);
+                final String timestampForFilename = DateTime.now()
+                    .toIso8601String()
+                    .replaceAll(':', '-');
+                final String logFileName =
+                    'obtainx-logs-$timestampForFilename.txt';
+                final XFile logFile = XFile.fromData(
+                  Uint8List.fromList(utf8.encode('$diagnostics$logs')),
+                  mimeType: 'text/plain',
+                  name: logFileName,
+                );
+                try {
+                  await SharePlus.instance.share(
+                    ShareParams(
+                      files: [logFile],
+                      fileNameOverrides: [logFileName],
+                      subject: tr('appLogs'),
+                    ),
+                  );
+                } catch (e) {
+                  unawaited(
+                    logsProvider.add(
+                      'Failed to share logs: $e',
+                      level: LogLevel.error,
+                    ),
+                  );
+                  await copyLogs();
+                }
+              },
+              child: Text(tr('shareAsFile')),
+            ),
+          ],
         ],
       ),
     );

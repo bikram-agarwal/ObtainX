@@ -382,13 +382,11 @@ class ItchIO extends AppSource {
     if (directUrl == null) return null;
 
     final String baseUrl = standardUrl.replaceAll(RegExp(r'/$'), '');
-    // Local copy: the signed URL is short-lived and must not be persisted into
-    // the app's additionalSettings.
-    final requestSettings = Map<String, dynamic>.from(additionalSettings)
-      ..['url'] = directUrl;
-    final streamRes = await sourceRequestStreamResponse('GET', {
+    // ObtainX's stream request takes the URL positionally, so the short-lived
+    // signed URL never touches the app's additionalSettings.
+    final streamRes = await sourceRequestStreamResponse('GET', directUrl, {
       'Referer': '$baseUrl?download',
-    }, requestSettings);
+    }, additionalSettings);
 
     // Peek into the Content-Disposition header
     final response = streamRes.value.value;

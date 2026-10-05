@@ -19,9 +19,12 @@ class HuaweiAppGallery extends AppSource {
     ];
     trustedApkHosts = ['dbankcloud.com', 'dbankcloud.ru'];
     canSearch = true;
+    regionalStore = true;
   }
 
-  static const String _sessionPrefsKey = 'huaweiAppGallery-session';
+  /// Prefs key of the cached store-API session (24 h). It counts as a secret,
+  /// so exports without secrets leave it out.
+  static const String sessionPrefsKey = 'huaweiAppGallery-session';
 
   static const String _apiPath = '/hwmarket/api/clientApi';
   static const String _userAgent = 'HiSpace##16.5.1.301##google##Pixel 8 Pro';
@@ -255,7 +258,7 @@ class HuaweiAppGallery extends AppSource {
   }) async {
     if (!forceRefresh) {
       final session =
-          _session ?? _Session.tryParse(sp.getSettingString(_sessionPrefsKey));
+          _session ?? _Session.tryParse(sp.getSettingString(sessionPrefsKey));
       if (session != null && session.isUsable) {
         _session = session;
         return session;
@@ -285,7 +288,7 @@ class HuaweiAppGallery extends AppSource {
     }
     final session = _Session(host, sign, deviceId, DateTime.now());
     _session = session;
-    sp.setSettingString(_sessionPrefsKey, session.toBlob());
+    sp.setSettingString(sessionPrefsKey, session.toBlob());
     return session;
   }
 

@@ -154,7 +154,7 @@ class _GitHub extends GitHub {
   ) async {
     return APKDetails('1.5.5-ced5040c', const [
       MapEntry('WaEnhancer-1.5.5.CED5040C.apk', 'https://example.com/wa.apk'),
-    ], AppNames('Example', 'Example'));
+    ], const AppNames('Example', 'Example'));
   }
 }
 

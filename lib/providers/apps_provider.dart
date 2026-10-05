@@ -20,7 +20,6 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/io_client.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/http/response_bytes.dart';
@@ -33,16 +32,12 @@ import 'package:flutter_fgbg/flutter_fgbg.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:workmanager/workmanager.dart';
-import 'package:obtainium/main.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/easy_localization_controller.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/localization.dart';
 
 import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/utils/translation_loader.dart';
 import 'package:obtainium/version/app_version.dart';
 export 'package:obtainium/version/app_version.dart';
 
@@ -186,7 +181,7 @@ class AppInMemory {
   String get sourceIdentifier => sourceType ?? sourceIdentifierForApp(app);
 
   String get name => app.finalName;
-  String get author => app.overrideAuthor ?? app.finalAuthor;
+  String get author => app.finalAuthor;
 
   bool get needsRefreshBeforeDownload =>
       app.settings.getBool('refreshBeforeDownload') ||
@@ -282,7 +277,10 @@ class DownloadedApk {
   DownloadedApk(this.appId, this.file, {this.release});
 }
 
-enum DownloadedDirType { xapk, zip, tarball }
+/// [splitApks]: a base APK plus split APKs downloaded from separate URLs into
+/// one directory (upstream #3298; only RuStore produces them). Its [DownloadedDir.file]
+/// is the base APK inside [DownloadedDir.extracted], not a container.
+enum DownloadedDirType { xapk, zip, tarball, splitApks }
 
 class DownloadedDir {
   String appId;
@@ -319,13 +317,6 @@ List<T> _moveToEnd<T extends Object>(List<T> arr, bool Function(T) match) {
 List<String> moveStrToEnd(List<String> arr, String str, {String? strB}) =>
     _moveToEnd(arr, (e) => e == str || e == strB);
 
-/// See [_moveToEnd] for semantic details.
-List<MapEntry<String, int>> moveStrToEndMapEntryWithCount(
-  List<MapEntry<String, int>> arr,
-  MapEntry<String, int> str, {
-  MapEntry<String, int>? strB,
-}) => _moveToEnd(arr, (e) => e.key == str.key || e.key == strB?.key);
-
 Future<File> downloadFileWithRetry(
   String url,
   String fileName,
@@ -336,6 +327,8 @@ Future<File> downloadFileWithRetry(
   Map<String, String>? headers,
   int retries = _defaultRetries,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
@@ -349,16 +342,22 @@ Future<File> downloadFileWithRetry(
       useExisting: useExisting,
       headers: headers,
       allowInsecure: allowInsecure,
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
       logs: logs,
       cancellationToken: cancellationToken,
     );
   } catch (e) {
     // A cancellation is not one of the retryable error types, so it naturally
-    // falls through to rethrow below.
+    // falls through to rethrow below. 429/5xx responses are transient, and a
+    // short read keeps its .part file so the retry resumes it with a Range
+    // request (upstream 6df95aac, d028ab9a).
     if (retries > 0 &&
         (e is ClientException ||
             e is SocketException ||
-            e is TimeoutException)) {
+            e is TimeoutException ||
+            e is HttpException ||
+            _isRetryableDownloadError(e))) {
       await Future.delayed(const Duration(seconds: _retryDelaySeconds));
       return await downloadFileWithRetry(
         url,
@@ -370,6 +369,8 @@ Future<File> downloadFileWithRetry(
         headers: headers,
         retries: (retries - 1),
         allowInsecure: allowInsecure,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
         logs: logs,
         cancellationToken: cancellationToken,
       );
@@ -377,6 +378,16 @@ Future<File> downloadFileWithRetry(
       rethrow;
     }
   }
+}
+
+/// A download failure worth retrying: HTTP 429/5xx (statusCode kept in
+/// `data`, which the GitHub 401 retry also reads) or a short read.
+bool _isRetryableDownloadError(Object e) {
+  if (e is! ObtainiumError) return false;
+  if (e.code == 'INCOMPLETE_DOWNLOAD') return true;
+  if (e.code != 'HTTP_ERROR') return false;
+  final Object? statusCode = e.data['statusCode'];
+  return statusCode is int && (statusCode == 429 || statusCode >= 500);
 }
 
 class DownloadResponseMetadata {
@@ -392,13 +403,6 @@ class DownloadResponseMetadata {
       extractDownloadFileNameFromContentDisposition(
         headers['content-disposition'],
       );
-}
-
-Uri _finalResponseUri(StreamedResponse response, Uri originalUri) {
-  if (response case BaseResponseWithUrl(:final Uri url)) {
-    return url;
-  }
-  return response.request?.url ?? originalUri;
 }
 
 String? sanitizeDownloadFileName(String? rawFileName) {
@@ -457,11 +461,46 @@ String? extractDownloadFileNameFromContentDisposition(
 }
 
 DownloadResponseMetadata _downloadResponseMetadata(
-  StreamedResponse response,
-  Uri originalUri,
-) => DownloadResponseMetadata(
-  finalUri: _finalResponseUri(response, originalUri),
-  headers: response.headers,
+  Uri finalUri,
+  HttpClientResponse response,
+) {
+  final Map<String, String> headers = <String, String>{};
+  response.headers.forEach((String name, List<String> values) {
+    headers[name] = values.join(', ');
+  });
+  return DownloadResponseMetadata(finalUri: finalUri, headers: headers);
+}
+
+/// [headers] (or none) plus `Range: [range]`, as a copy.
+Map<String, String> _withRangeHeader(
+  Map<String, String>? headers,
+  String range,
+) {
+  final Map<String, String> result = <String, String>{...?headers};
+  result.removeWhere(
+    (String key, String _) => key.toLowerCase() == HttpHeaders.rangeHeader,
+  );
+  result[HttpHeaders.rangeHeader] = range;
+  return result;
+}
+
+/// A probe GET through [HttpService]'s redirect handler, so a cross-origin
+/// redirect drops the source's credentials and cookies (upstream ec334d22),
+/// and pinned or RuStore hosts get their own trust store. The caller closes
+/// the returned client.
+Future<MapEntry<Uri, MapEntry<HttpClient, HttpClientResponse>>> _probeRequest(
+  String url,
+  Map<String, String>? headers, {
+  required bool allowInsecure,
+  required bool allowInsecureRedirects,
+  required bool certificatePinning,
+}) => HttpService().sourceRequestStreamResponse(
+  'GET',
+  url,
+  headers == null ? null : Map<String, String>.of(headers),
+  {'allowInsecure': allowInsecure},
+  allowInsecureRedirects: allowInsecureRedirects,
+  certificatePinning: certificatePinning,
 );
 
 /// Fetches only enough of a download response to inspect headers and redirects.
@@ -469,22 +508,25 @@ Future<DownloadResponseMetadata?> probeDownloadResponseMetadata(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
 }) async {
-  final Uri originalUri = Uri.parse(url);
-  final Request request = Request('GET', originalUri);
-  request.headers.addAll(withDefaultObtainXUserAgent(headers));
-  request.headers[HttpHeaders.rangeHeader] = 'bytes=0-0';
-  final IOClient client = IOClient(createHttpClient(allowInsecure));
+  final streamed = await _probeRequest(
+    url,
+    _withRangeHeader(headers, 'bytes=0-0'),
+    allowInsecure: allowInsecure,
+    allowInsecureRedirects: allowInsecureRedirects,
+    certificatePinning: certificatePinning,
+  );
+  final HttpClient client = streamed.value.key;
+  final HttpClientResponse response = streamed.value.value;
   try {
-    final StreamedResponse response = await client
-        .send(request)
-        .timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
-    return _downloadResponseMetadata(response, originalUri);
+    return _downloadResponseMetadata(streamed.key, response);
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 
@@ -494,6 +536,8 @@ Future<String> checkPartialDownloadHashDynamic(
   int lowerLimit = _partialHashCheckLowerLimit,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
   bool metadataReported = false;
@@ -514,6 +558,8 @@ Future<String> checkPartialDownloadHashDynamic(
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
         onResponseMetadata: reportMetadata,
       ),
       checkPartialDownloadHash(
@@ -521,6 +567,8 @@ Future<String> checkPartialDownloadHashDynamic(
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
         onResponseMetadata: reportMetadata,
       ),
     ]);
@@ -536,26 +584,34 @@ Future<String> checkPartialDownloadHash(
   int bytesToGrab, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final Uri originalUri = Uri.parse(url);
-  final req = Request('GET', originalUri);
-  req.headers.addAll(withDefaultObtainXUserAgent(headers));
   if (bytesToGrab <= 0) throw ArgumentError.value(bytesToGrab, 'bytesToGrab');
-  req.headers[HttpHeaders.rangeHeader] = 'bytes=0-${bytesToGrab - 1}';
-  final client = IOClient(createHttpClient(allowInsecure));
+  final streamed = await _probeRequest(
+    url,
+    _withRangeHeader(headers, 'bytes=0-${bytesToGrab - 1}'),
+    allowInsecure: allowInsecure,
+    allowInsecureRedirects: allowInsecureRedirects,
+    certificatePinning: certificatePinning,
+  );
+  final HttpClient client = streamed.value.key;
+  final HttpClientResponse response = streamed.value.value;
   try {
-    final response = await client.send(req).timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw ObtainiumError(response.reasonPhrase ?? tr('unexpectedError'))
-        ..url = url;
+      throw ObtainiumError(
+        response.reasonPhrase.isNotEmpty
+            ? response.reasonPhrase
+            : tr('unexpectedError'),
+      )..url = url;
     }
-    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
-    final bytes = await readBytePrefix(response.stream, bytesToGrab);
+    onResponseMetadata?.call(_downloadResponseMetadata(streamed.key, response));
+    final bytes = await readBytePrefix(response, bytesToGrab);
     if (bytes.isEmpty) throw NoVersionError();
     return 'sha256:$bytesToGrab:${sha256.convert(bytes)}';
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 
@@ -563,27 +619,32 @@ Future<String?> checkETagHeader(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final reqHeaders = withDefaultObtainXUserAgent(headers);
-  final Uri originalUri = Uri.parse(url);
-  final req = Request('GET', originalUri);
-  req.headers.addAll(reqHeaders);
-  final client = IOClient(createHttpClient(allowInsecure));
+  final streamed = await _probeRequest(
+    url,
+    headers,
+    allowInsecure: allowInsecure,
+    allowInsecureRedirects: allowInsecureRedirects,
+    certificatePinning: certificatePinning,
+  );
+  final HttpClient client = streamed.value.key;
+  final HttpClientResponse response = streamed.value.value;
   try {
-    final StreamedResponse response = await client
-        .send(req)
-        .timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
-    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
-    final etag = response.headers[HttpHeaders.etagHeader]?.replaceAll('"', '');
+    onResponseMetadata?.call(_downloadResponseMetadata(streamed.key, response));
+    final etag = response.headers
+        .value(HttpHeaders.etagHeader)
+        ?.replaceAll('"', '');
     return etag != null
         ? sha256.convert(utf8.encode(etag)).toString().substring(0, 12)
         : null;
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 
@@ -674,6 +735,8 @@ Future<File> downloadFile(
   bool useExisting = true,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
@@ -689,6 +752,8 @@ Future<File> downloadFile(
       useExisting: useExisting,
       headers: headers,
       allowInsecure: allowInsecure,
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
       logs: logs,
       cancellationToken: cancellationToken,
     );
@@ -708,26 +773,43 @@ Future<File> _downloadFile(
   bool useExisting = true,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
   final reqHeaders = withDefaultObtainXUserAgent(headers);
   final responseClient = createHttpClient(allowInsecure);
+  // The client of the request in flight when its final hop needed its own trust
+  // store (RuStore, or a pinned host): not [responseClient], so cancelling and
+  // cleanup must close it too.
+  HttpClient? hopClient;
   IOSink? sink;
   void abortDownload() {
     responseClient.close(force: true);
+    hopClient?.close(force: true);
   }
 
-  cancellationToken?.addListener(abortDownload);
-  try {
-    cancellationToken?.throwIfCancelled();
-    var response = (await HttpService().sourceRequestStreamResponse(
+  Future<HttpClientResponse> sendRequest() async {
+    final streamed = await HttpService().sourceRequestStreamResponse(
       'GET',
       url,
       reqHeaders,
       {'allowInsecure': allowInsecure},
       sharedClient: responseClient,
-    )).value.value;
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
+    );
+    hopClient = identical(streamed.value.key, responseClient)
+        ? null
+        : streamed.value.key;
+    return streamed.value.value;
+  }
+
+  cancellationToken?.addListener(abortDownload);
+  try {
+    cancellationToken?.throwIfCancelled();
+    var response = await sendRequest();
     final resHeaders = <String, String>{};
     response.headers.forEach((name, values) {
       resHeaders[name] = values.join(', ');
@@ -760,17 +842,26 @@ Future<File> _downloadFile(
       ext = ext.substring(0, ext.length - 1);
     }
     final urlPath = Uri.tryParse(url)?.path ?? url;
-    if (AppSource.isApkOrContainerFile(urlPath)) {
-      // Preserve the real extension (.apk/.xapk/.apkm/.apks) so XAPK/APKS
-      // bundles are still detected and extracted downstream rather than forced
-      // to .apk and handed to the APK parser.
+    if (AppSource.isApkOrContainerFile(
+      urlPath,
+      includeArchives: true,
+      includeTarballs: true,
+    )) {
+      // Preserve the real extension (.apk/.xapk/.apkm/.apks, and .zip/.tar.*
+      // containers, upstream #3208) so bundles are still detected and
+      // extracted downstream rather than forced to .apk and handed to the APK
+      // parser.
       ext = urlPath.split('.').last.toLowerCase();
     } else if (ext == 'attachment') {
       ext = 'apk';
     }
-    fileName = fileNameHasExt
-        ? fileName
-        : fileName.split('/').last; // Ensure the fileName is a file name
+    // Never trust a source-provided fileName: always reduce it to a plain
+    // basename so it cannot escape destDir, whatever the caller passed
+    // (upstream 96ae51b5).
+    fileName = fileName.replaceAll(r'\', '/').split('/').last;
+    if (fileName.isEmpty || fileName == '.' || fileName == '..') {
+      throw ObtainiumError(tr('unexpectedError'))..url = url;
+    }
     File downloadedFile = File('$destDir/$fileName.$ext');
     if (fileNameHasExt) {
       // If the user says the filename already has an ext, ignore whatever you inferred from above
@@ -835,13 +926,8 @@ Future<File> _downloadFile(
       // Only a resume needs a second request. Cancel the initial body without
       // downloading it, then reopen at the partial file's byte offset.
       await response.listen((_) {}).cancel();
-      response = (await HttpService().sourceRequestStreamResponse(
-        'GET',
-        url,
-        reqHeaders,
-        {'allowInsecure': allowInsecure},
-        sharedClient: responseClient,
-      )).value.value;
+      hopClient?.close(force: true);
+      response = await sendRequest();
       sentRangeRequest = true;
     }
     // If we requested a byte range to resume a partial download but the server
@@ -1007,6 +1093,7 @@ Future<File> _downloadFile(
   } finally {
     cancellationToken?.removeListener(abortDownload);
     responseClient.close(force: true);
+    hopClient?.close(force: true);
     unawaited(
       sink?.close().catchError((_) {
         logs?.add('Failed to close download sink', level: LogLevel.warning);
@@ -1022,18 +1109,30 @@ Future<int?> getDownloadSize(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
 }) async {
-  final reqHeaders = withDefaultObtainXUserAgent(headers);
-  final client = IOClient(createHttpClient(allowInsecure));
+  HttpClient? client;
   try {
-    final getReq = Request('GET', Uri.parse(url));
-    getReq.headers.addAll(reqHeaders);
-    final response = await client.send(getReq).timeout(sourceResponseTimeout);
+    final streamed = await _probeRequest(
+      url,
+      headers,
+      allowInsecure: allowInsecure,
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
+    );
+    client = streamed.value.key;
+    final HttpClientResponse response = streamed.value.value;
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
-    final length = response.contentLength;
-    return (length != null && length > 0) ? length : null;
+    // -1 when unknown; a transparently decompressed body has no usable length.
+    final int length = response.contentLength;
+    return length > 0 &&
+            response.compressionState !=
+                HttpClientResponseCompressionState.decompressed
+        ? length
+        : null;
   } on SocketException {
     return null;
   } on TimeoutException {
@@ -1041,6 +1140,11 @@ Future<int?> getDownloadSize(
   } on ClientException {
     return null;
   } on HandshakeException {
+    return null;
+  } on HttpException {
+    return null;
+  } on ObtainiumError {
+    // A refused redirect (e.g. HTTPS to HTTP) or too many redirects.
     return null;
   } catch (e) {
     unawaited(
@@ -1051,47 +1155,8 @@ Future<int?> getDownloadSize(
     );
     return null;
   } finally {
-    client.close();
+    client?.close(force: true);
   }
-}
-
-/// Formats a byte count with coarse, fixed per-unit precision (e.g. "5.0 GB",
-/// "512 MB", "128 KB"). Used for download-size labels in the UI.
-String formatBytesForDisplay(int bytes) {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-  } else if (bytes >= 1024 * 1024) {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
-  } else if (bytes >= 1024) {
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
-  } else {
-    return '$bytes B';
-  }
-}
-
-/// Formats a byte count as a short human-readable string (e.g. "5.0 MB").
-String formatBytes(int bytes) {
-  if (bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  var size = bytes.toDouble();
-  var unit = 0;
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024;
-    unit++;
-  }
-  final value = unit == 0 ? size.toStringAsFixed(0) : size.toStringAsFixed(1);
-  return '$value ${units[unit]}';
-}
-
-/// Formats download progress as "received / total" (e.g. "5.0 MB / 20.0 MB"),
-/// or just the received amount when the total is unknown. Returns null when no
-/// bytes have been received yet.
-String? formatDownloadSize(int? receivedBytes, int? totalBytes) {
-  if (receivedBytes == null) return null;
-  if (totalBytes != null && totalBytes > 0) {
-    return '${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)}';
-  }
-  return formatBytes(receivedBytes);
 }
 
 Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
@@ -1211,47 +1276,6 @@ Future<PackageInfo?> getInstalledInfo(
   return null;
 }
 
-/// Snapshot of a package's install state, taken before an install so that
-/// [waitForPackageInstall] can later tell whether the install landed.
-class InstallBaseline {
-  final bool wasInstalled;
-  final int? updateTime;
-  const InstallBaseline(this.wasInstalled, this.updateTime);
-}
-
-/// Captures the current install state of [appId] to compare against later.
-Future<InstallBaseline> captureInstallBaseline(String appId) async {
-  final info = await getInstalledInfo(appId);
-  return InstallBaseline(info != null, info?.lastUpdateTime);
-}
-
-/// Polls for an install that can't report completion synchronously (a silent
-/// background install, or a hand-off to an external installer). Returns true as
-/// soon as the package appears (when it wasn't installed before) or its update
-/// timestamp changes relative to [baseline] — a version-agnostic signal that
-/// also works with pseudo-versions — or false if neither happens within
-/// [attempts] × [interval].
-Future<bool> waitForPackageInstall(
-  String appId,
-  InstallBaseline baseline, {
-  required int attempts,
-  Duration interval = const Duration(milliseconds: 500),
-}) async {
-  for (var attempt = 0; attempt < attempts; attempt++) {
-    final info = await getInstalledInfo(appId);
-    if (info != null) {
-      if (!baseline.wasInstalled) return true;
-      final updateTimeAfter = info.lastUpdateTime;
-      if (baseline.updateTime == null ||
-          (updateTimeAfter != null && updateTimeAfter != baseline.updateTime)) {
-        return true;
-      }
-    }
-    await Future.delayed(interval);
-  }
-  return false;
-}
-
 Future<Directory> getAppStorageDir() async {
   try {
     final extDir = await getExternalStorageDirectory();
@@ -1291,6 +1315,12 @@ AppInMemory? sameStoreListingIn(
   }
   return null;
 }
+
+/// The duplicate error for a listing that collides with [existing], naming it
+/// (upstream #3038).
+ObtainiumError appAlreadyAddedError(AppInMemory existing) => ObtainiumError(
+  '${tr('appAlreadyAdded')}: ${existing.name} (${existing.app.id})',
+);
 
 /// Returns [app] carrying the listing ID it should be stored under in
 /// [listings].
@@ -1350,9 +1380,8 @@ class AppsProvider with ChangeNotifier {
   /// before assuming the provider is in a usable state.
   String? initError;
 
-  /// Non-null while a [checkUpdates] batch is in flight. Serves as both an
-  /// atomic guard (preventing concurrent batches) and a deduplication
-  /// mechanism: subsequent callers receive the existing completer's future.
+  /// Non-null while a [checkUpdates] batch is in flight. Batches never overlap:
+  /// a later call waits for this one to finish, then checks its own IDs.
   Completer<List<App>>? updateCheckCompleter;
   final ValueNotifier<double?> refreshProgressNotifier = ValueNotifier(null);
   double? get refreshProgress => refreshProgressNotifier.value;
@@ -1440,6 +1469,9 @@ class AppsProvider with ChangeNotifier {
     }
     return _apkDir!;
   }
+
+  /// Whether [iconsCacheDir] is usable yet (set by the async init).
+  bool get iconsCacheDirReady => _iconsCacheDir != null;
 
   Directory get iconsCacheDir {
     if (_iconsCacheDir == null) {
@@ -1586,6 +1618,7 @@ class AppsProvider with ChangeNotifier {
 
   /// Requests cancellation of an ongoing download for [appId], if any.
   void cancelDownload(String appId) {
+    if (_disposed) return;
     _downloadCancellations[appId]?.cancel();
     final entry = apps[appId];
     if (entry != null && entry.downloadProgress != null) {
@@ -1774,6 +1807,19 @@ class AppsProvider with ChangeNotifier {
 
   @override
   void dispose() {
+    // Unhook the static notification callbacks only while they still point at
+    // this instance, and stop its in-flight downloads (upstream 8c33f251).
+    if (NotificationsProvider.onDownloadCancelRequested == cancelDownload) {
+      NotificationsProvider.onDownloadCancelRequested = null;
+    }
+    if (NotificationsProvider.onInstallDownloadedFileRequested ==
+        installDownloadedAssetFile) {
+      NotificationsProvider.onInstallDownloadedFileRequested = null;
+    }
+    for (final CancellationToken token in _downloadCancellations.values) {
+      token.cancel();
+    }
+    _downloadCancellations.clear();
     _disposed = true;
     foregroundSubscription?.cancel();
     _autoExportDebounce?.cancel();
@@ -1812,8 +1858,13 @@ class AppsProvider with ChangeNotifier {
     final List<App> pps = results[0];
     final Map<String, dynamic> errorsMap = results[1];
     for (var app in pps) {
-      if (sameStoreListingIn(apps, app) != null) {
-        errorsMap.addAll({app.id: tr('appAlreadyAdded')});
+      final AppInMemory? existingListing = sameStoreListingIn(apps, app);
+      if (existingListing != null) {
+        // Name the listing it collides with (upstream #3038); the error is
+        // already keyed by the package id.
+        errorsMap.addAll({
+          app.id: '${tr('appAlreadyAdded')}: ${existingListing.name}',
+        });
       } else {
         await saveApps([withAllocatedListingId(app)], onlyIfExists: false);
       }
@@ -1925,7 +1976,15 @@ Future<bool> _runBGInstallMode(
         );
         unawaited(
           notificationsProvider.notify(
-            ErrorInstallingUpdatesNotification(failure),
+            // One notification per error group, so one install failure
+            // doesn't replace another (upstream f5ee3bd7).
+            ErrorInstallingUpdatesNotification(
+              failure,
+              id:
+                  errorInstallingUpdatesNotificationId +
+                  200 +
+                  key.hashCode.abs(),
+            ),
           ),
         );
       });
@@ -2151,10 +2210,12 @@ Future<void> bgUpdateCheck(
           notificationsProvider.notify(
             ErrorCheckingUpdatesNotification(
               result.errors!.errorsAppsString(element.key, element.value),
+              // Stable per error, so a repeat replaces its notification
+              // instead of stacking another (upstream 8c33f251).
               id:
                   errorCheckingUpdatesNotificationId +
                   100 +
-                  Random().nextInt(9900),
+                  element.key.hashCode.abs(),
             ),
           ),
         );
@@ -2163,7 +2224,11 @@ Future<void> bgUpdateCheck(
   } else {
     unawaited(bgLogs.add('BG update task: No apps due for checking.'));
   }
-  if (canInstall && params['toCheck'] == null) {
+  // Pending updates are only worth gathering when background installs are on
+  // (#3070); checks themselves run whenever the interval is set.
+  final bool backgroundInstallsEnabled =
+      appsProvider.settingsProvider.enableBackgroundUpdates;
+  if (canInstall && backgroundInstallsEnabled && params['toCheck'] == null) {
     final discovered = appsProvider.findExistingUpdates(
       installedOnly: true,
       excludeOnDemandOnly: true,
@@ -2194,9 +2259,13 @@ Future<void> bgUpdateCheck(
           notificationsProvider,
           bgLogs,
         )
-      : appsProvider
-            .findExistingUpdates(installedOnly: true, excludeOnDemandOnly: true)
-            .isNotEmpty;
+      : backgroundInstallsEnabled &&
+            appsProvider
+                .findExistingUpdates(
+                  installedOnly: true,
+                  excludeOnDemandOnly: true,
+                )
+                .isNotEmpty;
   // A retry carrying its own list never looked at the other pending installs,
   // so it leaves the due time as its saves left it (cleared) and the next
   // wake-up works it out in full.
@@ -2270,7 +2339,10 @@ _bgRunUpdateCheck(
               : err is ClientException
               ? (_bgClientExceptionRetryWaitSeconds)
               : (toCheckApp.value + 1);
-          if (minRetryIntervalForThisApp > _bgUpdateMaxRetryWaitSeconds) {
+          // A rate limit is waited out in full: capped, every retry landed
+          // inside the window and was wasted (upstream #3113).
+          if (minRetryIntervalForThisApp > _bgUpdateMaxRetryWaitSeconds &&
+              err is! RateLimitError) {
             minRetryIntervalForThisApp = _bgUpdateMaxRetryWaitSeconds;
           }
           if (minRetryIntervalForThisApp > retryAfterXSeconds) {
@@ -2282,6 +2354,23 @@ _bgRunUpdateCheck(
           }
         }
       });
+      // The retry budget is spent for these, so move their check time even
+      // after a transient failure: a source unreachable for the whole retry
+      // window then waits a full interval, as a persistent failure does
+      // (v1.6.17 sync D10).
+      final DateTime checkedAt = DateTime.now();
+      final List<App> exhausted = [
+        for (final String key in toThrow.rawErrors.keys)
+          if (appsProvider.apps[key]?.app case final App liveApp)
+            liveApp.copyWith(lastUpdateCheck: checkedAt),
+      ];
+      if (exhausted.isNotEmpty) {
+        await appsProvider.saveApps(
+          exhausted,
+          attemptToCorrectInstallStatus: false,
+          updateInstalledInfo: false,
+        );
+      }
     } else {
       unawaited(logs.add('Fatal error in BG update task: ${e.toString()}'));
       rethrow;
@@ -2351,35 +2440,6 @@ class CancellationToken {
   }
 }
 
-/// Isolates the implementation-level `easy_localization/src/` imports to a
-/// single file so the rest of the codebase only depends on the public API.
-class TranslationLoader {
-  static Future<void> load() async {
-    await EasyLocalizationController.initEasyLocation();
-    final s = SettingsProvider();
-    await s.initializeSettings();
-    final forceLocale = s.forcedLocale;
-    final controller = EasyLocalizationController(
-      saveLocale: true,
-      forceLocale: forceLocale,
-      fallbackLocale: fallbackLocale,
-      supportedLocales: supportedLocales.map((e) => e.key).toList(),
-      assetLoader: const RootBundleAssetLoader(),
-      useOnlyLangCode: false,
-      useFallbackTranslations: true,
-      path: localeDir,
-      onLoadError: (FlutterError e) {
-        throw e;
-      },
-    );
-    await controller.loadTranslations();
-    Localization.load(
-      controller.locale,
-      translations: controller.translations,
-      fallbackTranslations: controller.fallbackTranslations,
-    );
-  }
-}
 // Platform channel helpers for native OS features (e.g. system font loading).
 
 class NativeFeatures {
@@ -2576,7 +2636,12 @@ class NativeFeatures {
         return null;
       }
       return Uri.parse(uriString);
-    } on PlatformException {
+    } on PlatformException catch (e) {
+      // Nothing handles ACTION_OPEN_DOCUMENT_TREE on this device (some TV
+      // boxes): say so rather than silently doing nothing (upstream #3227).
+      if (e.code == 'OPEN_TREE_FAILED') {
+        throw ObtainiumError(tr('noFilePickerAvailable'));
+      }
       return null;
     } on MissingPluginException {
       return null;

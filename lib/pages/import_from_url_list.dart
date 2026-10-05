@@ -229,7 +229,9 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
   String? _validateUrls(String? value) {
     if (value == null || value.trim().isEmpty) return null;
     if (linkImportIn(value) != null) return null;
-    final List<String> lines = value.trim().split('\n');
+    // Split the text as typed, so "Line N" counts the lines the user sees,
+    // blank ones included (upstream 1d699fd9).
+    final List<String> lines = value.split('\n');
     for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
       if (lines[lineIndex].trim().isEmpty) continue;
       if (linkImportIn(lines[lineIndex]) != null) continue;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:device_info_plus_platform_interface/device_info_plus_platform_interface.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -20,6 +22,7 @@ import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:obtainium/http/source_request_session.dart';
+import 'package:obtainium/services/repository_index.dart';
 
 class _RealHttpOverrides extends HttpOverrides {}
 
@@ -56,7 +59,7 @@ class _StubAPKMirror extends APKMirror {
     return APKDetails(
       version,
       const <MapEntry<String, String>>[],
-      AppNames('Example', 'example'),
+      const AppNames('Example', 'example'),
       apkSizeBytes: apkSizeFromSource,
     );
   }
@@ -102,7 +105,7 @@ class _StubSource extends AppSource {
     return APKDetails(
       version,
       apkUrls,
-      AppNames('Example Author', 'Readable Name'),
+      const AppNames('Example Author', 'Readable Name'),
       versionCode: versionCode,
       versionCodesByAsset: versionCodesByAsset,
     );
@@ -451,6 +454,71 @@ Response _fdroidRepoResponse(String xml) {
   );
 }
 
+Map<String, dynamic> _fdroidRepoV2Release(
+  int versionCode,
+  String versionName, {
+  String appId = 'org.example.app',
+  List<String> nativecode = const [],
+  List<String> releaseChannels = const [],
+}) {
+  return {
+    'added': 1767225600000 + versionCode,
+    'file': {
+      'name': '/${appId}_$versionCode.apk',
+      'sha256': 'hash$versionCode',
+      'size': versionCode * 10,
+    },
+    'manifest': {
+      'versionName': versionName,
+      'versionCode': versionCode,
+      if (nativecode.isNotEmpty) 'nativecode': nativecode,
+    },
+    if (releaseChannels.isNotEmpty) 'releaseChannels': releaseChannels,
+  };
+}
+
+/// An index-v2 app whose newest build (3.0) is Beta and whose stable 2.0 is
+/// an arch split, one build of which (x86_64, code 22) is also Beta.
+Map<String, dynamic> _fdroidRepoV2Index() {
+  return {
+    'repo': {
+      'name': {'en-US': 'Example Repo'},
+    },
+    'packages': {
+      'org.example.app': {
+        'metadata': {
+          'name': {'en-US': 'Example App'},
+          'summary': {'en-US': 'An example'},
+          'authorName': 'Example Dev',
+          'changelog': 'https://example.org/changes',
+          'icon': {
+            'en-US': {
+              'name': '/org.example.app/en-US/icon.png',
+              'sha256': 'iconhash',
+              'size': 1,
+            },
+          },
+        },
+        'versions': {
+          'hash30': _fdroidRepoV2Release(30, '3.0', releaseChannels: ['Beta']),
+          'hash22': _fdroidRepoV2Release(
+            22,
+            '2.0',
+            nativecode: ['x86_64'],
+            releaseChannels: ['Beta'],
+          ),
+          'hash21': _fdroidRepoV2Release(21, '2.0', nativecode: ['arm64-v8a']),
+          'hash20': _fdroidRepoV2Release(
+            20,
+            '2.0',
+            nativecode: ['armeabi-v7a'],
+          ),
+        },
+      },
+    },
+  };
+}
+
 Response _fdroidVerificationResponse({required bool verified}) {
   return Response(
     jsonEncode({
@@ -696,7 +764,7 @@ void main() {
     },
   );
 
-  test('GitHub download retries 401 without an authorization header', () {
+  test('GitHub and Codeberg downloads retry 401 without the token', () {
     final Map<String, String> headers = <String, String>{
       HttpHeaders.authorizationHeader: 'Bearer invalid-token',
       HttpHeaders.acceptHeader: 'application/octet-stream',
@@ -727,6 +795,15 @@ void main() {
       ),
       isFalse,
     );
+    // Codeberg's requests go through the GitHub source's code (D15).
+    expect(
+      shouldRetryGitHubDownloadWithoutAuthorization(
+        source: Codeberg(),
+        headers: headers,
+        error: unauthorizedError,
+      ),
+      isTrue,
+    );
     expect(
       shouldRetryGitHubDownloadWithoutAuthorization(
         source: _StubSource(),
@@ -735,6 +812,48 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('a Codeberg token goes only to its own host', () async {
+    final Codeberg codeberg = Codeberg();
+    const Map<String, dynamic> settings = <String, dynamic>{
+      Codeberg.tokenKey: 'forgejo-token',
+    };
+    final Map<String, String>? own = await codeberg.getRequestHeaders(
+      settings,
+      'https://codeberg.org/owner/repo/releases/download/v1/app.apk',
+      forAPKDownload: true,
+    );
+    expect(own?[HttpHeaders.authorizationHeader], 'Bearer forgejo-token');
+    // A release asset can link to another host, which must not receive it.
+    final Map<String, String>? other = await codeberg.getRequestHeaders(
+      settings,
+      'https://cdn.example.org/app.apk',
+      forAPKDownload: true,
+    );
+    expect(other?[HttpHeaders.authorizationHeader], isNull);
+    expect(other?[HttpHeaders.acceptHeader], 'application/octet-stream');
+  });
+
+  test('a network failure a source wrapped is not persistent (D10)', () {
+    Object wrapped(Object error) {
+      try {
+        rethrowOrWrapError(error);
+      } catch (e) {
+        return e;
+      }
+    }
+
+    // Most sources wrap whatever they catch as an unexpected ObtainiumError.
+    final Object offline = wrapped(const SocketException('Failed host lookup'));
+    expect(offline, isA<ObtainiumError>());
+    expect(checkFailureIsPersistent(offline), isFalse);
+    expect(
+      checkFailureIsPersistent(wrapped(TimeoutException('slow'))),
+      isFalse,
+    );
+    // A source's own bug is still persistent, wrapped or not.
+    expect(checkFailureIsPersistent(wrapped(StateError('bug'))), isTrue);
   });
 
   // ── Size cache key invalidation ─────────────────────────────────────
@@ -996,6 +1115,140 @@ void main() {
       );
 
       expect(details.reproducibleStatus, reproducibleBuildStatusNoData);
+    },
+  );
+
+  test(
+    'F-Droid repo index-v2 selects like index.xml and fills the same fields',
+    () async {
+      final index = await parseRepositoryIndexV2(
+        Response(
+          jsonEncode(_fdroidRepoV2Index()),
+          200,
+          request: Request(
+            'GET',
+            Uri.parse('https://repo.example/repo/index-v2.json'),
+          ),
+        ),
+      );
+      expect(index, isNotNull);
+
+      // The suggested version is the newest one with a stable build. Every
+      // build of it counts (even Beta-marked 22), then device ABIs narrow it.
+      final details = await FDroidRepo.apkDetailsFromIndexV2(
+        index!,
+        'org.example.app',
+        <String, dynamic>{},
+        'fallback',
+      );
+      expect(details.version, '2.0');
+      expect(details.apkUrls.map((apk) => apk.value), [
+        'https://repo.example/repo/org.example.app_21.apk',
+        'https://repo.example/repo/org.example.app_20.apk',
+      ]);
+      expect(details.versionCode, 21);
+      expect(details.versionCodesByAsset, {
+        'org.example.app_21.apk': 21,
+        'org.example.app_20.apk': 20,
+      });
+      expect(details.names.author, 'Example Dev');
+      expect(details.names.name, 'Example App');
+      expect(
+        details.iconUrl,
+        'https://repo.example/repo/org.example.app/en-US/icon.png',
+      );
+      expect(details.changeLog, 'https://example.org/changes');
+      expect(details.apkSizeBytes, 200);
+      expect(
+        details.releaseDate,
+        DateTime.fromMillisecondsSinceEpoch(1767225600021),
+      );
+      expect(details.reproducibleStatus, reproducibleBuildStatusNoData);
+      expect(details.isReproducible, isNull);
+
+      final highest = await FDroidRepo.apkDetailsFromIndexV2(
+        index,
+        'Example App',
+        <String, dynamic>{'pickHighestVersionCode': true},
+        'fallback',
+      );
+      expect(
+        highest.apkUrls.single.value,
+        'https://repo.example/repo/org.example.app_21.apk',
+      );
+
+      final newest = await FDroidRepo.apkDetailsFromIndexV2(
+        index,
+        'org.example.app',
+        <String, dynamic>{'trySelectingSuggestedVersionCode': false},
+        'fallback',
+      );
+      expect(newest.version, '3.0');
+      expect(newest.versionCode, 30);
+    },
+  );
+
+  test(
+    'F-Droid repo reads index-v2.json only when no index.xml answers, once per refresh',
+    () async {
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requests = <String>[];
+        final index = _fdroidRepoV2Index();
+        (index['packages'] as Map<String, dynamic>)['org.example.other'] = {
+          'metadata': {
+            'name': {'en-US': 'Other App'},
+          },
+          'versions': {
+            'hash5': _fdroidRepoV2Release(5, '0.5', appId: 'org.example.other'),
+          },
+        };
+        server.listen((request) async {
+          requests.add(request.uri.path);
+          if (request.uri.path == '/repo/index-v2.json') {
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode(index));
+          } else {
+            request.response.statusCode = HttpStatus.notFound;
+          }
+          await request.response.close();
+        });
+        final repoUrl = 'http://127.0.0.1:${server.port}';
+        await SourceRequestSession.run(() async {
+          final first = await FDroidRepo().getLatestAPKDetails(repoUrl, {
+            'appIdOrName': 'org.example.app',
+          });
+          final second = await FDroidRepo().getLatestAPKDetails(repoUrl, {
+            'appIdOrName': 'org.example.other',
+          });
+          expect(first.version, '2.0');
+          expect(second.version, '0.5');
+          expect(
+            second.apkUrls.single.value,
+            '$repoUrl/repo/org.example.other_5.apk',
+          );
+        });
+        // The session shares the missing URL shapes and the index itself.
+        expect(requests, [
+          '/index.xml',
+          '/repo/index.xml',
+          '/fdroid/repo/index.xml',
+          '/index-v2.json',
+          '/repo/index-v2.json',
+        ]);
+        final results = await FDroidRepo().search(
+          '',
+          querySettings: {'url': repoUrl},
+        );
+        expect(
+          results.keys,
+          unorderedEquals([
+            '$repoUrl/repo?appId=org.example.app',
+            '$repoUrl/repo?appId=org.example.other',
+          ]),
+        );
+      }, _RealHttpOverrides());
     },
   );
 

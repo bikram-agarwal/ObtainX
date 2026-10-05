@@ -25,3 +25,17 @@ String? formatDownloadSize(int? receivedBytes, int? totalBytes) {
   }
   return formatBytes(receivedBytes);
 }
+
+/// Formats a byte count with coarse, fixed per-unit precision (e.g. "5.0 GB",
+/// "512 MB", "128 KB"). Used for download-size labels in the UI.
+String formatBytesForDisplay(int bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  } else if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
+  } else if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  } else {
+    return '$bytes B';
+  }
+}

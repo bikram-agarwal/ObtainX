@@ -20,8 +20,10 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart' show regExValidator;
 import 'package:obtainium/services/pick_file.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/utils/color_utils.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -60,6 +62,29 @@ class ImportExportPage extends StatefulWidget {
 
 class _ImportExportPageState extends State<ImportExportPage> {
   bool importInProgress = false;
+  bool exportInProgress = false;
+  TextEditingController? _autoExportFileNameController;
+  String? _storedAutoExportFileName;
+
+  // A settings import or restore can rewrite the name while this page stays
+  // mounted (see the settings page's token fields).
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String? stored = context.read<SettingsProvider>().autoExportFileName;
+    if (stored == _storedAutoExportFileName) return;
+    _storedAutoExportFileName = stored;
+    final TextEditingController? controller = _autoExportFileNameController;
+    if (controller != null && controller.text.trim() != (stored ?? '')) {
+      controller.text = stored ?? '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoExportFileNameController?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,6 +102,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
         s.exportSettings,
         s.autoExportOnChanges,
         s.alwaysUsePhoneLayout,
+        s.autoExportFileName,
       ),
     );
     final settingsProvider = context.read<SettingsProvider>();
@@ -112,11 +138,49 @@ class _ImportExportPageState extends State<ImportExportPage> {
       shape: WidgetStateProperty.all(const StadiumBorder()),
     );
 
+    // A manual export that includes secrets warns first: the file holds them
+    // in cleartext (upstream f2d6e38b).
+    Future<bool> confirmExportIncludesSecrets() async {
+      final bool? proceed = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(tr('warning')),
+            contentPadding: appDialogContentPadding,
+            content: Text(tr('exportIncludesSecretsWarning')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () {
+                  hapticSelection();
+                  Navigator.of(dialogContext).pop(true);
+                },
+                child: Text(tr('continue')),
+              ),
+            ],
+          );
+        },
+      );
+      return proceed == true;
+    }
+
     // With no folder yet (or one it can no longer reach), Export asks for one
     // and then exports to it. Upstream only picked the folder, so a first
-    // Export saved nothing. The folder button only picks.
+    // Export saved nothing. The folder button only picks. One export runs at
+    // a time; a double tap used to write two files (upstream 1fa18d27).
     Future<void> runObtainiumExport({bool pickOnly = false}) async {
+      if (exportInProgress) return;
       hapticSelection();
+      if (!pickOnly &&
+          settingsProvider.exportSettings >= 2 &&
+          !await confirmExportIncludesSecrets()) {
+        return;
+      }
+      if (!mounted) return;
+      setState(() => exportInProgress = true);
       try {
         final String? result = await appsProvider.export(
           pickOnly: pickOnly,
@@ -125,11 +189,12 @@ class _ImportExportPageState extends State<ImportExportPage> {
         if (result != null) {
           showMessage(tr('exportedTo', args: [result]));
         }
-        if (mounted) {
-          setState(() {});
-        }
       } catch (e) {
         showError(e);
+      } finally {
+        if (mounted) {
+          setState(() => exportInProgress = false);
+        }
       }
     }
 
@@ -358,10 +423,12 @@ class _ImportExportPageState extends State<ImportExportPage> {
       ),
     );
 
-    // Off only while an import runs.
+    // Off while an import runs, or while [busy] (the export folder during an
+    // export).
     Widget folderOutlineIconButton({
       required String tooltipMessage,
       required VoidCallback onPressed,
+      bool busy = false,
     }) {
       final String? off = offBecause();
       return Tooltip(
@@ -370,7 +437,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
           reason: off,
           child: TextButton(
             style: folderPickOutlineStyle,
-            onPressed: off == null ? onPressed : null,
+            onPressed: off == null && !busy ? onPressed : null,
             // Coloured by the style, so it mutes with the button.
             child: const Icon(Icons.folder_open_rounded),
           ),
@@ -818,6 +885,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                     ),
                                     folderOutlineIconButton(
                                       tooltipMessage: tr('pickExportDir'),
+                                      busy: exportInProgress,
                                       onPressed: () {
                                         runObtainiumExport(pickOnly: true);
                                       },
@@ -923,6 +991,37 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                 );
                               },
                             ),
+                            // A fixed name makes each auto-export overwrite
+                            // one file, so a synced folder doesn't fill up
+                            // with timestamped copies (upstream #2343).
+                            if (settingsProvider.autoExportOnChanges &&
+                                (savedExportUri != null ||
+                                    !exportSnapshot.hasData))
+                              Padding(
+                                padding: importPageCardRowPadding,
+                                child: TextField(
+                                  controller: _autoExportFileNameController ??=
+                                      TextEditingController(
+                                        text:
+                                            settingsProvider
+                                                .autoExportFileName ??
+                                            '',
+                                      ),
+                                  decoration: appPageOutlinedInputDecoration(
+                                    context,
+                                    labelText: tr('autoExportFileName'),
+                                    hintText: tr(
+                                      'obtainiumExportHyphenatedLowercase',
+                                    ),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (String value) {
+                                    settingsProvider.autoExportFileName = value;
+                                    _storedAutoExportFileName =
+                                        settingsProvider.autoExportFileName;
+                                  },
+                                ),
+                              ),
                             // Import picks a file, and Export a folder when
                             // there's none, so only an import running stops
                             // them.
@@ -952,6 +1051,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                         style: outlineButtonStyle,
                                         onPressed:
                                             importInProgress ||
+                                                exportInProgress ||
                                                 exportSnapshot.data == null
                                             ? null
                                             : runObtainiumExport,
@@ -1058,7 +1158,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
                           ]);
                         },
                       ),
-                      if (importInProgress) ...[
+                      if (importInProgress || exportInProgress) ...[
                         const SizedBox(height: 14),
                         const LinearRipplingWavyProgressIndicator(),
                         const SizedBox(height: 14),
@@ -1212,8 +1312,13 @@ class _SelectionModalState extends State<SelectionModal> {
     }
   }
 
-  void selectAll({bool deselect = false}) {
-    for (var e in entrySelections.keys) {
+  /// Selects (or deselects) [visible], the entries the filter shows, so a
+  /// filtered Select all doesn't pick hidden ones too (upstream 1fa18d27).
+  void selectAll({
+    bool deselect = false,
+    required Iterable<MapEntry<String, List<String>>> visible,
+  }) {
+    for (var e in visible) {
       entrySelections[e] = !deselect;
     }
   }
@@ -1246,15 +1351,15 @@ class _SelectionModalState extends State<SelectionModal> {
       if (widget.onlyOneSelectionAllowed) {
         return const SizedBox.shrink();
       }
-      final noneSelected = entrySelections.values
-          .where((v) => v == true)
-          .isEmpty;
-      return noneSelected
+      final int visibleSelected = filteredEntryKeys
+          .where((e) => entrySelections[e] == true)
+          .length;
+      return visibleSelected == 0
           ? TextButton(
               style: const ButtonStyle(visualDensity: VisualDensity.compact),
               onPressed: () {
                 setState(() {
-                  selectAll();
+                  selectAll(visible: filteredEntryKeys);
                 });
               },
               child: Text(tr('selectAll')),
@@ -1263,10 +1368,10 @@ class _SelectionModalState extends State<SelectionModal> {
               style: const ButtonStyle(visualDensity: VisualDensity.compact),
               onPressed: () {
                 setState(() {
-                  selectAll(deselect: true);
+                  selectAll(deselect: true, visible: filteredEntryKeys);
                 });
               },
-              child: Text(tr('deselectX', args: [''])),
+              child: Text(tr('deselectX', args: ['$visibleSelected'])),
             );
     }
 
@@ -1598,7 +1703,7 @@ class _SelectionModalState extends State<SelectionModal> {
                   ? null
                   : () {
                       setState(() {
-                        selectAll();
+                        selectAll(visible: filteredEntryKeys);
                       });
                     },
             ),
@@ -1609,7 +1714,7 @@ class _SelectionModalState extends State<SelectionModal> {
                   ? null
                   : () {
                       setState(() {
-                        selectAll(deselect: true);
+                        selectAll(deselect: true, visible: filteredEntryKeys);
                       });
                     },
             ),

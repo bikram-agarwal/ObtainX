@@ -9,6 +9,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/locale_resolution.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -31,6 +32,35 @@ Color obtainiumThemeColor = const Color(0xFF6438B5);
 // cached flag instead of requiring a SettingsProvider instance at every call site.
 // Kept in sync by SettingsProvider.initializeSettings and the setter.
 bool _tactileFeedbackEnabled = true;
+
+// Cached mirror of [SettingsProvider.globalApkFilterRegEx], for the release-
+// filter checks (Needs attention, the "Filtered" chip) that run without a
+// SettingsProvider instance. Kept in sync by initializeSettings and the setter.
+String? _globalApkFilterRegExMirror;
+
+/// [regEx] if it is set and compiles, else null. A stored global filter that
+/// doesn't compile is ignored, rather than failing every update check.
+String? usableApkFilterRegEx(String? regEx) {
+  if (regEx == null || regEx.trim().isEmpty) return null;
+  try {
+    RegExp(regEx);
+  } on FormatException {
+    return null;
+  }
+  return regEx;
+}
+
+/// The global APK filter as the release-filter checks see it: set, and valid.
+String? get activeGlobalApkFilterRegEx =>
+    usableApkFilterRegEx(_globalApkFilterRegExMirror);
+
+/// Whether the app's own APK filter is set. A blank value counts as unset:
+/// saved apps always carry the key, so a plain null check would never let
+/// the global filter apply.
+bool appApkFilterRegExIsSet(Map<String, dynamic> additionalSettings) {
+  final dynamic value = additionalSettings['apkFilterRegEx'];
+  return value is String && value.trim().isNotEmpty;
+}
 
 void hapticSelection() {
   if (_tactileFeedbackEnabled) HapticFeedback.selectionClick();
@@ -80,7 +110,10 @@ enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 // upstream's `groupBy` key (its none/category/source names match upstream), with
 // `appType` and `updateStatus` as ObtainX-only extras that Obtainium safely
 // ignores.
-enum InstallerMode { system, shizuku, external, dhizuku }
+// Append-only: the legacy int migration maps stored indexes onto this order, so
+// `root` (upstream #3277) is index 4 even though upstream's enum puts it at 3.
+// Values persist by name, so Obtainium backups carrying 'root' still match.
+enum InstallerMode { system, shizuku, external, dhizuku, root }
 
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
 
@@ -113,6 +146,30 @@ int snapUpdateInterval(int minutes) {
   }
   return nearest;
 }
+
+/// The [minimumUpdateAgeOptions] entry nearest [days]. A stored value that
+/// isn't one (an imported one) is applied as the slider shows it.
+int snapMinimumUpdateAgeDays(int days) {
+  if (days <= 0) return 0;
+  int nearest = minimumUpdateAgeOptions.first;
+  for (final int option in minimumUpdateAgeOptions) {
+    if ((option - days).abs() < (nearest - days).abs()) nearest = option;
+  }
+  return nearest;
+}
+
+/// Upstream Obtainium settings ObtainX doesn't adopt. They're purged from
+/// prefs on start and skipped on import, so they can't ride along in a backup
+/// either way.
+const Set<String> droppedUpstreamSettingKeys = {
+  'disableSwipeActions',
+  'showActionBannerForUpdateOnly',
+  'actionBannerMode',
+  'hideDowngrades',
+  'collapseGroupsOnStartup',
+  'appListDensity',
+  'exportInstalledOnly',
+};
 
 class SettingsProvider with ChangeNotifier {
   SharedPreferences? prefs;
@@ -159,6 +216,9 @@ class SettingsProvider with ChangeNotifier {
     if (_settingsInitialized) {
       // Already fully initialized on this instance — the migrations and native
       // lookups below are one-time work. Just notify so late listeners rebuild.
+      // An import writes prefs directly and then calls this, so the global
+      // APK filter's mirror is re-read here too.
+      _globalApkFilterRegExMirror = globalApkFilterRegEx;
       notifyListeners();
       return;
     }
@@ -179,6 +239,7 @@ class SettingsProvider with ChangeNotifier {
         info.systemFeatures.contains('android.hardware.type.television') ||
         info.systemFeatures.contains('android.software.leanback');
     _tactileFeedbackEnabled = prefs?.getBool('tactileFeedbackEnabled') ?? true;
+    _globalApkFilterRegExMirror = globalApkFilterRegEx;
     _settingsInitialized = true;
     notifyListeners();
   }
@@ -200,8 +261,11 @@ class SettingsProvider with ChangeNotifier {
 
   void _removeUnusedUpstreamSettings() {
     if (prefs == null) return;
-    prefs!.remove('disableSwipeActions');
-    prefs!.remove('showActionBannerForUpdateOnly');
+    // containsKey first: every fresh SettingsProvider runs this, and a remove
+    // is a platform write even when there's nothing to remove.
+    for (final String key in droppedUpstreamSettingKeys) {
+      if (prefs!.containsKey(key)) prefs!.remove(key);
+    }
   }
 
   bool get tactileFeedbackEnabled =>
@@ -537,8 +601,11 @@ class SettingsProvider with ChangeNotifier {
   }
 
   ThemeSettings get theme {
-    return ThemeSettings.values[prefs?.getInt('theme') ??
-        ThemeSettings.system.index];
+    final stored = prefs?.getInt('theme');
+    if (stored == null || stored < 0 || stored >= ThemeSettings.values.length) {
+      return ThemeSettings.system;
+    }
+    return ThemeSettings.values[stored];
   }
 
   set theme(ThemeSettings t) {
@@ -980,8 +1047,13 @@ class SettingsProvider with ChangeNotifier {
   }
 
   SortOrderSettings get sortOrder {
-    return SortOrderSettings.values[prefs?.getInt('sortOrder') ??
-        SortOrderSettings.ascending.index];
+    final stored = prefs?.getInt('sortOrder');
+    if (stored == null ||
+        stored < 0 ||
+        stored >= SortOrderSettings.values.length) {
+      return SortOrderSettings.ascending;
+    }
+    return SortOrderSettings.values[stored];
   }
 
   set sortOrder(SortOrderSettings s) {
@@ -1561,6 +1633,21 @@ class SettingsProvider with ChangeNotifier {
     return uri;
   }
 
+  /// The folder picker, starting at [previousUriString]; null when cancelled.
+  /// A device with no picker at all gets a toast saying so (upstream #3227).
+  Future<Uri?> _pickDocumentTree(String? previousUriString) async {
+    try {
+      return await NativeFeatures.openPersistedDocumentTree(
+        initialUri: previousUriString == null
+            ? null
+            : Uri.parse(previousUriString),
+      );
+    } on ObtainiumError catch (e) {
+      showAppToast(e.toString(), type: ToastType.error);
+      return null;
+    }
+  }
+
   /// Lets the user pick a folder for exports. Cancelling the system picker
   /// leaves the previous folder and persisted URI permission unchanged.
   /// Only the replaced export URI is released when the user picks a new tree.
@@ -1578,11 +1665,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousExportDirString = prefs?.getString('exportDir');
-    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
-      initialUri: previousExportDirString == null
-          ? null
-          : Uri.parse(previousExportDirString),
-    );
+    final Uri? newUri = await _pickDocumentTree(previousExportDirString);
 
     if (newUri == null) {
       return;
@@ -1652,11 +1735,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousApkSaveDirString = prefs?.getString('apkSaveDir');
-    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
-      initialUri: previousApkSaveDirString == null
-          ? null
-          : Uri.parse(previousApkSaveDirString),
-    );
+    final Uri? newUri = await _pickDocumentTree(previousApkSaveDirString);
 
     if (newUri == null) {
       return;
@@ -1725,11 +1804,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousIconsDirString = prefs?.getString('iconsDir');
-    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
-      initialUri: previousIconsDirString == null
-          ? null
-          : Uri.parse(previousIconsDirString),
-    );
+    final Uri? newUri = await _pickDocumentTree(previousIconsDirString);
 
     if (newUri == null) {
       return;
@@ -1843,6 +1918,61 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Fixed file name (without `.json`) for auto-exports, overwritten each time
+  /// so sync tools see one file (upstream #2343). Null keeps the timestamped
+  /// `-auto.json` names. Sanitised on read too, as an imported value never
+  /// went through the setter.
+  String? get autoExportFileName =>
+      _sanitizedExportFileName(prefs?.getString('autoExportFileName'));
+
+  set autoExportFileName(String? val) {
+    final String? cleaned = _sanitizedExportFileName(val);
+    if (cleaned == null) {
+      prefs?.remove('autoExportFileName');
+    } else {
+      prefs?.setString('autoExportFileName', cleaned);
+    }
+    notifyListeners();
+  }
+
+  static String? _sanitizedExportFileName(String? raw) {
+    final String? cleaned = raw
+        ?.replaceAll(RegExp(r'[/\\:*?"<>|]'), '')
+        .replaceFirst(RegExp(r'\.json$', caseSensitive: false), '')
+        .trim();
+    return cleaned == null || cleaned.isEmpty ? null : cleaned;
+  }
+
+  /// Supply-chain delay (upstream #3004): releases younger than this many days
+  /// are held back. 0 disables it; apps can override it per app.
+  int get minimumUpdateAgeDays {
+    return snapMinimumUpdateAgeDays(prefs?.getInt('minimumUpdateAgeDays') ?? 0);
+  }
+
+  set minimumUpdateAgeDays(int val) {
+    prefs?.setInt('minimumUpdateAgeDays', snapMinimumUpdateAgeDays(val));
+    notifyListeners();
+  }
+
+  /// APK filter applied to apps that have no APK filter of their own
+  /// (upstream #2979). Null when unset.
+  String? get globalApkFilterRegEx {
+    final String? value = prefs?.getString('globalApkFilterRegEx')?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  set globalApkFilterRegEx(String? val) {
+    final cleaned = val?.trim();
+    if (cleaned == null || cleaned.isEmpty) {
+      prefs?.remove('globalApkFilterRegEx');
+      _globalApkFilterRegExMirror = null;
+    } else {
+      prefs?.setString('globalApkFilterRegEx', cleaned);
+      _globalApkFilterRegExMirror = cleaned;
+    }
+    notifyListeners();
+  }
+
   int get exportSettings {
     try {
       return prefs?.getInt('exportSettings') ??
@@ -1893,6 +2023,39 @@ class SettingsProvider with ChangeNotifier {
 
   set enableVirusTotalScanning(bool val) {
     prefs?.setBool('enableVirusTotalScanning', val);
+    notifyListeners();
+  }
+
+  /// Opt-in: the update-all action skips the bulk update sheet and acts on
+  /// what it would pre-select ([bulkUpdateDefaultSelection]).
+  bool get skipBulkUpdateConfirmation {
+    return prefs?.getBool('skipBulkUpdateConfirmation') ?? false;
+  }
+
+  set skipBulkUpdateConfirmation(bool val) {
+    prefs?.setBool('skipBulkUpdateConfirmation', val);
+    notifyListeners();
+  }
+
+  /// Before installing, compare the APK's signing certificate with the
+  /// installed app's (upstream #2922). On by default.
+  bool get verifySigningCertHashes {
+    return prefs?.getBool('verifySigningCertHashes') ?? true;
+  }
+
+  set verifySigningCertHashes(bool val) {
+    prefs?.setBool('verifySigningCertHashes', val);
+    notifyListeners();
+  }
+
+  /// Opt-in: requests to GitHub, Codeberg, GitLab and RuStore (and their
+  /// subdomains) only trust the bundled CA roots in `assets/ca-certs/`.
+  bool get enableCertificatePinning {
+    return prefs?.getBool('enableCertificatePinning') ?? false;
+  }
+
+  set enableCertificatePinning(bool val) {
+    prefs?.setBool('enableCertificatePinning', val);
     notifyListeners();
   }
 

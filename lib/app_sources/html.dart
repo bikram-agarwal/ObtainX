@@ -2,44 +2,20 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:html/dom.dart' show Document;
 import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/utils/string_compare.dart';
 import 'package:obtainium/version/partial_download_version.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-int compareAlphaNumeric(String a, String b) {
-  final List<String> aParts = _splitAlphaNumeric(a);
-  final List<String> bParts = _splitAlphaNumeric(b);
-
-  for (int i = 0; i < aParts.length && i < bParts.length; i++) {
-    final String aPart = aParts[i];
-    final String bPart = bParts[i];
-
-    final bool aIsNumber = _isDigit(aPart);
-    final bool bIsNumber = _isDigit(bPart);
-
-    if (aIsNumber && bIsNumber) {
-      final int cmp = compareDecimalIdentifiers(aPart, bPart);
-      if (cmp != 0) {
-        return cmp;
-      }
-    } else if (!aIsNumber && !bIsNumber) {
-      final int cmp = aPart.compareTo(bPart);
-      if (cmp != 0) {
-        return cmp;
-      }
-    } else {
-      // Alphanumeric strings come before numeric strings
-      return aIsNumber ? 1 : -1;
-    }
-  }
-
-  return aParts.length.compareTo(bParts.length);
-}
+export 'package:obtainium/utils/string_compare.dart' show compareAlphaNumeric;
 
 final _releaseFileExtension = RegExp(
   r'\.(?:apk|xapk|apks|zip|tar(?:\.gz)?)$',
@@ -74,44 +50,42 @@ List<String> collectAllStringsFromJSONObject(dynamic obj) {
   return extractor(obj);
 }
 
-List<String> _splitAlphaNumeric(String s) {
-  if (s.isEmpty) return [];
-  final List<String> parts = [];
-  final StringBuffer sb = StringBuffer();
+List<MapEntry<String, String>> getLinksInLines(String lines) =>
+    // Quotes, brackets and angle brackets end a URL found in raw text or code,
+    // and trailing punctuation belongs to the text around it (upstream #2816).
+    RegExp(r'''(?:(?:http|https|ftp)://)[^\s"'<>()\[\]{}]+''')
+        .allMatches(lines)
+        .map((match) => match.group(0)!.replaceFirst(RegExp(r'[.,;:!?]+$'), ''))
+        .where((url) => url.isNotEmpty)
+        .map((url) => MapEntry(url, url.split('/').last))
+        .toList();
 
-  bool isNumeric = _isDigit(s[0]);
-  sb.write(s[0]);
-
-  for (int i = 1; i < s.length; i++) {
-    final bool currentIsNumeric = _isDigit(s[i]);
-    if (currentIsNumeric == isNumeric) {
-      sb.write(s[i]);
-    } else {
-      parts.add(sb.toString());
-      sb.clear();
-      sb.write(s[i]);
-      isNumeric = currentIsNumeric;
+/// Collects absolute and root-relative URLs found in element attributes
+/// (e.g. `<script src="/js/app.js">`), resolved against [reqUrl] (#3294).
+List<MapEntry<String, String>> getLinksInHtmlAttributes(
+  Document html,
+  Uri reqUrl,
+) {
+  final links = <MapEntry<String, String>>[];
+  final absoluteUrlPattern = RegExp(r'^(https?|ftp)://', caseSensitive: false);
+  for (final element in html.querySelectorAll('*')) {
+    for (final value in element.attributes.values) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) continue;
+      if (!absoluteUrlPattern.hasMatch(trimmed) && !trimmed.startsWith('/')) {
+        continue;
+      }
+      final resolved = ensureAbsoluteUrl(trimmed, reqUrl);
+      final uri = Uri.tryParse(resolved);
+      if (uri == null ||
+          !['http', 'https', 'ftp'].contains(uri.scheme.toLowerCase())) {
+        continue;
+      }
+      links.add(MapEntry(resolved, resolved.split('/').last));
     }
   }
-
-  parts.add(sb.toString());
-
-  return parts;
+  return links;
 }
-
-bool _isDigit(String s) {
-  if (s.isEmpty) return false;
-  return s.codeUnitAt(0) >= 48 && s.codeUnitAt(0) <= 57;
-}
-
-List<MapEntry<String, String>> getLinksInLines(String lines) =>
-    RegExp(r'(?:(?:http|https|ftp)://)\S+')
-        .allMatches(lines)
-        .map(
-          (match) =>
-              MapEntry(match.group(0)!, match.group(0)?.split('/').last ?? ''),
-        )
-        .toList();
 
 /// Given an HTTP response, grab some links according to the common additional settings
 /// (those that apply to intermediate and final steps)
@@ -119,9 +93,7 @@ Future<List<MapEntry<String, String>>> grabLinksCommonFromRes(
   Response res,
   Map<String, dynamic> additionalSettings,
 ) async {
-  if (res.statusCode != 200) {
-    throw getObtainiumHttpError(res);
-  }
+  ensureHttpSuccess(res);
   final reqUrl = res.request?.url ?? Uri.parse('');
   return grabLinksCommon(res.body, reqUrl, additionalSettings);
 }
@@ -149,28 +121,50 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
       .map((e) => MapEntry(ensureAbsoluteUrl(e.key, reqUrl), e.value))
       .toList();
   if (allLinks.isEmpty || matchLinksOutsideATags) {
-    // Decode the body if the response is a JSON
-    try {
-      final jsonStrings = collectAllStringsFromJSONObject(jsonDecode(rawBody));
-      allLinks = getLinksInLines(jsonStrings.join('\n'));
-      if (allLinks.isEmpty) {
-        allLinks = getLinksInLines(
-          jsonStrings
-              .map((l) {
-                return ensureAbsoluteUrl(l, reqUrl);
-              })
-              .join('\n'),
-        );
+    // Merge every link source instead of replacing one set with another:
+    // <a> links, URLs in the raw text and URLs in element attributes are all
+    // valid candidates when [matchLinksOutsideATags] is enabled (#2816).
+    final merged = <String, MapEntry<String, String>>{
+      for (final link in allLinks) link.key: link,
+    };
+    void addAll(Iterable<MapEntry<String, String>> links) {
+      for (final link in links) {
+        merged.putIfAbsent(link.key, () => link);
       }
-    } catch (e) {
-      unawaited(
-        LogsProvider().add(
-          'Failed to parse HTML links: ${e.toString()}',
-          level: LogLevel.warning,
-        ),
-      );
-      allLinks = getLinksInLines(rawBody);
     }
+
+    if (allLinks.isEmpty) {
+      // Decode the body if the response is a JSON
+      try {
+        final jsonStrings = collectAllStringsFromJSONObject(
+          jsonDecode(rawBody),
+        );
+        var jsonLinks = getLinksInLines(jsonStrings.join('\n'));
+        if (jsonLinks.isEmpty) {
+          jsonLinks = getLinksInLines(
+            jsonStrings
+                .map((l) {
+                  return ensureAbsoluteUrl(l, reqUrl);
+                })
+                .join('\n'),
+          );
+        }
+        addAll(jsonLinks);
+      } catch (e) {
+        unawaited(
+          LogsProvider().add(
+            'Failed to parse HTML links: ${e.toString()}',
+            level: LogLevel.warning,
+          ),
+        );
+        addAll(getLinksInLines(rawBody));
+      }
+    }
+    if (matchLinksOutsideATags) {
+      addAll(getLinksInLines(rawBody));
+      addAll(getLinksInHtmlAttributes(html, reqUrl));
+    }
+    allLinks = merged.values.toList();
   }
   List<MapEntry<String, String>> links = [];
   final bool skipSort = additionalSettings['skipSort'] == true;
@@ -498,12 +492,14 @@ class HTML extends AppSource {
           await sourceRequest(currentUrl, additionalSettings),
           intermediateLinks[i],
         );
+        // Filter by architecture before the empty check, so filtering away
+        // every link reports no release instead of failing on `.last`.
+        if (intermediateLinks[i]['autoLinkFilterByArch'] == true) {
+          intLinks = await filterApksByArch(intLinks);
+        }
         if (intLinks.isEmpty) {
           throw NoReleasesError(note: currentUrl);
         } else {
-          if (intermediateLinks[i]['autoLinkFilterByArch'] == true) {
-            intLinks = await filterApksByArch(intLinks);
-          }
           currentUrl = intLinks.last.key;
         }
       }
@@ -558,6 +554,12 @@ class HTML extends AppSource {
         rel,
         forAPKDownload: true,
       );
+      // Read when a probe runs, not before: a page that names its version
+      // needs no settings. Only a stored value is read, so skip
+      // SettingsProvider's one-time init.
+      Future<bool> readCertificatePinning() async =>
+          (SettingsProvider()..prefs = await SharedPreferences.getInstance())
+              .enableCertificatePinning;
       DownloadResponseMetadata? downloadMetadata;
       void captureDownloadMetadata(DownloadResponseMetadata metadata) {
         downloadMetadata ??= metadata;
@@ -569,6 +571,7 @@ class HTML extends AppSource {
           rel,
           headers: apkReqHeaders,
           allowInsecure: additionalSettings['allowInsecure'] == true,
+          certificatePinning: await readCertificatePinning(),
           onResponseMetadata: captureDownloadMetadata,
         );
         if (version == null || version.isEmpty) {
@@ -602,6 +605,7 @@ class HTML extends AppSource {
             lowerLimit: savedSize ?? 128,
             headers: apkReqHeaders,
             allowInsecure: additionalSettings['allowInsecure'] == true,
+            certificatePinning: await readCertificatePinning(),
             onResponseMetadata: captureDownloadMetadata,
           );
           version = resolvePartialDownloadVersion(
@@ -654,6 +658,7 @@ class HTML extends AppSource {
             rel,
             headers: apkReqHeaders,
             allowInsecure: additionalSettings['allowInsecure'] == true,
+            certificatePinning: await readCertificatePinning(),
           );
         } catch (error) {
           unawaited(

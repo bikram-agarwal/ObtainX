@@ -39,6 +39,41 @@ Future<Response> fdroidRepoRequestIndexWithVariants(
   return res;
 }
 
+/// Loads a third-party F-Droid repo's `index-v2.json` from the same URL shapes
+/// as [fdroidRepoRequestIndexWithVariants], for repos that no longer publish
+/// index.xml (upstream #3249). Returns the first that parses as a v2 index.
+Future<RepositoryIndexV2?> fdroidRepoRequestIndexV2WithVariants(
+  Future<Response> Function(String url, Map<String, dynamic> settings)
+  doSourceRequest,
+  String normalizedRepoBaseUrl,
+  Map<String, dynamic> additionalSettings,
+) async {
+  final String url = normalizedRepoBaseUrl;
+  final String base = url.endsWith('/index-v2.json')
+      ? AppSource.stripLastPathSegment(url)
+      : url;
+  for (final String candidate in [
+    '$base/index-v2.json',
+    '$base/repo/index-v2.json',
+    '$base/fdroid/repo/index-v2.json',
+  ]) {
+    try {
+      final Response res = await doSourceRequest(candidate, additionalSettings);
+      if (res.statusCode != 200) continue;
+      final RepositoryIndexV2? index = await parseRepositoryIndexV2(res);
+      if (index != null) return index;
+    } catch (e) {
+      unawaited(
+        LogsProvider().add(
+          'index-v2.json probe failed: $e',
+          level: LogLevel.debug,
+        ),
+      );
+    }
+  }
+  return null;
+}
+
 class FDroidRepo extends AppSource {
   bool _appIdFoundInUrl = false;
 
@@ -108,7 +143,9 @@ class FDroidRepo extends AppSource {
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
     var standardUri = Uri.parse(url);
     final pathSegments = standardUri.pathSegments;
-    if (pathSegments.isNotEmpty && pathSegments.last == 'index.xml') {
+    if (pathSegments.isNotEmpty &&
+        (pathSegments.last == 'index.xml' ||
+            pathSegments.last == 'index-v2.json')) {
       pathSegments.removeLast();
       standardUri = standardUri.replace(path: pathSegments.join('/'));
     }
@@ -255,17 +292,7 @@ class FDroidRepo extends AppSource {
         )
         .toList();
     if (selectedReleases.length > 1) {
-      List<String> supportedAbis = [];
-      try {
-        supportedAbis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
-      } catch (e) {
-        unawaited(
-          LogsProvider().add(
-            'Failed to get supported ABIs: $e',
-            level: LogLevel.error,
-          ),
-        );
-      }
+      final List<String> supportedAbis = await _deviceSupportedAbis();
       if (supportedAbis.isNotEmpty) {
         // A release with no <nativecode> element is architecture-universal.
         final compatible = selectedReleases.where((e) {
@@ -351,6 +378,134 @@ class FDroidRepo extends AppSource {
     );
   }
 
+  /// The device's ABIs, or none (which skips ABI matching) if unreadable.
+  static Future<List<String>> _deviceSupportedAbis() async {
+    try {
+      return (await DeviceInfoPlugin().androidInfo).supportedAbis;
+    } catch (e) {
+      unawaited(
+        LogsProvider().add(
+          'Failed to get supported ABIs: $e',
+          level: LogLevel.error,
+        ),
+      );
+      return [];
+    }
+  }
+
+  /// [parseIndexXmlSearchResults] for an `index-v2.json`: the same keys, and
+  /// the description (else the summary) in place of `<desc>`.
+  static Map<String, List<String>> indexV2SearchResults(
+    RepositoryIndexV2 index,
+    String query,
+  ) {
+    final String repoBase = AppSource.stripLastPathSegment(index.url);
+    final Map<String, List<String>> results = <String, List<String>>{};
+    for (final app in index.applications) {
+      final String appDesc = app.description.isNotEmpty
+          ? app.description
+          : app.summary;
+      if (query.isEmpty ||
+          app.id.contains(query) ||
+          app.name.contains(query) ||
+          appDesc.contains(query)) {
+        results['$repoBase?appId=${app.id}'] = [app.name, appDesc];
+      }
+    }
+    return results;
+  }
+
+  /// [apkDetailsFromIndexXmlResponse] for an `index-v2.json`, with the same
+  /// selection: the suggested version, then device ABIs, then
+  /// pickHighestVersionCode among what's left.
+  static Future<APKDetails> apkDetailsFromIndexV2(
+    RepositoryIndexV2 index,
+    String appIdOrName,
+    Map<String, dynamic> additionalSettings,
+    String authorFallback,
+  ) async {
+    final application = index.findApplication(appIdOrName);
+    if (application == null) {
+      throw ObtainiumError(tr('appWithIdOrNameNotFound'));
+    }
+    final releases = application.releases;
+    if (releases.isEmpty) {
+      throw NoReleasesError();
+    }
+    final bool trySelectingSuggestedVersionCode =
+        additionalSettings['trySelectingSuggestedVersionCode'] != false;
+    final bool pickHighestVersionCode =
+        additionalSettings['pickHighestVersionCode'] == true ||
+        additionalSettings['autoSelectHighestVersionCode'] == true;
+    // index-v2 has no marketvercode. fdroidserver instead puts builds newer
+    // than the suggested version code in the Beta channel, so the suggested
+    // version is the newest one with a stable build (upstream 6910c58e).
+    RepositoryIndexV2Release target = releases.first;
+    if (trySelectingSuggestedVersionCode) {
+      target = releases.firstWhere(
+        (release) =>
+            release.releaseChannels.isEmpty ||
+            release.releaseChannels.any(
+              (channel) => channel.toLowerCase() == 'stable',
+            ),
+        orElse: () => releases.first,
+      );
+    }
+    // As with index.xml: every release of that version (an arch split shares
+    // one versionName, and only some of its codes may count as suggested),
+    // narrowed by device ABIs before pickHighestVersionCode.
+    List<RepositoryIndexV2Release> selectedReleases = releases
+        .where((release) => release.versionName == target.versionName)
+        .toList();
+    if (selectedReleases.length > 1) {
+      final List<String> supportedAbis = await _deviceSupportedAbis();
+      if (supportedAbis.isNotEmpty) {
+        final compatible = selectedReleases
+            .where(
+              (release) =>
+                  release.nativecode.isEmpty ||
+                  release.nativecode.any(supportedAbis.contains),
+            )
+            .toList();
+        if (compatible.isNotEmpty) {
+          selectedReleases = compatible;
+        }
+      }
+      if (selectedReleases.length > 1 && pickHighestVersionCode) {
+        // Releases are already newest (highest versionCode) first.
+        selectedReleases = [selectedReleases.first];
+      }
+    }
+    final RepositoryIndexV2Release selected = selectedReleases.first;
+    final String repoBase = AppSource.stripLastPathSegment(index.url);
+    final String? iconPath = application.iconPath;
+    return APKDetails(
+      selected.versionName,
+      getApkUrlsFromUrls(
+        selectedReleases
+            .map((release) => '$repoBase/${release.apkName}')
+            .toList(),
+      ),
+      AppNames(
+        application.author ?? index.repoName ?? authorFallback,
+        application.name,
+      ),
+      versionCode: selected.versionCode,
+      versionCodesByAsset: {
+        for (final release in selectedReleases)
+          getApkUrlsFromUrls(['$repoBase/${release.apkName}']).single.key:
+              release.versionCode,
+      },
+      releaseDate: selected.added,
+      changeLog: application.changelog,
+      iconUrl: iconPath != null ? '$repoBase/$iconPath' : null,
+      apkSizeBytes: selectedReleases.last.size,
+      // index-v2 has no `binaries` field (fdroidserver leaves it out), so
+      // nothing marks a v2 release as a verified reproducible build.
+      reproducibleStatus: reproducibleBuildStatusNoData,
+    );
+  }
+
   @override
   Future<Map<String, List<String>>> search(
     String query, {
@@ -364,9 +519,14 @@ class FDroidRepo extends AppSource {
     final res = await sourceRequestWithURLVariants(url, {});
     if (res.statusCode == 200) {
       return await parseIndexXmlSearchResults(res, query);
-    } else {
-      throw getObtainiumHttpError(res);
     }
+    // Repos that publish only index-v2.json (upstream #3249).
+    final RepositoryIndexV2? indexV2 =
+        await fdroidRepoRequestIndexV2WithVariants(sourceRequest, url, {});
+    if (indexV2 != null) {
+      return indexV2SearchResults(indexV2, query);
+    }
+    throw getObtainiumHttpError(res);
   }
 
   @override
@@ -451,6 +611,30 @@ class FDroidRepo extends AppSource {
         standardUrl,
         additionalSettings,
       );
+      final bool indexXmlHasApp =
+          res.statusCode == 200 &&
+          (await parseRepositoryIndex(res)).findApplication(appIdOrName) !=
+              null;
+      if (!indexXmlHasApp) {
+        // Repos that publish only index-v2.json, or list this app only there
+        // (upstream #3249). Whatever index.xml serves stays on index.xml.
+        final RepositoryIndexV2? indexV2 =
+            await fdroidRepoRequestIndexV2WithVariants(
+              sourceRequest,
+              standardUrl,
+              additionalSettings,
+            );
+        if (indexV2 != null &&
+            (res.statusCode != 200 ||
+                indexV2.findApplication(appIdOrName) != null)) {
+          return await apkDetailsFromIndexV2(
+            indexV2,
+            appIdOrName,
+            additionalSettings,
+            name,
+          );
+        }
+      }
       if (res.statusCode == 200) {
         return await apkDetailsFromIndexXmlResponse(
           res,

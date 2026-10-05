@@ -19,17 +19,13 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/dynamic_color_utils.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:easy_localization/easy_localization.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/easy_localization_controller.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/localization.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 List<MapEntry<Locale, String>> supportedLocales = const [
@@ -147,33 +143,6 @@ String _diagnosticErrorMessage(
     buffer.writeln(stackTrace);
   }
   return buffer.toString().trimRight();
-}
-
-Future<void> loadTranslations() async {
-  // See easy_localization/issues/210
-  await EasyLocalizationController.initEasyLocation();
-  final s = SettingsProvider();
-  await s.initializeSettings();
-  final forceLocale = s.forcedLocale;
-  final controller = EasyLocalizationController(
-    saveLocale: true,
-    forceLocale: forceLocale,
-    fallbackLocale: fallbackLocale,
-    supportedLocales: supportedLocales.map((e) => e.key).toList(),
-    assetLoader: const RootBundleAssetLoader(),
-    useOnlyLangCode: false,
-    useFallbackTranslations: true,
-    path: localeDir,
-    onLoadError: (FlutterError e) {
-      throw e;
-    },
-  );
-  await controller.loadTranslations();
-  Localization.load(
-    controller.locale,
-    translations: controller.translations,
-    fallbackTranslations: controller.fallbackTranslations,
-  );
 }
 
 /// Unique task name used by WorkManager for periodic background update checks.
@@ -915,7 +884,10 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     });
 
     return WithForegroundTask(
-      child: DynamicColorBuilder(
+      // Upstream #3322: builds every Material You role from the OS tonal
+      // palettes; dynamic_color 1.x seeds the newer surface roles from the
+      // primary colour instead. The fork's scheme resolution below is unchanged.
+      child: ObtainiumDynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
           final ({ColorScheme light, ColorScheme dark}) schemes =
               _resolveThemeSchemes(settingsProvider, lightDynamic, darkDynamic);

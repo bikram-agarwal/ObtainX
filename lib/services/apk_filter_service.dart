@@ -1,5 +1,7 @@
 // APK file detection, filtering, and architecture selection.
 
+import 'dart:async';
+
 import 'package:device_info_plus/device_info_plus.dart';
 
 // ========================================================================
@@ -65,7 +67,8 @@ class ApkFilterService {
     if (apkFilterRegEx?.isNotEmpty == true) {
       final reg = RegExp(apkFilterRegEx!);
       apkUrls = apkUrls.where((element) {
-        final hasMatch = reg.hasMatch(element.key);
+        final hasMatch =
+            reg.hasMatch(element.key) || reg.hasMatch(element.value);
         return invert == true ? !hasMatch : hasMatch;
       }).toList();
     }
@@ -82,17 +85,22 @@ class ApkFilterService {
 
   Future<List<MapEntry<String, String>>> filterApksByArch(
     List<MapEntry<String, String>> apkUrls,
-    List<String> abis,
-  ) async {
+    List<String> abis, {
+    bool preferSplits = true,
+  }) async {
     if (apkUrls.length > 1) {
       for (var abi in abis) {
         final variants = [abi, ...?abiNameAliases[abi]];
-        final abiRegex = RegExp(
+        final RegExp architecturePattern = RegExp(
           '.*(?:${variants.join('|')}).*',
           caseSensitive: false,
         );
         final urls2 = apkUrls
-            .where((element) => abiRegex.hasMatch(element.key))
+            .where(
+              (element) =>
+                  architecturePattern.hasMatch(element.key) ||
+                  architecturePattern.hasMatch(element.value),
+            )
             .toList();
         if (urls2.isNotEmpty && urls2.length < apkUrls.length) {
           apkUrls = urls2;

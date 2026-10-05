@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
@@ -77,9 +79,14 @@ DateTime? parseUptodownDate(String? dateString) {
 /// Uptodown has already changed this table once (a sha256 row was added), which
 /// silently shifted the fixed offsets the old implementation relied on. So each
 /// field is identified by its *content* first, with the historical offsets kept
-/// only as a fallback for when content matching finds nothing.
+/// only as a fallback for when content matching finds nothing. A row's `<th>`
+/// label ([labelledCells]: lower-cased label → value) wins over both when its
+/// value has the expected shape (upstream 52970e18).
 ({String? appId, String? dateStr, String? extension})
-parseUptodownTechnicalFields(List<String> cells) {
+parseUptodownTechnicalFields(
+  List<String> cells, {
+  Map<String, String> labelledCells = const {},
+}) {
   final nonEmptyCells = cells
       .map((cell) => cell.trim())
       .where((cell) => cell.isNotEmpty)
@@ -111,12 +118,32 @@ parseUptodownTechnicalFields(List<String> cells) {
     }
   }
 
+  final labelledAppId = labelledCells['package name'];
+  if (labelledAppId != null &&
+      _uptodownPackageIdPattern.hasMatch(labelledAppId)) {
+    appId = labelledAppId;
+  }
+  final labelledExtension = labelledCells['file type']?.toLowerCase();
+  if (_uptodownFileExtensions.contains(labelledExtension)) {
+    extension = labelledExtension;
+  }
+  final labelledDate = labelledCells['date'];
+  if (labelledDate != null && _tryParseUptodownDate(labelledDate) != null) {
+    dateStr = labelledDate;
+  }
+
   // Fallbacks: the offsets the table used before the sha256 row appeared.
+  // Guarded, as elementAtOrNull throws on a negative index (upstream
+  // 52970e18).
   appId ??= nonEmptyCells.lastOrNull;
-  dateStr ??= nonEmptyCells.elementAtOrNull(nonEmptyCells.length - 5);
-  extension ??= nonEmptyCells
-      .elementAtOrNull(nonEmptyCells.length - 4)
-      ?.toLowerCase();
+  dateStr ??= nonEmptyCells.length >= 5
+      ? nonEmptyCells[nonEmptyCells.length - 5]
+      : null;
+  extension ??=
+      (nonEmptyCells.length >= 4
+              ? nonEmptyCells[nonEmptyCells.length - 4]
+              : null)
+          ?.toLowerCase();
 
   return (appId: appId, dateStr: dateStr, extension: extension);
 }
@@ -140,20 +167,8 @@ String? uptodownDirectApkUrl({String? dataUrl, String? dataUrlExt}) {
   return null;
 }
 
-/// Builds the endpoint Uptodown's download button calls to mint a file URL.
-String? uptodownAjaxDownloadUrl(String origin, String? appId, String? fileId) {
-  final trimmedAppId = appId?.trim();
-  final trimmedFileId = fileId?.trim();
-  if (trimmedAppId == null || trimmedAppId.isEmpty) return null;
-  if (trimmedFileId == null || trimmedFileId.isEmpty) return null;
-  final trimmedOrigin = origin.endsWith('/')
-      ? origin.substring(0, origin.length - 1)
-      : origin;
-  if (trimmedOrigin.isEmpty) return null;
-  return '$trimmedOrigin/ajax/app/$trimmedAppId/file/$trimmedFileId/download-url';
-}
-
-/// Reads the file URL out of the ajax response body.
+/// Reads the file URL out of a download-URL response body: the Android app
+/// API's, which has the shape the web ajax endpoint used.
 ///
 /// Success bodies nest it as `{"data": {"downloadURL": "..."}}`; a top-level
 /// `downloadURL` is accepted too. Error bodies look like
@@ -179,17 +194,30 @@ String? uptodownDownloadUrlFromAjaxBody(String body) {
   return null;
 }
 
+/// Reads the JWT and its expiry (`exp`, unix seconds) from the app API's
+/// login response, or null when the body isn't one.
+({String token, int expiresAt})? uptodownSessionFromAuthBody(String body) {
+  try {
+    final decoded = jsonDecode(body);
+    final token = decoded is Map ? decoded['token'] : null;
+    if (token is! String) return null;
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    final claims = jsonDecode(
+      utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+    );
+    final expiresAt = claims is Map ? claims['exp'] : null;
+    return expiresAt is int ? (token: token, expiresAt: expiresAt) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 bool _isHttpUrl(String value) =>
     value.startsWith('http://') || value.startsWith('https://');
 
 String _uptodownAbsoluteDownloadUrl(String value) =>
     _isHttpUrl(value) ? value : '$_uptodownDownloadUrlPrefix$value';
-
-String? _uptodownOriginOf(String url) {
-  final parsed = Uri.tryParse(url);
-  if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) return null;
-  return '${parsed.scheme}://${parsed.host}';
-}
 
 class Uptodown extends AppSource {
   Uptodown() {
@@ -199,11 +227,28 @@ class Uptodown extends AppSource {
     naiveStandardVersionDetection = true;
     showReleaseDateAsVersionToggle = true;
     urlsAlwaysHaveExtension = true;
+    canSearch = true;
   }
 
   static const String _browserUserAgent =
       'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/124.0.0.0 Mobile Safari/537.36';
+
+  // File URLs come from Uptodown's Android app API (upstream #3305): its
+  // anonymous login needs no Turnstile token, unlike the web endpoint.
+  static const String _apiHost = 'www.uptodown.app';
+  static const String _authPath = '/eapi/auth/token';
+  static const String _searchUrl = 'https://en.uptodown.com/android/en/s';
+  static const String _clientVersion = '739';
+  static const String _apiUserAgent =
+      'Dalvik/2.1.0 (Linux; U; Android 16; Pixel 8 Pro Build/BP4A.260205.001)';
+
+  /// Anonymous client auth key. Looks like Base64, but isn't used like one
+  static const String _hmacKey = 'MDGMXUMdvHJBG/vjdFgmqX6LUdy7ecfwvYNd0gyfOCs=';
+
+  /// Shared by every instance: SourceProvider hands out a fresh source per
+  /// lookup, so a per-instance session would log in again for each download.
+  static ({String token, int expiresAt})? _session;
 
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
@@ -220,18 +265,78 @@ class Uptodown extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
-    // Uptodown gates both its pages and its ajax endpoint behind a bot check, so
-    // present a normal mobile-browser UA everywhere.
-    final headers = <String, String>{'User-Agent': _browserUserAgent};
-    if (url.contains('/ajax/app/')) {
-      headers['Accept'] = 'application/json';
-      headers['X-Requested-With'] = 'XMLHttpRequest';
-      final origin = _uptodownOriginOf(url);
-      if (origin != null) {
-        headers['Referer'] = '$origin/android/download';
-      }
+    final uri = Uri.parse(url);
+    if (uri.host == _apiHost) {
+      final token = _session?.token;
+      return {
+        'User-Agent': _apiUserAgent,
+        'Identificador': 'Uptodown_Android',
+        'Identificador-Version': _clientVersion,
+        if (uri.path == _authPath)
+          'Content-Type': 'application/x-www-form-urlencoded'
+        else if (token != null)
+          'Authorization': 'Bearer $token',
+      };
     }
-    return headers;
+    if (url == _searchUrl) {
+      return {
+        'User-Agent': _apiUserAgent,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      };
+    }
+    // Files the app API hands out are fetched the way the app fetches them.
+    if (forAPKDownload) return {'User-Agent': _apiUserAgent};
+    // Uptodown gates its pages behind a bot check, so present a normal
+    // mobile-browser UA there.
+    return {'User-Agent': _browserUserAgent};
+  }
+
+  @override
+  Future<Map<String, List<String>>> search(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    try {
+      final res = await sourceRequest(
+        _searchUrl,
+        querySettings,
+        postBody: Uri(queryParameters: {'queryString': query}).query,
+      );
+      if (res.statusCode != 200) {
+        throw getObtainiumHttpError(res);
+      }
+      final decoded = jsonDecode(res.body);
+      final body = decoded is Map ? decoded : null;
+      if (body == null || body['success'] != 1) {
+        throw ObtainiumError(tr('uptodownSearchError'));
+      }
+      final data = body['data'];
+      final apps = data is Map ? data['apps'] : null;
+      final Map<String, List<String>> results = {};
+      if (apps is List) {
+        for (final app in apps) {
+          if (app is! Map || app['platformURL'] != '/android') continue;
+          final url = app['url']?.toString();
+          final name = app['name']
+              ?.toString()
+              .replaceAll(RegExp(r'<[^>]+>'), '')
+              .trim();
+          if (url == null || url.isEmpty || name == null || name.isEmpty) {
+            continue;
+          }
+          final author = app['author']?.toString().trim();
+          results[url] = [
+            name,
+            (author != null && author.isNotEmpty)
+                ? author
+                : tr('noDescription'),
+          ];
+        }
+      }
+      return results;
+    } catch (e) {
+      rethrowOrWrapError(e);
+    }
   }
 
   @override
@@ -254,21 +359,33 @@ class Uptodown extends AppSource {
       throw getObtainiumHttpError(res);
     }
     final html = await parseHtmlOffIsolate(res.body);
-    final String? version = html.querySelector('div.version')?.innerHtml;
+    // `.text`, not `.innerHtml`, so entities and markup don't leak through.
+    final String? version = html.querySelector('div.version')?.text.trim();
     final nameElement = html.querySelector('#detail-app-name');
-    final String? name = nameElement?.innerHtml.trim();
-    final String? author = html.querySelector('#author-link')?.innerHtml.trim();
+    final String? name = nameElement?.text.trim();
+    final String? author = html.querySelector('#author-link')?.text.trim();
+    final labelledCells = <String, String>{};
+    for (final row in html.querySelectorAll('#technical-information tr')) {
+      final label = row.querySelector('th')?.text.trim().toLowerCase();
+      if (label == null || label.isEmpty) continue;
+      final values = row.querySelectorAll('td');
+      final value = values.isEmpty ? null : values.last.text.trim();
+      if (value != null && value.isNotEmpty) labelledCells[label] = value;
+    }
     final detailCells = html
         .querySelectorAll('#technical-information td')
         .map((cell) => cell.text.trim())
         .where((cell) => cell.isNotEmpty)
         .toList();
-    final technicalFields = parseUptodownTechnicalFields(detailCells);
+    final technicalFields = parseUptodownTechnicalFields(
+      detailCells,
+      labelledCells: labelledCells,
+    );
     final String? fileId =
-        nameElement?.attributes['data-file-id'] ??
         html
             .querySelector('#detail-download-button')
-            ?.attributes['data-file-id'];
+            ?.attributes['data-file-id'] ??
+        nameElement?.attributes['data-file-id'];
     return Map.fromEntries([
       MapEntry('version', version),
       MapEntry('appId', technicalFields.appId),
@@ -350,19 +467,17 @@ class Uptodown extends AppSource {
       return legacyUrl;
     }
 
-    // Path 2 (current): ask the endpoint the button's own script calls.
+    // Path 2 (current): ask the Android app API. The web endpoint the page's
+    // own button calls rejects requests without a Turnstile token.
     final appId =
-        downloadButton?.attributes['data-app-id'] ??
-        nameElement?.attributes['data-code'];
+        (downloadButton?.attributes['data-app-id'] ??
+                nameElement?.attributes['data-code'])
+            ?.trim();
     final fileId =
-        downloadButton?.attributes['data-file-id'] ??
-        nameElement?.attributes['data-file-id'];
-    final ajaxUrl = uptodownAjaxDownloadUrl(
-      _uptodownOriginOf(assetUrl) ?? 'https://${hosts[0]}',
-      appId,
-      fileId,
-    );
-    if (ajaxUrl == null) {
+        (downloadButton?.attributes['data-file-id'] ??
+                nameElement?.attributes['data-file-id'])
+            ?.trim();
+    if (appId == null || appId.isEmpty || fileId == null || fileId.isEmpty) {
       unawaited(
         LogsProvider().add(
           'Uptodown page had no download-button ids: $assetUrl',
@@ -371,34 +486,88 @@ class Uptodown extends AppSource {
       );
       throw NoAPKError();
     }
-    // Mirrors what the page's own button reports: this flag distinguishes a
-    // direct file from a store wrapper, so use the value from the page we
-    // fetched rather than inferring it from the file extension.
-    final onlyXapk = downloadButton?.attributes['data-only-xapk'] == '1';
-    final ajaxRes = await sourceRequest(
-      ajaxUrl,
-      additionalSettings,
-      postBody: {'token': '', 'onlyXapk': onlyXapk},
+    return _resolveDownload(appId, fileId, additionalSettings);
+  }
+
+  Future<({String token, int expiresAt})> _getSession(
+    Map<String, dynamic> settings, {
+    bool forceRefresh = false,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final session = _session;
+    if (!forceRefresh && session != null && now < session.expiresAt - 60) {
+      return session;
+    }
+    return await _auth(settings);
+  }
+
+  Future<({String token, int expiresAt})> _auth(
+    Map<String, dynamic> settings,
+  ) async {
+    final random = Random();
+    final identifier = List.generate(
+      8,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+    final timestamp = (DateTime.now().millisecondsSinceEpoch ~/ 1000)
+        .toString();
+    final signature = Hmac(
+      sha256,
+      utf8.encode(_hmacKey),
+    ).convert(utf8.encode(timestamp)).toString();
+    final response = await sourceRequest(
+      Uri.https(_apiHost, _authPath, {'identifier': identifier}).toString(),
+      settings,
+      postBody: Uri(
+        queryParameters: {
+          'identifier': identifier,
+          'id_plataforma': '13',
+          'lang': 'en',
+          'unixtime': timestamp,
+          'hmac': signature,
+        },
+      ).query,
     );
-    if (ajaxRes.statusCode != 200) {
-      unawaited(
-        LogsProvider().add(
-          'Uptodown download-url HTTP ${ajaxRes.statusCode} for $ajaxUrl',
-          level: LogLevel.error,
-        ),
-      );
-      throw getObtainiumHttpError(ajaxRes);
+    if (response.statusCode != 200) throw getObtainiumHttpError(response);
+    final session = uptodownSessionFromAuthBody(response.body);
+    if (session == null) {
+      throw ObtainiumError(tr('uptodownInvalidAuthResponse'));
     }
-    final downloadUrl = uptodownDownloadUrlFromAjaxBody(ajaxRes.body);
-    if (downloadUrl == null) {
-      unawaited(
-        LogsProvider().add(
-          'Uptodown download-url response had no downloadURL for $ajaxUrl',
-          level: LogLevel.error,
-        ),
+    return _session = session;
+  }
+
+  Future<String> _resolveDownload(
+    String appId,
+    String fileId,
+    Map<String, dynamic> settings,
+  ) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      // A rejected token gets one fresh login.
+      await _getSession(settings, forceRefresh: attempt > 0);
+      final response = await sourceRequest(
+        Uri.https(
+          _apiHost,
+          '/eapi/apps/$appId/file/$fileId/downloadUrl',
+        ).toString(),
+        settings,
       );
-      throw NoAPKError();
+      if (response.statusCode == 401) continue;
+      if (response.statusCode != 200) throw getObtainiumHttpError(response);
+      Object? decoded;
+      try {
+        decoded = jsonDecode(response.body);
+      } on FormatException {
+        decoded = null;
+      }
+      if (decoded is! Map || decoded['success'] != 1) {
+        throw ObtainiumError(tr('uptodownDownloadError'));
+      }
+      final downloadUrl = uptodownDownloadUrlFromAjaxBody(response.body);
+      if (downloadUrl == null) {
+        throw NoAPKError();
+      }
+      return downloadUrl;
     }
-    return downloadUrl;
+    throw ObtainiumError(tr('uptodownDownloadError'));
   }
 }

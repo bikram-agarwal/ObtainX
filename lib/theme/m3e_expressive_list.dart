@@ -169,55 +169,62 @@ class M3eCollapsibleGroupHeader extends StatelessWidget {
             )
           : m3eCollapsedGroupHeaderFill(colorScheme),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: SettingsProvider.collapsedHeaderHeight,
-          child: Center(
-            child: ListTile(
-              dense: true,
-              onTap: null,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-              leading: AnimatedContainer(
-                duration: kM3eGroupHeaderTransitionDuration,
-                curve: kM3eGroupTransitionCurve,
-                width: isExpanded ? 20 : 32,
-                height: isExpanded ? 20 : 32,
-                decoration: BoxDecoration(
-                  color: isExpanded
-                      ? Colors.transparent
-                      : colorScheme.surfaceContainerHighest,
-                  shape: BoxShape.circle,
-                ),
-                child: AnimatedRotation(
-                  turns: isExpanded ? 0.25 : 0,
+      // Announced as an expandable button (upstream 6ccf3c07). The visible
+      // title is its label; upstream's extra `label: title` would read the
+      // title twice.
+      child: Semantics(
+        button: true,
+        expanded: isExpanded,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: SettingsProvider.collapsedHeaderHeight,
+            child: Center(
+              child: ListTile(
+                dense: true,
+                onTap: null,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                leading: AnimatedContainer(
                   duration: kM3eGroupHeaderTransitionDuration,
                   curve: kM3eGroupTransitionCurve,
-                  child: Icon(
-                    Icons.chevron_right_rounded,
+                  width: isExpanded ? 20 : 32,
+                  height: isExpanded ? 20 : 32,
+                  decoration: BoxDecoration(
                     color: isExpanded
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
-                    size: isExpanded ? 18 : 20,
+                        ? Colors.transparent
+                        : colorScheme.surfaceContainerHighest,
+                    shape: BoxShape.circle,
+                  ),
+                  child: AnimatedRotation(
+                    turns: isExpanded ? 0.25 : 0,
+                    duration: kM3eGroupHeaderTransitionDuration,
+                    curve: kM3eGroupTransitionCurve,
+                    child: Icon(
+                      Icons.chevron_right_rounded,
+                      color: isExpanded
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                      size: isExpanded ? 18 : 20,
+                    ),
                   ),
                 ),
+                title: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                trailing: trailingAction == null
+                    ? countLabel
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          countLabel,
+                          const SizedBox(width: 8),
+                          trailingAction!,
+                        ],
+                      ),
               ),
-              title: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              trailing: trailingAction == null
-                  ? countLabel
-                  : Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        countLabel,
-                        const SizedBox(width: 8),
-                        trailingAction!,
-                      ],
-                    ),
             ),
           ),
         ),

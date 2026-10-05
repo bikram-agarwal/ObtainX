@@ -4,15 +4,16 @@
 
 import 'dart:convert';
 
+import 'package:obtainium/app_sources/app_source.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/app_sources/huaweiappgallery.dart';
 import 'package:obtainium/components/generated_form_model.dart';
-import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/models/app.dart';
 import 'package:obtainium/providers/source_provider.dart' show SourceProvider;
 import 'package:obtainium/services/apk_filter_service.dart';
+import 'package:obtainium/version/version_detection_mode.dart';
 
 Map<String, dynamic> _migrateAppToHTML(
   Map<String, dynamic> json,
@@ -57,12 +58,16 @@ void _migrateAdditionalDataToSettings(
       json['trackOnly'] == 'true' || json['trackOnly'] == true;
   additionalSettings['noVersionDetection'] =
       json['noVersionDetection'] == 'true' ||
-      json['noVersionDetection'] == true;
+      json['noVersionDetection'] == true ||
+      // Ancient additionalData-format apps: track-only implies no version
+      // detection (parity with fork main).
+      json['trackOnly'] == true;
 }
 
 /// Converts legacy booleans `noVersionDetection` / `releaseDateAsVersion`
 /// to the current `versionDetection` string dropdown and back.
 void _migrateVersionDetectionFormat(Map<String, dynamic> additionalSettings) {
+  // Legacy bool-style flags → intermediate dropdown keys.
   if (additionalSettings['noVersionDetection'] == true) {
     additionalSettings['versionDetection'] = 'noVersionDetection';
     if (additionalSettings['releaseDateAsVersion'] == true) {
@@ -71,14 +76,21 @@ void _migrateVersionDetectionFormat(Map<String, dynamic> additionalSettings) {
     additionalSettings.remove('noVersionDetection');
     additionalSettings.remove('releaseDateAsVersion');
   }
-  if (additionalSettings['versionDetection'] == 'standardVersionDetection') {
-    additionalSettings['versionDetection'] = true;
-  } else if (additionalSettings['versionDetection'] == 'noVersionDetection') {
-    additionalSettings['versionDetection'] = false;
-  } else if (additionalSettings['versionDetection'] == 'releaseDateAsVersion') {
-    additionalSettings['versionDetection'] = false;
+  // 'releaseDateAsVersion' additionally carries a version-string choice, which
+  // [VersionDetectionMode.fromStored] (a pure mode parse) can't express — apply
+  // that side effect before normalising.
+  if (additionalSettings['versionDetection'] == 'releaseDateAsVersion') {
     additionalSettings['releaseDateAsVersion'] = true;
   }
+  // Every other legacy encoding (bools, the pre-dropdown strings) is handled by
+  // [VersionDetectionMode.fromStored]; this rewrites the stored value to the
+  // canonical mode key and re-derives useVersionCodeAsOSVersion. It MUST land on
+  // a string, never a bool — a bool makes every installed app read as
+  // pseudo-versioned (see isVersionPseudo) and breaks update detection.
+  normalizeVersionDetectionSettings(
+    additionalSettings,
+    promoteLegacyBoolean: true,
+  );
 }
 
 /// Converts legacy `supportFixedAPKURL` bool to `defaultPseudoVersioningMethod`.
@@ -103,6 +115,22 @@ void _coerceAdditionalSettingTypes(
       additionalSettings[item.key] = item.ensureType(
         additionalSettings[item.key],
       );
+    }
+  }
+}
+
+/// Resolves legacy saved forms where switches that now turn each other off
+/// were both enabled. Form order determines priority.
+void _normalizeMutuallyExclusiveSwitches(
+  Map<String, dynamic> additionalSettings,
+  List<GeneratedFormItem> formItems,
+) {
+  for (final GeneratedFormItem item in formItems) {
+    if (item is! GeneratedFormSwitch || additionalSettings[item.key] != true) {
+      continue;
+    }
+    for (final String targetKey in item.turnsOffKeys) {
+      additionalSettings[targetKey] = false;
     }
   }
 }
@@ -234,20 +262,33 @@ Map<String, dynamic> _migrateHtmlSpecificMigrations(
 }
 
 /// One-time migration for Huawei AppGallery apps saved while the source
-/// forced pseudo-versioning.
+/// forced pseudo-versioning by release date (upstream be702b3c), before it
+/// moved to the AppGallery API, which reports real version names.
+///
+/// Adapted to ObtainX: `versionDetection` is a string mode (never a bool) and
+/// release-date versions are ISO-8601 here, epoch digits in Obtainium backups.
+/// It triggers only on that release-date state, which the API source no longer
+/// offers, so it stays idempotent. An app that is merely `pseudo` keeps its
+/// mode: that is a legitimate choice this cannot tell apart from the old pin.
 void _migrateHuaweiAppGallery(
   Map<String, dynamic> json,
   Map<String, dynamic> additionalSettings,
 ) {
   bool isPseudoVersion(dynamic v) =>
-      v is String && RegExp(r'^\d{10,}$').hasMatch(v);
+      v is String &&
+      (RegExp(r'^\d{10,}$').hasMatch(v) ||
+          RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}').hasMatch(v));
   final hasLegacyState =
       additionalSettings['releaseDateAsVersion'] == true ||
+      additionalSettings['versionStringSource'] ==
+          versionStringSourceReleaseDate ||
       isPseudoVersion(json['installedVersion']) ||
       isPseudoVersion(json['latestVersion']);
   if (!hasLegacyState) return;
-  additionalSettings['versionDetection'] = true;
-  additionalSettings.remove('releaseDateAsVersion');
+  additionalSettings['versionDetection'] = VersionDetectionMode.auto.key;
+  additionalSettings['versionStringSource'] = versionStringSourceDefault;
+  syncVersionStringSourceSettings(additionalSettings);
+  normalizeVersionDetectionSettings(additionalSettings);
   if (isPseudoVersion(json['installedVersion'])) {
     json['installedVersion'] = null;
   }
@@ -291,11 +332,22 @@ Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
 
   _migrateAdditionalDataToSettings(json, additionalSettings, formItems);
   _migrateVersionDetectionFormat(additionalSettings);
+  // Populate the versionStringSource string from any legacy per-method boolean
+  // flags so the unified dropdown pre-fills correctly (parity with fork main,
+  // which syncs here during deserialization). Prefer an already-configured
+  // string value when the app has one.
+  syncVersionStringSourceSettings(
+    additionalSettings,
+    preferConfiguredSource: originalAdditionalSettings.containsKey(
+      'versionStringSource',
+    ),
+  );
   _migratePseudoVersioningMethod(
     originalAdditionalSettings,
     additionalSettings,
   );
   _coerceAdditionalSettingTypes(additionalSettings, formItems);
+  _normalizeMutuallyExclusiveSwitches(additionalSettings, formItems);
 
   int preferredApkIndex = json['preferredApkIndex'] == null
       ? 0
@@ -330,20 +382,7 @@ Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
   return json;
 }
 
-/// Parses an [App] from a JSON map as stored on disk, applying the legacy
-/// schema migrations in [appJSONCompatibilityModifiers] first. If the
-/// migrations fail (e.g. the saved URL no longer matches any source), the
-/// unmigrated JSON is parsed instead so the app is not lost.
-App appFromStoredJson(Map<String, dynamic> json) {
-  final Map<String, dynamic> originalJson = Map.from(json);
-  Map<String, dynamic> migratedJson;
-  try {
-    migratedJson = appJSONCompatibilityModifiers(Map.from(json));
-  } catch (e) {
-    migratedJson = originalJson;
-    AppLogger.warn(
-      'Error running JSON compat modifiers (using original JSON): ${e.toString()}',
-    );
-  }
-  return App.fromJson(migratedJson);
-}
+/// Upstream's name for loading a stored app. [App.fromJson] already applies
+/// [appJSONCompatibilityModifiers] (and falls back to the unmigrated JSON), so
+/// this is a plain alias that must not migrate a second time.
+App appFromStoredJson(Map<String, dynamic> json) => App.fromJson(json);

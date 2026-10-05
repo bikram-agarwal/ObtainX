@@ -1,12 +1,15 @@
 import 'dart:async';
-import 'dart:io' show SocketException;
+import 'dart:io' show HandshakeException, HttpException, SocketException;
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:android_package_installer/android_package_installer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' show ClientException;
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart'
+    show hapticHeavyImpact;
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/widgets/app_toast.dart';
@@ -25,6 +28,10 @@ class ObtainiumError {
   /// [toString].
   String? url;
 
+  /// The exception [rethrowOrWrapError] wrapped, so a caller can still tell a
+  /// network failure from a real one.
+  final Object? cause;
+
   ObtainiumError(
     this._message, {
     this.code = 'UNKNOWN',
@@ -32,6 +39,7 @@ class ObtainiumError {
     this.stack,
     this.data = const {},
     this.url,
+    this.cause,
   });
 
   ObtainiumError.withCode(
@@ -41,6 +49,7 @@ class ObtainiumError {
     this.stack,
     this.data = const {},
     this.url,
+    this.cause,
   });
 
   String get message =>
@@ -67,6 +76,15 @@ class ObtainiumError {
       url != null && url!.isNotEmpty ? '$message ($url)' : message;
 }
 
+/// A network failure that can pass on another try (no connection, a TLS
+/// handshake, a timeout, a dropped response), as opposed to a source's answer.
+bool isTransientNetworkError(Object error) =>
+    error is SocketException ||
+    error is HandshakeException ||
+    error is TimeoutException ||
+    error is ClientException ||
+    error is HttpException;
+
 Never rethrowOrWrapError(
   Object error, {
   String? sourceName,
@@ -81,14 +99,10 @@ Never rethrowOrWrapError(
           level: LogLevel.error,
         ),
       );
-      throw ObtainiumError(
-        error.message,
-        code: 'UNEXPECTED',
-        unexpected: true,
-        stack: resolvedStack,
-        data: error.data,
-        url: error.url,
-      );
+      // Rethrow as itself (upstream 8c33f251): re-wrapping lost the subclass,
+      // e.g. a CheckUpdatesException's per-app errors and its empty-message
+      // code, which left the error dialog blank.
+      throw error;
     }
     throw error;
   }
@@ -104,7 +118,16 @@ Never rethrowOrWrapError(
     code: 'UNEXPECTED',
     unexpected: true,
     stack: capturedStack,
+    cause: error,
   );
+}
+
+/// A non-2xx HTTP response during a file download, carrying the status code so
+/// callers can decide whether the failure is retryable (e.g. 429/5xx).
+class HTTPStatusError extends ObtainiumError {
+  final int statusCode;
+  HTTPStatusError(this.statusCode, String message)
+    : super(message, code: 'HTTP_ERROR');
 }
 
 class RateLimitError extends ObtainiumError {
@@ -133,6 +156,26 @@ class NoReleasesError extends ObtainiumError {
 
 class NoAPKError extends ObtainiumError {
   NoAPKError() : super.withCode('NO_APK');
+}
+
+/// The latest release is younger than the configured minimum update age and
+/// the source cannot provide an older release (#3303). Thrown only when adding
+/// an app; an update check suppresses the young release instead.
+class MinUpdateAgeError extends ObtainiumError {
+  MinUpdateAgeError(DateTime releaseDate, int minAgeDays)
+    : super.withCode(
+        'MIN_UPDATE_AGE',
+        data: {
+          'releaseDate': releaseDate.toIso8601String(),
+          'minAgeDays': minAgeDays,
+        },
+      );
+}
+
+/// RuStore lists some apps only as aggregated cards pulled from an external
+/// source and does not host an APK for them (see #3298).
+class RuStoreAggregatedAppError extends ObtainiumError {
+  RuStoreAggregatedAppError() : super.withCode('RUSTORE_AGGREGATED_APP');
 }
 
 class NoVersionError extends ObtainiumError {
@@ -167,6 +210,23 @@ class InstallError extends ObtainiumError {
           ).name.replaceFirst('STATUS_', ''),
         },
       );
+}
+
+/// The downloaded APK's signing certificate does not match the expected hash
+/// (user-provided) or the installed app's certificate.
+class SigningCertMismatchError extends ObtainiumError {
+  SigningCertMismatchError({
+    required bool hardBlock,
+    required Set<String> expected,
+    required Set<String> actual,
+  }) : super.withCode(
+         'SIGNING_CERT_MISMATCH',
+         data: {
+           'hardBlock': hardBlock,
+           'expected': expected.toList(),
+           'actual': actual.toList(),
+         },
+       );
 }
 
 class IDChangedError extends ObtainiumError {
@@ -235,6 +295,12 @@ class MultiAppMultiError extends ObtainiumError {
     }
     rawErrors[appId] = error;
     final string = error.toString();
+    // An app re-added with a different error must leave its old group, or the
+    // dialog lists it twice (upstream 8c33f251).
+    for (final entry in idsByErrorString.entries) {
+      entry.value.remove(appId);
+    }
+    idsByErrorString.removeWhere((k, v) => v.isEmpty);
     var tempIds = idsByErrorString.remove(string);
     if (tempIds == null) {
       tempIds = [];
@@ -281,11 +347,20 @@ String localizeErrorCode(String code, Map<String, dynamic>? data) {
       args: [data?['sourceName'] ?? ''],
     ),
     'NO_APK' => tr('noAPKFound'),
+    'MIN_UPDATE_AGE' => tr(
+      'releaseTooYoungForMinAge',
+      args: ['${data?['minAgeDays'] ?? ''}'],
+    ),
+    'RUSTORE_AGGREGATED_APP' => tr('rustoreAggregatedAppNoApk'),
     'NO_VERSION' => tr('noVersionFound'),
     'UNSUPPORTED_URL' => tr('urlMatchesNoSource'),
     'DOWNGRADE' =>
       '${tr('cantInstallOlderVersion')} (versionCode ${data?['currentVersionCode'] ?? '?'} → ${data?['newVersionCode'] ?? '?'})',
     'INSTALL_FAILED' => data?['message']?.toString() ?? tr('installFailed'),
+    'SIGNING_CERT_MISMATCH' =>
+      data?['hardBlock'] == true
+          ? tr('signingCertMismatchHardBlock')
+          : tr('signingCertMismatchMessage'),
     'ID_CHANGED' => '${tr('appIdMismatch')} - ${data?['newId'] ?? ''}',
     'REPO_RENAMED' => tr('repoRenamed'),
     'NOT_IMPLEMENTED' => tr('functionNotImplemented'),
@@ -303,8 +378,6 @@ bool isEnglish() {
   if (_appCurrentLocale != null) return _appCurrentLocale!.languageCode == 'en';
   return false;
 }
-
-String lowerCaseIfEnglish(String str) => isEnglish() ? str.toLowerCase() : str;
 
 String list2FriendlyString(List<String> list) {
   final isUsingEnglish = isEnglish();
@@ -342,6 +415,8 @@ void showMessage(
   bool scaffoldHasBottomBar = false,
 }) {
   final ScaffoldMessengerState? messenger = scaffoldMessengerKey.currentState;
+  // The one error haptic (upstream 06cb4ac8); call sites must not add another.
+  if (isError) hapticHeavyImpact();
   if (e is CancellationException) {
     unawaited(LogsProvider().add(e.toString(), level: LogLevel.info));
     if (messenger != null) {

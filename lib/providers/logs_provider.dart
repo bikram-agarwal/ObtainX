@@ -30,12 +30,19 @@ class Log {
 
   Log(this.message, this.level);
 
+  /// Tolerant of a malformed row (bad level index, null message or timestamp),
+  /// so one bad entry can't hide the whole log window (upstream bcf37107).
   Log.fromMap(Map<String, Object?> map) {
-    id = map[idColumn] as int;
-    level = LogLevel.values.elementAt(map[levelColumn] as int);
-    message = map[messageColumn] as String;
+    id = map[idColumn] as int?;
+    final Object? rawLevel = map[levelColumn];
+    level =
+        rawLevel is int && rawLevel >= 0 && rawLevel < LogLevel.values.length
+        ? LogLevel.values[rawLevel]
+        : LogLevel.info;
+    message = map[messageColumn]?.toString() ?? '';
+    final Object? rawTimestamp = map[timestampColumn];
     timestamp = DateTime.fromMillisecondsSinceEpoch(
-      map[timestampColumn] as int,
+      rawTimestamp is int ? rawTimestamp : 0,
     );
   }
 
@@ -98,7 +105,14 @@ create table if not exists $logTable (
 
   Future<Log> add(String message, {LogLevel level = LogLevel.info}) async {
     final Log l = Log(message, level);
-    l.id = await (await getDB()).insert(logTable, l.toMap());
+    try {
+      l.id = await (await getDB()).insert(logTable, l.toMap());
+    } catch (e) {
+      // A failed logging write must not reach the global error handler: that
+      // handler logs, which would attempt the same failing write again and
+      // loop (upstream bc4a37e5).
+      debugPrint('Failed to persist log entry: $e');
+    }
     if (kDebugMode) {
       debugPrint(l.toString());
     }
@@ -182,54 +196,4 @@ MapEntry<String?, List<int>?> getWhereDates({
   return whereArgs.isEmpty
       ? const MapEntry(null, null)
       : MapEntry(where.join(' and '), whereArgs);
-}
-
-abstract class Logger {
-  void debug(String message);
-  void info(String message);
-  void warn(String message, [Object? error, StackTrace? stack]);
-  void error(String message, [Object? error, StackTrace? stack]);
-}
-
-class AppLogger implements Logger {
-  final LogsProvider _logs;
-  final bool _isDebug;
-
-  AppLogger({LogsProvider? logs, bool? isDebug})
-    : _logs = logs ?? LogsProvider(),
-      _isDebug = isDebug ?? kDebugMode;
-
-  @override
-  void debug(String message) {
-    _logs.add(message, level: LogLevel.debug);
-    if (_isDebug) {
-      debugPrint('[DEBUG] $message');
-    }
-  }
-
-  @override
-  void info(String message) {
-    _logs.add(message, level: LogLevel.info);
-    if (_isDebug) {
-      debugPrint('[INFO] $message');
-    }
-  }
-
-  @override
-  void warn(String message, [Object? error, StackTrace? stack]) {
-    final full = error != null ? '$message\n$error\n$stack' : message;
-    _logs.add(full, level: LogLevel.warning);
-    if (_isDebug) {
-      debugPrint('[WARN] $full');
-    }
-  }
-
-  @override
-  void error(String message, [Object? error, StackTrace? stack]) {
-    final full = error != null ? '$message\n$error\n$stack' : message;
-    _logs.add(full, level: LogLevel.error);
-    if (_isDebug) {
-      debugPrint('[ERROR] $full');
-    }
-  }
 }

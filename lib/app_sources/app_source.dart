@@ -1,20 +1,24 @@
 // AppSource — abstract base class for all app sources.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/models/app.dart';
+import 'package:obtainium/models/typed_settings.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/services/apk_filter_service.dart';
 import 'package:obtainium/services/http_service.dart';
-import 'package:obtainium/services/version_service.dart';
 import 'package:obtainium/utils/signing_cert_utils.dart';
 import 'package:obtainium/utils/string_utils.dart';
 import 'package:obtainium/utils/url_utils.dart';
+import 'package:obtainium/version/version_detection_mode.dart';
+import 'package:obtainium/version/version_strings.dart';
 
 // ========================================================================
 // AppSource — abstract base class for all app sources.
@@ -27,6 +31,9 @@ const List<int> minimumUpdateAgeOptions = [0, 1, 2, 3, 5, 7, 14, 30];
 
 abstract class AppSource {
   List<String> hosts = [];
+
+  /// Download hosts (e.g. a store's CDN) whose APKs don't trigger the
+  /// "downloaded from a different origin" warning.
   List<String> trustedApkHosts = [];
   bool hostChanged = false;
   bool hostIdenticalDespiteAnyChange = false;
@@ -36,31 +43,38 @@ abstract class AppSource {
   bool changeLogPageIsStandardUrl = false;
   bool appIdInferIsOptional = false;
   bool inferAppIdFromUrlPath = false;
+
+  /// Look the package ID up for track-only apps too (upstream's flag). A
+  /// track-only app is still matched to the installed package by its ID.
   bool inferAppIdEvenWhenTrackOnly = false;
   bool allowSubDomains = false;
   bool naiveStandardVersionDetection = false;
   bool allowOverride = true;
   bool neverAutoSelect = false;
   bool showReleaseDateAsVersionToggle = false;
+  bool showReleaseTitleAsVersionToggle = false;
+  bool showExtractVersionFromAssetNameToggle = false;
+  bool showReleaseCommitShaAsVersionToggle = false;
   bool versionDetectionDisallowed = false;
   bool suppressStandardVersionExtraction = false;
   List<String> excludeCommonSettingKeys = [];
   bool urlsAlwaysHaveExtension = false;
+
+  /// Lets requests for this source follow an HTTPS→HTTP redirect, which is
+  /// otherwise refused (for stores whose CDN only serves cleartext).
   bool allowInsecureRedirects = false;
   bool allowIncludeZips = false;
   bool allowIncludeTarballs = false;
+  bool regionalStore = false;
   String get sourceIdentifier => runtimeType.toString();
 
-  RegExp? _hostMatchRegExp;
-
-  /// Whether [host] matches this source's [hosts], honoring [allowSubDomains].
-  /// The compiled pattern is cached because this runs for every app loaded and
-  /// every URL resolved.
-  bool matchesHost(String host) {
-    return (_hostMatchRegExp ??= RegExp(
-      '^${allowSubDomains ? '([^\\.]+\\.)*' : '(www\\.)?'}(${getSourceRegex(hosts)})\$',
-    )).hasMatch(host);
-  }
+  /// Transient per-check context: the app as it was known before this update
+  /// check, set by [SourceProvider.getApp] right before [getLatestAPKDetails].
+  /// Lets a source skip an expensive *secondary* verification network round-trip
+  /// (e.g. F-Droid reproducible-build metadata) when the raw upstream version is
+  /// unchanged since the last check, reusing the cached result instead. Not
+  /// persisted; safe to read because each check gets its own source instance.
+  App? previouslyCheckedApp;
 
   Future<Map<String, String>?> getRequestHeaders(
     Map<String, dynamic> additionalSettings,
@@ -76,13 +90,17 @@ abstract class AppSource {
 
   String standardizeUrl(String url) {
     url = preStandardizeUrl(url);
-    if (!hostChanged) {
+    if (!hostChanged || hostIdenticalDespiteAnyChange) {
       url = sourceSpecificStandardizeURL(url);
     }
     return url;
   }
 
   App postProcessApp(App app) {
+    return app;
+  }
+
+  Future<App> resolveVersionComparison(App app) async {
     return app;
   }
 
@@ -112,33 +130,62 @@ abstract class AppSource {
       url,
       additionalSettingsPlusSourceConfig,
     );
-    additionalSettingsPlusSourceConfig['url'] = url;
-    additionalSettingsPlusSourceConfig['enableCertificatePinning'] =
-        sp.enableCertificatePinning;
-    additionalSettingsPlusSourceConfig['allowInsecureRedirects'] =
-        allowInsecureRedirects;
     final method = postBody == null ? 'GET' : 'POST';
     final requestHeaders = await getRequestHeaders(
       additionalSettingsPlusSourceConfig,
       url,
     );
-    final streamedResponseUrlWithResponseAndClient = await HttpService()
-        .sourceRequestStreamResponse(
-          method,
-          requestHeaders,
-          additionalSettingsPlusSourceConfig,
-          followRedirects: followRedirects,
-          postBody: postBody,
-        );
-    return await HttpService().httpClientResponseStreamToFinalResponse(
-      streamedResponseUrlWithResponseAndClient.value.key,
-      method,
-      streamedResponseUrlWithResponseAndClient.key.toString(),
-      streamedResponseUrlWithResponseAndClient.value.value,
-    );
+    final session = SourceRequestSession.current;
+    final allowInsecure =
+        additionalSettingsPlusSourceConfig['allowInsecure'] == true;
+    final certificatePinning = sp.enableCertificatePinning;
+    Future<http.Response> loadResponse() async {
+      final service = HttpService();
+      final sharedClient = session?.clientFor(allowInsecure);
+      final streamed = await service.sourceRequestStreamResponse(
+        method,
+        url,
+        requestHeaders,
+        additionalSettingsPlusSourceConfig,
+        followRedirects: followRedirects,
+        postBody: postBody,
+        sharedClient: sharedClient,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
+      );
+      return service.httpClientResponseStreamToFinalResponse(
+        streamed.value.key,
+        method,
+        streamed.key.toString(),
+        streamed.value.value,
+        // A hop that needed its own trust store (RuStore, pinned hosts) ran on
+        // a dedicated client, which must be closed even inside a session.
+        closeClient: !identical(streamed.value.key, sharedClient),
+      );
+    }
+
+    final String requestPath = Uri.parse(url).path;
+    if (session != null &&
+        method == 'GET' &&
+        (requestPath.endsWith('/index.xml') ||
+            requestPath.endsWith('/index-v2.json'))) {
+      // Key after URL/header customization so credentials, TLS policy and
+      // redirects cannot accidentally share a response across configurations.
+      final headerNames = requestHeaders?.keys.toList() ?? <String>[];
+      headerNames.sort();
+      final key = jsonEncode([
+        url,
+        allowInsecure,
+        certificatePinning,
+        followRedirects,
+        for (final name in headerNames) [name, requestHeaders![name]],
+      ]);
+      return session.repositoryResponse(key, loadResponse);
+    }
+    return loadResponse();
   }
 
-  Map<String, dynamic> runOnAddAppInputChange(String inputUrl) => {};
+  void runOnAddAppInputChange(String inputUrl) {}
 
   /// Delegates to [ApkFilterService.apkContainerExtensions].
   static List<String> get apkContainerExtensions =>
@@ -205,9 +252,70 @@ abstract class AppSource {
     ),
   ];
 
-  /// Some additional data may be needed for Apps regardless of Source
+  /// Some additional data may be needed for Apps regardless of Source.
+  ///
+  /// ORDER + SECTION HEADERS ARE DELIBERATE. The [GeneratedFormSectionHeader]
+  /// rows split the Additional-Options page into separate section cards (the
+  /// renderer groups every header + its following rows into one card when
+  /// `wrapFormSectionsInCards` is set). Do NOT flatten this back into one list
+  /// or drop the headers — that collapses the page into a single giant card
+  /// (matches the fork's `main`). Name / author / notes are intentionally NOT
+  /// here: they are edited via the app detail page's "Edit app info" dialog, not
+  /// this form.
   List<List<GeneratedFormItem>> get _commonAppSettingFormItems => [
-    [GeneratedFormSwitch('trackOnly', label: tr('trackOnly'))],
+    [
+      GeneratedFormSectionHeader(
+        '__formSectionTracking',
+        label: tr('additionalOptionsSectionTracking'),
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'trackOnly',
+        label: tr('trackOnly'),
+        labelTooltip: tr('trackOnlyAppDescription'),
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'onDemandOnly',
+        label: tr('onDemandOnly'),
+        value: false,
+        labelTooltip: tr('onDemandOnlyDescription'),
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'exemptFromBackgroundUpdates',
+        label: tr('exemptFromBackgroundUpdates'),
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'skipUpdateNotifications',
+        label: tr('skipUpdateNotifications'),
+      ),
+    ],
+    [
+      // Per-app override of the global minimum update age; '' = use global.
+      GeneratedFormSlider(
+        'minimumUpdateAgeDays',
+        [
+          MapEntry('', tr('useGlobalDefault')),
+          for (final days in minimumUpdateAgeOptions)
+            MapEntry(days.toString(), days == 0 ? tr('none') : '$days'),
+        ],
+        label: tr('minimumUpdateAgeDays'),
+        value: '',
+        required: false,
+      ),
+    ],
+    [
+      GeneratedFormSectionHeader(
+        '__formSectionVersion',
+        label: tr('additionalOptionsSectionVersion'),
+      ),
+    ],
     [
       GeneratedFormTextField(
         'versionExtractionRegEx',
@@ -225,17 +333,30 @@ abstract class AppSource {
       ),
     ],
     [
-      GeneratedFormSwitch(
+      // Version detection is a THREE-STATE dropdown, not a bool switch. Every
+      // reader (isVersionPseudo, app.dart's isVersionDetectionStandard,
+      // apps_provider_updates/lifecycle, additional_options_page) keys off the
+      // string values 'auto'/'standard'/'pseudo'/'versionCode'. A bool switch
+      // here silently corrupts the value (GeneratedFormSwitch.ensureType coerces
+      // it to a bool on every deserialize) and breaks install/update detection —
+      // do NOT revert to a switch. 'versionCode' subsumes the old separate
+      // useVersionCodeAsOSVersion switch (kept in sync as a derived bool).
+      GeneratedFormDropdown(
         'versionDetection',
-        label: tr('versionDetectionExplanation'),
-        value: true,
+        [
+          MapEntry('auto', tr('versionDetectionModeAuto')),
+          MapEntry('standard', tr('versionDetectionModeStandard')),
+          MapEntry('pseudo', tr('versionDetectionModePseudo')),
+          MapEntry('versionCode', tr('versionDetectionModeVersionCode')),
+        ],
+        label: tr('versionDetection'),
+        value: 'auto',
       ),
     ],
     [
-      GeneratedFormSwitch(
-        'useVersionCodeAsOSVersion',
-        label: tr('useVersionCodeAsOSVersion'),
-        value: false,
+      GeneratedFormSectionHeader(
+        '__formSectionApk',
+        label: tr('additionalOptionsSectionApk'),
       ),
     ],
     [
@@ -265,20 +386,11 @@ abstract class AppSource {
       ),
     ],
     [
-      GeneratedFormSlider(
-        'minimumUpdateAgeDays',
-        [
-          const MapEntry('', 'useGlobalDefault'),
-          for (final days in minimumUpdateAgeOptions)
-            MapEntry(days.toString(), days == 0 ? 'none' : days.toString()),
-        ],
-        label: tr('minimumUpdateAgeDays'),
-        value: '',
-        required: false,
+      GeneratedFormSectionHeader(
+        '__formSectionAdvanced',
+        label: tr('additionalOptionsSectionAdvanced'),
       ),
     ],
-    [GeneratedFormTextField('appName', label: tr('appName'), required: false)],
-    [GeneratedFormTextField('appAuthor', label: tr('author'), required: false)],
     [
       GeneratedFormSwitch(
         'shizukuPretendToBeGooglePlay',
@@ -294,6 +406,25 @@ abstract class AppSource {
       ),
     ],
     [
+      GeneratedFormSwitch(
+        'refreshBeforeDownload',
+        label: tr('refreshBeforeDownload'),
+      ),
+    ],
+    [
+      // Same label as the global setting in Settings > Integrations,
+      // deliberately: this is that switch scoped to one app, not a separate
+      // opt-out with inverted meaning.
+      GeneratedFormSwitch(
+        enableVirusTotalScanKey,
+        label: tr('enableVirusTotalScanning'),
+        value: true,
+        labelTooltip: tr('perAppVirusTotalScanTooltip'),
+      ),
+    ],
+    [
+      // Opt-in hard block (upstream #2922): an APK signed by any other
+      // certificate is never installed, including on first install.
       GeneratedFormTextField(
         'allowedSigningCertHashes',
         label: tr('allowedSigningCertHashes'),
@@ -307,26 +438,51 @@ abstract class AppSource {
         ],
       ),
     ],
-    [
-      GeneratedFormSwitch(
-        'exemptFromBackgroundUpdates',
-        label: tr('exemptFromBackgroundUpdates'),
-      ),
-    ],
-    [
-      GeneratedFormSwitch(
-        'skipUpdateNotifications',
-        label: tr('skipUpdateNotifications'),
-      ),
-    ],
-    [GeneratedFormTextField('about', label: tr('about'), required: false)],
-    [
-      GeneratedFormSwitch(
-        'refreshBeforeDownload',
-        label: tr('refreshBeforeDownload'),
-      ),
-    ],
   ];
+
+  /// The choices for the unified "Use as version string" (`versionStringSource`)
+  /// dropdown. 'Default' is always offered; each alternate pseudo-version source
+  /// is added only when the source opted in via its show*Toggle flag. A single
+  /// dropdown here replaces the old scattered per-source boolean switches
+  /// (releaseTitleAsVersion / releaseDateAsVersion / …) — parity with fork main.
+  List<MapEntry<String, String>> get versionStringSourceOptions {
+    final List<MapEntry<String, String>> options = [
+      MapEntry(versionStringSourceDefault, tr('versionStringSourceDefault')),
+    ];
+    if (showReleaseTitleAsVersionToggle) {
+      options.add(
+        MapEntry(
+          versionStringSourceReleaseTitle,
+          tr('versionStringSourceReleaseTitle'),
+        ),
+      );
+    }
+    if (showExtractVersionFromAssetNameToggle) {
+      options.add(
+        MapEntry(
+          versionStringSourceAssetName,
+          tr('versionStringSourceAssetName'),
+        ),
+      );
+    }
+    if (showReleaseDateAsVersionToggle) {
+      options.add(
+        MapEntry(
+          versionStringSourceReleaseDate,
+          tr('versionStringSourceReleaseDate'),
+        ),
+      );
+    }
+    if (showReleaseCommitShaAsVersionToggle) {
+      options.add(
+        MapEntry(
+          versionStringSourceReleaseCommitSha,
+          tr('versionStringSourceReleaseCommitSha'),
+        ),
+      );
+    }
+    return options;
+  }
 
   /// Combines per-source form items with the common app-setting form items,
   /// interspersing conditional items (zip/tarball options, version toggles) and
@@ -336,21 +492,31 @@ abstract class AppSource {
   List<List<GeneratedFormItem>> get combinedAppSpecificSettingFormItems {
     var agnosticItems = cloneFormItems(_commonAppSettingFormItems);
 
-    final versionDetectionIdx = agnosticItems.indexWhere(
-      (row) => row.any((item) => item.key == 'versionDetection'),
-    );
-    if (showReleaseDateAsVersionToggle &&
-        versionDetectionIdx >= 0 &&
+    // Insert the unified versionStringSource dropdown at the top of the Version
+    // section (right after its header) when the source offers any alternate
+    // version-string source. Mirrors fork main; do NOT revert to per-flag
+    // switches (the backend's single source of truth is the versionStringSource
+    // string, kept in sync with the legacy booleans by syncVersionStringSourceSettings).
+    final List<MapEntry<String, String>> versionSourceOptions =
+        versionStringSourceOptions;
+    if (versionSourceOptions.length > 1 &&
         !agnosticItems.any(
-          (row) => row.any((item) => item.key == 'releaseDateAsVersion'),
+          (row) => row.any((item) => item.key == 'versionStringSource'),
         )) {
-      agnosticItems.insert(versionDetectionIdx + 1, [
-        GeneratedFormSwitch(
-          'releaseDateAsVersion',
-          label: '${tr('releaseDateAsVersion')} (${tr('pseudoVersion')})',
-          value: false,
-        ),
-      ]);
+      final int versionSectionHeaderIndex = agnosticItems.indexWhere(
+        (row) => row.length == 1 && row.first.key == '__formSectionVersion',
+      );
+      agnosticItems.insert(
+        versionSectionHeaderIndex >= 0 ? versionSectionHeaderIndex + 1 : 0,
+        [
+          GeneratedFormDropdown(
+            'versionStringSource',
+            versionSourceOptions,
+            label: tr('versionStringSource'),
+            value: versionStringSourceDefault,
+          ),
+        ],
+      );
     }
 
     agnosticItems = agnosticItems
@@ -412,16 +578,31 @@ abstract class AppSource {
     }
 
     if (versionDetectionDisallowed) {
-      for (var item in agnosticItems.expand((row) => row)) {
-        if (item.key == 'versionDetection' ||
-            item.key == 'useVersionCodeAsOSVersion') {
-          (item as GeneratedFormSwitch).disabled = true;
+      for (final item in agnosticItems.expand((row) => row)) {
+        if (item.key != 'versionDetection' &&
+            item.key != 'useVersionCodeAsOSVersion') {
+          continue;
+        }
+        if (item is GeneratedFormSwitch) {
+          item.disabled = true;
           item.value = false;
+        } else if (item is GeneratedFormDropdown) {
+          // versionDetection is a dropdown now. Pinning it to the only mode this
+          // source supports is what actually enforces the flag: the previous
+          // switch-only guard silently did nothing, leaving every mode selectable
+          // on sources that cannot compare versions at all (and 'versionCode' /
+          // explicit 'standard' are excluded from install-status auto-disable, so
+          // nothing corrected the choice afterwards).
+          item.disabledOptKeys = VersionDetectionMode.values
+              .where((mode) => mode != VersionDetectionMode.pseudo)
+              .map((mode) => mode.key)
+              .toList();
+          item.value = VersionDetectionMode.pseudo.key;
         }
       }
     }
 
-    return [
+    final combined = [
       // Clone so callers (e.g. the add-app form pre-filling default values)
       // can't mutate the source-owned items. Sources are now cached/shared, so
       // an in-place edit here would otherwise leak across apps.
@@ -429,6 +610,25 @@ abstract class AppSource {
       ...agnosticItems,
       ...moreConditionalItems,
     ];
+
+    final List<List<GeneratedFormItem>> pruned = [];
+    List<GeneratedFormItem>? pendingHeaderRow;
+
+    for (final row in combined) {
+      final bool isHeader =
+          row.length == 1 && row.first is GeneratedFormSectionHeader;
+      if (isHeader) {
+        pendingHeaderRow = row;
+      } else {
+        if (pendingHeaderRow != null) {
+          pruned.add(pendingHeaderRow);
+          pendingHeaderRow = null;
+        }
+        pruned.add(row);
+      }
+    }
+
+    return pruned;
   }
 
   bool get hasAppSpecificSettings =>
@@ -448,11 +648,16 @@ abstract class AppSource {
   ) async {
     final Map<String, String> results = {};
     for (var e in sourceConfigSettingFormItems) {
+      final dynamic perAppValue = additionalSettings[e.key];
+      // A blank per-app value (e.g. an empty token field) means "not set", so
+      // it must not shadow the global value.
+      final bool perAppValueUnset =
+          perAppValue == null ||
+          (perAppValue is String && perAppValue.trim().isEmpty);
       var val = hostChanged && !hostIdenticalDespiteAnyChange
-          ? additionalSettings[e.key]
-          : (additionalSettings[e.key] is String &&
-                (additionalSettings[e.key] as String).isNotEmpty)
-          ? additionalSettings[e.key]
+          ? perAppValue
+          : !perAppValueUnset
+          ? perAppValue
           : (e is GeneratedFormSwitch
                 ? settingsProvider.getSettingBool(e.key).toString()
                 : settingsProvider.getSettingString(e.key));
@@ -468,16 +673,6 @@ abstract class AppSource {
 
   String? changeLogPageFromStandardUrl(String standardUrl) {
     return changeLogPageIsStandardUrl ? standardUrl : null;
-  }
-
-  /// Best-effort download size (bytes) for sources whose apps carry no direct
-  /// APK URL (e.g. track-only sources). Returns null when unavailable.
-  Future<int?> resolveDownloadSize(
-    String standardUrl,
-    Map<String, dynamic> additionalSettings, {
-    String? releaseUrl,
-  }) async {
-    return null;
   }
 
   Future<String?> getSourceNote() async {
@@ -502,15 +697,6 @@ abstract class AppSource {
   bool canSearch = false;
   bool includeAdditionalOptsInMainSearch = false;
   List<GeneratedFormItem> get searchQuerySettingFormItems => [];
-
-  /// Search query settings for a specific instance URL. Sources can use [url]
-  /// to adjust defaults (e.g. only prefill credentials for their default host).
-  /// [settingsProvider] is the caller's initialized provider when available.
-  List<GeneratedFormItem> searchQuerySettingItemsForUrl(
-    String url, {
-    SettingsProvider? settingsProvider,
-  }) => searchQuerySettingFormItems;
-
   Future<Map<String, List<String>>> search(
     String query, {
     Map<String, dynamic> querySettings = const {},
@@ -531,8 +717,9 @@ abstract class AppSource {
   }
 
   static Future<String?> tryInferAppIdFromLastPathSegment(
-    String standardUrl,
-  ) async {
+    String standardUrl, {
+    Map<String, dynamic> additionalSettings = const {},
+  }) async {
     return Uri.parse(
       standardUrl,
     ).pathSegments.where((s) => s.isNotEmpty).lastOrNull;
@@ -557,4 +744,104 @@ abstract class MassAppUrlSource {
   String get name;
   List<String> get requiredArgs;
   Future<Map<String, List<String>>> getUrlsWithDescriptions(List<String> args);
+}
+
+// ------------------------------------------------------------------------
+// ObtainX-only: per-app VirusTotal key, version-string sources and explicit
+// app IDs, all read by [AppSource] and its subclasses.
+// ------------------------------------------------------------------------
+
+/// Per-app companion to the global `enableVirusTotalScanning` setting: turning
+/// this off excludes one app from the pre-install VirusTotal scan. Same polarity
+/// and label as the global switch on purpose - on means "scan", so the two read
+/// identically wherever they appear.
+///
+/// Defaults to **true**, which every read MUST repeat as
+/// `getBool(enableVirusTotalScanKey, defaultValue: true)`. Apps saved before this
+/// key existed have no entry for it, and [TypedSettings.getBool]'s own default is
+/// false, so a bare `getBool(enableVirusTotalScanKey)` reads as "don't scan" and
+/// silently disables scanning for every pre-existing app. There is exactly one
+/// read site - AppsProvider.willScanApkWithVirusTotal - so keep it that way.
+const String enableVirusTotalScanKey = 'enableVirusTotalScan';
+
+// Version-string-source values (stored in additionalSettings['versionStringSource']).
+const String versionStringSourceDefault = 'default';
+const String versionStringSourceReleaseTitle = 'releaseTitle';
+const String versionStringSourceAssetName = 'assetName';
+const String versionStringSourceReleaseDate = 'releaseDate';
+const String versionStringSourceReleaseCommitSha = 'releaseCommitSha';
+
+const Set<String> validVersionStringSources = {
+  versionStringSourceDefault,
+  versionStringSourceReleaseTitle,
+  versionStringSourceAssetName,
+  versionStringSourceReleaseDate,
+  versionStringSourceReleaseCommitSha,
+};
+
+/// Resolves the effective version-string source from [additionalSettings],
+/// preferring an explicitly configured value and otherwise falling back to the
+/// legacy per-method boolean flags.
+String getVersionStringSource(
+  Map<String, dynamic> additionalSettings, {
+  bool preferConfiguredSource = true,
+}) {
+  final dynamic configuredSource = additionalSettings['versionStringSource'];
+  if (configuredSource is String &&
+      preferConfiguredSource &&
+      validVersionStringSources.contains(configuredSource)) {
+    return configuredSource;
+  }
+  if (additionalSettings['releaseDateAsVersion'] == true) {
+    return versionStringSourceReleaseDate;
+  }
+  if (additionalSettings['releaseTitleAsVersion'] == true) {
+    return versionStringSourceReleaseTitle;
+  }
+  if (additionalSettings['extractVersionFromAssetName'] == true) {
+    return versionStringSourceAssetName;
+  }
+  if (additionalSettings['releaseCommitShaAsVersion'] == true) {
+    return versionStringSourceReleaseCommitSha;
+  }
+  if (configuredSource is String &&
+      validVersionStringSources.contains(configuredSource)) {
+    return configuredSource;
+  }
+  return versionStringSourceDefault;
+}
+
+/// Normalises [additionalSettings] so that the string version-source key and
+/// the legacy per-method boolean flags agree with each other.
+void syncVersionStringSourceSettings(
+  Map<String, dynamic> additionalSettings, {
+  bool preferConfiguredSource = true,
+}) {
+  final String versionStringSource = getVersionStringSource(
+    additionalSettings,
+    preferConfiguredSource: preferConfiguredSource,
+  );
+  additionalSettings['versionStringSource'] = versionStringSource;
+  additionalSettings['releaseDateAsVersion'] =
+      versionStringSource == versionStringSourceReleaseDate;
+  additionalSettings['releaseTitleAsVersion'] =
+      versionStringSource == versionStringSourceReleaseTitle;
+  additionalSettings['extractVersionFromAssetName'] =
+      versionStringSource == versionStringSourceAssetName;
+  additionalSettings['releaseCommitShaAsVersion'] =
+      versionStringSource == versionStringSourceReleaseCommitSha;
+}
+
+/// The user-supplied "App ID - Custom" value, or null when none was given.
+///
+/// Empty means "not supplied", not "the id is the empty string".
+/// [GeneratedFormTextField] defaults to `''`, and the Add-app page assigns the
+/// whole form value map to `additionalSettings` on every change, so an untouched
+/// box reaches callers as `''` as soon as the user touches any other option.
+/// Treating that as explicit made the app id blank.
+/// [IzzyOnDroid.tryInferringAppId] guards its own read the same way.
+String? explicitAppIdFromSettings(Map<String, dynamic> additionalSettings) {
+  final String? raw = additionalSettings['appId'] as String?;
+  final String? trimmed = raw?.trim();
+  return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
 }

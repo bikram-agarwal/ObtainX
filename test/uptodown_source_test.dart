@@ -1,5 +1,59 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart';
 import 'package:obtainium/app_sources/uptodown.dart';
+
+/// A JWT whose `exp` claim is [exp] (unix seconds).
+String _jwt(int exp) {
+  String part(Map<String, dynamic> json) =>
+      base64Url.encode(utf8.encode(jsonEncode(json))).replaceAll('=', '');
+  return '${part({'alg': 'none'})}.${part({'exp': exp})}.signature';
+}
+
+/// Serves a download page plus the app API, rejecting the first token.
+class _ApiFixtureUptodown extends Uptodown {
+  // Already expired, so every lookup logs in and the request order doesn't
+  // depend on a session left over from another test.
+  final String token = _jwt(0);
+  final List<String> paths = [];
+  final List<Map<String, String>?> headers = [];
+  int downloadUrlRequests = 0;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    final uri = Uri.parse(url);
+    paths.add(uri.path);
+    headers.add(await getRequestHeaders(additionalSettings, url));
+    if (uri.host == 'vlc.en.uptodown.com') {
+      return Response(
+        '<button id="detail-download-button" data-app-id="19600" '
+        'data-file-id="1184763632"></button>',
+        200,
+      );
+    }
+    if (uri.path == '/eapi/auth/token') {
+      expect(postBody, contains('id_plataforma=13'));
+      return Response(jsonEncode({'token': token}), 200);
+    }
+    if (uri.path == '/eapi/apps/19600/file/1184763632/downloadUrl') {
+      if (++downloadUrlRequests == 1) return Response('', 401);
+      return Response(
+        jsonEncode({
+          'success': 1,
+          'data': {'downloadURL': 'https://dw.uptodown.com/dwn/abc/vlc.apk'},
+        }),
+        200,
+      );
+    }
+    return Response('', 404);
+  }
+}
 
 void main() {
   group('Uptodown Source Tests', () {
@@ -125,36 +179,97 @@ void main() {
       expect(uptodownDirectApkUrl(dataUrl: '   '), isNull);
     });
 
-    test('uptodownAjaxDownloadUrl builds the endpoint, or null on missing ids', () {
-      expect(
-        uptodownAjaxDownloadUrl(
-          'https://vlc.en.uptodown.com',
-          '19600',
-          '1184763632',
-        ),
-        equals(
-          'https://vlc.en.uptodown.com/ajax/app/19600/file/1184763632/download-url',
-        ),
+    test('parseUptodownTechnicalFields prefers valid <th>-labelled rows', () {
+      const cells = [
+        'Jul 1, 2026',
+        'APK',
+        '45.77 MB',
+        'org.videolan.vlc',
+        'com.example.other',
+      ];
+      final labelled = parseUptodownTechnicalFields(
+        cells,
+        labelledCells: const {
+          'package name': 'org.videolan.vlc',
+          'date': 'Jul 1, 2026',
+          'file type': 'XAPK',
+        },
       );
-      expect(
-        uptodownAjaxDownloadUrl(
-          'https://vlc.en.uptodown.com/',
-          '19600',
-          '1184763632',
-        ),
-        equals(
-          'https://vlc.en.uptodown.com/ajax/app/19600/file/1184763632/download-url',
-        ),
+      expect(labelled.appId, equals('org.videolan.vlc'));
+      expect(labelled.dateStr, equals('Jul 1, 2026'));
+      expect(labelled.extension, equals('xapk'));
+
+      // Labels whose values don't look right fall back to content matching.
+      final mislabelled = parseUptodownTechnicalFields(
+        cells,
+        labelledCells: const {
+          'package name': '45.77 MB',
+          'date': 'yesterday',
+          'file type': 'Android',
+        },
       );
-      expect(
-        uptodownAjaxDownloadUrl('https://vlc.en.uptodown.com', null, '118'),
-        isNull,
-      );
-      expect(
-        uptodownAjaxDownloadUrl('https://vlc.en.uptodown.com', '19600', ''),
-        isNull,
-      );
+      expect(mislabelled.appId, equals('com.example.other'));
+      expect(mislabelled.dateStr, equals('Jul 1, 2026'));
+      expect(mislabelled.extension, equals('apk'));
     });
+
+    test('parseUptodownTechnicalFields copes with a short table', () {
+      final fields = parseUptodownTechnicalFields(['org.example.app']);
+      expect(fields.appId, equals('org.example.app'));
+      expect(fields.dateStr, isNull);
+      expect(fields.extension, isNull);
+      expect(parseUptodownTechnicalFields(const []).appId, isNull);
+    });
+
+    test('uptodownSessionFromAuthBody reads the token and its expiry', () {
+      final token = _jwt(1767225600);
+      final session = uptodownSessionFromAuthBody(jsonEncode({'token': token}));
+      expect(session?.token, equals(token));
+      expect(session?.expiresAt, equals(1767225600));
+      expect(uptodownSessionFromAuthBody('{"token":"not-a-jwt"}'), isNull);
+      expect(uptodownSessionFromAuthBody('{"token":"a.b.c"}'), isNull);
+      expect(uptodownSessionFromAuthBody('<html>'), isNull);
+    });
+
+    test(
+      'downloads resolve through the app API, logging in again once on 401',
+      () async {
+        final source = _ApiFixtureUptodown();
+        final url = await source.assetUrlPrefetchModifier(
+          'https://vlc.en.uptodown.com/android/download/1184763632-x',
+          'https://vlc.en.uptodown.com/android/download',
+          {},
+        );
+        expect(url, equals('https://dw.uptodown.com/dwn/abc/vlc.apk'));
+        expect(source.paths, [
+          '/android/download/1184763632-x',
+          '/eapi/auth/token',
+          '/eapi/apps/19600/file/1184763632/downloadUrl',
+          '/eapi/auth/token',
+          '/eapi/apps/19600/file/1184763632/downloadUrl',
+        ]);
+        // Pages get the browser UA; the API gets the app's headers and token.
+        expect(source.headers[0]?['User-Agent'], contains('Mozilla'));
+        expect(
+          source.headers[1]?['Content-Type'],
+          equals('application/x-www-form-urlencoded'),
+        );
+        expect(source.headers[1]?.containsKey('Authorization'), isFalse);
+        expect(
+          source.headers[4]?['Authorization'],
+          equals('Bearer ${source.token}'),
+        );
+        expect(source.headers[4]?['Identificador'], equals('Uptodown_Android'));
+        expect(
+          (await source.getRequestHeaders(
+            {},
+            url,
+            forAPKDownload: true,
+          ))?['User-Agent'],
+          startsWith('Dalvik/'),
+        );
+      },
+    );
 
     test('uptodownDownloadUrlFromAjaxBody reads nested and top-level keys', () {
       expect(

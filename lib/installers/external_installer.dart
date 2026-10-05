@@ -14,6 +14,13 @@ import 'package:obtainium/providers/source_provider.dart';
 /// mechanism fork main uses — rather than reinventing the handoff. The target
 /// package + activity are what the settings UI writes
 /// (externalInstallerPackage / externalInstallerComponent).
+///
+/// Intentional divergence — do not "fix": ObtainX never asks the installer for
+/// a result (no `Intent.EXTRA_RETURN_RESULT`, no `ExternalInstallResult`).
+/// Upstream Obtainium adopted that result-request handoff (#3091); ObtainX
+/// removed it (b9228270) because it makes installers close their own Open/Done
+/// screen. Completion comes from the native package-broadcast watcher in
+/// MainActivity. See localdocs UPSTREAM_SYNC_GUIDE §3.10/§5.
 class ExternalInstaller extends Installer {
   ExternalInstaller(super.settingsProvider);
 

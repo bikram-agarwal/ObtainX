@@ -60,6 +60,7 @@ import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/utils/locale_utils.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
@@ -692,6 +693,7 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
     s.rightSwipeAction,
     s.alwaysUsePhoneLayout,
     s.appFolders.length,
+    s.globalApkFilterRegEx,
     // Per-view overrides: relevant for real folders and the synthetic
     // On-Demand Only view; a hash-as-zero collapse for the main page.
     viewSettingsId == null
@@ -3786,7 +3788,7 @@ class AppsPageState extends State<AppsPage> {
       return refreshFuture
           .catchError((e) {
             if (!context.mounted) return <App>[];
-            showError(e is Map ? e['errors'] : e);
+            showError(e is CheckUpdatesException ? e.errors : e);
             return <App>[];
           })
           .whenComplete(() {
@@ -3796,6 +3798,7 @@ class AppsPageState extends State<AppsPage> {
             );
           })
           .whenComplete(() {
+            if (!mounted) return;
             setState(() {
               refreshingSince = null;
             });
@@ -3846,6 +3849,19 @@ class AppsPageState extends State<AppsPage> {
       _notifyHomeFabChromeIfChanged();
     }
 
+    // A deleted category leaves the (in-memory) filter, so the list isn't
+    // stuck on "no apps" (upstream c071bdad).
+    final Set<String> knownCategories = settingsProvider.categories.keys
+        .toSet();
+    if (!knownCategories.containsAll(filter.includedCategoryFilter)) {
+      filter.includedCategoryFilter = filter.includedCategoryFilter
+          .intersection(knownCategories);
+    }
+    if (!knownCategories.containsAll(filter.excludedCategoryFilter)) {
+      filter.excludedCategoryFilter = filter.excludedCategoryFilter
+          .intersection(knownCategories);
+    }
+
     // ── Cached filter / sort / reorder ─────────────────────────────────────
     // filter+sort is O(n log n). We skip the entire pass when nothing that
     // affects list ordering has changed — e.g. tapping to select a row or
@@ -3872,6 +3888,8 @@ class AppsPageState extends State<AppsPage> {
       _effectiveGroupNonInstalledSeparately(settingsProvider),
       _effectiveGroupTrackOnlySeparately(settingsProvider),
       _effectiveGroupUpdatesSeparately(settingsProvider),
+      // Needs attention reads it (D8).
+      settingsProvider.globalApkFilterRegEx,
     ]);
     if (listBuildToken != _lastListBuildToken) {
       final listTiming = PerformanceRecorder.instance.startOperation();
@@ -3980,52 +3998,58 @@ class AppsPageState extends State<AppsPage> {
 
       final sortCol = _effectiveSortColumn(settingsProvider);
       final sortOrd = _effectiveSortOrder(settingsProvider);
-      workingList.sort((a, b) {
-        int result = 0;
-        if (sortCol == SortColumnSettings.authorName) {
-          result = ((a.author + a.name).toLowerCase()).compareTo(
-            (b.author + b.name).toLowerCase(),
-          );
-        } else if (sortCol == SortColumnSettings.nameAuthor) {
-          result = ((a.name + a.author).toLowerCase()).compareTo(
-            (b.name + b.author).toLowerCase(),
-          );
-        } else if (sortCol == SortColumnSettings.releaseDate) {
-          // Handle null dates: apps with unknown release dates go to end.
-          final aDate = a.app.releaseDate;
-          final bDate = b.app.releaseDate;
-          final isDescending = sortOrd == SortOrderSettings.descending;
-          if (aDate == null && bDate == null) {
-            result = ((a.name + a.author).toLowerCase()).compareTo(
-              (b.name + b.author).toLowerCase(),
-            );
-          } else if (aDate == null) {
-            result = isDescending ? -1 : 1;
-          } else if (bDate == null) {
-            result = isDescending ? 1 : -1;
-          } else {
-            result = aDate.compareTo(bDate);
-          }
-        } else if (sortCol == SortColumnSettings.lastUpdateCheck) {
-          final aDate = a.app.lastUpdateCheck;
-          final bDate = b.app.lastUpdateCheck;
-          final isDescending = sortOrd == SortOrderSettings.descending;
-          if (aDate == null && bDate == null) {
-            result = ((a.name + a.author).toLowerCase()).compareTo(
-              (b.name + b.author).toLowerCase(),
-            );
-          } else if (aDate == null) {
-            result = isDescending ? -1 : 1;
-          } else if (bDate == null) {
-            result = isDescending ? 1 : -1;
-          } else {
-            result = aDate.compareTo(bDate);
-          }
-        } else if (sortCol == SortColumnSettings.added) {
-          result = 0;
+      // List.sort isn't stable, so equal keys keep their list order; "added"
+      // is that order and isn't sorted at all (upstream cbd7ca76).
+      if (sortCol != SortColumnSettings.added) {
+        final Map<AppInMemory, int> listOrder = Map.identity();
+        for (var i = 0; i < workingList.length; i++) {
+          listOrder[workingList[i]] = i;
         }
-        return result;
-      });
+        workingList.sort((a, b) {
+          int result = 0;
+          if (sortCol == SortColumnSettings.authorName) {
+            result = ((a.author + a.name).toLowerCase()).compareTo(
+              (b.author + b.name).toLowerCase(),
+            );
+          } else if (sortCol == SortColumnSettings.nameAuthor) {
+            result = ((a.name + a.author).toLowerCase()).compareTo(
+              (b.name + b.author).toLowerCase(),
+            );
+          } else if (sortCol == SortColumnSettings.releaseDate) {
+            // Handle null dates: apps with unknown release dates go to end.
+            final aDate = a.app.releaseDate;
+            final bDate = b.app.releaseDate;
+            final isDescending = sortOrd == SortOrderSettings.descending;
+            if (aDate == null && bDate == null) {
+              result = ((a.name + a.author).toLowerCase()).compareTo(
+                (b.name + b.author).toLowerCase(),
+              );
+            } else if (aDate == null) {
+              result = isDescending ? -1 : 1;
+            } else if (bDate == null) {
+              result = isDescending ? 1 : -1;
+            } else {
+              result = aDate.compareTo(bDate);
+            }
+          } else if (sortCol == SortColumnSettings.lastUpdateCheck) {
+            final aDate = a.app.lastUpdateCheck;
+            final bDate = b.app.lastUpdateCheck;
+            final isDescending = sortOrd == SortOrderSettings.descending;
+            if (aDate == null && bDate == null) {
+              result = ((a.name + a.author).toLowerCase()).compareTo(
+                (b.name + b.author).toLowerCase(),
+              );
+            } else if (aDate == null) {
+              result = isDescending ? -1 : 1;
+            } else if (bDate == null) {
+              result = isDescending ? 1 : -1;
+            } else {
+              result = aDate.compareTo(bDate);
+            }
+          }
+          return result != 0 ? result : listOrder[a]!.compareTo(listOrder[b]!);
+        });
+      }
 
       if (sortOrd == SortOrderSettings.descending) {
         workingList = workingList.reversed.toList();
@@ -5279,17 +5303,7 @@ class AppsPageState extends State<AppsPage> {
           ? null
           : () {
               hapticHeavyImpact();
-              showBulkUpdatePickerSheet(
-                context: context,
-                apps: appsProvider.apps,
-                existingUpdateIds: existingUpdateIdsAllOrSelected,
-                newInstallIds: newInstallIdsAllOrSelected,
-                trackOnlyUpdateIds: trackOnlyUpdateIdsAllOrSelected,
-                initialSelectedIds: selectedAppIds.isNotEmpty
-                    ? selectedAppIds
-                    : null,
-              ).then((Set<String>? selectedIds) {
-                if (selectedIds == null || selectedIds.isEmpty) return;
+              void obtain(Set<String> selectedIds) {
                 unawaited(
                   appsProvider
                       .downloadAndInstallLatestApps(
@@ -5308,6 +5322,35 @@ class AppsPageState extends State<AppsPage> {
                         }
                       }),
                 );
+              }
+
+              final Set<String>? initialSelectedIds = selectedAppIds.isNotEmpty
+                  ? selectedAppIds
+                  : null;
+              // Opt-in skip (upstream #3099): act on exactly what the sheet
+              // would pre-select. When that's nothing, the sheet opens anyway.
+              if (settingsProvider.skipBulkUpdateConfirmation) {
+                final Set<String> defaultSelection = bulkUpdateDefaultSelection(
+                  existingUpdateIds: existingUpdateIdsAllOrSelected,
+                  newInstallIds: newInstallIdsAllOrSelected,
+                  trackOnlyUpdateIds: trackOnlyUpdateIdsAllOrSelected,
+                  initialSelectedIds: initialSelectedIds,
+                );
+                if (defaultSelection.isNotEmpty) {
+                  obtain(defaultSelection);
+                  return;
+                }
+              }
+              showBulkUpdatePickerSheet(
+                context: context,
+                apps: appsProvider.apps,
+                existingUpdateIds: existingUpdateIdsAllOrSelected,
+                newInstallIds: newInstallIdsAllOrSelected,
+                trackOnlyUpdateIds: trackOnlyUpdateIdsAllOrSelected,
+                initialSelectedIds: initialSelectedIds,
+              ).then((Set<String>? selectedIds) {
+                if (selectedIds == null || selectedIds.isEmpty) return;
+                obtain(selectedIds);
               });
             };
     }
@@ -5336,14 +5379,20 @@ class AppsPageState extends State<AppsPage> {
                       appsProvider: appsProvider,
                     );
                   }
+                  // Save against the latest rows, not the snapshot taken when
+                  // the sheet opened, so a finished update check isn't undone.
+                  final liveApps = appsToCategorize
+                      .map((app) => appsProvider.apps[app.listingKey]?.app)
+                      .nonNulls
+                      .toList();
                   final updatedCategoryLists =
                       applyBulkCategoryActionsToCategoryLists(
-                        appsToCategorize.map((app) => app.categories),
+                        liveApps.map((app) => app.categories),
                         actions,
                       );
                   var index = 0;
                   appsProvider.saveApps(
-                    appsToCategorize
+                    liveApps
                         .map(
                           (app) => app.copyWith(
                             categories: updatedCategoryLists[index++],
@@ -5393,8 +5442,14 @@ class AppsPageState extends State<AppsPage> {
               TextButton(
                 onPressed: () {
                   hapticSelection();
+                  // The latest rows, not the snapshot from when this opened.
+                  final liveRows = appsToMark
+                      .map((app) => appsProvider.apps[app.listingKey])
+                      .nonNulls
+                      .toList();
                   appsProvider.saveApps(
-                    appsToMark.map((appToUpdate) {
+                    liveRows.map((row) {
+                      final App appToUpdate = row.app;
                       final bool hasLegacyReset = appToUpdate.additionalSettings
                           .containsKey(installStatusResetKey);
                       // Track-only apps may be marked out of "Not installed",
@@ -5409,9 +5464,7 @@ class AppsPageState extends State<AppsPage> {
                       if ((appToUpdate.installedVersion != null ||
                               hasLegacyReset ||
                               isTrackOnly) &&
-                          !appsProvider.isVersionDetectionPossible(
-                            appsProvider.apps[appToUpdate.id],
-                          )) {
+                          !appsProvider.isVersionDetectionPossible(row)) {
                         appToMark = acknowledgeSourceRelease(appToUpdate);
                         if (isTrackOnly) {
                           appToMark = appToMark.copyWith(
@@ -5449,7 +5502,11 @@ class AppsPageState extends State<AppsPage> {
     }
 
     void pinSelectedApps([Iterable<App>? targetApps]) {
-      final appsToPin = targetApps ?? getSelectedApps();
+      // Pin state and the saved rows both come from the latest data.
+      final appsToPin = (targetApps ?? getSelectedApps())
+          .map((app) => appsProvider.apps[app.listingKey]?.app)
+          .nonNulls
+          .toList();
       final pinStatus = appsToPin.where((element) => element.pinned).isEmpty;
       appsProvider.saveApps(
         appsToPin.map((e) => e.copyWith(pinned: pinStatus)).toList(),

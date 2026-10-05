@@ -8,15 +8,28 @@ class VivoAppStore extends AppSource {
   static const appDetailUrl =
       'https://h5coml.vivo.com.cn/h5coml/appdetail_h5/browser_v2/index.html?appId=';
 
+  /// Upstream's download link (#3140), used only when the detail JSON has
+  /// neither `download_url` nor `apk`.
+  static const apkDownloadUrl =
+      'https://appstore.vivo.com.cn/appinfo/downloadApkFile?id=';
+
   @override
   String get name => tr('vivoAppStore');
 
   VivoAppStore() {
-    hosts = ['h5.appstore.vivo.com.cn', 'h5coml.vivo.com.cn'];
+    // Upstream (#3140) moved to the detail-browser page host. Its links are
+    // accepted as input; stored URLs keep the h5coml form ([appDetailUrl]).
+    hosts = [
+      'h5.appstore.vivo.com.cn',
+      'h5coml.vivo.com.cn',
+      'detail-browser.vivo.com.cn',
+    ];
     naiveStandardVersionDetection = true;
     canSearch = true;
     allowOverride = false;
     regionalStore = true;
+    // Vivo's download/detail endpoints redirect to plain-HTTP CDN URLs.
+    allowInsecureRedirects = true;
   }
 
   @override
@@ -46,6 +59,10 @@ class VivoAppStore extends AppSource {
           json['download_url']?.toString() ?? json['apk']?.toString();
       if (apkUrl != null && apkUrl.startsWith('/')) {
         apkUrl = 'https://apkwsdl.vivo.com.cn/appstore$apkUrl';
+      }
+      final id = json['id']?.toString();
+      if ((apkUrl == null || apkUrl.isEmpty) && id != null && id.isNotEmpty) {
+        apkUrl = '$apkDownloadUrl${Uri.encodeQueryComponent(id)}';
       }
       if (versionName == null) {
         throw NoVersionError();

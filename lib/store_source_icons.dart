@@ -187,14 +187,16 @@ String? storeSourceAssetPathForHost(String host) {
     return StoreSourceIconPaths.uptodown;
   }
   if (normalized.contains('appgallery.huawei.com') ||
-      normalized.contains('appgallery.cloud.huawei.com')) {
+      normalized.contains('appgallery.cloud.huawei.com') ||
+      normalized.contains('appgallery.huawei.ru')) {
     return StoreSourceIconPaths.huaweiAppGallery;
   }
   if (normalized.contains('sj.qq.com')) {
     return StoreSourceIconPaths.tencent;
   }
   if (normalized.contains('h5.appstore.vivo.com.cn') ||
-      normalized.contains('h5coml.vivo.com.cn')) {
+      normalized.contains('h5coml.vivo.com.cn') ||
+      normalized.contains('detail-browser.vivo.com.cn')) {
     return StoreSourceIconPaths.vivoAppStore;
   }
   if (normalized.contains('rustore.ru')) {

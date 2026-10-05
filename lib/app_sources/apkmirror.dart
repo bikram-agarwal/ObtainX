@@ -10,6 +10,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/utils/min_update_age.dart';
 
 /// Single consolidated debug-logging flag for the APKMirror size code path.
 ///
@@ -532,7 +533,12 @@ DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
     r'<pubDate>([^<]+)</pubDate>',
     caseSensitive: false,
   ).firstMatch(itemInnerXml);
-  final raw = pubDateMatch?.group(1)?.trim();
+  return _apkMirrorPubDate(pubDateMatch?.group(1));
+}
+
+/// Parses an RSS `pubDate`, also when its zone isn't spelled `GMT`.
+DateTime? _apkMirrorPubDate(String? pubDate) {
+  final raw = pubDate?.trim();
   if (raw == null || raw.isEmpty) return null;
   try {
     return HttpDate.parse(raw);
@@ -563,6 +569,7 @@ String? apkMirrorVersionFromTitle(String? title) {
   return digit == null ? label : label.substring(digit.start).trim();
 }
 
+/// The APKMirror maintainers do not allow for directly downloading APKs (PR #44)
 class APKMirror extends AppSource {
   APKMirror() {
     name = 'APKMirror';
@@ -666,6 +673,20 @@ class APKMirror extends AppSource {
     String standardUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
+    try {
+      return await _getLatestAPKDetails(standardUrl, additionalSettings);
+    } catch (e) {
+      // As before this wrapper: a network failure reaches the update worker
+      // as itself, which retries TLS handshakes to the same host.
+      if (isTransientNetworkError(e)) rethrow;
+      rethrowOrWrapError(e);
+    }
+  }
+
+  Future<APKDetails> _getLatestAPKDetails(
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
     final bool fallbackToOlderReleases =
         additionalSettings['fallbackToOlderReleases'] == true;
     final String? regexFilter =
@@ -681,6 +702,7 @@ class APKMirror extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
+    final int minAgeDays = await effectiveMinUpdateAgeDays(additionalSettings);
     final itemInnerBlocks = RegExp(
       r'<item>([\s\S]*?)</item>',
       caseSensitive: false,
@@ -717,8 +739,11 @@ class APKMirror extends AppSource {
           ? RegExp(regexFilter)
           : null;
       String? chosenBlock;
+      String? tooYoungBlock;
+      int releaseSkipped = 0;
       for (int itemIndex = 0; itemIndex < itemInnerBlocks.length; itemIndex++) {
-        if (!fallbackToOlderReleases && itemIndex > 0) break;
+        // Releases skipped as too young don't count as the latest one.
+        if (!fallbackToOlderReleases && itemIndex > releaseSkipped) break;
         final block = itemInnerBlocks[itemIndex];
         final nameToFilter = titleFromApkMirrorRssItemInner(block);
         if (titleFilterPattern != null &&
@@ -726,14 +751,28 @@ class APKMirror extends AppSource {
             !titleFilterPattern.hasMatch(nameToFilter.trim())) {
           continue;
         }
+        if (isReleaseTooYoung(
+          releaseDateFromApkMirrorRssItemInner(block),
+          minAgeDays,
+        )) {
+          tooYoungBlock ??= block;
+          releaseSkipped++;
+          continue;
+        }
         chosenBlock = block;
-        titleString = nameToFilter;
         break;
       }
-      if (chosenBlock != null) {
-        releasePageUrl = releaseUrlFromApkMirrorRssItemInner(chosenBlock);
-        releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
+      // No release old enough: use the newest so the provider can suppress
+      // it until it ages.
+      chosenBlock ??= tooYoungBlock;
+      if (chosenBlock == null) {
+        throw NoReleasesError(
+          note: regexFilter != null ? tr('noMatchingReleaseFound') : null,
+        );
       }
+      titleString = titleFromApkMirrorRssItemInner(chosenBlock);
+      releasePageUrl = releaseUrlFromApkMirrorRssItemInner(chosenBlock);
+      releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
     } else {
       final parsedItems = (await parseHtmlOffIsolate(
         res.body,
@@ -743,10 +782,12 @@ class APKMirror extends AppSource {
           parsedItems[scanIndex].querySelector('title')?.innerHtml,
         );
       }
-      dynamic targetRelease;
       int chosenParsedItemIndex = -1;
+      int tooYoungParsedItemIndex = -1;
+      int releaseSkipped = 0;
       for (int itemIndex = 0; itemIndex < parsedItems.length; itemIndex++) {
-        if (!fallbackToOlderReleases && itemIndex > 0) break;
+        // Releases skipped as too young don't count as the latest one.
+        if (!fallbackToOlderReleases && itemIndex > releaseSkipped) break;
         final nameToFilter = parsedItems[itemIndex]
             .querySelector('title')
             ?.innerHtml;
@@ -755,26 +796,38 @@ class APKMirror extends AppSource {
             !RegExp(regexFilter).hasMatch(nameToFilter.trim())) {
           continue;
         }
-        targetRelease = parsedItems[itemIndex];
+        if (isReleaseTooYoung(
+          _apkMirrorPubDate(
+            parsedItems[itemIndex].querySelector('pubDate')?.innerHtml,
+          ),
+          minAgeDays,
+        )) {
+          if (tooYoungParsedItemIndex < 0) tooYoungParsedItemIndex = itemIndex;
+          releaseSkipped++;
+          continue;
+        }
         chosenParsedItemIndex = itemIndex;
         break;
       }
-      titleString = targetRelease?.querySelector('title')?.innerHtml;
-      final dateString = targetRelease
-          ?.querySelector('pubDate')
-          ?.innerHtml
-          .split(' ')
-          .sublist(0, 5)
-          .join(' ');
-      releaseDate = dateString != null
-          ? HttpDate.parse('$dateString GMT')
-          : null;
-      if (chosenParsedItemIndex >= 0) {
-        releasePageUrl = releaseUrlFromApkMirrorFeedBodyForItemIndex(
-          res.body,
-          chosenParsedItemIndex,
+      // No release old enough: use the newest so the provider can suppress
+      // it until it ages.
+      if (chosenParsedItemIndex < 0) {
+        chosenParsedItemIndex = tooYoungParsedItemIndex;
+      }
+      if (chosenParsedItemIndex < 0) {
+        throw NoReleasesError(
+          note: regexFilter != null ? tr('noMatchingReleaseFound') : null,
         );
       }
+      final targetRelease = parsedItems[chosenParsedItemIndex];
+      titleString = targetRelease.querySelector('title')?.innerHtml;
+      releaseDate = _apkMirrorPubDate(
+        targetRelease.querySelector('pubDate')?.innerHtml,
+      );
+      releasePageUrl = releaseUrlFromApkMirrorFeedBodyForItemIndex(
+        res.body,
+        chosenParsedItemIndex,
+      );
     }
     if (releasePageUrl != null && !releasePageUrl.startsWith('$standardUrl/')) {
       releasePageUrl = null;
@@ -824,7 +877,12 @@ class APKMirror extends AppSource {
 
   AppNames getAppNames(String standardUrl) {
     final String temp = standardUrl.substring(standardUrl.indexOf('://') + 3);
-    final List<String> names = temp.substring(temp.indexOf('/') + 1).split('/');
+    final pathStart = temp.indexOf('/');
+    if (pathStart < 0 || pathStart + 1 >= temp.length) {
+      throw InvalidURLError(name);
+    }
+    final List<String> names = temp.substring(pathStart + 1).split('/');
+    if (names.length < 3) throw InvalidURLError(name);
     return AppNames(names[1], names[2]);
   }
 

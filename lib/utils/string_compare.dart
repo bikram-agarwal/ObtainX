@@ -1,3 +1,8 @@
+// Natural (alphanumeric) string ordering shared by sources.
+
+import 'package:obtainium/version/version_comparison.dart'
+    show compareDecimalIdentifiers;
+
 int compareAlphaNumeric(String a, String b) {
   final List<String> aParts = _splitAlphaNumeric(a);
   final List<String> bParts = _splitAlphaNumeric(b);
@@ -10,14 +15,9 @@ int compareAlphaNumeric(String a, String b) {
     final bool bIsNumber = _isDigit(bPart);
 
     if (aIsNumber && bIsNumber) {
-      final int? aNumber = int.tryParse(aPart);
-      final int? bNumber = int.tryParse(bPart);
-      if (aNumber == null || bNumber == null) {
-        final int cmp = aPart.compareTo(bPart);
-        if (cmp != 0) return cmp;
-      } else {
-        final int cmp = aNumber.compareTo(bNumber);
-        if (cmp != 0) return cmp;
+      final int cmp = compareDecimalIdentifiers(aPart, bPart);
+      if (cmp != 0) {
+        return cmp;
       }
     } else if (!aIsNumber && !bIsNumber) {
       final int cmp = aPart.compareTo(bPart);
@@ -25,6 +25,7 @@ int compareAlphaNumeric(String a, String b) {
         return cmp;
       }
     } else {
+      // Alphanumeric strings come before numeric strings
       return aIsNumber ? 1 : -1;
     }
   }

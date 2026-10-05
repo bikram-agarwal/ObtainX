@@ -6,6 +6,11 @@
 
 import 'package:obtainium/models/app.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/version/app_version.dart'
+    show sourceBuildComparisonKey;
+import 'package:obtainium/version/partial_download_version.dart'
+    show partialDownloadFingerprintKey;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Resolves the effective minimum update age (in days) for an app: the
 /// per-app override when set, otherwise the global setting.
@@ -20,8 +25,10 @@ Future<int> effectiveMinUpdateAgeDays(
       return parsed;
     }
   }
+  // Only a stored value is read, so skip SettingsProvider's one-time init
+  // (migrations and native lookups): this runs on every update check.
   final sp = settingsProvider ?? SettingsProvider();
-  await sp.initializeSettings();
+  sp.prefs ??= await SharedPreferences.getInstance();
   return sp.minimumUpdateAgeDays;
 }
 
@@ -32,17 +39,53 @@ bool isReleaseTooYoung(DateTime? releaseDate, int minAgeDays, {DateTime? now}) {
       Duration(days: minAgeDays);
 }
 
-/// Replaces the release-specific fields of [fetchedApp] with [currentApp]'s, so
-/// the update stays suppressed until the fetched release is old enough. The
-/// APK URLs must move with the version, otherwise an update made during the
-/// suppression window would silently download the fresh release.
+/// `additionalSettings` entries that describe the fetched release rather than
+/// the user's configuration, so they move with the release.
+const List<String> _releaseScopedSettingKeys = [
+  'sourceVersionCodes',
+  'rawSelectedReleaseTitle',
+  sourceBuildComparisonKey,
+  partialDownloadFingerprintKey,
+];
+
+/// Replaces every release-specific field of [fetchedApp] with [currentApp]'s,
+/// so the update stays suppressed until the fetched release is old enough.
+/// The APK URLs must move with the version, otherwise an update made during
+/// the suppression window would silently download the fresh release; so must
+/// the size, version codes, RegEx-assist snapshots and verification results,
+/// which all describe that one release. Settings and identity still come from
+/// the fetch.
 App applyMinAgeSuppression(App currentApp, App fetchedApp) {
+  final Map<String, dynamic> additionalSettings = Map<String, dynamic>.from(
+    fetchedApp.additionalSettings,
+  );
+  for (final String key in _releaseScopedSettingKeys) {
+    if (currentApp.additionalSettings.containsKey(key)) {
+      additionalSettings[key] = currentApp.additionalSettings[key];
+    } else {
+      additionalSettings.remove(key);
+    }
+  }
   return fetchedApp.copyWith(
     latestVersion: currentApp.latestVersion,
     releaseDate: currentApp.releaseDate,
     changeLog: currentApp.changeLog,
-    releaseUrl: currentApp.releaseUrl,
     apkUrls: currentApp.apkUrls,
     otherAssetUrls: currentApp.otherAssetUrls,
+    preferredApkIndex: currentApp.apkUrls.isEmpty
+        ? 0
+        : currentApp.preferredApkIndex.clamp(0, currentApp.apkUrls.length - 1),
+    additionalSettings: additionalSettings,
+    apkSizeBytes: currentApp.apkSizeBytes,
+    rawLatestVersionFromSource: currentApp.rawLatestVersionFromSource,
+    rawApkNamesFromSource: currentApp.rawApkNamesFromSource,
+    rawReleaseTitlesFromSource: currentApp.rawReleaseTitlesFromSource,
+    latestIsReproducible: currentApp.latestIsReproducible,
+    latestReproducibleStatus: currentApp.latestReproducibleStatus,
+    latestReproducibleVersionCode: currentApp.latestReproducibleVersionCode,
+    latestAttestationStatus: currentApp.latestAttestationStatus,
+    latestMalwareScanStatus: currentApp.latestMalwareScanStatus,
+    latestMalwareScanDetail: currentApp.latestMalwareScanDetail,
+    latestMalwareScanReportUrl: currentApp.latestMalwareScanReportUrl,
   );
 }

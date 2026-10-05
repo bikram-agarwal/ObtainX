@@ -33,6 +33,7 @@ import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/utils/format_utils.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -1493,8 +1494,12 @@ class AddAppPageState extends State<AddAppPage> {
               );
             }
           }
-          if (sameStoreListingIn(appsProvider.apps, app) != null) {
-            throw ObtainiumError(tr('appAlreadyAdded'));
+          final AppInMemory? sameStoreListing = sameStoreListingIn(
+            appsProvider.apps,
+            app,
+          );
+          if (sameStoreListing != null) {
+            throw appAlreadyAddedError(sameStoreListing);
           }
           app = await appsProvider.addNewListing(
             app.copyWith(categories: pickedCategories),

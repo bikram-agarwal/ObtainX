@@ -44,6 +44,36 @@ class FixtureAPKMirror extends APKMirror {
   }
 }
 
+/// Serves [feed] as the RSS feed and nothing else.
+class FeedFixtureAPKMirror extends APKMirror {
+  FeedFixtureAPKMirror(this.feed);
+
+  final String feed;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (url.endsWith('/feed/')) return Response(feed, 200);
+    return Response('', 404);
+  }
+}
+
+/// An APKMirror feed with one item per (version, age) pair, newest first.
+String apkMirrorFeedWithReleases(List<(String, Duration)> releases) {
+  final items = releases.map((release) {
+    final (version, age) = release;
+    return '<item><title>Example $version by Example</title>'
+        '<link>https://www.apkmirror.com/apk/example/example/example-${version.replaceAll('.', '-')}-release/</link>'
+        '<pubDate>${HttpDate.format(DateTime.now().subtract(age))}</pubDate>'
+        '</item>';
+  });
+  return '<rss><channel>${items.join()}</channel></rss>';
+}
+
 class ReleasePageBlockedAPKMirror extends APKMirror {
   final List<String> requestedUrls = [];
 
@@ -1173,6 +1203,120 @@ This app description should not be included.
       isNull,
     );
   });
+
+  // Fixtures ported from upstream's apkmirror_test.dart (#3310).
+  test('apk mirror changelog skips page noise and stops at About', () async {
+    final changeLog = await apkMirrorChangeLogFromReleasePageHtml('''
+<html><body>
+<h2><a href="#whatsnew">What's new in App 1.2.3</a></h2>
+<div>
+<p>Thanks for choosing App!</p>
+<p>Fixed bugs.</p>
+<ul><li>Faster startup</li><li>New icon</li></ul>
+</div>
+<p>Verified safe to install (read more)</p>
+<p>Scroll to available downloads</p>
+<h2>About App 1.2.3</h2>
+<p>This text must not be included.</p>
+</body></html>
+''');
+    expect(changeLog, contains('Thanks for choosing App!'));
+    expect(changeLog, contains('Fixed bugs.'));
+    expect(changeLog, contains('- Faster startup'));
+    expect(changeLog, contains('- New icon'));
+    expect(changeLog, isNot(contains('Verified safe')));
+    expect(changeLog, isNot(contains('Scroll to available downloads')));
+    expect(changeLog, isNot(contains('This text must not be included.')));
+  });
+
+  test('apk mirror feed item index resolves that item\'s release url', () {
+    const feed = '''
+<?xml version="1.0"?>
+<rss><channel>
+<item>
+<title>App One 1.0 by A</title>
+<link>https://www.apkmirror.com/apk/dev/app-one/app-one-1-0-release/</link>
+<pubDate>Sun, 13 Sep 2026 01:02:27 +0000</pubDate>
+</item>
+<item>
+<title>App One 1.1 by A</title>
+<link>https://www.apkmirror.com/apk/dev/app-one/app-one-1-1-release/</link>
+<pubDate>Mon, 14 Sep 2026 01:02:27 +0000</pubDate>
+</item>
+</channel></rss>
+''';
+    expect(
+      releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, 0),
+      'https://www.apkmirror.com/apk/dev/app-one/app-one-1-0-release/',
+    );
+    expect(
+      releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, 1),
+      'https://www.apkmirror.com/apk/dev/app-one/app-one-1-1-release/',
+    );
+    expect(releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, 5), isNull);
+    expect(releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, -1), isNull);
+    expect(
+      releaseUrlFromApkMirrorFeedBodyForItemIndex('<item></item>', 0),
+      isNull,
+    );
+  });
+
+  test(
+    'apk mirror file size parses across a line break and in KB/GB',
+    () async {
+      expect(
+        await apkSizeBytesFromApkMirrorReleasePageHtml('File size:\n270.70 MB'),
+        (270.70 * 1024 * 1024).round(),
+      );
+      expect(apkSizeBytesFromApkMirrorSizeText('File size: 12 KB'), 12 * 1024);
+      expect(
+        apkSizeBytesFromApkMirrorSizeText('File size: 1.5 GB'),
+        (1.5 * 1024 * 1024 * 1024).round(),
+      );
+      expect(apkSizeBytesFromApkMirrorSizeText('No size here'), isNull);
+    },
+  );
+
+  test(
+    'apk mirror reports no matching release when the title filter excludes all',
+    () async {
+      await expectLater(
+        FeedFixtureAPKMirror(
+          apkMirrorFeedWithReleases([('2.0', const Duration(days: 1))]),
+        ).getLatestAPKDetails('https://www.apkmirror.com/apk/example/example', {
+          'filterReleaseTitlesByRegEx': 'nothing-matches',
+        }),
+        throwsA(isA<NoReleasesError>()),
+      );
+    },
+  );
+
+  test(
+    'apk mirror skips releases younger than the minimum update age',
+    () async {
+      const url = 'https://www.apkmirror.com/apk/example/example';
+      final details = await FeedFixtureAPKMirror(
+        apkMirrorFeedWithReleases([
+          ('2.0', const Duration(days: 1)),
+          ('1.0', const Duration(days: 10)),
+        ]),
+      ).getLatestAPKDetails(url, {'minimumUpdateAgeDays': '7'});
+      expect(details.version, '1.0');
+      expect(
+        details.changeLog,
+        'https://www.apkmirror.com/apk/example/example/example-1-0-release/',
+      );
+
+      // None old enough: the newest stays, for the provider to suppress.
+      final allTooYoung = await FeedFixtureAPKMirror(
+        apkMirrorFeedWithReleases([
+          ('2.0', const Duration(days: 1)),
+          ('1.0', const Duration(days: 2)),
+        ]),
+      ).getLatestAPKDetails(url, {'minimumUpdateAgeDays': '7'});
+      expect(allTooYoung.version, '2.0');
+    },
+  );
 
   test('app copy preserves known apk size when refreshed size is unknown', () {
     final currentApp = App(

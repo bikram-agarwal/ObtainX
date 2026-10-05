@@ -4,6 +4,7 @@ import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
+import 'package:obtainium/utils/color_utils.dart';
 
 enum BulkCategoryCoverageState { all, some, none }
 

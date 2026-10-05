@@ -6,6 +6,7 @@ import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/core/logging/app_logger.dart';
+import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/utils/min_update_age.dart';
 

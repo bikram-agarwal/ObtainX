@@ -67,9 +67,9 @@ ThemeData buildObtainiumTheme(ColorScheme colorScheme, String? fontFamily) {
     filledButtonTheme: const FilledButtonThemeData(style: pillButtonStyle),
     elevatedButtonTheme: const ElevatedButtonThemeData(style: pillButtonStyle),
     outlinedButtonTheme: const OutlinedButtonThemeData(style: pillButtonStyle),
-    textButtonTheme: const TextButtonThemeData(
-      style: ButtonStyle(shape: WidgetStatePropertyAll(buttonShape)),
-    ),
+    // Matches upstream (03bef37f). main.dart merges appTextButtonTheme over
+    // it, and that style's non-null fields win.
+    textButtonTheme: const TextButtonThemeData(style: pillButtonStyle),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
       shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(20)),
       // FAB shadow depth. Tweak these to try different values (M3 default is 6).
@@ -141,16 +141,20 @@ BorderRadius positionalTileRadius({
   );
 }
 
-RoundedSuperellipseBorder positionalTileShape({
-  required bool isFirst,
-  required bool isLast,
-}) => RoundedSuperellipseBorder(
-  borderRadius: positionalTileRadius(isFirst: isFirst, isLast: isLast),
-);
-
 abstract final class ExpressiveMotion {
   static const Curve emphasized = Curves.easeInOutCubicEmphasized;
 
   static const Duration short = Durations.short4;
   static const Duration medium = Durations.medium2;
+}
+
+abstract final class AppPaddings {
+  static const EdgeInsets pageHorizontal = EdgeInsets.symmetric(horizontal: 16);
+  static const EdgeInsets page = EdgeInsets.fromLTRB(16, 0, 16, 0);
+  static const EdgeInsets cardInner = EdgeInsets.all(16);
+}
+
+abstract final class AppSpacings {
+  static const double sectionGap = 20;
+  static const double elementGap = 8;
 }

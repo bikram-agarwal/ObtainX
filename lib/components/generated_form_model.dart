@@ -306,6 +306,42 @@ class GeneratedFormDropdown extends GeneratedFormItem {
   }
 }
 
+/// A discrete slider over [opts] (upstream #3251). Each option maps a stored
+/// value to its label; a label that is a plain number is shown as that many
+/// days, anything else is shown as given (already translated).
+class GeneratedFormSlider extends GeneratedFormItem {
+  final List<MapEntry<String, String>>? opts;
+  late bool required;
+
+  GeneratedFormSlider(
+    super.key,
+    this.opts, {
+    super.label,
+    super.belowWidgets,
+    String super.value = '',
+    this.required = true,
+    List<String? Function(String? value)> super.additionalValidators = const [],
+  });
+
+  @override
+  String ensureType(val) {
+    return val.toString();
+  }
+
+  @override
+  GeneratedFormSlider clone() {
+    return GeneratedFormSlider(
+      key,
+      opts?.map((e) => MapEntry(e.key, e.value)).toList(),
+      label: label,
+      belowWidgets: belowWidgets,
+      value: value,
+      required: required,
+      additionalValidators: List.from(additionalValidators),
+    );
+  }
+}
+
 class GeneratedFormSwitch extends GeneratedFormItem {
   bool disabled;
   // Fork-only: help icon next to the switch label + keys this switch turns off.
