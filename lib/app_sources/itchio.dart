@@ -137,8 +137,8 @@ class ItchIO extends AppSource {
     for (var abbrElement in abbrElements) {
       final title = abbrElement.attributes['title'];
       if (title == null) continue;
-      final DateTime abbrDate = abbrTimeFormat.parseUtc(title);
-      abbrDates.add(abbrDate);
+      final DateTime? abbrDate = abbrTimeFormat.tryParseUtc(title);
+      if (abbrDate != null) abbrDates.add(abbrDate);
     }
 
     if (abbrDates.isEmpty) return null;
@@ -256,18 +256,11 @@ class ItchIO extends AppSource {
     try {
       final String baseUrl = standardUrl.replaceAll(RegExp(r'/$'), '');
 
-      // Retrieve the body for parsing
       final res = await sourceRequest(standardUrl, additionalSettings);
-      if (res.statusCode != 200) {
-        throw getObtainiumHttpError(res);
-      }
+      ensureHttpSuccess(res);
       final body = res.body;
-
-      // Retrieve CSRF token and cookies
-      final (csrfToken, cookies) = await _setupDownload(
-        standardUrl,
-        additionalSettings,
-      );
+      final csrfToken = _findCsrf(body);
+      final cookies = res.headers['set-cookie'];
 
       final Document storePage = await parseHtmlOffIsolate(body);
       final String title = _parseTitle(storePage);
@@ -389,9 +382,13 @@ class ItchIO extends AppSource {
     if (directUrl == null) return null;
 
     final String baseUrl = standardUrl.replaceAll(RegExp(r'/$'), '');
-    final streamRes = await sourceRequestStreamResponse('GET', directUrl, {
+    // Local copy: the signed URL is short-lived and must not be persisted into
+    // the app's additionalSettings.
+    final requestSettings = Map<String, dynamic>.from(additionalSettings)
+      ..['url'] = directUrl;
+    final streamRes = await sourceRequestStreamResponse('GET', {
       'Referer': '$baseUrl?download',
-    }, additionalSettings);
+    }, requestSettings);
 
     // Peek into the Content-Disposition header
     final response = streamRes.value.value;

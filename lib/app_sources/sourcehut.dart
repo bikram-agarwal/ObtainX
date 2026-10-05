@@ -5,8 +5,9 @@ import 'package:intl/intl.dart';
 import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/components/generated_form_model.dart';
-import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/min_update_age.dart';
 
 class SourceHut extends AppSource {
   SourceHut() {
@@ -90,7 +91,11 @@ class SourceHut extends AppSource {
       if (res.statusCode == 200) {
         final parsedHtml = await parseHtmlOffIsolate(res.body);
         List<APKDetails> apkDetailsList = [];
+        final int minAgeDays = await effectiveMinUpdateAgeDays(
+          additionalSettings,
+        );
         int ind = 0;
+        int releaseSkipped = 0;
 
         for (var entry in parsedHtml.querySelectorAll('item').take(6)) {
           ind++;
@@ -99,7 +104,7 @@ class SourceHut extends AppSource {
           if (!releasePage.startsWith('$standardUrl/refs')) {
             continue;
           }
-          if (!fallbackToOlderReleases && ind > 1) {
+          if (!fallbackToOlderReleases && ind > releaseSkipped + 1) {
             break;
           }
           final String? version = entry.querySelector('title')?.text.trim();
@@ -117,12 +122,12 @@ class SourceHut extends AppSource {
                   ).parse(releaseDateString)
                 : null;
           } catch (e) {
-            unawaited(
-              LogsProvider().add(
-                'Failed to parse SourceHut release date: ${e.toString()}',
-                level: LogLevel.warning,
-              ),
+            AppLogger.warn(
+              'Failed to parse SourceHut release date: ${e.toString()}',
             );
+          }
+          if (isReleaseTooYoung(releaseDate, minAgeDays)) {
+            releaseSkipped++;
           }
           final res2 = await sourceRequest(releasePage, additionalSettings);
           List<MapEntry<String, String>> apkUrls = [];
@@ -150,6 +155,16 @@ class SourceHut extends AppSource {
         }
         if (apkDetailsList.isEmpty) {
           throw NoReleasesError();
+        }
+        // Prefer the newest release old enough for the minimum update age; if
+        // none is, keep the newest so it can be suppressed until it ages.
+        if (minAgeDays > 0) {
+          final eligible = apkDetailsList
+              .where((e) => !isReleaseTooYoung(e.releaseDate, minAgeDays))
+              .toList();
+          if (eligible.isNotEmpty) {
+            apkDetailsList = eligible;
+          }
         }
         if (fallbackToOlderReleases) {
           if (additionalSettings['trackOnly'] != true) {

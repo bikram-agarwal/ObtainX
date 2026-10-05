@@ -1,7 +1,7 @@
 {
     "invalidURLForSource": "Geçerli bir {} uygulama URL'si değil",
     "noReleaseFound": "Uygun bir sürüm bulunamadı",
-    "noVersionFound": "Sürüm bulunamadı",
+    "noVersionFound": "Sürüm belirlenemedi",
     "urlMatchesNoSource": "URL, bilinen bir kaynakla eşleşmiyor",
     "cantInstallOlderVersion": "Uygulamanın eski bir sürümü yüklenemez",
     "showAppDowngradeError": "Uygulama sürüm düşürme hatalarını göster",
@@ -18,7 +18,7 @@
     "repoRenamedExplanation": "Bu depo taşındı. URL'yi güncellemek gelecekteki güncellemelerin çalışmasını sağlar.",
     "updateUrl": "URL'yi güncelle",
     "dismiss": "Kapat",
-    "functionNotImplemented": "Bu sınıf bu işlevi uygulamamış",
+    "functionNotImplemented": "Bu sınıf bu işlevi uygulamıyor",
     "placeholder": "Yer tutucu",
     "someErrors": "Bazı hatalar oluştu",
     "unexpectedError": "Beklenmedik hata",
@@ -141,7 +141,7 @@
     "settingsCustomFontErrorInvalid": "Yüklenemedi: Geçersiz veya bozuk yazı tipi dosyası.",
     "authorName": "Geliştirici/isim",
     "nameAuthor": "İsim/geliştirici",
-    "asAdded": "Eklendiği gibi",
+    "asAdded": "Eklendiği sırayla",
     "ascending": "Artan",
     "descending": "Azalan",
     "bgUpdateCheckInterval": "Arka planda güncelleme denetleme sıklığı",
@@ -159,7 +159,7 @@
     "close": "Kapat",
     "share": "Paylaş",
     "appNotFound": "Uygulama bulunamadı",
-    "obtainiumExportHyphenatedLowercase": "obtainium-dışa-aktarma",
+    "obtainiumExportHyphenatedLowercase": "obtainx-dışa-aktarma",
     "pickAnAPK": "APK seç",
     "appHasMoreThanOnePackage": "{} birden fazla pakete sahip:",
     "deviceSupportsXArch": "Cihazınız {} CPU mimarisini destekliyor.",
@@ -214,7 +214,7 @@
     "downloadingX": "{} indiriliyor",
     "downloadX": "{}'yi indir",
     "downloadedX": "{} indirildi",
-    "releaseAsset": "Sürüm varlığı",
+    "releaseAsset": "Sürüm dosyası",
     "downloadNotifDescription": "Bir uygulamanın indirilme ilerlemesini kullanıcıya bildirir",
     "noAPKFound": "APK bulunamadı",
     "noVersionDetection": "Sürüm algılaması yok",
@@ -245,7 +245,7 @@
     "groupByCategory": "Kategoriye göre grupla",
     "autoApkFilterByArch": "Mümkün olduğunda APK'ları CPU mimarisine göre filtrelemeye çalış",
     "autoLinkFilterByArch": "Mümkün olduğunda bağlantıları CPU mimarisine göre filtrelemeye çalış",
-    "overrideSource": "Öncelenecek kaynak",
+    "overrideSource": "Kaynağı geçersiz kıl",
     "dontShowAgain": "Bunu tekrar gösterme",
     "moveNonInstalledAppsToBottom": "Yüklü olmayan uygulamaları uygulamalar görünümünün altına taşı",
     "gitlabPATLabel": "GitLab kişisel erişim anahtarı",
@@ -319,7 +319,7 @@
     "dhizukuBinderNotFound": "Dhizuku hizmeti çalışmıyor",
     "shizukuOld": "Eski Shizuku sürümü (<11) - güncelleyin",
     "shizukuOldAndroidWithADB": "Shizuku, Android < 8.1'de ADB ile çalışıyor - Android'i güncelleyin veya bunun yerine Dhizuku ya da Sui kullanın",
-    "shizukuPretendToBeGooglePlay": "Yükleme kaynağını Google Play olarak ayarla (Shizuku kullanılıyorsa)",
+    "shizukuPretendToBeGooglePlay": "Yükleme kaynağını Google Play olarak ayarla (Shizuku veya Root kullanılıyorsa)",
     "useVersionCodeAsOSVersion": "Uygulama versionCode'sini işletim sistemi tarafından algılanan sürüm olarak kullan",
     "requestHeader": "İstek başlığı",
     "useLatestAssetDateAsReleaseDate": "En son varlık yüklemesini yayın tarihi olarak kullan",
@@ -340,7 +340,7 @@
     "crowdsourcedConfigsShort": "Topluluk kaynaklı uygulama yapılandırmaları",
     "allowInsecure": "Güvenli olmayan HTTP isteklerine izin ver",
     "stayOneVersionBehind": "En son sürümden bir önceki sürümde kal",
-    "useFirstApkOfVersion": "Birden fazla APK'ların ilkini otomatik seç",
+    "useFirstApkOfVersion": "Birden fazla APK arasından ilkini otomatik seç",
     "refreshBeforeDownload": "İndirmeden önce uygulama detaylarını yenile",
     "perAppVirusTotalScanTooltip": "Bu uygulamanın indirilen APK'larını yüklemeden önce VirusTotal ile tara. Bu uygulamayı taramadan hariç tutmak için kapatın.\n\nBunun bir etkisi olması için Ayarlar'da \"APK'ları VirusTotal ile tara\" seçeneğinin doğrulanmış bir API anahtarıyla etkinleştirilmiş olması gerekir.",
     "tencentAppStore": "Tencent App Store",
@@ -393,20 +393,20 @@
         "other": "{n} günlük temizlendi (şundan önce = {before}, şundan sonra = {after})"
     },
     "xAndNMoreUpdatesAvailable": {
-        "one": "{} ve 1 diğer uygulama için güncellemeler mevcut.",
-        "other": "{} ve {} diğer uygulama için güncellemeler mevcut."
+        "one": "{} ve 1 uygulama daha için güncellemeler mevcut.",
+        "other": "{} ve {} uygulama daha için güncellemeler mevcut."
     },
     "xAndNMoreUpdatesInstalled": {
-        "one": "{} ve 1 diğer uygulama güncellendi.",
-        "other": "{} ve {} diğer uygulama güncellendi."
+        "one": "{} ve 1 uygulama daha güncellendi.",
+        "other": "{} ve {} uygulama daha güncellendi."
     },
     "xAndNMoreUpdatesFailed": {
-        "one": "{} ve 1 diğer uygulama güncellenemedi.",
-        "other": "{} ve {} diğer uygulama güncellenemedi."
+        "one": "{} ve 1 uygulama daha güncellenemedi.",
+        "other": "{} ve {} uygulama daha güncellenemedi."
     },
     "xAndNMoreUpdatesPossiblyInstalled": {
-        "one": "{} ve 1 diğer uygulama güncellenmiş olabilir.",
-        "other": "{} ve {} diğer uygulama güncellenmiş olabilir."
+        "one": "{} ve 1 uygulama daha güncellenmiş olabilir.",
+        "other": "{} ve {} uygulama daha güncellenmiş olabilir."
     },
     "apk": {
         "one": "{} APK",
@@ -848,5 +848,46 @@
     "action": {
         "one": "Eylem",
         "other": "Eylemler"
-    }
+    },
+    "allowedSigningCertHashes": "Expected signing certificate hashes",
+    "autoExportFileName": "Otomatik dışa aktarma dosya adı (zaman damgalı bir ad için boş bırakın)",
+    "exportIncludesSecretsWarning": "Dışa aktarılan dosya, jetonlar gibi hassas değerler dahil tüm ayarları düz metin olarak içerecektir. Dosyaya sahip olan herkes bunları okuyabilir.",
+    "clearLogs": "Clear logs",
+    "clearLogsWarning": "This will delete all stored logs. Continue?",
+    "codebergTokenLabel": "Codeberg access token",
+    "cscCode": "CSC kodu",
+    "deviceModel": "Cihaz modeli",
+    "enableCertificatePinning": "Sertifika sabitlemeyi etkinleştir",
+    "expectedSigningCertHash": "Expected certificate hash",
+    "forgejoTokenLabel": "ForgeJo access token",
+    "globalApkFilterRegEx": "Genel APK filtre regex'i",
+    "skipBulkUpdateConfirmation": "Güncelleme/yükleme onay penceresini atla",
+    "huaweiAppGalleryApiError": "Huawei AppGallery API'sinden uygulama ayrıntıları alınamadı",
+    "insecureRedirect": "HTTPS'ten güvenli olmayan HTTP'ye yapılan bir yönlendirmenin takip edilmesi reddedildi. Bu, uygulama başına 'Güvenli olmayan bağlantılara izin ver' ayarıyla etkinleştirilebilir.",
+    "installConfirmationError": "Yükleme onayı zamanında alınmadı — uygulama yüklenmemiş olabilir",
+    "invalidSigningCertHash": "Invalid signing certificate hash",
+    "logsCleared": "Logs cleared",
+    "minimumUpdateAgeDays": "Güncellemeler için minimum süre",
+    "releaseTooYoungForMinAge": "The latest release is younger than the minimum update age ({} days) and this source does not provide older releases.",
+    "rustoreAggregatedAppNoApk": "RuStore lists this app from an external source and does not host its APK",
+    "samsungGalaxyStoreApiError": "Samsung Galaxy Store API hatası",
+    "searchFailed": "{}: search failed ({})",
+    "installMethodRoot": "Root",
+    "rootNotGranted": "Root access not granted",
+    "signingCertMismatchTitle": "Signing certificate mismatch",
+    "signingCertMismatchMessage": "The downloaded APK is signed with a different certificate than the installed app. The install was skipped.",
+    "signingCertMismatchHardBlock": "The downloaded APK does not match the expected signing certificate hash. The install was blocked.",
+    "signingCertMismatchWarningBody": "{} is signed with a different certificate than the installed version. Installing it will most likely fail. Only continue if you trust this source.",
+    "signingCertMismatchHardBlockBody": "The downloaded file for {} does not match the signing certificate hash you configured. The install has been blocked.",
+    "actualSigningCertHash": "Downloaded certificate hash",
+    "storeHandshakeNoSign": "{} ile mağaza el sıkışması imza döndürmedi",
+    "useGlobalDefault": "Genel varsayılanı kullan",
+    "unexpectedStoreApiResponse": "Beklenmedik mağaza API yanıtı",
+    "uptodownDownloadError": "Uptodown could not resolve the download",
+    "uptodownInvalidAuthResponse": "Invalid Uptodown authentication response",
+    "uptodownSearchError": "Uptodown search failed",
+    "verifySigningCertHashes": "Warn about signing certificate changes",
+    "verifySigningCertHashesHelp": "Before installing, check that the downloaded APK is signed with the same certificate as the installed app. Apps with expected signing certificate hashes configured are always checked.",
+    "categoryAlreadyExists": "Bu isimde bir kategori zaten mevcut",
+    "noMatchingReleaseFound": "Eşleşen bir sürüm bulunamadı"
 }

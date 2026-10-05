@@ -6,7 +6,7 @@ import 'package:bcrypt/bcrypt.dart';
 import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:obtainium/custom_errors.dart';
-import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
 /// CoolApk app source.
@@ -30,6 +30,8 @@ class CoolApk extends AppSource {
     canSearch = true;
   }
 
+  static const String _apiBaseUrl = 'https://api2.coolapk.com';
+
   @override
   String sourceSpecificStandardizeURL(
     String url, {
@@ -50,25 +52,16 @@ class CoolApk extends AppSource {
       if (appId == null) {
         throw NoReleasesError();
       }
-      const String apiUrl = 'https://api2.coolapk.com';
-
-      final detailUrl = '$apiUrl/v6/apk/detail?id=$appId';
+      final detailUrl = '$_apiBaseUrl/v6/apk/detail?id=$appId';
       final res = await sourceRequest(detailUrl, additionalSettings);
 
-      if (res.statusCode != 200) {
-        throw getObtainiumHttpError(res);
-      }
+      ensureHttpSuccess(res);
 
       Map<String, dynamic> json;
       try {
         json = jsonDecode(res.body);
       } catch (e) {
-        unawaited(
-          LogsProvider().add(
-            'Failed to decode JSON response: $e',
-            level: LogLevel.error,
-          ),
-        );
+        AppLogger.error(e, message: 'Failed to decode JSON response');
         throw NoReleasesError();
       }
       if (json['status'] == -2 || json['data'] == null) {
@@ -76,8 +69,11 @@ class CoolApk extends AppSource {
       }
 
       final detail = json['data'];
-      final String version = detail['apkversionname'].toString();
-      final String appName = detail['title'].toString();
+      final String version = detail['apkversionname']?.toString() ?? '';
+      final String appName = detail['title']?.toString() ?? tr('app');
+      if (version.isEmpty) {
+        throw NoVersionError();
+      }
       final String author = detail['developername']?.toString() ?? 'CoolApk';
       final String changelog = detail['changelog']?.toString() ?? '';
       int? releaseDate;
@@ -88,10 +84,13 @@ class CoolApk extends AppSource {
         final parsed = int.tryParse(lastUpdate.toString());
         releaseDate = parsed != null ? parsed * 1000 : null;
       }
-      final String aid = detail['id'].toString();
+      final String aid = detail['id']?.toString() ?? '';
+      if (aid.isEmpty) {
+        throw NoReleasesError();
+      }
 
       final String apkUrl = await _getLatestApkUrl(
-        apiUrl,
+        _apiBaseUrl,
         appId,
         aid,
         version,
