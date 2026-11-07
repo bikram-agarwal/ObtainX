@@ -564,7 +564,10 @@ class HomePageState extends State<HomePage> {
         return Future<void>.value();
       }
       isLinkActivity = true;
-      return interpretLink(uri);
+      // interpretLink reads an add link's URL before its own try, as upstream
+      // does, and escapes that aren't UTF-8 throw there. Uncaught, that would
+      // stop a cold start here, before the listeners below are set up.
+      return interpretLink(uri).catchError((Object e) => showError(e));
     }
 
     // Check initial link if app was in cold state (terminated)

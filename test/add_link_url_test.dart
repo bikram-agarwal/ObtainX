@@ -105,4 +105,15 @@ void main() {
       expect(() => _dataIn(link), throwsFormatException, reason: link);
     }
   });
+
+  test('what interpretLink throws before its try is still shown', () {
+    final String source = File('lib/pages/home.dart').readAsStringSync();
+
+    expect(
+      source,
+      contains(
+        'return interpretLink(uri).catchError((Object e) => showError(e));',
+      ),
+    );
+  });
 }
