@@ -1232,7 +1232,7 @@ class GitHub extends AppSource {
       }
       _positionLatestRelease(releases, latestRelease);
       releases = releases.reversed.toList();
-      final targetRelease = _selectGitHubTargetRelease(
+      var targetRelease = _selectGitHubTargetRelease(
         releases: releases,
         fallbackToOlderReleases: fallbackToOlderReleases,
         includePrereleases: includePrereleases,
@@ -1243,6 +1243,37 @@ class GitHub extends AppSource {
         additionalSettings: additionalSettings,
         sourceConfigSettingValues: sourceConfigSettingValues,
       );
+      // The list holds at most 100 releases. A repo that ships many
+      // pre-releases can push its latest stable release off that page, so with
+      // pre-releases excluded nothing qualified ("Could not find a suitable
+      // release"). Ask GitHub for the latest stable release directly and run it
+      // through the same filters.
+      if (targetRelease == null &&
+          !includePrereleases &&
+          latestRelease == null &&
+          Uri.parse(requestUrl).path.endsWith('/releases')) {
+        final uri = Uri.parse(requestUrl);
+        final Response latestRes = await sourceRequest(
+          uri.replace(query: null, path: '${uri.path}/latest').toString(),
+          additionalSettings,
+        );
+        if (latestRes.statusCode == 200) {
+          final latest = jsonDecode(latestRes.body);
+          if (latest is Map<String, dynamic>) {
+            targetRelease = _selectGitHubTargetRelease(
+              releases: [latest],
+              fallbackToOlderReleases: fallbackToOlderReleases,
+              includePrereleases: includePrereleases,
+              regexFilter: regexFilter,
+              regexNotesFilter: regexNotesFilter,
+              includeZips: includeZips,
+              includeTarballs: includeTarballs,
+              additionalSettings: additionalSettings,
+              sourceConfigSettingValues: sourceConfigSettingValues,
+            );
+          }
+        }
+      }
       if (targetRelease == null) {
         throw NoReleasesError();
       }
