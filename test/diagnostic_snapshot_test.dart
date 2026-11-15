@@ -159,6 +159,8 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'installMethod': 'system',
       'enableBackgroundUpdates': false,
+      // Background conditions show whenever background checks run.
+      'updateInterval': 0,
       'enableVirusTotalScanning': false,
     });
     final SettingsProvider settings = SettingsProvider()

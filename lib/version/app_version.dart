@@ -5,6 +5,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:crypto/crypto.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
 const observedVersionNameKey = 'observedVersionName';
@@ -50,9 +51,21 @@ const List<String> _releaseFilterSettingKeys = [
 bool appHasNoMatchingRelease(App app) =>
     app.additionalSettings[noMatchingReleaseKey] == true;
 
-String releaseFilterFingerprint(App app) => _releaseFilterSettingKeys
-    .map((String key) => app.additionalSettings[key]?.toString() ?? '')
-    .join('\n');
+String releaseFilterFingerprint(App app) => [
+  ..._releaseFilterSettingKeys.map(
+    (String key) => app.additionalSettings[key]?.toString() ?? '',
+  ),
+  // Only when it applies, so fingerprints saved before the global filter
+  // existed still match.
+  ?_globalApkFilterApplyingTo(app),
+].join('\n');
+
+/// The global APK filter when it stands in for [app]'s unset own filter (see
+/// SourceProvider.getApp), else null.
+String? _globalApkFilterApplyingTo(App app) =>
+    appApkFilterRegExIsSet(app.additionalSettings)
+    ? null
+    : activeGlobalApkFilterRegEx;
 
 /// A check error caused by the user's version or file filter, not by the
 /// source simply having nothing yet.
@@ -71,6 +84,11 @@ bool checkErrorNeedsAttention(App app, Object error) {
       if (key == 'versionExtractionRegEx') continue;
       final String value = app.additionalSettings[key]?.toString().trim() ?? '';
       if (value.isNotEmpty) return true;
+    }
+    // The global APK filter runs in getApp after the source answered, so it
+    // can only leave no APK, never no release.
+    if (error is NoAPKError && _globalApkFilterApplyingTo(app) != null) {
+      return true;
     }
   }
   return false;
@@ -136,6 +154,11 @@ bool appHasBlockingAttention(App app) {
       return false;
   }
 }
+
+/// Whether the stored Needs-attention detail names the app's current release
+/// (and that release isn't skipped).
+bool needsAttentionIsForCurrentRelease(App app) =>
+    _blockedReleaseIsCurrent(app);
 
 /// Whether the release a pre-install check blocked (stored as the detail) is
 /// still the latest one, and not skipped. A newer release is checked afresh.

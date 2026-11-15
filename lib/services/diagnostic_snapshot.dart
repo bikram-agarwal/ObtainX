@@ -263,7 +263,8 @@ Future<String> buildObtainxDiagnosticLog({
     'Installer',
     installerMode == InstallerMode.external.name
         ? '$installerMode (${settings.externalInstallerPackage ?? 'no target set'})'
-        : installerMode == InstallerMode.shizuku.name
+        : installerMode == InstallerMode.shizuku.name ||
+              installerMode == InstallerMode.root.name
         ? '$installerMode (pretends to be Play: ${settings.shizukuPretendToBeGooglePlay})'
         : installerMode,
   );
@@ -274,7 +275,8 @@ Future<String> buildObtainxDiagnosticLog({
         'on start ${settings.checkOnStart}, installed/track-only only ${settings.onlyCheckInstalledOrTrackOnlyApps}, '
         'prereleases ${settings.includePrereleasesByDefault}',
   );
-  if (settings.enableBackgroundUpdates) {
+  // The Wi-Fi and charging constraints apply to every background check.
+  if (settings.updateInterval > 0) {
     _writeLine(
       buffer,
       'Background conditions',
@@ -282,6 +284,13 @@ Future<String> buildObtainxDiagnosticLog({
           'foreground service ${settings.useFGService}',
     );
   }
+  _writeLine(
+    buffer,
+    'Update safeguards',
+    'min age ${settings.minimumUpdateAgeDays} d, pinning ${settings.enableCertificatePinning}, '
+        'signer check ${settings.verifySigningCertHashes}, '
+        'global APK filter ${settings.globalApkFilterRegEx != null}',
+  );
   _writeLine(
     buffer,
     'Downloads',

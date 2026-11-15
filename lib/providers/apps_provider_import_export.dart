@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 
+import 'package:obtainium/app_sources/huaweiappgallery.dart';
 import 'package:obtainium/custom_errors.dart';
 
 import 'package:obtainium/app_sources/github.dart';
@@ -24,6 +25,7 @@ import 'package:shared_storage/shared_storage.dart' as saf;
 /// fingerprint are listed explicitly.
 bool isSecretSettingKey(String key) {
   return key.endsWith('-creds') ||
+      key == HuaweiAppGallery.sessionPrefsKey ||
       key == GitHub.validatedPATFingerprintKey ||
       key == GitLab.validatedPATFingerprintKey ||
       key == virusTotalApiKeyKey ||
@@ -186,6 +188,16 @@ String readableLinkPayload(String payload) {
   }
 }
 
+/// Whether [file], listed in the export folder, is an earlier auto-export that
+/// a new one replaces: a timestamped `-auto.json`, or the fixed [customName]
+/// file. Matched by display name, as a listed file's URI ends in its document
+/// ID (`primary:Backups/name.json`), not its name.
+bool isReplacedAutoExport(saf.DocumentFile file, String? customName) {
+  final String name = file.name ?? file.uri.pathSegments.last.split('/').last;
+  return name.endsWith('-auto.json') ||
+      (customName != null && name == '$customName.json');
+}
+
 /// Import/export of app configurations for [AppsProvider].
 extension AppsProviderImportExport on AppsProvider {
   /// Builds an exportable JSON map containing app data and optionally settings.
@@ -202,6 +214,10 @@ extension AppsProviderImportExport on AppsProvider {
     final folderNamesById = {
       for (final folder in settingsProvider.appFolders) folder.id: folder.name,
     };
+    int shouldExportSettings = settingsProvider.exportSettings;
+    if (overrideExportSettings != null) {
+      shouldExportSettings = overrideExportSettings;
+    }
     final appList = apps.values
         .where(
           (e) =>
@@ -226,15 +242,19 @@ extension AppsProviderImportExport on AppsProvider {
               }
             }
             additionalSettings['folderNames'] = folderNames;
-            appJson['additionalSettings'] = jsonEncode(additionalSettings);
           }
+          // Per-app credentials (an overridden source's token, e.g.
+          // github-creds) live in additionalSettings, not prefs, so an export
+          // without secrets strips them here too (upstream b0356157).
+          if (shouldExportSettings < 2) {
+            additionalSettings.removeWhere(
+              (String key, dynamic _) => isSecretSettingKey(key),
+            );
+          }
+          appJson['additionalSettings'] = jsonEncode(additionalSettings);
           return appJson;
         })
         .toList();
-    int shouldExportSettings = settingsProvider.exportSettings;
-    if (overrideExportSettings != null) {
-      shouldExportSettings = overrideExportSettings;
-    }
     Map<String, dynamic>? settingsMap;
     Map<String, dynamic>? settingsObtainXMap;
     if (shouldExportSettings > 0) {
@@ -278,21 +298,35 @@ extension AppsProviderImportExport on AppsProvider {
     if (isAuto && !settingsProvider.autoExportOnChanges) {
       return null;
     }
+    final String? customName = settingsProvider.autoExportFileName;
     var exportDir = await settingsProvider.getExportDir(
       warnIfInaccessible: true,
     );
     if (isAuto) {
       if (exportDir == null) {
+        if (settingsProvider.prefs?.getString('exportDir') != null) {
+          unawaited(
+            logs.add(
+              'Auto-export skipped: export directory permission unavailable',
+            ),
+          );
+        }
         return null;
       }
       final files = await saf
-          .listFiles(exportDir, columns: [saf.DocumentFileColumn.id])
-          .where((f) => f.uri.pathSegments.last.endsWith('-auto.json'))
+          .listFiles(
+            exportDir,
+            columns: [
+              saf.DocumentFileColumn.id,
+              saf.DocumentFileColumn.displayName,
+            ],
+          )
+          .where((f) => isReplacedAutoExport(f, customName))
           .toList();
-      if (files.isNotEmpty) {
-        for (var f in files) {
-          unawaited(saf.delete(f.uri));
-        }
+      for (final f in files) {
+        // Awaited so the old file is gone before its replacement (same custom
+        // name) is created (upstream b0356157).
+        await saf.delete(f.uri);
       }
     }
     if (exportDir == null || pickOnly) {
@@ -311,19 +345,24 @@ extension AppsProviderImportExport on AppsProvider {
         finalExport,
         indent: '    ',
       );
+      // An auto-export with a custom name keeps one fixed file, replaced each
+      // time, instead of a new timestamped file per change.
+      final String displayName = isAuto && customName != null
+          ? '$customName.json'
+          : '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json';
       final result = await saf.createFile(
         exportDir,
-        displayName:
-            '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
+        displayName: displayName,
         mimeType: 'application/json',
         bytes: bytes,
       );
       if (result == null) {
         throw ObtainiumError(tr('unexpectedError'));
       }
+      // Any volume, so an SD card path reads right too (upstream 1d699fd9).
       returnPath = exportDir.pathSegments
           .join('/')
-          .replaceFirst('tree/primary:', '/');
+          .replaceFirst(RegExp(r'^tree/[^:]+:'), '/');
     }
     return returnPath;
   }
@@ -438,9 +477,13 @@ extension AppsProviderImportExport on AppsProvider {
     if (importSettings && settingsMap != null) {
       hasSettings = true;
       // 'appFolders' is skipped: already merged/persisted by
-      // _reconcileImportedFolders. Reload settings so the merged folder list
-      // (and everything else) is reflected in memory immediately.
-      _applyImportedSettings(settingsMap, skipKeys: const {'appFolders'});
+      // _reconcileImportedFolders. Upstream settings ObtainX dropped aren't
+      // written at all. Reload settings so the merged folder list (and
+      // everything else) is reflected in memory immediately.
+      _applyImportedSettings(
+        settingsMap,
+        skipKeys: const {'appFolders', ...droppedUpstreamSettingKeys},
+      );
       await settingsProvider.initializeSettings();
     }
     return MapEntry<List<App>, bool>(importedApps, hasSettings);

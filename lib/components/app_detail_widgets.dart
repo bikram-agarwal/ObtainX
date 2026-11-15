@@ -6,6 +6,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
+import 'package:obtainium/utils/locale_utils.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
@@ -132,10 +133,12 @@ class _AppFilePickerState extends State<AppFilePicker> {
               groupValue: fileUrl!.value,
               onChanged: (String? val) {
                 setState(() {
-                  fileUrl = urlsToSelectFrom.firstWhere(
-                    (e) => e.value == val,
-                    orElse: () => urlsToSelectFrom.first,
-                  );
+                  fileUrl = urlsToSelectFrom.isNotEmpty
+                      ? urlsToSelectFrom.firstWhere(
+                          (e) => e.value == val,
+                          orElse: () => urlsToSelectFrom.first,
+                        )
+                      : fileUrl;
                 });
               },
               child: Column(
@@ -179,9 +182,8 @@ class _AppFilePickerState extends State<AppFilePicker> {
                                 list2FriendlyString(
                                   widget.archs!.map((e) => '\'$e\'').toList(),
                                 ),
-                      style: const TextStyle(
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         fontStyle: FontStyle.italic,
-                        fontSize: 12,
                       ),
                     ),
                 ],
@@ -362,6 +364,87 @@ class MalwareScanWarningDialog extends StatelessWidget {
           child: Text(tr('installAnyway')),
         ),
       ],
+    );
+  }
+}
+
+/// Shown before installing an APK whose signing certificate doesn't match
+/// (upstream #2922, in ObtainX's dialog style). [hardBlock] is the per-app
+/// pinned-certificate case, which offers no way to install anyway; otherwise
+/// the APK differs from the installed app's signer and the user decides.
+/// Pops true to install anyway.
+class SigningCertMismatchDialog extends StatelessWidget {
+  const SigningCertMismatchDialog({
+    super.key,
+    required this.appName,
+    required this.expectedHashes,
+    required this.actualHashes,
+    required this.hardBlock,
+  });
+
+  final String appName;
+  final List<String> expectedHashes;
+  final List<String> actualHashes;
+  final bool hardBlock;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+
+    Widget hashBlock(String label, List<String> hashes) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: textTheme.labelMedium),
+        if (hashes.isEmpty)
+          Text(tr('none'), style: textTheme.bodySmall)
+        else
+          for (final String hash in hashes)
+            SelectableText(hash, style: textTheme.bodySmall),
+      ],
+    );
+
+    return AlertDialog(
+      scrollable: true,
+      title: Text(tr('signingCertMismatchTitle')),
+      contentPadding: appDialogContentPadding,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            hardBlock
+                ? tr('signingCertMismatchHardBlockBody', args: [appName])
+                : tr('signingCertMismatchWarningBody', args: [appName]),
+          ),
+          const SizedBox(height: 12),
+          hashBlock(tr('expectedSigningCertHash'), expectedHashes),
+          const SizedBox(height: 8),
+          hashBlock(tr('actualSigningCertHash'), actualHashes),
+        ],
+      ),
+      actions: hardBlock
+          ? [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(tr('ok')),
+              ),
+            ]
+          : [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(tr('cancelInstall')),
+              ),
+              TextButton(
+                onPressed: () {
+                  hapticSelection();
+                  Navigator.of(context).pop(true);
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
+                child: Text(tr('installAnyway')),
+              ),
+            ],
     );
   }
 }

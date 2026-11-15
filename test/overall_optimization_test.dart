@@ -197,6 +197,8 @@ void main() {
   test(
     'direct APK sources preserve the migration baseline through their HTML delegate',
     () async {
+      // The hash probe reads the certificate-pinning setting (D9).
+      SharedPreferences.setMockInitialValues({});
       await HttpOverrides.runWithHttpOverrides(() async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));

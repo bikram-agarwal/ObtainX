@@ -310,7 +310,7 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
     </tr>
     <tr>
         <td>Update size shown in advance</td>
-        <td>Shown for most stores (added July 2026) — but not APKMirror</td>
+        <td>Shown for most stores (added July 2026), and for APKMirror since v1.6.16 (September 2026)</td>
         <td>Shown for those same stores (from May 2026) — and APKMirror too</td>
     </tr>
     <tr>
@@ -325,8 +325,8 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
     </tr>
     <tr>
         <td>Changelog view</td>
-        <td>• Centered, narrow panel squishes text vertically<br>• Completely obscures the center of the screen<br>• Doesn't show screenshots present in release notes<br>• Can't fetch changelog from APKMirror apps</td>
-        <td>• Full-width bottom sheet (wider, better readable text layout)<br>• Keeps background app context visible<br>• Shows screenshots present in release notes<br>• Fetches changelog from APKMirror and GitLab apps too<br>• Relative changelog images resolve on Forgejo instances, not only codeberg.org</td>
+        <td>• Centered, narrow panel squishes text vertically<br>• Completely obscures the center of the screen<br>• Doesn't show screenshots present in release notes</td>
+        <td>• Full-width bottom sheet (wider, better readable text layout)<br>• Keeps background app context visible<br>• Shows screenshots present in release notes<br>• Fetches changelog from GitLab apps too<br>• Relative changelog images resolve on Forgejo instances, not only codeberg.org</td>
     </tr>
     <tr>
         <td>Update check configuration</td>
@@ -479,14 +479,14 @@ ObtainX groups a source's additional options into labeled section cards, so that
 
 ### Adding apps: search across stores
 
-ObtainX searches 9 stores (3 more than Obtainium), shows them all as chips upfront, shows the result on the same page with each result showing store badge. You can also change store selection afterwards and re-search without leaving the page; Obtainium searches 6 stores through a two-dialog flow with no store badges on results.
+ObtainX searches 12 stores (3 more than Obtainium), shows them all as chips upfront, shows the result on the same page with each result showing store badge. You can also change store selection afterwards and re-search without leaving the page; Obtainium searches 9 stores through a two-dialog flow with no store badges on results.
 
 <table>
     <tr><th width="26%">Feature</th><th width="37%">Obtainium</th><th width="37%">ObtainX</th></tr>
     <tr>
         <td>Searchable sources</td>
-        <td>6 — GitHub, GitLab, Codeberg, F-Droid, F-Droid repo, Vivo App Store</td>
-        <td>9 — those 6 <strong>plus</strong> IzzyOnDroid, CoolApk, Tencent</td>
+        <td>9 — GitHub, GitLab, Codeberg, F-Droid, F-Droid repo, Vivo App Store, RuStore, Huawei AppGallery, Uptodown</td>
+        <td>12 — those 9 <strong>plus</strong> IzzyOnDroid, CoolApk, Tencent</td>
     </tr>
     <tr>
         <td>All sources visible upfront</td>

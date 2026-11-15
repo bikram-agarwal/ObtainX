@@ -378,3 +378,23 @@ bool versionOrderIsUnclear(String installed, String latest) {
   return compareVersionStrings(installed, latest).relation ==
       VersionRelation.unknown;
 }
+
+/// Delegates to [VersionService.regExValidator].
+String? regExValidator(String? value) => VersionService().regExValidator(value);
+
+/// Delegates to [VersionService.replaceMatchGroupsInString].
+String? replaceMatchGroupsInString(
+  RegExpMatch match,
+  String matchGroupString,
+) => VersionService().replaceMatchGroupsInString(match, matchGroupString);
+
+/// Delegates to [VersionService.extractVersion].
+String? extractVersion(
+  String? versionExtractionRegEx,
+  String? matchGroupString,
+  String stringToCheck,
+) => VersionService().extractVersion(
+  versionExtractionRegEx,
+  matchGroupString,
+  stringToCheck,
+);

@@ -245,7 +245,7 @@ class FDroid extends AppSource {
           details.changeLog = prevApp.changeLog;
         }
         if (prevApp.author.trim().isNotEmpty) {
-          details.names.author = prevApp.author;
+          details.names = details.names.copyWith(author: prevApp.author);
         }
       }
       if (usesOfficialFDroidHost && !canReuseCachedVerification) {
@@ -260,10 +260,9 @@ class FDroid extends AppSource {
               (l) => l.startsWith('AuthorName: '),
             );
             if (authorLines.isNotEmpty) {
-              details.names.author = authorLines.first
-                  .split(': ')
-                  .sublist(1)
-                  .join(': ');
+              details.names = details.names.copyWith(
+                author: authorLines.first.split(': ').sublist(1).join(': '),
+              );
             }
             final changelogUrls = lines
                 .where((l) => l.startsWith('Changelog: '))
@@ -329,7 +328,7 @@ class FDroid extends AppSource {
           details.apkSizeBytes = prevApp.apkSizeBytes;
         }
         if (prevApp.name.trim().isNotEmpty) {
-          details.names.name = prevApp.name;
+          details.names = details.names.copyWith(name: prevApp.name);
         }
       }
       return details;
@@ -469,7 +468,9 @@ class FDroid extends AppSource {
         String? url = e.attributes['href'];
         if (url != null) {
           try {
-            standardizeUrl(url);
+            // Keep the canonical form so search results match stored app URLs
+            // and duplicate detection works (upstream 006a2262).
+            url = standardizeUrl(url);
           } catch (e) {
             url = null;
           }
@@ -510,7 +511,9 @@ class FDroid extends AppSource {
         : null;
     if (res.statusCode == 200) {
       final response = jsonDecode(res.body);
-      List<dynamic> releases = response['packages'] ?? [];
+      List<dynamic> releases = response is Map
+          ? (response['packages'] ?? [])
+          : [];
       if (apkFilterRegEx != null) {
         releases = releases.where((rel) {
           final String apk = '${apkUrlPrefix}_${rel['versionCode']}.apk';

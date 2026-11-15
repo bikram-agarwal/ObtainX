@@ -1,4 +1,4 @@
-import 'package:easy_localization/easy_localization.dart';
+import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -69,6 +69,26 @@ class BulkUpdateSheet extends StatefulWidget {
   State<BulkUpdateSheet> createState() => _BulkUpdateSheetState();
 }
 
+/// What [BulkUpdateSheet] starts with selected: those of [initialSelectedIds]
+/// it lists, otherwise every update and track-only update. An app that isn't
+/// installed is only included when the user selected it.
+Set<String> bulkUpdateDefaultSelection({
+  required List<String> existingUpdateIds,
+  required List<String> newInstallIds,
+  required List<String> trackOnlyUpdateIds,
+  Set<String>? initialSelectedIds,
+}) {
+  final validSheetIds = {
+    ...existingUpdateIds,
+    ...newInstallIds,
+    ...trackOnlyUpdateIds,
+  };
+  if (initialSelectedIds != null && initialSelectedIds.isNotEmpty) {
+    return initialSelectedIds.where(validSheetIds.contains).toSet();
+  }
+  return {...existingUpdateIds, ...trackOnlyUpdateIds};
+}
+
 class _BulkUpdateSheetState extends State<BulkUpdateSheet> {
   late Set<String> selectedIds;
   late Set<_BulkUpdateSectionId> expandedSectionIds;
@@ -76,19 +96,12 @@ class _BulkUpdateSheetState extends State<BulkUpdateSheet> {
   @override
   void initState() {
     super.initState();
-    final validSheetIds = {
-      ...widget.existingUpdateIds,
-      ...widget.newInstallIds,
-      ...widget.trackOnlyUpdateIds,
-    };
-    if (widget.initialSelectedIds != null &&
-        widget.initialSelectedIds!.isNotEmpty) {
-      selectedIds = widget.initialSelectedIds!
-          .where(validSheetIds.contains)
-          .toSet();
-    } else {
-      selectedIds = {...widget.existingUpdateIds, ...widget.trackOnlyUpdateIds};
-    }
+    selectedIds = bulkUpdateDefaultSelection(
+      existingUpdateIds: widget.existingUpdateIds,
+      newInstallIds: widget.newInstallIds,
+      trackOnlyUpdateIds: widget.trackOnlyUpdateIds,
+      initialSelectedIds: widget.initialSelectedIds,
+    );
     expandedSectionIds = {_BulkUpdateSectionId.updates};
   }
 
@@ -242,7 +255,18 @@ class _BulkUpdateSheetState extends State<BulkUpdateSheet> {
                 overflow: TextOverflow.ellipsis,
               ),
             if (versionLabel.isNotEmpty)
-              Text(versionLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+              // An RTL Directionality mirrors the arrow, so "installed →
+              // latest" would read as a downgrade (upstream 8a2b51aa).
+              Directionality(
+                textDirection: isUpdate
+                    ? TextDirection.ltr
+                    : Directionality.of(context),
+                child: Text(
+                  versionLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
           ],
         ),
         trailing: Checkbox(

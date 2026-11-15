@@ -87,6 +87,7 @@ class _Device extends DeviceInfoPlatform {
       'totalDiskSize': 1,
       'physicalRamSize': 4096,
       'availableRamSize': 2048,
+      'time': 0,
       'isLowRamDevice': false,
       'systemFeatures': <String>[],
     });

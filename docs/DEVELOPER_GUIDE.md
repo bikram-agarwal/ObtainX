@@ -20,7 +20,7 @@ should follow when working in this codebase.
 | Persistence | One JSON file per app on disk + `SharedPreferences` for settings + `flutter_secure_storage` for credentials + `sqflite` for logs |
 | Localization | `easy_localization` (`assets/translations/*.json`, key-based `tr()` / `plural()`) |
 | Background work | `workmanager` (periodic background tasks, Android-only) |
-| Installation | Installer abstraction (`StockInstaller` / `ShizukuInstaller` / `ExternalInstaller`) backed by `android_package_installer`, `shizuku_apk_installer`, `android_intent_plus` |
+| Installation | Installer abstraction (`StockInstaller` / `ShizukuInstaller` / `DhizukuInstaller` / `ExternalInstaller` / `RootInstaller`) backed by `android_package_installer`, `shizuku_apk_installer`, `android_intent_plus`, `su` |
 
 ### Entry point: `lib/main.dart`
 
@@ -86,7 +86,8 @@ lib/
 │  ├─ stock_installer.dart        AndroidPackageInstaller
 │  ├─ shizuku_installer.dart      Shizuku/Sui binder
 │  ├─ dhizuku_installer.dart      Dhizuku Device Owner binder
-│  └─ external_installer.dart     Third-party installer hand-off
+│  ├─ external_installer.dart     Third-party installer hand-off
+│  └─ root_installer.dart         Root `su` + `pm install`
 └─ app_sources/                  One file per supported source (28 sources + githubstars)
 ```
 
@@ -385,8 +386,8 @@ Background work is scheduled via **`workmanager`** (Android periodic tasks). The
 - Tarballs are extracted from supported compression formats (gzip, bzip2, xz) into
   split APK directories.
 - `installApk` / `installApkDir` select the installer strategy (`StockInstaller`,
-  `ShizukuInstaller`, or `ExternalInstaller`) based on user settings. See
-  `lib/installers/`.
+  `ShizukuInstaller`, `DhizukuInstaller`, `ExternalInstaller`, or `RootInstaller`)
+  based on user settings. See `lib/installers/`.
 - `canInstallSilently(app)` decides whether a background silent install is allowed.
 - `moveObbFile` uses **SAF (`shared_storage`) on Android 11+**, direct file access on
   older versions.
@@ -401,12 +402,20 @@ installation methods. The abstract `Installer` class (`installer.dart`) defines:
 
 ```dart
 abstract class Installer {
-  Future<InstallResult> installApk(App app, String path, ...);
-  Future<InstallResult> installApkDir(App app, String dir, ...);
+  String get modeKey; // 'system', 'shizuku', 'dhizuku', 'external' or 'root'
+  bool get wantsContainerHandoff => false;
+  Future<bool> canInstallSilently(App app);
+  Future<bool> checkPermission();
+  Future<void> ensurePermission({ThemeData? toastTheme});
+  Future<InstallResult> installApk(
+    List<String> apkFilePaths, {
+    required String appId,
+    Map<String, dynamic> installOptions,
+  });
 }
 ```
 
-Four concrete implementations:
+Five concrete implementations:
 
 | Installer | Backend | Use case |
 | --- | --- | --- |
@@ -414,8 +423,9 @@ Four concrete implementations:
 | `ShizukuInstaller` | `shizuku_apk_installer` plugin | Elevated installs via Shizuku/Sui binder |
 | `DhizukuInstaller` | `shizuku_apk_installer` plugin | Elevated installs via Dhizuku Device Owner binder |
 | `ExternalInstaller` | Native `MethodChannel` bridge (`external_install_bridge.dart` + `MainActivity.kt`) | Hands off to a third-party installer app chosen by the user; lists eligible targets via `listInstallTargets()` and converts file paths to `content://` URIs via `FileProvider` |
+| `RootInstaller` | `su` + `pm install` | Elevated installs for the app's own Android user (not just user 0, so it works under multi-user); a granted `su` check is reused for two minutes |
 
-The selection logic (in `apps_provider_install.dart`) checks `installerMode`: `shizuku` → `ShizukuInstaller`; `dhizuku` → `DhizukuInstaller`; `external` → `ExternalInstaller`; otherwise → `StockInstaller`.
+The selection logic (in `apps_provider_install.dart`) checks `installerMode`: `shizuku` → `ShizukuInstaller`; `dhizuku` → `DhizukuInstaller`; `external` → `ExternalInstaller`; `root` → `RootInstaller`; otherwise → `StockInstaller`.
 
 ### Credentials
 

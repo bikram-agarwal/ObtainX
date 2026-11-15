@@ -77,6 +77,57 @@ void main() {
     },
   );
 
+  test('a missing repository index stays missing for the operation', () async {
+    int requests = 0;
+    Future<Response> load() async {
+      requests++;
+      return Response('', 404);
+    }
+
+    await SourceRequestSession.run(() async {
+      final session = SourceRequestSession.current!;
+      expect((await session.repositoryResponse('repo', load)).statusCode, 404);
+      expect((await session.repositoryResponse('repo', load)).statusCode, 404);
+    });
+    expect(requests, 1);
+  });
+
+  test(
+    'an index-v2.json parses once per response and other bodies are rejected',
+    () async {
+      final response = Response(
+        jsonEncode({
+          'repo': <String, dynamic>{},
+          'packages': {
+            'org.example.app': {'versions': <String, dynamic>{}},
+          },
+        }),
+        200,
+        request: Request(
+          'GET',
+          Uri.parse('https://repo.example/repo/index-v2.json'),
+        ),
+      );
+      final indexes = await Future.wait([
+        parseRepositoryIndexV2(response),
+        parseRepositoryIndexV2(response),
+      ]);
+      expect(identical(indexes[0], indexes[1]), isTrue);
+      expect(
+        indexes.first!.findApplication('org.example.app')?.releases,
+        isEmpty,
+      );
+      expect(
+        await parseRepositoryIndexV2(Response('<html>Not found</html>', 200)),
+        isNull,
+      );
+      expect(
+        await parseRepositoryIndexV2(Response('{"repo": {}}', 200)),
+        isNull,
+      );
+    },
+  );
+
   test(
     'one parsed index resolves independent apps and preserves name matching',
     () async {

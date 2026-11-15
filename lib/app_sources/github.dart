@@ -12,6 +12,7 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/min_update_age.dart';
 import 'package:obtainium/version/app_version.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
@@ -215,7 +216,7 @@ class GitHub extends AppSource {
       password: true,
       required: false,
       helpUrl:
-          'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token',
+          'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token',
       assistIcon: Icons.verified_user_outlined,
       assistTooltip: tr('validateGitHubPAT'),
       assistAction: _validatePATFromSettingsForm,
@@ -223,7 +224,7 @@ class GitHub extends AppSource {
     GeneratedFormTextField(
       'GHReqPrefix',
       label: tr('GHReqPrefix'),
-      hint: 'gh-proxy.org',
+      hint: 'gh-proxy.com',
       required: false,
       additionalValidators: [
         (value) {
@@ -416,7 +417,11 @@ class GitHub extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
-    final token = await getTokenIfAny(additionalSettings);
+    // A request with skipAuth is the retry without the configured token, after
+    // GitHub rejected it for this repository (see [sourceRequest], #3211).
+    final token = additionalSettings[_skipAuthKey] == true
+        ? null
+        : await getTokenIfAny(additionalSettings);
     final headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
@@ -444,12 +449,18 @@ class GitHub extends AppSource {
       followRedirects: followRedirects,
       postBody: postBody,
     );
+    if (additionalSettings[_skipAuthKey] == true) return res;
     final String? token = await getTokenIfAny(additionalSettings);
-    if (res.statusCode == 401 && token != null && token.isNotEmpty) {
+    // The one retry layer for every API call: a rejected token (401, or a 403
+    // whose message blames the token) must not block a public repository.
+    // The retry carries skipAuth on a copy: blanking github-creds no longer
+    // works, as a blank per-app value now falls back to the global token.
+    if ((res.statusCode == 401 || _isAuthRejection(res)) &&
+        token != null &&
+        token.isNotEmpty) {
       final Map<String, dynamic> unauthSettings = Map<String, dynamic>.from(
         additionalSettings,
-      );
-      unauthSettings[githubCredsKey] = '';
+      )..[_skipAuthKey] = true;
       final Response retryRes = await super.sourceRequest(
         url,
         unauthSettings,
@@ -466,6 +477,23 @@ class GitHub extends AppSource {
       }
     }
     return res;
+  }
+
+  /// Request-local flag (never persisted): send the request without the token.
+  static const String _skipAuthKey = 'skipAuth';
+
+  /// Whether [res] is a 401/403 whose JSON body says the configured token is
+  /// the problem (e.g. "Resource not accessible by personal access token").
+  static bool _isAuthRejection(Response res) {
+    if (res.statusCode != 401 && res.statusCode != 403) return false;
+    try {
+      final message = (jsonDecode(res.body)['message'] as String? ?? '')
+          .toLowerCase();
+      return message.contains('access token') ||
+          message.contains('bad credentials');
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
@@ -1028,31 +1056,51 @@ class GitHub extends AppSource {
     required String? regexNotesFilter,
     required bool includeZips,
     required bool includeTarballs,
+    required bool useLatestAssetDateAsReleaseDate,
+    required int minAgeDays,
     required Map<String, dynamic> additionalSettings,
     required Map<String, String> sourceConfigSettingValues,
   }) {
-    var prereleaseSkipped = 0;
+    // Releases passed over for being a prerelease, a draft or too young, so
+    // that "don't fall back to older releases" still reaches the first
+    // release that qualifies (upstream: drafts used to end the search).
+    var releaseSkipped = 0;
+    final titleRegex = regexFilter != null ? RegExp(regexFilter) : null;
+    final notesRegex = regexNotesFilter != null
+        ? RegExp(regexNotesFilter)
+        : null;
     for (int i = 0; i < releases.length; i++) {
-      if (!fallbackToOlderReleases && i > prereleaseSkipped) break;
+      if (!fallbackToOlderReleases && i > releaseSkipped) break;
       if (!includePrereleases && releases[i]['prerelease'] == true) {
-        prereleaseSkipped++;
+        releaseSkipped++;
         continue;
       }
       if (releases[i]['draft'] == true) {
+        releaseSkipped++;
         continue;
       }
       var nameToFilter = releases[i]['name'] as String?;
       if (nameToFilter == null || nameToFilter.trim().isEmpty) {
         nameToFilter = releases[i]['tag_name']?.toString() ?? '';
       }
-      if (regexFilter != null &&
-          !RegExp(regexFilter).hasMatch(nameToFilter.trim())) {
+      if (titleRegex != null && !titleRegex.hasMatch(nameToFilter.trim())) {
         continue;
       }
-      if (regexNotesFilter != null &&
-          !RegExp(
-            regexNotesFilter,
-          ).hasMatch(((releases[i]['body'] as String?) ?? '').trim())) {
+      if (notesRegex != null &&
+          !notesRegex.hasMatch(
+            ((releases[i]['body'] as String?) ?? '').trim(),
+          )) {
+        continue;
+      }
+      // Minimum update age (#3303): pass over releases still too young.
+      if (isReleaseTooYoung(
+        _getReleaseDateFromRelease(
+          releases[i],
+          useLatestAssetDateAsReleaseDate,
+        ),
+        minAgeDays,
+      )) {
+        releaseSkipped++;
         continue;
       }
       final allAssetsWithUrls = _findReleaseAssetUrls(
@@ -1186,6 +1234,10 @@ class GitHub extends AppSource {
         additionalSettings['sortMethodChoice'] ?? 'smartname-datefallback';
     final bool includeZips = additionalSettings['includeZips'] == true;
     final bool includeTarballs = additionalSettings['includeTarballs'] == true;
+    final int minAgeDays = await effectiveMinUpdateAgeDays(
+      additionalSettings,
+      settingsProvider: settingsProvider,
+    );
     dynamic latestRelease;
     if (verifyLatestTag) {
       final uri = Uri.parse(requestUrl);
@@ -1232,17 +1284,26 @@ class GitHub extends AppSource {
       }
       _positionLatestRelease(releases, latestRelease);
       releases = releases.reversed.toList();
-      final targetRelease = _selectGitHubTargetRelease(
-        releases: releases,
-        fallbackToOlderReleases: fallbackToOlderReleases,
-        includePrereleases: includePrereleases,
-        regexFilter: regexFilter,
-        regexNotesFilter: regexNotesFilter,
-        includeZips: includeZips,
-        includeTarballs: includeTarballs,
-        additionalSettings: additionalSettings,
-        sourceConfigSettingValues: sourceConfigSettingValues,
-      );
+      dynamic targetRelease;
+      // Prefer a release old enough for the minimum update age; if none is,
+      // fall back to the newest so the update check can hold it back until it
+      // ages.
+      for (final int age in minAgeDays > 0 ? [minAgeDays, 0] : [0]) {
+        targetRelease = _selectGitHubTargetRelease(
+          releases: releases,
+          fallbackToOlderReleases: fallbackToOlderReleases,
+          includePrereleases: includePrereleases,
+          regexFilter: regexFilter,
+          regexNotesFilter: regexNotesFilter,
+          includeZips: includeZips,
+          includeTarballs: includeTarballs,
+          useLatestAssetDateAsReleaseDate: useLatestAssetDateAsReleaseDate,
+          minAgeDays: age,
+          additionalSettings: additionalSettings,
+          sourceConfigSettingValues: sourceConfigSettingValues,
+        );
+        if (targetRelease != null) break;
+      }
       if (targetRelease == null) {
         throw NoReleasesError();
       }
@@ -1423,7 +1484,7 @@ class GitHub extends AppSource {
           return '${await convertStandardUrlToAPIUrl(standardUrl, additionalSettings)}/${useTagUrl ? 'tags' : 'releases'}?per_page=100';
         },
         (Response res) {
-          rateLimitErrorCheck(res);
+          githubErrorCheck(res);
         },
       );
     } catch (e) {
@@ -1446,8 +1507,9 @@ class GitHub extends AppSource {
     String rootProp, {
     Function(Response)? onHttpErrorCode,
     Map<String, dynamic> querySettings = const {},
+    Map<String, dynamic> additionalSettings = const {},
   }) async {
-    final Response res = await sourceRequest(requestUrl, {});
+    final Response res = await sourceRequest(requestUrl, additionalSettings);
     if (res.statusCode == 200) {
       final int minStarCount =
           int.tryParse(querySettings['minStarCount']?.toString() ?? '') ?? 0;
@@ -1497,7 +1559,7 @@ class GitHub extends AppSource {
       '${await getAPIHost({})}/search/repositories?q=${Uri.encodeQueryComponent(query)}&per_page=100',
       'items',
       onHttpErrorCode: (Response res) {
-        rateLimitErrorCheck(res);
+        githubErrorCheck(res);
       },
       querySettings: querySettings,
     );
@@ -1546,5 +1608,31 @@ class GitHub extends AppSource {
           .clamp(1, 9999);
       throw RateLimitError(remainingMinutes);
     }
+  }
+
+  /// Throws GitHub's real error for a failed API response (#3211). A 401/403
+  /// carrying a message (e.g. "Resource not accessible by personal access
+  /// token") is that error, not a rate limit, unless the response says it is
+  /// one (remaining quota 0, a retry-after, a 429, or "rate limit" in the
+  /// message). Everything else goes to [rateLimitErrorCheck], which keeps its
+  /// broad detection and timing.
+  void githubErrorCheck(Response res) {
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      String? message;
+      try {
+        message = (jsonDecode(res.body)['message'] as String?)?.trim();
+      } catch (_) {
+        // Not a JSON error body; fall through to the generic handler.
+        message = null;
+      }
+      final bool rateLimited =
+          res.headers['x-ratelimit-remaining'] == '0' ||
+          res.headers['retry-after'] != null ||
+          (message?.toLowerCase().contains('rate limit') ?? false);
+      if (message != null && message.isNotEmpty && !rateLimited) {
+        throw ObtainiumError(message);
+      }
+    }
+    rateLimitErrorCheck(res);
   }
 }

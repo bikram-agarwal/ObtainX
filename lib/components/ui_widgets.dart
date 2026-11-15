@@ -213,55 +213,6 @@ class AppIcon extends StatelessWidget {
   }
 }
 
-class HighlightableButton extends StatelessWidget {
-  final bool highlight;
-  final VoidCallback? onPressed;
-  final VoidCallback? onLongPress;
-  final Widget? icon;
-  final Widget label;
-
-  const HighlightableButton({
-    super.key,
-    required this.highlight,
-    required this.onPressed,
-    this.onLongPress,
-    this.icon,
-    required this.label,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (highlight) {
-      if (icon != null) {
-        return FilledButton.icon(
-          onPressed: onPressed,
-          onLongPress: onLongPress,
-          icon: icon!,
-          label: label,
-        );
-      }
-      return FilledButton(
-        onPressed: onPressed,
-        onLongPress: onLongPress,
-        child: label,
-      );
-    }
-    if (icon != null) {
-      return TextButton.icon(
-        onPressed: onPressed,
-        onLongPress: onLongPress,
-        icon: icon!,
-        label: label,
-      );
-    }
-    return TextButton(
-      onPressed: onPressed,
-      onLongPress: onLongPress,
-      child: label,
-    );
-  }
-}
-
 class EmptyState extends StatelessWidget {
   final IconData icon;
   final String? message;
@@ -277,11 +228,14 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 56,
-              color: colorScheme.onSurfaceVariant,
-              semanticLabel: message,
+            ExcludeSemantics(
+              child: Icon(
+                icon,
+                size: 56,
+                color: colorScheme.onSurfaceVariant,
+                // The message is rendered below (announced once by the Text).
+                semanticLabel: message,
+              ),
             ),
             if (message != null) ...[
               const SizedBox(height: 16),

@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:math';
 
-import 'package:hsluv/hsluv.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,34 +9,20 @@ import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart';
+import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/components/ui_widgets.dart' show AppSwitch;
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
+import 'package:obtainium/utils/color_utils.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 export 'generated_form_model.dart';
-
-// Generates a color in the HSLuv (Pastel) color space
-// https://pub.dev/documentation/hsluv/latest/hsluv/Hsluv/hpluvToRgb.html
-Color generateRandomLightColor() {
-  final randomSeed = Random().nextInt(120);
-  // https://en.wikipedia.org/wiki/Golden_angle
-  final goldenAngle = 180 * (3 - sqrt(5));
-  // Generate next golden angle hue
-  final double hue = randomSeed * goldenAngle;
-  // Map from HPLuv color space to RGB, use constant saturation=100, lightness=55
-  final List<double> rgbValuesDbl = Hsluv.hpluvToRgb([hue, 100, 55]);
-  // Map RBG values from 0-1 to 0-255:
-  final List<int> rgbValues = rgbValuesDbl
-      .map((rgb) => (rgb * 255).clamp(0, 255).toInt())
-      .toList();
-  return Color.fromARGB(255, rgbValues[0], rgbValues[1], rgbValues[2]);
-}
 
 typedef OnValueChanges =
     void Function(Map<String, dynamic> values, bool valid, bool isBuilding);
@@ -711,6 +695,15 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
     widget.textFocusNode.addListener(_onTextFocusChange);
   }
 
+  @override
+  void didUpdateWidget(covariant _TVTextFieldFocus oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.textFocusNode != oldWidget.textFocusNode) {
+      oldWidget.textFocusNode.removeListener(_onTextFocusChange);
+      widget.textFocusNode.addListener(_onTextFocusChange);
+    }
+  }
+
   void _onTextFocusChange() {
     if (!widget.textFocusNode.hasFocus && _activated) {
       setState(() => _activated = false);
@@ -756,6 +749,93 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
           child: ExcludeFocus(excluding: !_activated, child: widget.child),
         ),
       ),
+    );
+  }
+}
+
+/// A discrete-value slider backed by a [GeneratedFormSlider] (upstream #3251).
+/// Its own [StatefulWidget], so dragging only rebuilds the slider; the chosen
+/// value is committed to the form when the drag ends (or per step on TV, where
+/// a slider can't be dragged).
+class _SliderFormItem extends StatefulWidget {
+  const _SliderFormItem({
+    super.key,
+    required this.formItem,
+    required this.initialValue,
+    required this.onCommit,
+  });
+
+  final GeneratedFormSlider formItem;
+  final dynamic initialValue;
+  final ValueChanged<String> onCommit;
+
+  @override
+  State<_SliderFormItem> createState() => _SliderFormItemState();
+}
+
+class _SliderFormItemState extends State<_SliderFormItem> {
+  late final List<MapEntry<String, String>> opts;
+  late double sliderVal;
+
+  int get _index => sliderVal.round().clamp(0, opts.length - 1);
+
+  String _optLabel(MapEntry<String, String> opt) {
+    final int? days = int.tryParse(opt.value);
+    return days != null ? plural('day', days) : opt.value;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    opts = widget.formItem.opts ?? const <MapEntry<String, String>>[];
+    final int index = opts.indexWhere((e) => e.key == widget.initialValue);
+    sliderVal = (index >= 0 ? index : 0).toDouble();
+  }
+
+  void _commit() {
+    widget.onCommit(opts[_index].key);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (opts.isEmpty) return Text(tr('dropdownNoOptsError'));
+    final double max = (opts.length - 1).toDouble();
+    final String label = _optLabel(opts[_index]);
+    final int? divisions = opts.length > 1 ? opts.length - 1 : null;
+    void onChanged(double value) {
+      setState(() {
+        sliderVal = value;
+      });
+    }
+
+    // As the settings page's sliders: on TV the wrapper is one focus stop
+    // that steps with the D-pad, clamping quietly at either end.
+    final Widget control = TVSliderWrapper(
+      value: sliderVal,
+      min: 0,
+      max: max,
+      divisions: divisions,
+      onChanged: onChanged,
+      onChangeEnd: (double value) => _commit(),
+      child: Slider(
+        value: sliderVal,
+        max: max,
+        divisions: divisions,
+        label: label,
+        onChanged: onChanged,
+        onChangeEnd: (double value) => _commit(),
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '${widget.formItem.label}: $label',
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
+        control,
+      ],
     );
   }
 }
@@ -1188,6 +1268,20 @@ class _GeneratedFormState extends State<GeneratedForm> {
               );
             },
           );
+        } else if (widget.items[r][e] is GeneratedFormSlider) {
+          final GeneratedFormSlider sliderItem =
+              widget.items[r][e] as GeneratedFormSlider;
+          formInputs[r][e] = _SliderFormItem(
+            key: ValueKey<String>('slider_$fieldKey'),
+            formItem: sliderItem,
+            initialValue: values[fieldKey],
+            onCommit: (String value) {
+              setState(() {
+                values[fieldKey] = value;
+                someValueChanged();
+              });
+            },
+          );
         } else if (widget.items[r][e] is GeneratedFormTagInput) {
           // Capture the form item here so that closures defined below don't
           // close over the for-loop variables r and e, which have stale
@@ -1203,7 +1297,10 @@ class _GeneratedFormState extends State<GeneratedForm> {
             if (!mounted || result == null) return;
             var temp = values[fieldKey] as Map<String, MapEntry<int, bool>>?;
             temp ??= {};
-            if (temp.containsKey(result.name)) return;
+            if (temp.containsKey(result.name)) {
+              showMessage(tr('categoryAlreadyExists'));
+              return;
+            }
             final singleSelect = tagInput.singleSelect;
             final someSelected = temp.values.any((v) => v.value);
             setState(() {
@@ -1322,6 +1419,13 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                   initialName: oldEntry.key,
                                 );
                                 if (!mounted || result == null) return;
+                                // Renaming onto another category would merge
+                                // the two (upstream 1b53f2c6).
+                                if (result.name != oldEntry.key &&
+                                    temp.containsKey(result.name)) {
+                                  showMessage(tr('categoryAlreadyExists'));
+                                  return;
+                                }
                                 setState(() {
                                   if (result.name != oldEntry.key) {
                                     temp.remove(oldEntry.key);
