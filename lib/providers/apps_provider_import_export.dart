@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 
+import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/huaweiappgallery.dart';
 import 'package:obtainium/custom_errors.dart';
 
@@ -28,6 +29,7 @@ bool isSecretSettingKey(String key) {
       key == HuaweiAppGallery.sessionPrefsKey ||
       key == GitHub.validatedPATFingerprintKey ||
       key == GitLab.validatedPATFingerprintKey ||
+      key == Codeberg.validatedTokenFingerprintKey ||
       key == virusTotalApiKeyKey ||
       key == virusTotalValidatedApiKeyFingerprintKey;
 }
@@ -684,6 +686,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'swipeActionEnumVersion',
   'enableVirusTotalScanning',
   'githubValidatedPATFingerprint',
+  'codeberg-validated-token-fingerprint',
   'openAppInfoInAppManager',
   'folderCriteriaMigrationVersion',
   'collapsedGroups',

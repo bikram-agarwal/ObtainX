@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart' show Response;
 import 'package:obtainium/app_sources/github.dart';
@@ -34,6 +37,90 @@ class Codeberg extends AppSource {
   static const String tokenKey = 'forgejo-creds';
   static const String tokenHelpUrl =
       'https://forgejo.org/docs/latest/user/api-usage/#authentication';
+
+  // Token validation for the Settings field, like GitHub's and GitLab's PAT
+  // checks: saving validates the token against codeberg.org, and a
+  // fingerprint of the last validated token is stored so the field can show
+  // it as validated.
+  static const String validatedTokenFingerprintKey =
+      'codeberg-validated-token-fingerprint';
+
+  static String? tokenFingerprint(String? token) {
+    if (token == null || token.isEmpty) return null;
+    return sha256.convert(utf8.encode(token)).toString();
+  }
+
+  static bool hasValidatedToken(
+    String? token,
+    SettingsProvider settingsProvider,
+  ) {
+    final String? fingerprint = tokenFingerprint(token);
+    if (fingerprint == null) return false;
+    return settingsProvider.getSettingString(validatedTokenFingerprintKey) ==
+        fingerprint;
+  }
+
+  static void clearTokenValidation(SettingsProvider settingsProvider) {
+    settingsProvider.setSettingString(validatedTokenFingerprintKey, '');
+  }
+
+  static void storeTokenValidation(
+    String token,
+    SettingsProvider settingsProvider,
+  ) {
+    final String? fingerprint = tokenFingerprint(token);
+    if (fingerprint == null) return;
+    settingsProvider.setSettingString(
+      validatedTokenFingerprintKey,
+      fingerprint,
+    );
+  }
+
+  /// The error to show for codeberg.org's answer to `GET /api/v1/user` with
+  /// the token, or null when the token is valid.
+  ///
+  /// A valid token that lacks the `read:user` scope gets a 403 naming the
+  /// scope. ObtainX only reads repositories with it, so that still counts as
+  /// valid; an invalid token gets 401.
+  static String? tokenValidationError(int statusCode, String body) {
+    if (statusCode == 200) return null;
+    if (statusCode == 401) return tr('codebergTokenInvalid');
+    if (statusCode == 403 && body.toLowerCase().contains('scope')) return null;
+    if (statusCode == 403 || statusCode == 429) {
+      return tr('codebergTokenValidationRateLimited');
+    }
+    return tr('codebergTokenValidationFailed');
+  }
+
+  /// Checks [token] against codeberg.org. Returns null when it is valid,
+  /// otherwise a message for the user. Goes through HttpService, so
+  /// certificate pinning applies when it is on.
+  static Future<String?> validateToken(String token) async {
+    final String trimmed = token.trim();
+    if (trimmed.isEmpty) return tr('codebergTokenValidationFailed');
+    try {
+      final HttpService service = HttpService();
+      final streamed = await service.sourceRequestStreamResponse(
+        'GET',
+        'https://$_defaultHost/api/v1/user',
+        <String, String>{
+          'Authorization': 'token $trimmed',
+          'Accept': 'application/json',
+        },
+        const <String, dynamic>{},
+      );
+      final Response response = await service
+          .httpClientResponseStreamToFinalResponse(
+            streamed.value.key,
+            'GET',
+            streamed.key.toString(),
+            streamed.value.value,
+          );
+      return tokenValidationError(response.statusCode, response.body);
+    } catch (_) {
+      return tr('codebergTokenValidationFailed');
+    }
+  }
 
   /// Whether this source may fall back to the global token. Only codeberg.org's
   /// own source does: [Forgejo] instances and overridden hosts use their

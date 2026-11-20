@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
+import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -140,5 +141,39 @@ void main() {
     await tester.drag(find.byType(Slider), const Offset(60, 0));
     await tester.pump();
     expect(values()['days'], isNotEmpty);
+  });
+
+  // The options page's sliders must look like the settings page's: the M3E
+  // vertical-bar thumb on the gapped track, title left and value right.
+  testWidgets('slider uses the settings page slider look', (tester) async {
+    await pumpForm(tester, [
+      [
+        GeneratedFormSlider(
+          'days',
+          [const MapEntry('a', 'Option A'), const MapEntry('b', 'Option B')],
+          label: 'Days',
+          value: 'a',
+        ),
+      ],
+    ]);
+    final SliderThemeData theme = SliderTheme.of(
+      tester.element(find.byType(Slider)),
+    );
+    expect(theme.thumbShape, isA<M3eVerticalBarThumbShape>());
+    expect(theme.trackShape, isA<M3eGappedTrackShape>());
+    expect(find.text('Days'), findsOneWidget);
+    expect(find.text('Option A'), findsOneWidget);
+    // Same text size as the switch rows (bodyLarge), not the body default.
+    final double? bodyLarge = Theme.of(
+      tester.element(find.text('Days')),
+    ).textTheme.bodyLarge?.fontSize;
+    expect(
+      DefaultTextStyle.of(tester.element(find.text('Days'))).style.fontSize,
+      bodyLarge,
+    );
+    expect(
+      DefaultTextStyle.of(tester.element(find.text('Option A'))).style.fontSize,
+      bodyLarge,
+    );
   });
 }

@@ -8,6 +8,7 @@ import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/components/generated_form_model.dart';
+import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/components/ui_widgets.dart' show AppSwitch;
@@ -776,6 +777,9 @@ class _SliderFormItem extends StatefulWidget {
 class _SliderFormItemState extends State<_SliderFormItem> {
   late final List<MapEntry<String, String>> opts;
   late double sliderVal;
+  // As on the settings page: on TV the wrapper is the one focus stop, so the
+  // slider itself must not take focus.
+  late final FocusNode _sliderFocusNode;
 
   int get _index => sliderVal.round().clamp(0, opts.length - 1);
 
@@ -790,6 +794,13 @@ class _SliderFormItemState extends State<_SliderFormItem> {
     opts = widget.formItem.opts ?? const <MapEntry<String, String>>[];
     final int index = opts.indexWhere((e) => e.key == widget.initialValue);
     sliderVal = (index >= 0 ? index : 0).toDouble();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
   }
 
   void _commit() {
@@ -808,8 +819,11 @@ class _SliderFormItemState extends State<_SliderFormItem> {
       });
     }
 
-    // As the settings page's sliders: on TV the wrapper is one focus stop
-    // that steps with the D-pad, clamping quietly at either end.
+    // Built exactly like the settings page's sliders (the M3E track and
+    // vertical-bar thumb from m3eSliderTheme, title left and value right):
+    // on TV the wrapper is one focus stop that steps with the D-pad,
+    // clamping quietly at either end.
+    final bool isTV = context.read<SettingsProvider>().isTV;
     final Widget control = TVSliderWrapper(
       value: sliderVal,
       min: 0,
@@ -817,22 +831,34 @@ class _SliderFormItemState extends State<_SliderFormItem> {
       divisions: divisions,
       onChanged: onChanged,
       onChangeEnd: (double value) => _commit(),
-      child: Slider(
-        value: sliderVal,
-        max: max,
-        divisions: divisions,
-        label: label,
-        onChanged: onChanged,
-        onChangeEnd: (double value) => _commit(),
+      child: SliderTheme(
+        data: m3eSliderTheme(context),
+        child: Slider(
+          focusNode: isTV ? _sliderFocusNode : null,
+          value: sliderVal.clamp(0, max),
+          max: max,
+          divisions: divisions,
+          label: label,
+          onChanged: onChanged,
+          onChangeEnd: (double value) => _commit(),
+        ),
       ),
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          '${widget.formItem.label}: $label',
-          style: Theme.of(context).textTheme.bodyLarge,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: DefaultTextStyle.merge(
+            style: m3eSliderTitleStyle(context),
+            child: Row(
+              children: [
+                Expanded(child: Text(widget.formItem.label)),
+                Text(label),
+              ],
+            ),
+          ),
         ),
         control,
       ],

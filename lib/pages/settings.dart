@@ -16,6 +16,7 @@ import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/installers/root_installer.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
+import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -46,8 +47,12 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/services/pick_file.dart';
+import 'package:obtainium/pages/page_route_slide_up.dart';
+import 'package:obtainium/pages/update_health.dart' show UpdateHealthPage;
 import 'package:obtainium/utils/update_health.dart'
     show
+        hasUpdateHealthIssues,
+        isUpdateHealthIgnored,
         updateHealthDayOptions,
         updateHealthDaysLabel,
         updateHealthFailedChecksLabel,
@@ -129,6 +134,7 @@ class SettingsPageState extends State<SettingsPage> {
 
   static const List<String> _settingsSectionKeys = [
     'updates',
+    'updateHealth',
     'integrations',
     'warnings',
     'sourceSpecific',
@@ -150,7 +156,8 @@ class SettingsPageState extends State<SettingsPage> {
     final bool hasUnsavedChanges =
         (sourceSpecificState != null &&
             (sourceSpecificState.isGithubDirty ||
-                sourceSpecificState.isGitlabDirty)) ||
+                sourceSpecificState.isGitlabDirty ||
+                sourceSpecificState.isCodebergDirty)) ||
         (integrationsState?.isVirusTotalApiKeyDirty ?? false);
     if (hasUnsavedChanges) {
       final bool? discard = await showDialog<bool>(
@@ -234,6 +241,7 @@ class SettingsPageState extends State<SettingsPage> {
 
     final List<String> visibleSettingsSectionKeys = [
       'updates',
+      'updateHealth',
       'integrations',
       'warnings',
       if (sourceProvider.sourceTemplates.any(
@@ -499,6 +507,12 @@ class SettingsPageState extends State<SettingsPage> {
         title: tr('updates'),
         icon: Icons.update_rounded,
         widget: _UpdatesSection(cs: cs, androidInfo: _androidInfo),
+      ),
+      _SettingsCategory(
+        key: 'updateHealth',
+        title: tr('updateHealth'),
+        icon: Icons.monitor_heart_rounded,
+        widget: _UpdateHealthSection(cs: cs),
       ),
       _SettingsCategory(
         key: 'integrations',
@@ -902,6 +916,16 @@ class SettingsPageState extends State<SettingsPage> {
                                   androidInfo: _androidInfo,
                                 ),
                               ),
+                              // ── Update health ─────────────────────────────
+                              sectionHeader(
+                                tr('updateHealth'),
+                                Icons.monitor_heart_rounded,
+                                'updateHealth',
+                              ),
+                              collapsibleCard(
+                                'updateHealth',
+                                _UpdateHealthSection(cs: cs),
+                              ),
                               // ── Integrations ─────────────────────────────
                               sectionHeader(
                                 tr('integrations'),
@@ -1075,33 +1099,56 @@ class _UpdatesSection extends StatelessWidget {
     context.select<SettingsProvider, int>(_updateSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
 
+    // Grouped under upstream's labels (Background checks / Update checks /
+    // Filtering & versions / Installation, v1.7.4 sync D26). Each group is its
+    // own card: the M3E card has no label row.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        // First item in the Updates section, deliberately NOT inside the
-        // settings card: a manual trigger for the full background update
-        // worker (check → download → install-if-enabled → notify, across all
-        // eligible apps), as opposed to pull-to-refresh's foreground check of
-        // only the currently visible list.
+        _settingsGroupLabel(context, tr('backgroundChecks'), first: true),
+        // Deliberately NOT inside the settings card: a manual trigger for the
+        // full background update worker (check → download → install-if-enabled
+        // → notify, across all eligible apps), as opposed to pull-to-refresh's
+        // foreground check of only the currently visible list.
         const _RunBgUpdateCheckNowButton(),
         FutureBuilder<AndroidDeviceInfo>(
           future: androidInfo,
           builder: (context, snapshot) {
-            return _buildSettingsCardContent(context, sp, cs, snapshot);
+            return M3eExpressiveSettingsCard(
+              colorScheme: cs,
+              items: _backgroundCheckRows(context, sp, snapshot),
+            );
           },
         ),
-        _UpdateHealthGroup(cs: cs),
+        _settingsGroupLabel(context, tr('updateChecks')),
+        M3eExpressiveSettingsCard(colorScheme: cs, items: _updateCheckRows(sp)),
+        _settingsGroupLabel(context, tr('filteringAndVersions')),
+        M3eExpressiveSettingsCard(
+          colorScheme: cs,
+          items: _filteringRows(sp, cs),
+        ),
+        _settingsGroupLabel(context, tr('installation')),
+        M3eExpressiveSettingsCard(
+          colorScheme: cs,
+          items: <Widget>[
+            AppSwitchListTile(
+              key: const ValueKey<String>('parallel_downloads'),
+              title: Text(tr('parallelDownloads')),
+              value: sp.parallelDownloads,
+              onChanged: (bool value) => sp.parallelDownloads = value,
+            ),
+          ],
+        ),
       ],
     );
   }
 
-  Widget _buildSettingsCardContent(
+  List<Widget> _backgroundCheckRows(
     BuildContext context,
     SettingsProvider sp,
-    ColorScheme cs,
     AsyncSnapshot<AndroidDeviceInfo> snapshot,
   ) {
-    final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
+    final List<Widget> rows = <Widget>[const _UpdateIntervalSlider()];
     // Root installs silently on any Android version, like Shizuku and Dhizuku.
     final bool showBgControls =
         (sp.updateInterval > 0) &&
@@ -1181,7 +1228,11 @@ class _UpdatesSection extends StatelessWidget {
           ),
         );
     }
-    rows.addAll(<Widget>[
+    return rows;
+  }
+
+  List<Widget> _updateCheckRows(SettingsProvider sp) {
+    return <Widget>[
       AppSwitchListTile(
         key: const ValueKey<String>('check_updates_on_start'),
         title: Text(tr('checkOnStart')),
@@ -1193,12 +1244,6 @@ class _UpdatesSection extends StatelessWidget {
         title: Text(tr('checkUpdateOnDetailPage')),
         value: sp.checkUpdateOnDetailPage,
         onChanged: (bool value) => sp.checkUpdateOnDetailPage = value,
-      ),
-      AppSwitchListTile(
-        key: const ValueKey<String>('include_prereleases_by_default'),
-        title: Text(tr('includePrereleasesByDefault')),
-        value: sp.includePrereleasesByDefault,
-        onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
       // Opt-in "Add anyway" when the check during add fails (upstream #3345).
       ListTile(
@@ -1221,15 +1266,19 @@ class _UpdatesSection extends StatelessWidget {
         onTap: () =>
             sp.allowAddingAppsWithoutCheck = !sp.allowAddingAppsWithoutCheck,
       ),
-      _MinimumUpdateAgeSlider(cs: cs),
-      const _GlobalApkFilterField(),
-      const _GlobalVersionRegExFields(),
       AppSwitchListTile(
         key: const ValueKey<String>('only_check_installed_or_track_only_apps'),
         title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
         value: sp.onlyCheckInstalledOrTrackOnlyApps,
         onChanged: (bool value) => sp.onlyCheckInstalledOrTrackOnlyApps = value,
       ),
+    ];
+  }
+
+  List<Widget> _filteringRows(SettingsProvider sp, ColorScheme cs) {
+    return <Widget>[
+      const _GlobalApkFilterField(),
+      const _GlobalVersionRegExFields(),
       AppSwitchListTile(
         key: const ValueKey<String>('remove_on_external_uninstall'),
         title: Text(tr('removeOnExternalUninstall')),
@@ -1237,10 +1286,10 @@ class _UpdatesSection extends StatelessWidget {
         onChanged: (bool value) => sp.removeOnExternalUninstall = value,
       ),
       AppSwitchListTile(
-        key: const ValueKey<String>('parallel_downloads'),
-        title: Text(tr('parallelDownloads')),
-        value: sp.parallelDownloads,
-        onChanged: (bool value) => sp.parallelDownloads = value,
+        key: const ValueKey<String>('include_prereleases_by_default'),
+        title: Text(tr('includePrereleasesByDefault')),
+        value: sp.includePrereleasesByDefault,
+        onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
       AppSwitchListTile(
         key: const ValueKey<String>('skip_bulk_update_confirmation'),
@@ -1248,8 +1297,25 @@ class _UpdatesSection extends StatelessWidget {
         value: sp.skipBulkUpdateConfirmation,
         onChanged: (bool value) => sp.skipBulkUpdateConfirmation = value,
       ),
-    ]);
-    return M3eExpressiveSettingsCard(colorScheme: cs, items: rows);
+      _MinimumUpdateAgeSlider(cs: cs),
+    ];
+  }
+
+  /// A group label inside the Updates section (above a card).
+  Widget _settingsGroupLabel(
+    BuildContext context,
+    String label, {
+    bool first = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        first ? 4 : 20,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
+      child: appPageCardSectionHeaderLabel(context, label),
+    );
   }
 
   Widget _bgGuardRow(
@@ -1379,9 +1445,7 @@ class _RunBgUpdateCheckNowButtonState
 /// (onChangeEnd), avoiding a notifyListeners → full-page rebuild on every
 /// slider tick during drag.
 class _UpdateIntervalSlider extends StatefulWidget {
-  const _UpdateIntervalSlider({required this.cs});
-
-  final ColorScheme cs;
+  const _UpdateIntervalSlider();
 
   @override
   State<_UpdateIntervalSlider> createState() => _UpdateIntervalSliderState();
@@ -1441,29 +1505,33 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
         );
     final String label = _labelForVal(sliderVal);
     final isTV = context.read<SettingsProvider>().isTV;
+    // No leading icon. As in [_IntOptionSlider], the outer inset is 8 less
+    // than the card's and the title row adds those 8 back, so the title lines
+    // up with the card's other rows and with the slider track.
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-        kM3eSettingsCardHorizontalInset,
+        kM3eSettingsCardHorizontalInset - 8,
         8,
-        kM3eSettingsCardHorizontalInset,
+        kM3eSettingsCardHorizontalInset - 8,
         8,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(Icons.update_rounded, color: widget.cs.onSurfaceVariant),
-          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
-                      Text(label),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('bgUpdateCheckInterval'))),
+                        Text(label),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -1480,18 +1548,7 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                     setState(() => _dragValue = null);
                   },
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.onPrimary,
-                      inactiveTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       value: sliderVal.clamp(0, _stops.length.toDouble()),
@@ -1598,11 +1655,14 @@ class _MinimumUpdateAgeSliderState extends State<_MinimumUpdateAgeSlider> {
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('minimumUpdateAgeDays'))),
-                      Text(label),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('minimumUpdateAgeDays'))),
+                        Text(label),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -1615,18 +1675,7 @@ class _MinimumUpdateAgeSliderState extends State<_MinimumUpdateAgeSlider> {
                   },
                   onChangeEnd: save,
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.onPrimary,
-                      inactiveTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       value: sliderVal.clamp(0, max),
@@ -1858,9 +1907,11 @@ class _GlobalVersionRegExFieldsState extends State<_GlobalVersionRegExFields> {
 /// the end of the Updates section; apps can override each one on their
 /// options page. 0 ("Disabled") turns a heuristic off. Upstream shows these
 /// on its update-health page with its own slider tile; ObtainX keeps them in
-/// Settings with the fork's sliders (v1.7.4 sync, D8).
-class _UpdateHealthGroup extends StatelessWidget {
-  const _UpdateHealthGroup({required this.cs});
+/// The Update health section (upstream #1753, v1.7.4 sync D8): its own
+/// section, as upstream has it. The global thresholds each app can override,
+/// the list marker toggle, and last a row opening the list of flagged apps.
+class _UpdateHealthSection extends StatelessWidget {
+  const _UpdateHealthSection({required this.cs});
 
   final ColorScheme cs;
 
@@ -1870,26 +1921,28 @@ class _UpdateHealthGroup extends StatelessWidget {
     final bool archivedEnabled = context.select<SettingsProvider, bool>(
       (s) => s.updateHealthArchivedEnabled,
     );
+    final bool showIndicator = context.select<SettingsProvider, bool>(
+      (s) => s.showUpdateHealthIndicator,
+    );
     final SettingsProvider sp = context.read<SettingsProvider>();
+    // Rebuilds when an app's state or a threshold changes.
+    final int flaggedCount = context.select<AppsProvider, int>(
+      (AppsProvider ap) => ap.apps.values
+          .where(
+            (a) =>
+                !isUpdateHealthIgnored(a.app) &&
+                hasUpdateHealthIssues(a.app, sp),
+          )
+          .length,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            kM3eSettingsCardHorizontalInset,
-            20,
-            kM3eSettingsCardHorizontalInset,
-            8,
-          ),
-          child: appPageCardSectionHeaderLabel(context, tr('updateHealth')),
-        ),
         M3eExpressiveSettingsCard(
           colorScheme: cs,
           items: [
             _IntOptionSlider(
               key: const ValueKey<String>('update_health_stale_release'),
-              cs: cs,
-              icon: Icons.event_busy_rounded,
               title: tr('updateHealthStaleReleaseCheck'),
               options: updateHealthDayOptions,
               read: (SettingsProvider s) => s.updateHealthStaleReleaseDays,
@@ -1899,8 +1952,6 @@ class _UpdateHealthGroup extends StatelessWidget {
             ),
             _IntOptionSlider(
               key: const ValueKey<String>('update_health_stale_version'),
-              cs: cs,
-              icon: Icons.history_rounded,
               title: tr('updateHealthStaleVersionCheck'),
               options: updateHealthDayOptions,
               read: (SettingsProvider s) => s.updateHealthStaleVersionDays,
@@ -1910,8 +1961,6 @@ class _UpdateHealthGroup extends StatelessWidget {
             ),
             _IntOptionSlider(
               key: const ValueKey<String>('update_health_failed_checks'),
-              cs: cs,
-              icon: Icons.error_outline_rounded,
               title: tr('updateHealthFailedChecksCheck'),
               options: updateHealthFailedChecksOptions,
               read: (SettingsProvider s) => s.updateHealthFailedChecksCount,
@@ -1919,22 +1968,38 @@ class _UpdateHealthGroup extends StatelessWidget {
                   s.updateHealthFailedChecksCount = count,
               labelFor: updateHealthFailedChecksLabel,
             ),
-            AppSwitchListTile(
-              key: const ValueKey<String>('update_health_archived'),
-              title: Text(tr('updateHealthArchivedCheck')),
-              value: archivedEnabled,
-              onChanged: (bool value) => sp.updateHealthArchivedEnabled = value,
-            ),
             _IntOptionSlider(
               key: const ValueKey<String>('update_health_filtered_releases'),
-              cs: cs,
-              icon: Icons.filter_alt_outlined,
               title: tr('updateHealthFilteredReleasesCheck'),
               options: updateHealthFilteredReleasesOptions,
               read: (SettingsProvider s) => s.updateHealthFilteredReleasesCount,
               write: (SettingsProvider s, int count) =>
                   s.updateHealthFilteredReleasesCount = count,
               labelFor: updateHealthFilteredReleasesLabel,
+            ),
+            AppSwitchListTile(
+              key: const ValueKey<String>('update_health_archived'),
+              title: Text(tr('updateHealthArchivedCheck')),
+              value: archivedEnabled,
+              onChanged: (bool value) => sp.updateHealthArchivedEnabled = value,
+            ),
+            AppSwitchListTile(
+              key: const ValueKey<String>('show_update_health_indicator'),
+              title: Text(tr('showUpdateHealthIndicator')),
+              value: showIndicator,
+              onChanged: (bool value) => sp.showUpdateHealthIndicator = value,
+            ),
+            ListTile(
+              key: const ValueKey<String>('update_health_detected_issues'),
+              title: Text(tr('updateHealthDetectedIssues')),
+              subtitle: flaggedCount > 0
+                  ? Text(plural('apps', flaggedCount))
+                  : null,
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.push(
+                context,
+                slideUpPageRoute((_) => const UpdateHealthPage()),
+              ),
             ),
           ],
         ),
@@ -1949,8 +2014,6 @@ class _UpdateHealthGroup extends StatelessWidget {
 class _IntOptionSlider extends StatefulWidget {
   const _IntOptionSlider({
     super.key,
-    required this.cs,
-    required this.icon,
     required this.title,
     required this.options,
     required this.read,
@@ -1958,8 +2021,6 @@ class _IntOptionSlider extends StatefulWidget {
     required this.labelFor,
   });
 
-  final ColorScheme cs;
-  final IconData icon;
   final String title;
   final List<int> options;
   final int Function(SettingsProvider settings) read;
@@ -2007,30 +2068,34 @@ class _IntOptionSliderState extends State<_IntOptionSlider> {
       setState(() => _dragValue = null);
     }
 
+    // No leading icon (the section title has one). The outer inset is 8 less
+    // than the card's, and the title row adds those 8 back, so the title
+    // lines up with the card's other rows and with the slider track.
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-        kM3eSettingsCardHorizontalInset,
+        kM3eSettingsCardHorizontalInset - 8,
         8,
-        kM3eSettingsCardHorizontalInset,
+        kM3eSettingsCardHorizontalInset - 8,
         8,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(widget.icon, color: widget.cs.onSurfaceVariant),
-          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(widget.title)),
-                      const SizedBox(width: 8),
-                      Text(label),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(widget.title)),
+                        const SizedBox(width: 8),
+                        Text(label),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -2043,18 +2108,7 @@ class _IntOptionSliderState extends State<_IntOptionSlider> {
                   },
                   onChangeEnd: save,
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.onPrimary,
-                      inactiveTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       value: sliderVal.clamp(0, max),
@@ -2099,6 +2153,7 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   String _storedCodebergToken = '';
   bool _githubChecking = false;
   bool _gitlabChecking = false;
+  bool _codebergChecking = false;
 
   bool get isGithubDirty {
     final String currentText = _githubPatController.text.trim();
@@ -2114,12 +2169,21 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     return currentText != savedText;
   }
 
+  bool get isCodebergDirty {
+    final String currentText = _codebergTokenController.text.trim();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String savedText = sp.getSettingString(Codeberg.tokenKey) ?? '';
+    return currentText != savedText;
+  }
+
   void discardChanges() {
     final SettingsProvider sp = context.read<SettingsProvider>();
     _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
     _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _storedCodebergToken = sp.getSettingString(Codeberg.tokenKey) ?? '';
     _githubPatController.text = _storedGithubPat;
     _gitlabPatController.text = _storedGitlabPat;
+    _codebergTokenController.text = _storedCodebergToken;
     setState(() {});
   }
 
@@ -2590,35 +2654,154 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
           ),
         ),
         // codeberg.org only: a Forgejo instance's token is set per app, so
-        // this one never goes to another host (D15). Saved as typed, like the
-        // hub proxy; there's nothing to validate it against.
+        // this one never goes to another host (D15). Saved and validated like
+        // the GitLab PAT above.
         Padding(
           padding: const EdgeInsets.fromLTRB(
             kM3eSettingsCardHorizontalInset,
             12,
-            kM3eSettingsCardHorizontalInset,
+            kM3eSettingsCardTrailingInset,
             12,
           ),
-          child: TextField(
-            controller: _codebergTokenController,
-            obscureText: true,
-            decoration:
-                appPageOutlinedInputDecoration(
-                  context,
-                  labelText: tr('codebergTokenLabel'),
-                  isDense: true,
-                ).copyWith(
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.open_in_new_rounded),
-                    onPressed: () => _openExternalUrl(Codeberg.tokenHelpUrl),
-                    tooltip: tr('about'),
-                  ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _codebergTokenController,
+                  obscureText: true,
+                  decoration:
+                      appPageOutlinedInputDecoration(
+                        context,
+                        labelText: tr('codebergTokenLabel'),
+                        isDense: true,
+                      ).copyWith(
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.open_in_new_rounded),
+                          onPressed: () =>
+                              _openExternalUrl(Codeberg.tokenHelpUrl),
+                          tooltip: tr('about'),
+                        ),
+                      ),
+                  onChanged: (val) {
+                    setState(() {});
+                  },
                 ),
-            onChanged: (val) {
-              final String token = val.trim();
-              _storedCodebergToken = token;
-              sp.setSettingString(Codeberg.tokenKey, token);
-            },
+              ),
+              const SizedBox(width: 8),
+              Builder(
+                builder: (context) {
+                  final String enteredText = _codebergTokenController.text
+                      .trim();
+                  final String savedText =
+                      sp.getSettingString(Codeberg.tokenKey) ?? '';
+                  final bool isDirty = enteredText != savedText;
+                  final bool isValidated = Codeberg.hasValidatedToken(
+                    enteredText,
+                    sp,
+                  );
+                  final bool buttonIsEnabled =
+                      isDirty || (enteredText.isNotEmpty && !isValidated);
+
+                  return SizedBox(
+                    width: 48,
+                    height: 56,
+                    child: Center(
+                      child: _codebergChecking
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: ExpressiveLoadingIndicator(
+                                color: cs.primary,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 20,
+                                  height: 20,
+                                ),
+                              ),
+                            )
+                          // Shield only when validated AND saved (see the GitHub
+                          // field above for why fingerprint-alone is wrong).
+                          : (isValidated && !isDirty
+                                ? Tooltip(
+                                    message: tr('codebergTokenValidated'),
+                                    child: Icon(
+                                      Icons.verified_user,
+                                      color: cs.primary,
+                                    ),
+                                  )
+                                : IconButton.filledTonal(
+                                    icon: const Icon(Icons.save_rounded),
+                                    onPressed: buttonIsEnabled
+                                        ? () async {
+                                            FocusManager.instance.primaryFocus
+                                                ?.unfocus();
+                                            if (enteredText.isEmpty) {
+                                              _storedCodebergToken = '';
+                                              sp.setSettingString(
+                                                Codeberg.tokenKey,
+                                                '',
+                                              );
+                                              Codeberg.clearTokenValidation(sp);
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                buildAppSnackBar(
+                                                  context,
+                                                  tr('dismiss'),
+                                                ),
+                                              );
+                                              setState(() {});
+                                              return;
+                                            }
+                                            setState(() {
+                                              _codebergChecking = true;
+                                            });
+                                            final String? error =
+                                                await Codeberg.validateToken(
+                                                  enteredText,
+                                                );
+                                            if (!context.mounted) return;
+                                            setState(() {
+                                              _codebergChecking = false;
+                                            });
+                                            if (error == null) {
+                                              _storedCodebergToken =
+                                                  enteredText;
+                                              sp.setSettingString(
+                                                Codeberg.tokenKey,
+                                                enteredText,
+                                              );
+                                              Codeberg.storeTokenValidation(
+                                                enteredText,
+                                                sp,
+                                              );
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                buildAppSnackBar(
+                                                  context,
+                                                  tr('codebergTokenValidated'),
+                                                  type: ToastType.success,
+                                                ),
+                                              );
+                                            } else {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                buildAppSnackBar(
+                                                  context,
+                                                  error,
+                                                  type: ToastType.error,
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        : null,
+                                  )),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
         ),
       ],
@@ -3015,11 +3198,14 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('uiScale'))),
-                      Text('${(value * 100).round()}%'),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('uiScale'))),
+                        Text('${(value * 100).round()}%'),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -3039,14 +3225,7 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                     setState(() => _dragValue = null);
                   },
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: cs.onPrimary,
-                      inactiveTickMarkColor: cs.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       min: SettingsProvider.appUiScaleMin,
@@ -3128,11 +3307,14 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('cardCorners'))),
-                      Text('${(value * 100).round()}%'),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('cardCorners'))),
+                        Text('${(value * 100).round()}%'),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -3152,14 +3334,7 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                     setState(() => _dragValue = null);
                   },
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: cs.onPrimary,
-                      inactiveTickMarkColor: cs.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       min: SettingsProvider.cardCornerScaleMin,
@@ -3206,7 +3381,6 @@ class _WarningsSection extends StatelessWidget {
     sp.hideAPKOriginWarning,
     sp.verifySigningCertHashes,
     sp.showAppDowngradeError,
-    sp.showUpdateHealthIndicator,
   );
 
   @override
@@ -3260,13 +3434,6 @@ class _WarningsSection extends StatelessWidget {
           title: Text(tr('showAppDowngradeError')),
           value: sp.showAppDowngradeError,
           onChanged: (value) => sp.showAppDowngradeError = value,
-        ),
-        // A show toggle, so it lives here; the update-health thresholds are
-        // in the Updates section (v1.7.4 sync, D8).
-        AppSwitchListTile(
-          title: Text(tr('showUpdateHealthIndicator')),
-          value: sp.showUpdateHealthIndicator,
-          onChanged: (value) => sp.showUpdateHealthIndicator = value,
         ),
       ],
     );
@@ -5235,161 +5402,6 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
               onTap: () => _choose(targets, settingsProvider),
             );
           },
-    );
-  }
-}
-
-class _VerticalBarThumbShape extends SliderComponentShape {
-  const _VerticalBarThumbShape();
-
-  static const double _width = 4;
-  static const double _height = 28;
-  static const double _radius = 2;
-
-  @override
-  Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
-      const Size(_width, _height);
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset center, {
-    required Animation<double> activationAnimation,
-    required Animation<double> enableAnimation,
-    required bool isDiscrete,
-    required TextPainter labelPainter,
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required TextDirection textDirection,
-    required double value,
-    required double textScaleFactor,
-    required Size sizeWithOverflow,
-  }) {
-    // Flutter's slider computes the framework-provided [center.dx] using
-    // the FULL trackRect width:
-    //   thumbX = trackRect.left + value * trackRect.width
-    // ...but tick marks are inset on each side by trackHeight/2:
-    //   tickX  = trackRect.left + value * (trackRect.width - trackHeight)
-    //                           + trackHeight/2
-    // The two only coincide at value == 0.5. Everywhere else the thumb
-    // drifts off the tick proportionally to (value - 0.5) * trackHeight.
-    // For a default 4dp track this drift is sub-pixel and unnoticeable;
-    // for our M3E 16dp track it's a visible 8dp at the endpoints.
-    //
-    // Re-project the framework-provided center onto the tick-aligned
-    // x-axis so the vertical bar thumb lands exactly on each dot.
-    final Rect trackRect = sliderTheme.trackShape!.getPreferredRect(
-      parentBox: parentBox,
-      offset: Offset.zero,
-      sliderTheme: sliderTheme,
-      isEnabled: enableAnimation.value > 0,
-      isDiscrete: isDiscrete,
-    );
-    final double trackHeight = trackRect.height;
-    final double trackWidth = trackRect.width;
-    Offset alignedCenter = center;
-    if (trackWidth > trackHeight) {
-      final double valueRatio = textDirection == TextDirection.rtl
-          ? 1.0 - value
-          : value;
-      final double alignedX =
-          trackRect.left +
-          valueRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-      alignedCenter = Offset(alignedX, center.dy);
-    }
-    final canvas = context.canvas;
-    final paint = Paint()
-      ..color = sliderTheme.thumbColor ?? Colors.white
-      ..style = PaintingStyle.fill;
-    final rrect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: alignedCenter, width: _width, height: _height),
-      const Radius.circular(_radius),
-    );
-    canvas.drawRRect(rrect, paint);
-  }
-}
-
-class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
-  const _GappedTrackShape();
-
-  static const double _gap = 4;
-  static const double _radius = 8;
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required TextDirection textDirection,
-    required Offset thumbCenter,
-    Offset? secondaryOffset,
-    bool isDiscrete = false,
-    bool isEnabled = false,
-    double additionalActiveTrackHeight = 0,
-  }) {
-    final canvas = context.canvas;
-    final trackRect = getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
-
-    // Re-project thumbCenter.dx onto the tick-aligned axis so the split
-    // between active and inactive lanes coincides with the rendered
-    // thumb position. See the long comment in [_VerticalBarThumbShape]
-    // for why this re-projection is needed (Flutter's tick range is
-    // inset by trackHeight/2 on each side; the framework-provided
-    // thumbCenter is on the un-inset full-track axis).
-    double thumbX = thumbCenter.dx;
-    final double trackHeight = trackRect.height;
-    final double trackWidth = trackRect.width;
-    if (trackWidth > trackHeight) {
-      final double valueRatio = ((thumbCenter.dx - trackRect.left) / trackWidth)
-          .clamp(0.0, 1.0);
-      thumbX =
-          trackRect.left +
-          valueRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-    }
-
-    final activePaint = Paint()
-      ..color = (sliderTheme.activeTrackColor ?? Colors.blue);
-    final inactivePaint = Paint()
-      ..color = (sliderTheme.inactiveTrackColor ?? Colors.grey);
-
-    // Active (left) track — up to thumb minus gap
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-          trackRect.left,
-          trackRect.top,
-          thumbX - _gap,
-          trackRect.bottom,
-        ),
-        topLeft: const Radius.circular(_radius),
-        bottomLeft: const Radius.circular(_radius),
-      ),
-      activePaint,
-    );
-
-    // Inactive (right) track — from thumb plus gap
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-          thumbX + _gap,
-          trackRect.top,
-          trackRect.right,
-          trackRect.bottom,
-        ),
-        topRight: const Radius.circular(_radius),
-        bottomRight: const Radius.circular(_radius),
-      ),
-      inactivePaint,
     );
   }
 }

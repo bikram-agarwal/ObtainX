@@ -911,6 +911,7 @@
         "other": "…и ещё {} ошибок"
     },
     "andOneMoreError": "…и ещё 1 ошибка",
+    "backgroundChecks": "Фоновые проверки",
     "bgGuardChecksAndUpdates": "Проверка и обновление",
     "bgGuardChecksOnly": "Только проверка",
     "bgGuardNothing": "Ничего",
@@ -922,10 +923,12 @@
     "couldNotExtractArchive": "Не удалось распаковать загруженный архив",
     "disabled": "Отключено",
     "enabled": "Включено",
+    "filteringAndVersions": "Фильтрация и версии",
     "globalVersionExtractionRegEx": "Глобальная обрезка версии (регулярное выражение)",
     "ignoreForThisVersion": "Игнорировать текущую версию",
     "ignorePermanently": "Игнорировать постоянно",
     "includeDrafts": "Включать черновики (требуется токен с доступом на запись в репозиторий)",
+    "installation": "Установка",
     "updateHealth": "Работоспособность обновлений",
     "updateHealthArchivedCheck": "Помечать архивированные источники (GitHub/GitLab)",
     "updateHealthDetectedApps": "Обнаруженные приложения",
@@ -969,6 +972,7 @@
     "sectionUpdateHealthDetection": "Работоспособность обновления",
     "shizukuPretendToBeGalaxyStore": "Указывать Samsung Galaxy Store как источник установки (если используется Shizuku или root)",
     "showUpdateHealthIndicator": "Показывать индикатор работоспособности обновления в списке приложений",
+    "updateChecks": "Проверки обновлений",
     "whenNotCharging": "Если устройство не заряжается",
     "whenNotOnWiFi": "Если подключение не по Wi-Fi"
 }

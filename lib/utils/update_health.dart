@@ -288,6 +288,18 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
       ),
     ],
     [
+      GeneratedFormSlider(
+        'updateHealthFilteredReleases',
+        _thresholdSliderOptions(
+          updateHealthFilteredReleasesOptions,
+          updateHealthFilteredReleasesLabel,
+        ),
+        label: tr('updateHealthOverrideFilteredReleases'),
+        value: '',
+        required: false,
+      ),
+    ],
+    [
       GeneratedFormDropdown(
         'updateHealthArchived',
         [
@@ -296,18 +308,6 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
           MapEntry('on', tr('enabled')),
         ],
         label: tr('updateHealthOverrideArchived'),
-        value: '',
-        required: false,
-      ),
-    ],
-    [
-      GeneratedFormSlider(
-        'updateHealthFilteredReleases',
-        _thresholdSliderOptions(
-          updateHealthFilteredReleasesOptions,
-          updateHealthFilteredReleasesLabel,
-        ),
-        label: tr('updateHealthOverrideFilteredReleases'),
         value: '',
         required: false,
       ),
