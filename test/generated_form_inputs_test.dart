@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
@@ -164,9 +164,10 @@ void main() {
     expect(find.text('Days'), findsOneWidget);
     expect(find.text('Option A'), findsOneWidget);
     // Same text size as the switch rows (bodyLarge), not the body default.
-    final double? bodyLarge = Theme.of(
-      tester.element(find.text('Days')),
-    ).textTheme.bodyLarge?.fontSize;
+    final double? bodyLarge = Theme.of(tester.element(find.text('Days')))
+        .textTheme
+        .bodyLarge
+        ?.fontSize;
     expect(
       DefaultTextStyle.of(tester.element(find.text('Days'))).style.fontSize,
       bodyLarge,

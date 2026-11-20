@@ -114,8 +114,11 @@ class HttpService {
   HttpClient createHttpClient(bool insecure) {
     final client = HttpClient()..connectionTimeout = sourceConnectionTimeout;
     if (insecure) {
-      client.badCertificateCallback =
-          (X509Certificate cert, String host, int port) => true;
+      client.badCertificateCallback = (
+        X509Certificate cert,
+        String host,
+        int port,
+      ) => true;
     }
     return client;
   }
@@ -229,12 +232,10 @@ class HttpService {
               throw TimeoutException(tr('unexpectedError'), responseTimeout);
             },
           );
-          withDefaultObtainXUserAgent(requestHeaders).forEach((
-            String headerName,
-            String headerValue,
-          ) {
-            request.headers.set(headerName, headerValue);
-          });
+          withDefaultObtainXUserAgent(requestHeaders)
+              .forEach((String headerName, String headerValue) {
+                request.headers.set(headerName, headerValue);
+              });
           request.cookies.addAll(cookies);
           request.followRedirects = false;
           if (postBody != null) {

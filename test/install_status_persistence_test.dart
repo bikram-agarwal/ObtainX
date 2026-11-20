@@ -189,9 +189,9 @@ void main() {
   });
 
   group('reconciler with a missing package (fork string enum)', () {
-    App? reconcile(App app, {required bool isBg}) => _ReconcileProvider(
-      isBg: isBg,
-    ).getCorrectedInstallStatusAppIfPossible(app, null);
+    App? reconcile(App app, {required bool isBg}) =>
+        _ReconcileProvider(isBg: isBg)
+            .getCorrectedInstallStatusAppIfPossible(app, null);
 
     test('a background load keeps a marked-updated pseudo version', () {
       expect(reconcile(_app(), isBg: true), isNull);
@@ -259,9 +259,8 @@ void main() {
         ..cachedAppsDir = directory
         ..appCheckStore = AppCheckStore('${directory.path}/checks.db');
       p.settingsProvider.prefs = await SharedPreferences.getInstance();
-      await File(
-        '${directory.path}/${installedApp.id}.json',
-      ).writeAsString(jsonEncode(installedApp.toJson()));
+      await File('${directory.path}/${installedApp.id}.json')
+          .writeAsString(jsonEncode(installedApp.toJson()));
       addTearDown(() async {
         // Drain post-load correction writes before closing the store.
         await p.saveApps(

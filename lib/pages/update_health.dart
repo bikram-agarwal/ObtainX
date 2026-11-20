@@ -16,7 +16,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/empty_state_illustration.dart';
 import 'package:obtainium/components/ui_widgets.dart' show AppIcon;

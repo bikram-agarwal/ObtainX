@@ -3,7 +3,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 // ignore: implementation_imports
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -65,9 +65,9 @@ void main() {
     settings = SettingsProvider()
       ..prefs = await SharedPreferences.getInstance();
     provider = _Apps();
-    final icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    final icon = (await rootBundle.load('assets/graphics/logo_remember.png'))
+        .buffer
+        .asUint8List();
     for (int appIndex = 0; appIndex < 3; appIndex++) {
       final app = App(
         id: 'org.example.app$appIndex',

@@ -1,7 +1,7 @@
 import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart'
     show buildThemeAccentSettingsCardItems;
 import 'package:obtainium/providers/settings_provider.dart';
@@ -225,25 +225,22 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
                 Expanded(
                   child: Text(
                     tr('settingsShadingIntensity'),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: textColor),
+                    style: Theme.of(context).textTheme.bodyLarge
+                        ?.copyWith(color: textColor),
                   ),
                 ),
                 Text(
                   _shadingIntensityLabel(sliderValue),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelLarge?.copyWith(color: textColor),
+                  style: Theme.of(context).textTheme.labelLarge
+                      ?.copyWith(color: textColor),
                 ),
               ],
             ),
             const SizedBox(height: 2),
             Text(
               tr('settingsShadingIntensitySubtitle'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: colorScheme.onSurfaceVariant),
             ),
             const SizedBox(height: 10),
             TVSliderWrapper(

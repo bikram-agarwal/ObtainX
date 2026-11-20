@@ -810,9 +810,9 @@ class SamsungGalaxyStore extends AppSource {
     final row = items[rowIndex];
     // The two "pretend to be" switches exclude each other. The items are
     // clones, so editing the Play switch here doesn't leak to other sources.
-    final googlePlay =
-        row.firstWhere((item) => item.key == 'shizukuPretendToBeGooglePlay')
-            as GeneratedFormSwitch;
+    final googlePlay = row.firstWhere(
+      (item) => item.key == 'shizukuPretendToBeGooglePlay',
+    ) as GeneratedFormSwitch;
     googlePlay.turnsOffKeys = [
       ...googlePlay.turnsOffKeys,
       'shizukuPretendToBeGalaxyStore',
@@ -901,9 +901,8 @@ class SamsungGalaxyStore extends AppSource {
         }
         final fields = _xmlValues(list.findElements('value'), {});
         final package = fields['GUID'] ?? '';
-        if (!RegExp(
-              r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$',
-            ).hasMatch(package) ||
+        if (!RegExp(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$')
+                .hasMatch(package) ||
             fields['playStoreProductYN']?.toUpperCase() == 'Y' ||
             fields['installable']?.toUpperCase() == 'N' ||
             fields['installableYN']?.toUpperCase() == 'N') {

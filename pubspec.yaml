@@ -15,11 +15,13 @@ publish_to: 'none'
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # ObtainX uses its own version line, independent of upstream Obtainium's.
-version: 2.22.0+22200
+version: 2.23.0+22300
 
 environment:
-  sdk: ^3.12.0
-  flutter: ">=3.47.6"
+  sdk: ^3.14.0
+  # 3.50 deprecates the framework's flutter/material (the app is on
+  # material_ui) and re-exports ScrollCacheExtent from the widgets library.
+  flutter: ">=3.50.0"
 
 dependencies:
   flutter:
@@ -35,17 +37,19 @@ dependencies:
   # Direct dependency only for AndroidWebViewController's platform-specific
   # inset opt-out, which the cross-platform package does not expose.
   webview_flutter_android: ^4.14.1
-  # Upstream Material `dynamic_color` package. We use only `DynamicColorBuilder`
-  # and the `.harmonized()` ColorScheme extension - both available in the
-  # upstream package - so the previous `dynamic_system_colors` fork (which
-  # added APIs we don't use) was swapped out for the upstream to unblock the
-  # bruckcode M3E packages, which transitively depend on `dynamic_color` and
-  # would otherwise collide with the fork's identical Android plugin class.
+  # The app's Material library (the framework's flutter/material is deprecated
+  # from Flutter 3.50). Same widgets and the same MaterialIcons font as the
+  # framework copy. Packages still on flutter/material (the M3E indicators,
+  # expressive_refresh, flutter_markdown_plus) get the app theme through
+  # components/legacy_material_bridge.dart. Upstream migrated in #3258.
+  material_ui: ^1.11.1
+  # Upstream Material `dynamic_color` package. ObtainX calls only its platform
+  # API (`DynamicColorPlugin.getCorePalette` / `getAccentColor`, see
+  # utils/dynamic_color_utils.dart), which returns a palette and a Color, no
+  # Material types, so 1.x works unchanged in the material_ui app.
   # Stays on 1.x on purpose: m3e_design (pulled in by progress_indicator_m3e)
-  # requires dynamic_color ^1.8.1. Upstream Obtainium moved to dynamic_color
-  # 2.x with material_ui (#3258); ObtainX deferred that migration (v1.6.17
-  # sync, decision D2) - intentional divergence, do not "fix" until the M3E
-  # packages allow 2.x.
+  # requires dynamic_color ^1.8.1. Upstream Obtainium is on 2.x (#3258);
+  # intentional divergence, do not "fix" until the M3E packages allow 2.x.
   dynamic_color: ^1.8.1
   # Direct only for utils/dynamic_color_utils.dart (#3322), which builds the
   # Material You scheme from the OS tonal palettes. Already locked through

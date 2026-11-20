@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 // Material 3 motion spec uses an "emphasized" easing curve that starts
 // briskly, decelerates through the middle, and settles slowly into the

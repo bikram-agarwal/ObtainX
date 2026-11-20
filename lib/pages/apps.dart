@@ -5,7 +5,7 @@ import 'dart:math' as math;
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart'
     show
         PaintingContext,
@@ -22,6 +22,7 @@ import 'package:flutter/rendering.dart'
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -364,8 +365,10 @@ class _RenderZOrderSliverMainAxisGroup extends RenderSliverMainAxisGroup {
   }
 }
 
-typedef _AnimatedAppsGroupItemBuilder =
-    Widget Function(BuildContext context, int index);
+typedef _AnimatedAppsGroupItemBuilder = Widget Function(
+  BuildContext context,
+  int index,
+);
 
 class _AnimatedAppsGroupBody extends StatefulWidget {
   const _AnimatedAppsGroupBody({
@@ -1347,9 +1350,8 @@ class _AppListItem extends StatelessWidget {
                   children: app.app.categories.map((category) {
                     return Expanded(
                       child: Container(
-                        color: Color(
-                          categoryColors[category] ?? transparent,
-                        ).withAlpha(255),
+                        color: Color(categoryColors[category] ?? transparent)
+                            .withAlpha(255),
                       ),
                     );
                   }).toList(),
@@ -2246,34 +2248,37 @@ void showChangeLogDialog(
           return Text(tr('notFound'), style: textTheme.bodyMedium);
         }
         return appSource.changeLogIfAnyIsMarkDown
-            ? MarkdownBody(
-                styleSheet: MarkdownStyleSheet(
-                  blockquoteDecoration: BoxDecoration(
-                    color: Theme.of(sheetContext).cardColor,
+            // flutter_markdown_plus is still on flutter/material.
+            ? LegacyMaterialBridge(
+                child: MarkdownBody(
+                  styleSheet: MarkdownStyleSheet(
+                    blockquoteDecoration: BoxDecoration(
+                      color: Theme.of(sheetContext).cardColor,
+                    ),
                   ),
-                ),
-                data: displayChangeLog,
-                // Single newlines are line breaks in release notes (upstream
-                // #2101, ad1c208e).
-                softLineBreak: true,
-                onTapLink: (text, href, title) {
-                  if (href != null) {
-                    launchUrlString(
-                      resolveChangeLogLink(
-                        href: href,
-                        appUrl: app.url,
-                        appSource: appSource,
-                      ),
-                      mode: LaunchMode.externalApplication,
-                    );
-                  }
-                },
-                extensionSet: md.ExtensionSet(
-                  md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-                  [
-                    md.EmojiSyntax(),
-                    ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-                  ],
+                  data: displayChangeLog,
+                  // Single newlines are line breaks in release notes (upstream
+                  // #2101, ad1c208e).
+                  softLineBreak: true,
+                  onTapLink: (text, href, title) {
+                    if (href != null) {
+                      launchUrlString(
+                        resolveChangeLogLink(
+                          href: href,
+                          appUrl: app.url,
+                          appSource: appSource,
+                        ),
+                        mode: LaunchMode.externalApplication,
+                      );
+                    }
+                  },
+                  extensionSet: md.ExtensionSet(
+                    md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+                    [
+                      md.EmojiSyntax(),
+                      ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+                    ],
+                  ),
                 ),
               )
             : SelectableText(displayChangeLog, style: textTheme.bodyMedium);
@@ -3037,12 +3042,12 @@ class AppsPageState extends State<AppsPage> {
                         heroTag: '${heroScope}_update_all_fab',
                         elevation: 6,
                         highlightElevation: 8,
-                        backgroundColor: Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer,
-                        foregroundColor: Theme.of(
-                          context,
-                        ).colorScheme.onPrimaryContainer,
+                        backgroundColor: Theme.of(context)
+                            .colorScheme
+                            .primaryContainer,
+                        foregroundColor: Theme.of(context)
+                            .colorScheme
+                            .onPrimaryContainer,
                         onPressed: () {
                           hapticSelection();
                           runMassObtain();
@@ -3059,9 +3064,9 @@ class AppsPageState extends State<AppsPage> {
                           bottom: -4,
                           child: Badge(
                             label: Text(pageUpdateCount.toString()),
-                            backgroundColor: Theme.of(
-                              context,
-                            ).colorScheme.error,
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .error,
                             textColor: Theme.of(context).colorScheme.onError,
                           ),
                         ),
@@ -3088,12 +3093,12 @@ class AppsPageState extends State<AppsPage> {
                     heroTag: '${heroScope}_view_options_fab',
                     elevation: 6,
                     highlightElevation: 8,
-                    backgroundColor: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    foregroundColor: Theme.of(
-                      context,
-                    ).colorScheme.onSurfaceVariant,
+                    backgroundColor: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest,
+                    foregroundColor: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant,
                     onPressed: () {
                       hapticSelection();
                       openViewOptionsSheet();
@@ -4063,9 +4068,10 @@ class AppsPageState extends State<AppsPage> {
         // The on-demand page shows all on-demand apps regardless of folder membership.
         workingList = workingList
             .where(
-              (appInMem) => folderIdsForApp(
-                appInMem.app,
-              ).where((id) => existingFolderIds.contains(id)).isEmpty,
+              (appInMem) =>
+                  folderIdsForApp(appInMem.app)
+                      .where((id) => existingFolderIds.contains(id))
+                      .isEmpty,
             )
             .toList();
       }
@@ -4269,9 +4275,9 @@ class AppsPageState extends State<AppsPage> {
             onDemandMatches.add(appInMem);
             continue;
           }
-          final List<String> folderIds = folderIdsForApp(
-            appInMem.app,
-          ).where(existingFolderIds.contains).toList();
+          final List<String> folderIds = folderIdsForApp(appInMem.app)
+              .where(existingFolderIds.contains)
+              .toList();
           if (folderIds.isEmpty) continue; // not filed into any live folder
           // Home folder = the earliest one in settings order.
           folderIds.sort(
@@ -6063,9 +6069,9 @@ class AppsPageState extends State<AppsPage> {
                           tr('visibilityFilterCycleHint'),
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
                               ),
                         ),
                         const SizedBox(height: 8),
@@ -6531,6 +6537,13 @@ class AppsPageState extends State<AppsPage> {
                 child: ExpressiveRefreshIndicator(
                   key: _refreshIndicatorKey,
                   onRefresh: refresh,
+                  // expressive_refresh is still on flutter/material, so it
+                  // can't see the material_ui theme: pass the colours it
+                  // would take from there.
+                  color: Theme.of(context).colorScheme.primary,
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest,
                   child: _ConditionalScrollbar(
                     condition: !isLargeScreen,
                     controller: scrollController,
@@ -6541,9 +6554,9 @@ class AppsPageState extends State<AppsPage> {
                           Positioned.fill(
                             child: DecoratedBox(
                               decoration: BoxDecoration(
-                                gradient: Theme.of(
-                                  context,
-                                ).colorScheme.schemePageBackgroundGradient,
+                                gradient: Theme.of(context)
+                                    .colorScheme
+                                    .schemePageBackgroundGradient,
                               ),
                             ),
                           ),
@@ -6567,9 +6580,8 @@ class AppsPageState extends State<AppsPage> {
                                       icon: const Icon(Icons.arrow_back),
                                       onPressed: () =>
                                           Navigator.of(context).maybePop(),
-                                      tooltip: MaterialLocalizations.of(
-                                        context,
-                                      ).backButtonTooltip,
+                                      tooltip: MaterialLocalizations.of(context)
+                                          .backButtonTooltip,
                                     )
                                   : null,
                               title: _searchExpanded
@@ -6631,9 +6643,8 @@ class AppsPageState extends State<AppsPage> {
                               // and "Apps" title are always on the same toolbar row.
                               searchWidget: _searchExpanded
                                   ? _buildSearchBar(
-                                      colorScheme: Theme.of(
-                                        context,
-                                      ).colorScheme,
+                                      colorScheme: Theme.of(context)
+                                          .colorScheme,
                                       showFilterSheet: showFilterSheet,
                                       neutralFilter: neutralFilter,
                                       settingsProvider: settingsProvider,
@@ -6882,9 +6893,9 @@ class AppsPageState extends State<AppsPage> {
                 child: settingsProvider.useGradientBackground
                     ? DecoratedBox(
                         decoration: BoxDecoration(
-                          gradient: Theme.of(
-                            context,
-                          ).colorScheme.schemePageBackgroundGradient,
+                          gradient: Theme.of(context)
+                              .colorScheme
+                              .schemePageBackgroundGradient,
                         ),
                       )
                     : ColoredBox(color: Theme.of(context).colorScheme.surface),
@@ -6914,18 +6925,16 @@ class AppsPageState extends State<AppsPage> {
                   VerticalDivider(
                     width: 1,
                     thickness: 1,
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.outlineVariant.withAlpha(50),
+                    color: Theme.of(context).colorScheme.outlineVariant
+                        .withAlpha(50),
                   ),
                   Expanded(
                     flex: 4,
                     child: selectedAppIds.isNotEmpty
                         ? Builder(
                             builder: (BuildContext context) {
-                              final ColorScheme scheme = Theme.of(
-                                context,
-                              ).colorScheme;
+                              final ColorScheme scheme = Theme.of(context)
+                                  .colorScheme;
                               final destructiveButtonStyle =
                                   FilledButton.styleFrom(
                                     minimumSize: const Size.fromHeight(56),
@@ -6942,9 +6951,9 @@ class AppsPageState extends State<AppsPage> {
                                     // Match the ActionListTile rows above:
                                     // bodyLarge (16sp) label + 24dp icon, so the
                                     // Remove action isn't visually smaller.
-                                    textStyle: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
+                                    textStyle: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge,
                                     alignment: Alignment.centerLeft,
                                   );
                               return Scaffold(
@@ -7323,14 +7332,12 @@ class AppsPageState extends State<AppsPage> {
                                         child: SingleChildScrollView(
                                           padding: const EdgeInsets.all(24),
                                           child: M3eExpressiveSettingsCard(
-                                            colorScheme: Theme.of(
-                                              context,
-                                            ).colorScheme,
+                                            colorScheme: Theme.of(context)
+                                                .colorScheme,
                                             items: [
                                               AboutSectionContent(
-                                                colorScheme: Theme.of(
-                                                  context,
-                                                ).colorScheme,
+                                                colorScheme: Theme.of(context)
+                                                    .colorScheme,
                                               ),
                                             ],
                                           ),
@@ -8849,9 +8856,8 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
           Expanded(
             child: Text(
               tr('noCategories'),
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: emptyColor),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: emptyColor),
             ),
           ),
         ],
@@ -8926,9 +8932,8 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
         const SizedBox(height: 2),
         Text(
           tr('categoryFilterCycleHint'),
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
         const SizedBox(height: 8),
         CategoryActionChipGroup(
@@ -9270,9 +9275,8 @@ class _CategoryChipsRow extends StatelessWidget {
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: categories.map((category) {
-              final color = Color(
-                categoryColors[category] ?? transparent,
-              ).withAlpha(255);
+              final color = Color(categoryColors[category] ?? transparent)
+                  .withAlpha(255);
               return CategoryActionChip(
                 label: category,
                 color: color,
@@ -9305,9 +9309,8 @@ class _CategoryChipsRow extends StatelessWidget {
         final List<Widget> children = [];
         for (int i = 0; i < bestK; i++) {
           final category = categories[i];
-          final color = Color(
-            categoryColors[category] ?? transparent,
-          ).withAlpha(255);
+          final color = Color(categoryColors[category] ?? transparent)
+              .withAlpha(255);
           children.add(
             CategoryActionChip(
               label: category,

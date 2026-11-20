@@ -2,13 +2,14 @@ import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/app_sources/githubstars.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/pages/import_export.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 
 Future<void> showImportGitHubStarsSheet(
   BuildContext context, {
@@ -192,8 +193,13 @@ class _ImportGitHubStarsContentState extends State<ImportGitHubStarsContent> {
           FilledButton.icon(
             onPressed: _isLoading ? null : _importStarredRepositories,
             icon: _isLoading
-                ? const ExpressiveLoadingIndicator(
-                    constraints: BoxConstraints.tightFor(width: 24, height: 24),
+                ? const LegacyMaterialBridge(
+                    child: ExpressiveLoadingIndicator(
+                      constraints: BoxConstraints.tightFor(
+                        width: 24,
+                        height: 24,
+                      ),
+                    ),
                   )
                 : const Icon(Icons.download_rounded),
             label: Text(tr('import')),

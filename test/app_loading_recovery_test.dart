@@ -260,37 +260,33 @@ void main() {
     },
   );
 
-  test(
-    'a stalled package service still loads saved apps without recording uninstalls',
-    () async {
-      final provider = await _provider(hasInstalledVersion: true);
-      final stalled = Completer<Object?>();
-      messenger.setMockMethodCallHandler(channel, (_) => stalled.future);
-      await provider.loadApps(
-        installedInfoTimeout: const Duration(milliseconds: 50),
-      );
-      expect(provider.apps[_app.id]!.app.installedVersion, '1.0');
-      expect(provider.loadingApps, isFalse);
-      expect(provider.appsLoadingCompleter, isNull);
-      expect(provider.lastFullDiskLoadAt, isNull);
-      expect(
-        provider.logs.messages.any(
-          (message) =>
-              message.contains('Installed package snapshot unavailable'),
-        ),
-        isTrue,
-      );
-      stalled.complete([]);
-      await Future<void>.delayed(Duration.zero);
-      expect(provider.apps[_app.id]!.app.installedVersion, '1.0');
-      await provider.saveApps(
-        [provider.apps[_app.id]!.app.copyWith(lastUpdateCheck: DateTime.now())],
-        updateInstalledInfo: false,
-        autoExportAfterSave: false,
-      );
-      expect(provider.apps[_app.id]!.app.installedVersion, '1.0');
-    },
-  );
+  test('a stalled package service still loads saved apps without recording uninstalls', () async {
+    final provider = await _provider(hasInstalledVersion: true);
+    final stalled = Completer<Object?>();
+    messenger.setMockMethodCallHandler(channel, (_) => stalled.future);
+    await provider.loadApps(
+      installedInfoTimeout: const Duration(milliseconds: 50),
+    );
+    expect(provider.apps[_app.id]!.app.installedVersion, '1.0');
+    expect(provider.loadingApps, isFalse);
+    expect(provider.appsLoadingCompleter, isNull);
+    expect(provider.lastFullDiskLoadAt, isNull);
+    expect(
+      provider.logs.messages.any(
+        (message) => message.contains('Installed package snapshot unavailable'),
+      ),
+      isTrue,
+    );
+    stalled.complete([]);
+    await Future<void>.delayed(Duration.zero);
+    expect(provider.apps[_app.id]!.app.installedVersion, '1.0');
+    await provider.saveApps(
+      [provider.apps[_app.id]!.app.copyWith(lastUpdateCheck: DateTime.now())],
+      updateInstalledInfo: false,
+      autoExportAfterSave: false,
+    );
+    expect(provider.apps[_app.id]!.app.installedVersion, '1.0');
+  });
 
   test(
     'a stalled checkpoint read cannot block the app list or the next load',
@@ -342,79 +338,76 @@ void main() {
     },
   );
 
-  test(
-    'stalled final timestamp save falls back to JSON and releases later saves',
-    () async {
-      final provider = await _provider();
-      final database = _Database('${provider.cachedAppsDir!.path}/save.db');
-      final factory = _Factory(database);
-      provider.appCheckStore = AppCheckStore(
-        database.path,
-        factory: factory,
-        operationTimeout: const Duration(milliseconds: 50),
-      );
-      await provider.saveApps(
-        [_app],
-        onlyIfExists: false,
-        attemptToCorrectInstallStatus: false,
-        updateInstalledInfo: false,
-        autoExportAfterSave: false,
-      );
-      final previousRevision = provider.appCheckStore!.revisions[_app.id];
-      final saved = provider.apps[_app.id]!.app;
-      final checked = saved.copyWith(
-        lastUpdateCheck: DateTime.utc(2026, 9, 12, 10),
-      );
-      final started = Completer<void>();
-      final stalled = Completer<void>();
-      database.commitStarted = started;
-      database.stalledCommit = stalled;
-      final firstSave = provider.saveApps(
-        [checked],
-        attemptToCorrectInstallStatus: false,
-        updateInstalledInfo: false,
-        autoExportAfterSave: false,
-      );
-      await started.future;
-      await firstSave.timeout(const Duration(seconds: 2));
-      final file = File('${provider.cachedAppsDir!.path}/${_app.id}.json');
-      final fallback =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      expect(
-        App.fromJson(fallback).lastUpdateCheck?.toUtc(),
-        checked.lastUpdateCheck,
-      );
-      expect(fallback[appRecordRevisionKey], isNot(previousRevision));
-      expect(
-        provider.logs.messages.any(
-          (message) => message.contains('falling back to 1 app records'),
-        ),
-        isTrue,
-      );
-      final updated = checked.copyWith(
-        latestVersion: '2.0',
-        lastUpdateCheck: DateTime.utc(2026, 9, 12, 11),
-      );
-      await provider
-          .saveApps(
-            [updated],
-            attemptToCorrectInstallStatus: false,
-            updateInstalledInfo: false,
-            autoExportAfterSave: false,
-          )
-          .timeout(const Duration(seconds: 2));
-      expect(database.commits, 1);
-      stalled.complete();
-      await Future<void>.delayed(Duration.zero);
-      // Simulate a new process reading a late SQLite result alongside newer JSON.
-      final reloadedStore = AppCheckStore(database.path, factory: factory);
-      final record =
-          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      reloadedStore.apply(record, await reloadedStore.read());
-      final restored = App.fromJson(record);
-      expect(restored.latestVersion, '2.0');
-      expect(restored.lastUpdateCheck?.toUtc(), updated.lastUpdateCheck);
-      await reloadedStore.close();
-    },
-  );
+  test('stalled final timestamp save falls back to JSON and releases later saves', () async {
+    final provider = await _provider();
+    final database = _Database('${provider.cachedAppsDir!.path}/save.db');
+    final factory = _Factory(database);
+    provider.appCheckStore = AppCheckStore(
+      database.path,
+      factory: factory,
+      operationTimeout: const Duration(milliseconds: 50),
+    );
+    await provider.saveApps(
+      [_app],
+      onlyIfExists: false,
+      attemptToCorrectInstallStatus: false,
+      updateInstalledInfo: false,
+      autoExportAfterSave: false,
+    );
+    final previousRevision = provider.appCheckStore!.revisions[_app.id];
+    final saved = provider.apps[_app.id]!.app;
+    final checked = saved.copyWith(
+      lastUpdateCheck: DateTime.utc(2026, 9, 12, 10),
+    );
+    final started = Completer<void>();
+    final stalled = Completer<void>();
+    database.commitStarted = started;
+    database.stalledCommit = stalled;
+    final firstSave = provider.saveApps(
+      [checked],
+      attemptToCorrectInstallStatus: false,
+      updateInstalledInfo: false,
+      autoExportAfterSave: false,
+    );
+    await started.future;
+    await firstSave.timeout(const Duration(seconds: 2));
+    final file = File('${provider.cachedAppsDir!.path}/${_app.id}.json');
+    final fallback =
+        jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    expect(
+      App.fromJson(fallback).lastUpdateCheck?.toUtc(),
+      checked.lastUpdateCheck,
+    );
+    expect(fallback[appRecordRevisionKey], isNot(previousRevision));
+    expect(
+      provider.logs.messages.any(
+        (message) => message.contains('falling back to 1 app records'),
+      ),
+      isTrue,
+    );
+    final updated = checked.copyWith(
+      latestVersion: '2.0',
+      lastUpdateCheck: DateTime.utc(2026, 9, 12, 11),
+    );
+    await provider
+        .saveApps(
+          [updated],
+          attemptToCorrectInstallStatus: false,
+          updateInstalledInfo: false,
+          autoExportAfterSave: false,
+        )
+        .timeout(const Duration(seconds: 2));
+    expect(database.commits, 1);
+    stalled.complete();
+    await Future<void>.delayed(Duration.zero);
+    // Simulate a new process reading a late SQLite result alongside newer JSON.
+    final reloadedStore = AppCheckStore(database.path, factory: factory);
+    final record =
+        jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    reloadedStore.apply(record, await reloadedStore.read());
+    final restored = App.fromJson(record);
+    expect(restored.latestVersion, '2.0');
+    expect(restored.lastUpdateCheck?.toUtc(), updated.lastUpdateCheck);
+    await reloadedStore.close();
+  });
 }

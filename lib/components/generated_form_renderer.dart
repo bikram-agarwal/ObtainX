@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -25,8 +25,11 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 export 'generated_form_model.dart';
 
-typedef OnValueChanges =
-    void Function(Map<String, dynamic> values, bool valid, bool isBuilding);
+typedef OnValueChanges = void Function(
+  Map<String, dynamic> values,
+  bool valid,
+  bool isBuilding,
+);
 
 /// Copy tag map so form state is not the same instance as [GeneratedFormTagInput.value].
 Map<String, MapEntry<int, bool>> cloneCategoryTagInputValueMap(
@@ -1505,9 +1508,9 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                         title: message.key,
                                         message: message.value,
                                         items: const [],
-                                        primaryActionColour: Theme.of(
-                                          ctx,
-                                        ).colorScheme.error,
+                                        primaryActionColour: Theme.of(ctx)
+                                            .colorScheme
+                                            .error,
                                       );
                                     },
                                   ).then((value) {

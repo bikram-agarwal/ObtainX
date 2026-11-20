@@ -139,55 +139,52 @@ void main() {
     },
   );
 
-  test(
-    'uses discovered global endpoint and the selected profile without authorizing results',
-    () async {
-      final source = _SearchGalaxyStore([
-        _discovery(),
-        _response([_product]),
-      ]);
-      final profile = source.searchProfiles.first;
-      final results = await source.search(
-        '  Samsung & tools  ',
-        querySettings: profile.querySettings,
-      );
-      expect(results, {
-        'https://apps.galaxyappstore.com/detail/com.sec.android.easyMover': [
-          'Samsung Smart Switch Mobile',
-          'Samsung Electronics Co., Ltd.',
-        ],
-      });
-      expect(
-        source.requests.map((request) => request.uri.queryParameters['reqId']),
-        ['2300', '2040'],
-      );
-      expect(source.requests.first.uri.host, 'hub-odc.samsungapps.com');
-      final search = source.requests.last;
-      expect(search.uri.host, 'il-odc.samsungapps.com');
-      expect(search.uri.scheme, 'https');
-      expect(search.followRedirects, isFalse);
-      expect(search.settings, profile.querySettings);
-      final root = search.body.rootElement;
-      expect(root.getAttribute('deviceModel'), 'SM-S948B');
-      expect(root.getAttribute('csc'), 'DBT');
-      expect(root.getAttribute('mcc'), '425');
-      expect(root.getAttribute('mnc'), '01');
-      final request = root.findElements('request').single;
-      expect(request.getAttribute('name'), 'searchProductListEx2Notc');
-      final params = {
-        for (final param in request.findElements('param'))
-          param.getAttribute('name')!: param.innerText,
-      };
-      expect(params['keyword'], 'Samsung & tools');
-      expect(params['startNum'], '1');
-      expect(params['endNum'], '20');
-      expect(params['storeContentType'], 'Apps');
-      expect(params['imei'], isNotEmpty);
-      expect(params['stduk'], params['imei']);
-      expect(params['extuk'], params['imei']);
-      expect(source.responses, isEmpty);
-    },
-  );
+  test('uses discovered global endpoint and the selected profile without authorizing results', () async {
+    final source = _SearchGalaxyStore([
+      _discovery(),
+      _response([_product]),
+    ]);
+    final profile = source.searchProfiles.first;
+    final results = await source.search(
+      '  Samsung & tools  ',
+      querySettings: profile.querySettings,
+    );
+    expect(results, {
+      'https://apps.galaxyappstore.com/detail/com.sec.android.easyMover': [
+        'Samsung Smart Switch Mobile',
+        'Samsung Electronics Co., Ltd.',
+      ],
+    });
+    expect(
+      source.requests.map((request) => request.uri.queryParameters['reqId']),
+      ['2300', '2040'],
+    );
+    expect(source.requests.first.uri.host, 'hub-odc.samsungapps.com');
+    final search = source.requests.last;
+    expect(search.uri.host, 'il-odc.samsungapps.com');
+    expect(search.uri.scheme, 'https');
+    expect(search.followRedirects, isFalse);
+    expect(search.settings, profile.querySettings);
+    final root = search.body.rootElement;
+    expect(root.getAttribute('deviceModel'), 'SM-S948B');
+    expect(root.getAttribute('csc'), 'DBT');
+    expect(root.getAttribute('mcc'), '425');
+    expect(root.getAttribute('mnc'), '01');
+    final request = root.findElements('request').single;
+    expect(request.getAttribute('name'), 'searchProductListEx2Notc');
+    final params = {
+      for (final param in request.findElements('param'))
+        param.getAttribute('name')!: param.innerText,
+    };
+    expect(params['keyword'], 'Samsung & tools');
+    expect(params['startNum'], '1');
+    expect(params['endNum'], '20');
+    expect(params['storeContentType'], 'Apps');
+    expect(params['imei'], isNotEmpty);
+    expect(params['stduk'], params['imei']);
+    expect(params['extuk'], params['imei']);
+    expect(source.responses, isEmpty);
+  });
 
   test('uses China profile for both discovery and search', () async {
     final source = _SearchGalaxyStore([
@@ -227,8 +224,7 @@ void main() {
         _discovery(),
         _response(
           [_product],
-          itemExtra:
-              '<extList><list><value name="GUID">com.other.app</value><value name="productName">Other app</value></list></extList>',
+          itemExtra: '<extList><list><value name="GUID">com.other.app</value><value name="productName">Other app</value></list></extList>',
         ),
       ]);
       final results = await source.search('Samsung');
@@ -297,8 +293,7 @@ void main() {
     ], responseExtra: '<errorInfo><errorString errorCode="0"/></errorInfo>'),
     'nested field value': _response(
       [_product],
-      itemExtra:
-          '<value name="extra"><value name="GUID">com.other.app</value></value>',
+      itemExtra: '<value name="extra"><value name="GUID">com.other.app</value></value>',
     ),
   }.entries) {
     test(

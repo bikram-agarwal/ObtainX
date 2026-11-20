@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
@@ -459,55 +459,52 @@ void main() {
     );
   });
 
-  test(
-    'parallel downloads install as ready, serialize installs, and defer self-update',
-    () async {
-      final Completer<String> slowDownload = Completer<String>();
-      final Completer<String> fastDownload = Completer<String>();
-      final Completer<String> selfUpdateDownload = Completer<String>();
-      final Completer<void> fastInstallStarted = Completer<void>();
-      final Completer<void> releaseFastInstall = Completer<void>();
-      final List<String> installOrder = [];
-      var activeInstalls = 0;
-      var maxActiveInstalls = 0;
+  test('parallel downloads install as ready, serialize installs, and defer self-update', () async {
+    final Completer<String> slowDownload = Completer<String>();
+    final Completer<String> fastDownload = Completer<String>();
+    final Completer<String> selfUpdateDownload = Completer<String>();
+    final Completer<void> fastInstallStarted = Completer<void>();
+    final Completer<void> releaseFastInstall = Completer<void>();
+    final List<String> installOrder = [];
+    var activeInstalls = 0;
+    var maxActiveInstalls = 0;
 
-      final Future<void> processing = processDownloadResultsAsReady<String>(
-        downloads: [
-          (id: 'slow', result: slowDownload.future),
-          (id: 'fast', result: fastDownload.future),
-          (id: 'self', result: selfUpdateDownload.future),
-        ],
-        deferUntilEnd: (String id) => id == 'self',
-        process: (String result) async {
-          activeInstalls++;
-          if (activeInstalls > maxActiveInstalls) {
-            maxActiveInstalls = activeInstalls;
-          }
-          installOrder.add(result);
-          if (result == 'fast') {
-            fastInstallStarted.complete();
-            await releaseFastInstall.future;
-          }
-          activeInstalls--;
-        },
-      );
+    final Future<void> processing = processDownloadResultsAsReady<String>(
+      downloads: [
+        (id: 'slow', result: slowDownload.future),
+        (id: 'fast', result: fastDownload.future),
+        (id: 'self', result: selfUpdateDownload.future),
+      ],
+      deferUntilEnd: (String id) => id == 'self',
+      process: (String result) async {
+        activeInstalls++;
+        if (activeInstalls > maxActiveInstalls) {
+          maxActiveInstalls = activeInstalls;
+        }
+        installOrder.add(result);
+        if (result == 'fast') {
+          fastInstallStarted.complete();
+          await releaseFastInstall.future;
+        }
+        activeInstalls--;
+      },
+    );
 
-      selfUpdateDownload.complete('self');
-      fastDownload.complete('fast');
-      await fastInstallStarted.future;
-      slowDownload.complete('slow');
-      await Future<void>.delayed(Duration.zero);
+    selfUpdateDownload.complete('self');
+    fastDownload.complete('fast');
+    await fastInstallStarted.future;
+    slowDownload.complete('slow');
+    await Future<void>.delayed(Duration.zero);
 
-      expect(installOrder, const ['fast']);
-      expect(maxActiveInstalls, 1);
+    expect(installOrder, const ['fast']);
+    expect(maxActiveInstalls, 1);
 
-      releaseFastInstall.complete();
-      await processing;
+    releaseFastInstall.complete();
+    await processing;
 
-      expect(installOrder, const ['fast', 'slow', 'self']);
-      expect(maxActiveInstalls, 1);
-    },
-  );
+    expect(installOrder, const ['fast', 'slow', 'self']);
+    expect(maxActiveInstalls, 1);
+  });
 
   test('F-Droid-style verification controls retain their help tooltip', () {
     for (final AppSource source in [FDroid(), FDroidRepo(), IzzyOnDroid()]) {

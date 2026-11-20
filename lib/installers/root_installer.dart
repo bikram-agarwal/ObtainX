@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
@@ -104,9 +104,8 @@ class RootInstaller extends Installer {
       final result = await _runAsRoot(script);
       final String output = '${result.stdout}\n${result.stderr}'.trim();
       // pm reports failures on stdout as `Failure [INSTALL_FAILED_X: ...]`.
-      final RegExpMatch? failure = RegExp(
-        r'Failure \[([A-Z0-9_]+)',
-      ).firstMatch(output);
+      final RegExpMatch? failure = RegExp(r'Failure \[([A-Z0-9_]+)')
+          .firstMatch(output);
       if (result.exitCode != 0 || failure != null) {
         AppLogger.warn(
           'Root pm install failed for $appId (exit ${result.exitCode}): $output',

@@ -1,8 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
@@ -756,9 +755,8 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
                     matchGradientBackground: useGradientBackground,
                     leading: IconButton(
                       icon: const Icon(Icons.arrow_back),
-                      tooltip: MaterialLocalizations.of(
-                        context,
-                      ).backButtonTooltip,
+                      tooltip: MaterialLocalizations.of(context)
+                          .backButtonTooltip,
                       onPressed: () => Navigator.of(context).maybePop(),
                     ),
                   ),

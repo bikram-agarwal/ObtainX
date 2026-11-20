@@ -8,7 +8,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_archive/flutter_archive.dart';
 import 'package:flutter_fgbg/flutter_fgbg.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
@@ -638,10 +638,8 @@ extension AppsProviderInstall on AppsProvider {
       }),
     );
     try {
-      return await Future.any([
-        intentCompleter.future,
-        pollCompleter.future,
-      ]).timeout(_installConfirmTimeout);
+      return await Future.any([intentCompleter.future, pollCompleter.future])
+          .timeout(_installConfirmTimeout);
     } on TimeoutException {
       unawaited(
         logs.add(
@@ -1863,9 +1861,8 @@ extension AppsProviderInstall on AppsProvider {
         final obbFileName = file.path.split('/').last;
         final obbDestPath =
             '${await getStorageRootPath()}/Android/obb/$appId/$obbFileName';
-        await Directory(
-          '${await getStorageRootPath()}/Android/obb/$appId',
-        ).create(recursive: true);
+        await Directory('${await getStorageRootPath()}/Android/obb/$appId')
+            .create(recursive: true);
         await file.copy(obbDestPath);
         unawaited(
           logs.add(
@@ -2178,9 +2175,8 @@ extension AppsProviderInstall on AppsProvider {
       final Set<String> refusedIds = {};
       for (final List<String> ids in idsByInstallerMode.values) {
         try {
-          await getInstaller(
-            apps[ids.first]?.app,
-          ).ensurePermission(toastTheme: dialogTheme);
+          await getInstaller(apps[ids.first]?.app)
+              .ensurePermission(toastTheme: dialogTheme);
         } catch (error) {
           for (final id in ids) {
             errors.add(id, error, appName: apps[id]?.name);

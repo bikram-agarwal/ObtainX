@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Formats a numeric date using the device locale's month/day order and omits
 /// the year when [dateTime] falls within the current year.
@@ -9,9 +9,8 @@ String formatDeviceOrderedNumericDate(
 }) {
   final DateTime local = dateTime.toLocal();
   final DateTime localNow = (now ?? DateTime.now()).toLocal();
-  final String datePattern = MaterialLocalizations.of(
-    context,
-  ).dateHelpText.toLowerCase();
+  final String datePattern = MaterialLocalizations.of(context).dateHelpText
+      .toLowerCase();
   final int monthPosition = datePattern.indexOf('m');
   final int dayPosition = datePattern.indexOf('d');
   final bool monthComesFirst =

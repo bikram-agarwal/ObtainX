@@ -8,7 +8,7 @@ import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -418,9 +418,8 @@ extension AppsProviderLifecycle on AppsProvider {
       List<PackageInfo> installedAppsData = [];
       try {
         installedAppsData = singleId == null
-            ? await getAllInstalledInfo(
-                light: true,
-              ).timeout(installedInfoTimeout)
+            ? await getAllInstalledInfo(light: true)
+                  .timeout(installedInfoTimeout)
             : [
                 await getInstalledInfo(
                   singleId,
@@ -565,9 +564,9 @@ extension AppsProviderLifecycle on AppsProvider {
             }
             if (!reused) {
               try {
-                final json =
-                    jsonDecode(await File(item.path).readAsString())
-                        as Map<String, dynamic>;
+                final json = jsonDecode(
+                  await File(item.path).readAsString(),
+                ) as Map<String, dynamic>;
                 checks.apply(json, checkTimes);
                 app = App.fromJson(json);
                 // The file name is the record's identity, so a record whose
@@ -2058,9 +2057,9 @@ extension AppsProviderLifecycle on AppsProvider {
         );
         if (savedApps.containsKey(listingKey)) continue;
         try {
-          final json =
-              jsonDecode(await File(item.path).readAsString())
-                  as Map<String, dynamic>;
+          final json = jsonDecode(
+            await File(item.path).readAsString(),
+          ) as Map<String, dynamic>;
           savedApps[listingKey] = App.fromJson(json);
         } catch (err) {
           // A record this sweep cannot parse is left alone; loadApps owns

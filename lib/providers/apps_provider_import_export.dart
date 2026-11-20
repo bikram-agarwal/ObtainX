@@ -182,9 +182,8 @@ String readableLinkPayload(String payload) {
   }
 
   try {
-    return const JsonEncoder.withIndent(
-      '  ',
-    ).convert(expand(jsonDecode(payload)));
+    return const JsonEncoder.withIndent('  ')
+        .convert(expand(jsonDecode(payload)));
   } catch (_) {
     return payload;
   }
@@ -646,7 +645,7 @@ extension AppsProviderImportExport on AppsProvider {
 
 const int obtainiumSortColumnCount = 4;
 const String obtainXFolderViewSettingPrefix = 'folderView_';
-const String obtainXSettingsSectionPrefix = 'settingsSection_';
+// obtainXSettingsSectionPrefix lives in settings_provider.dart.
 
 /// Pref keys with no counterpart in upstream Obtainium. They're kept out of
 /// [SplitExportSettings.settings] (so an Obtainium import isn't polluted by keys

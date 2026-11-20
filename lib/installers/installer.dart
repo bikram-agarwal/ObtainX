@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/app_sources/samsunggalaxystore.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -17,12 +17,10 @@ String installerPackageNameForApp(App app, {required bool googlePlayDefault}) {
     try {
       // Only a type test, so the cached template is enough: no per-install
       // source instance (guide §3.2).
-      isGalaxyStore =
-          SourceProvider().getSourceTemplate(
-                app.url,
-                overrideSource: app.overrideSource,
-              )
-              is SamsungGalaxyStore;
+      isGalaxyStore = SourceProvider().getSourceTemplate(
+        app.url,
+        overrideSource: app.overrideSource,
+      ) is SamsungGalaxyStore;
     } catch (_) {
       isGalaxyStore = false;
     }

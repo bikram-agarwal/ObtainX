@@ -1,6 +1,6 @@
 // Builds the Material 3 Expressive theme for the app.
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Builds the app-wide Material 3 Expressive [ThemeData] for a given
 /// [colorScheme]. Expressive character lives here (large rounded shapes,
@@ -237,8 +237,10 @@ abstract final class AppIconSizes {
 }
 
 /// The type style used for section labels throughout the app.
-TextStyle? sectionHeaderTextStyle(BuildContext context) =>
-    Theme.of(context).textTheme.titleMedium?.copyWith(
+TextStyle? sectionHeaderTextStyle(BuildContext context) => Theme.of(context)
+    .textTheme
+    .titleMedium
+    ?.copyWith(
       fontWeight: FontWeight.w600,
       color: Theme.of(context).colorScheme.onSurface,
     );

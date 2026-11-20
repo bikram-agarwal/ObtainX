@@ -120,9 +120,8 @@ void main() {
           evidence['retryAfter'],
           greaterThanOrEqualTo(
             before +
-                Duration(
-                  minutes: response.statusCode == 404 ? 15 : 1,
-                ).inMilliseconds,
+                Duration(minutes: response.statusCode == 404 ? 15 : 1)
+                    .inMilliseconds,
           ),
         );
         final restarted = _GitHub(_comparison('ahead'));
@@ -276,34 +275,31 @@ void main() {
     },
   );
 
-  test(
-    'changed per-app credentials or proxy bypass failure backoff without storing credentials',
-    () async {
-      final source = _GitHub(Response('', 403));
-      final failed = await source.resolveVersionComparison(_app());
-      for (final config in [
-        {GitHub.githubCredsKey: 'test-credential'},
-        {GitHub.githubReqPrefixKey: 'https://proxy.example/'},
-        {GitHub.githubReqPrefixUseTokenKey: 'true'},
-      ]) {
-        final before = source.requests.length;
-        final retried = await source.resolveVersionComparison(
-          failed.copyWith(
-            additionalSettings: {...failed.additionalSettings, ...config},
-          ),
-        );
-        expect(source.requests, hasLength(before + 1));
-        expect(
-          jsonEncode(retried.additionalSettings[sourceBuildComparisonKey]),
-          isNot(contains('test-credential')),
-        );
-        expect(
-          retried.additionalSettings[sourceBuildComparisonKey]['failureCount'],
-          1,
-        );
-      }
-    },
-  );
+  test('changed per-app credentials or proxy bypass failure backoff without storing credentials', () async {
+    final source = _GitHub(Response('', 403));
+    final failed = await source.resolveVersionComparison(_app());
+    for (final config in [
+      {GitHub.githubCredsKey: 'test-credential'},
+      {GitHub.githubReqPrefixKey: 'https://proxy.example/'},
+      {GitHub.githubReqPrefixUseTokenKey: 'true'},
+    ]) {
+      final before = source.requests.length;
+      final retried = await source.resolveVersionComparison(
+        failed.copyWith(
+          additionalSettings: {...failed.additionalSettings, ...config},
+        ),
+      );
+      expect(source.requests, hasLength(before + 1));
+      expect(
+        jsonEncode(retried.additionalSettings[sourceBuildComparisonKey]),
+        isNot(contains('test-credential')),
+      );
+      expect(
+        retried.additionalSettings[sourceBuildComparisonKey]['failureCount'],
+        1,
+      );
+    }
+  });
 
   test('changed global credentials bypass failure backoff', () async {
     final source = _GitHub(Response('', 403));

@@ -84,9 +84,8 @@ void main() {
 
   // ObtainX: an app added without a check (D10) has a placeholder version.
   test('the first check of an app added without one dates nothing', () {
-    final placeholder = _app(
-      'Unknown',
-    ).copyWith(apkUrls: const [MapEntry('placeholder', 'placeholder')]);
+    final placeholder = _app('Unknown')
+        .copyWith(apkUrls: const [MapEntry('placeholder', 'placeholder')]);
     final app = recordLatestVersionChange(
       placeholder,
       _app('1.0'),

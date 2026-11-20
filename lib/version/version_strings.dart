@@ -14,6 +14,7 @@ library;
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:obtainium/custom_errors.dart';
+
 import 'version_comparison.dart';
 export 'version_comparison.dart';
 
@@ -351,9 +352,10 @@ String versionShapeForReconciliation(String version) {
 }
 
 List<BigInt> numericVersionTokens(String version) {
-  return RegExp(
-    r'\d+',
-  ).allMatches(version).map((match) => BigInt.parse(match.group(0)!)).toList();
+  return RegExp(r'\d+')
+      .allMatches(version)
+      .map((match) => BigInt.parse(match.group(0)!))
+      .toList();
 }
 
 bool recognizedNumericReleaseVersionsAreComparable(

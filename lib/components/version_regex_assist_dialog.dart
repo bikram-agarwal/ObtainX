@@ -1,13 +1,14 @@
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 
-typedef RegexAssistRawVersionResolver =
-    Future<String?> Function(Map<String, dynamic> currentValues);
+typedef RegexAssistRawVersionResolver = Future<String?> Function(
+  Map<String, dynamic> currentValues,
+);
 
 /// Removes segments that are alphabet-only (e.g. pixel, beta, release).
 String stripLetterOnlySegmentsFromVersionRaw(String raw) {

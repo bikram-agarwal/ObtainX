@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/app_sources/html.dart';
@@ -260,8 +261,7 @@ class GitHub extends AppSource {
       label: tr('githubPATLabel'),
       password: true,
       required: false,
-      helpUrl:
-          'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token',
+      helpUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token',
       assistIcon: Icons.verified_user_outlined,
       assistTooltip: tr('validateGitHubPAT'),
       assistAction: _validatePATFromSettingsForm,

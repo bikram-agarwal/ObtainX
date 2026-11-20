@@ -18,7 +18,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
@@ -2801,18 +2801,20 @@ class NativeFeatures {
   }) async {
     if (!Platform.isAndroid) return;
     try {
-      await _notificationsChannel
-          .invokeMethod('showDownloadProgressNotification', <String, Object?>{
-            'id': id,
-            'appId': appId,
-            'title': title,
-            'message': message,
-            'channelCode': channelCode,
-            'progressPercent': progressPercent,
-            'indeterminate': indeterminate,
-            'cancelLabel': cancelLabel,
-            'shortCriticalText': shortCriticalText,
-          });
+      await _notificationsChannel.invokeMethod(
+        'showDownloadProgressNotification',
+        <String, Object?>{
+          'id': id,
+          'appId': appId,
+          'title': title,
+          'message': message,
+          'channelCode': channelCode,
+          'progressPercent': progressPercent,
+          'indeterminate': indeterminate,
+          'cancelLabel': cancelLabel,
+          'shortCriticalText': shortCriticalText,
+        },
+      );
     } on PlatformException {
       // The regular Flutter notification remains the fallback.
     } on MissingPluginException {

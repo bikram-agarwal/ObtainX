@@ -42,9 +42,8 @@ class Aptoide extends AppSource {
   ) async {
     final res = await sourceRequest(standardUrl, additionalSettings);
     ensureHttpSuccess(res);
-    final idMatch = RegExp(
-      r'"app"\s*:\s*\{\s*"id"\s*:\s*([0-9]+)',
-    ).firstMatch(res.body);
+    final idMatch = RegExp(r'"app"\s*:\s*\{\s*"id"\s*:\s*([0-9]+)')
+        .firstMatch(res.body);
     String? id;
     if (idMatch != null) {
       id = idMatch.group(1)!;

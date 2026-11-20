@@ -8,8 +8,7 @@ import 'package:android_package_manager/android_package_manager.dart'
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
@@ -64,6 +63,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart' as shizuku;
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 
 IconData _swipeActionIcon(SwipeAction action) => switch (action) {
   SwipeAction.update => Icons.system_update_alt_rounded,
@@ -113,9 +113,13 @@ class SettingsPageState extends State<SettingsPage> {
       GlobalKey<_IntegrationsSectionState>();
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
-  final ValueNotifier<Map<String, bool>> _expandedSettingsSections =
+  // Which sections are expanded (phone layout). Deliberately in memory only,
+  // for the life of the process: a cold start opens Settings with every
+  // section collapsed, and while the app keeps running, coming back to
+  // Settings (including a rebuild that recreates this State) shows them as the
+  // user left them. Static so it outlives this State; never disposed.
+  static final ValueNotifier<Map<String, bool>> _expandedSettingsSections =
       ValueNotifier<Map<String, bool>>(<String, bool>{});
-  bool _expandedSettingsSectionsLoaded = false;
 
   String? _selectedCategory;
 
@@ -143,12 +147,6 @@ class SettingsPageState extends State<SettingsPage> {
     'interaction',
     'categories',
   ];
-
-  @override
-  void dispose() {
-    _expandedSettingsSections.dispose();
-    super.dispose();
-  }
 
   Future<bool> confirmDiscardUnsavedChanges() async {
     final sourceSpecificState = _sourceSpecificKey.currentState;
@@ -194,17 +192,8 @@ class SettingsPageState extends State<SettingsPage> {
     return true;
   }
 
-  void _loadExpandedSettingsSections(SettingsProvider sp) {
-    if (_expandedSettingsSectionsLoaded || sp.prefs == null) return;
-    _expandedSettingsSections.value = <String, bool>{
-      for (final key in _settingsSectionKeys)
-        key: sp.prefs?.getBool('settingsSection_$key') ?? true,
-    };
-    _expandedSettingsSectionsLoaded = true;
-  }
-
   static bool _sectionExpanded(Map<String, bool> expandedState, String key) {
-    return expandedState[key] ?? true;
+    return expandedState[key] ?? false;
   }
 
   @override
@@ -220,10 +209,8 @@ class SettingsPageState extends State<SettingsPage> {
 
     // One-time initialization guard.
     if (sp.prefs == null) sp.initializeSettings();
-    _loadExpandedSettingsSections(sp);
 
     void setSectionExpanded(String key, bool value) {
-      sp.prefs?.setBool('settingsSection_$key', value);
       _expandedSettingsSections.value = <String, bool>{
         ..._expandedSettingsSections.value,
         key: value,
@@ -231,9 +218,6 @@ class SettingsPageState extends State<SettingsPage> {
     }
 
     void setAllSettingsSectionsExpanded(bool value) {
-      for (final sectionKey in _settingsSectionKeys) {
-        sp.prefs?.setBool('settingsSection_$sectionKey', value);
-      }
       _expandedSettingsSections.value = <String, bool>{
         for (final sectionKey in _settingsSectionKeys) sectionKey: value,
       };
@@ -394,9 +378,10 @@ class SettingsPageState extends State<SettingsPage> {
                                   duration: headerTransitionDuration,
                                   curve: headerTransitionCurve,
                                   style: TextStyle(
-                                    fontFamily: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge?.fontFamily,
+                                    fontFamily: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge
+                                        ?.fontFamily,
                                     fontWeight: expanded
                                         ? FontWeight.w600
                                         : FontWeight.w700,
@@ -466,9 +451,10 @@ class SettingsPageState extends State<SettingsPage> {
                   child: Text(
                     tr('about'),
                     style: TextStyle(
-                      fontFamily: Theme.of(
-                        context,
-                      ).textTheme.bodyLarge?.fontFamily,
+                      fontFamily: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.fontFamily,
                       fontWeight: FontWeight.w600,
                       color: cs.primary,
                       fontSize: 13,
@@ -628,9 +614,10 @@ class SettingsPageState extends State<SettingsPage> {
                         child: Text(
                           title,
                           style: TextStyle(
-                            fontFamily: Theme.of(
-                              context,
-                            ).textTheme.bodyLarge?.fontFamily,
+                            fontFamily: Theme.of(context)
+                                .textTheme
+                                .bodyLarge
+                                ?.fontFamily,
                             fontWeight: selected
                                 ? FontWeight.w600
                                 : FontWeight.w500,
@@ -1431,7 +1418,9 @@ class _RunBgUpdateCheckNowButtonState
               ? const SizedBox(
                   width: 20,
                   height: 20,
-                  child: ExpressiveLoadingIndicator(),
+                  child: LegacyMaterialBridge(
+                    child: ExpressiveLoadingIndicator(),
+                  ),
                 )
               : Text(tr('runBgCheckNow')),
         ),
@@ -2304,9 +2293,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                 children: [
                   Text(
                     tr('personalAccessTokenPAT'),
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context).textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   HelpHintIcon(
                     message: tr('patExplanationTooltip'),
@@ -2402,14 +2390,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                     '',
                                                   );
                                                   GitHub.clearPATValidation(sp);
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    buildAppSnackBar(
-                                                      context,
-                                                      tr('dismiss'),
-                                                    ),
-                                                  );
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                        buildAppSnackBar(
+                                                          context,
+                                                          tr('dismiss'),
+                                                        ),
+                                                      );
                                                   setState(() {});
                                                   return;
                                                 }
@@ -2443,15 +2430,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                     ),
                                                   );
                                                 } else {
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    buildAppSnackBar(
-                                                      context,
-                                                      error,
-                                                      type: ToastType.error,
-                                                    ),
-                                                  );
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                        buildAppSnackBar(
+                                                          context,
+                                                          error,
+                                                          type: ToastType.error,
+                                                        ),
+                                                      );
                                                 }
                                               }
                                             : null,
@@ -2592,14 +2578,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                 '',
                                               );
                                               GitLab.clearPATValidation(sp);
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  tr('dismiss'),
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('dismiss'),
+                                                    ),
+                                                  );
                                               setState(() {});
                                               return;
                                             }
@@ -2623,25 +2608,23 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                 enteredText,
                                                 sp,
                                               );
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  tr('gitlabPATValidated'),
-                                                  type: ToastType.success,
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('gitlabPATValidated'),
+                                                      type: ToastType.success,
+                                                    ),
+                                                  );
                                             } else {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  error,
-                                                  type: ToastType.error,
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
+                                                    ),
+                                                  );
                                             }
                                           }
                                         : null,
@@ -2741,14 +2724,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                 '',
                                               );
                                               Codeberg.clearTokenValidation(sp);
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  tr('dismiss'),
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('dismiss'),
+                                                    ),
+                                                  );
                                               setState(() {});
                                               return;
                                             }
@@ -2784,15 +2766,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                 ),
                                               );
                                             } else {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  error,
-                                                  type: ToastType.error,
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
+                                                    ),
+                                                  );
                                             }
                                           }
                                         : null,
@@ -3917,15 +3898,14 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                                               setState(() {});
                                             } else {
                                               clearApiKeyValidation(sp);
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  error,
-                                                  type: ToastType.error,
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
+                                                    ),
+                                                  );
                                             }
                                           }
                                         : null,
@@ -4013,9 +3993,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   } else if (mode == 'root') {
                     // Switches only once su grants it; a denial keeps the
                     // current installer (upstream #3277 fell back to stock).
-                    final bool granted = await RootInstaller(
-                      sp,
-                    ).checkPermission();
+                    final bool granted = await RootInstaller(sp)
+                        .checkPermission();
                     if (!context.mounted) return;
                     if (granted) {
                       sp.installerMode = mode;
@@ -4770,9 +4749,8 @@ class _LogsSheetState extends State<LogsSheet> {
           Expanded(
             child: Text(
               tr('appLogs'),
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
           HelpHintIcon(
@@ -4836,7 +4814,9 @@ class _LogsSheetState extends State<LogsSheet> {
         if (isLoading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
-            child: Center(child: ExpressiveLoadingIndicator()),
+            child: Center(
+              child: LegacyMaterialBridge(child: ExpressiveLoadingIndicator()),
+            ),
           )
         else
           SelectableText(logString ?? ''),
@@ -4857,9 +4837,9 @@ class _LogsSheetState extends State<LogsSheet> {
                         items: const [],
                         initValid: true,
                         message: tr('clearLogsWarning'),
-                        primaryActionColour: Theme.of(
-                          modalContext,
-                        ).colorScheme.error,
+                        primaryActionColour: Theme.of(modalContext)
+                            .colorScheme
+                            .error,
                       );
                     },
                   )) !=
@@ -5201,9 +5181,8 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                             onTap: () {
                               final entry = entries[index];
                               if (entry.value.length == 1) {
-                                Navigator.of(
-                                  sheetContext,
-                                ).pop(entry.value.first);
+                                Navigator.of(sheetContext)
+                                    .pop(entry.value.first);
                               } else {
                                 setSheetState(() {
                                   expandedIndex = expandedIndex == index
@@ -5218,15 +5197,15 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                             ),
                             title: Text(
                               entries[index].value.first.label,
-                              style: Theme.of(
-                                builderContext,
-                              ).textTheme.titleSmall,
+                              style: Theme.of(builderContext)
+                                  .textTheme
+                                  .titleSmall,
                             ),
                             subtitle: Text(
                               entries[index].key,
-                              style: Theme.of(
-                                builderContext,
-                              ).textTheme.bodySmall,
+                              style: Theme.of(builderContext)
+                                  .textTheme
+                                  .bodySmall,
                             ),
                             trailing: entries[index].value.length > 1
                                 ? AnimatedRotation(
@@ -5250,9 +5229,9 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                                                 context: builderContext,
                                                 target: target,
                                                 siblings: entries[index].value,
-                                                onTap: () => Navigator.of(
-                                                  sheetContext,
-                                                ).pop(target),
+                                                onTap: () =>
+                                                    Navigator.of(sheetContext)
+                                                        .pop(target),
                                               ),
                                         )
                                         .toList(),
@@ -5366,7 +5345,9 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                 contentPadding: EdgeInsets.symmetric(horizontal: 8),
                 leading: SizedBox.square(
                   dimension: 24,
-                  child: ExpressiveLoadingIndicator(),
+                  child: LegacyMaterialBridge(
+                    child: ExpressiveLoadingIndicator(),
+                  ),
                 ),
               );
             }

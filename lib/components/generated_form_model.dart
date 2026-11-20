@@ -1,6 +1,6 @@
 import 'dart:math';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 enum GeneratedFormItemType { textField, dropdown, switch_, subForm }
 
@@ -193,12 +193,11 @@ abstract class GeneratedFormItem {
 /// Given the current form values, it may push text patches back into the form.
 typedef FormValuesTextPatch = void Function(Map<String, String> patches);
 
-typedef GeneratedFormTextFieldAssist =
-    Future<void> Function(
-      BuildContext context,
-      FormValuesTextPatch patch,
-      Map<String, dynamic> values,
-    );
+typedef GeneratedFormTextFieldAssist = Future<void> Function(
+  BuildContext context,
+  FormValuesTextPatch patch,
+  Map<String, dynamic> values,
+);
 
 class GeneratedFormTextField extends GeneratedFormItem {
   late bool required;

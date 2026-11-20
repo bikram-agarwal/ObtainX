@@ -16,37 +16,34 @@ import 'package:obtainium/services/store_lookup_queue.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test(
-    'parallel repository checks share a request and refresh on the next operation',
-    () async {
-      int requests = 0;
-      final gate = Completer<Response>();
-      Future<Response> load() {
-        requests++;
-        return gate.future;
-      }
+  test('parallel repository checks share a request and refresh on the next operation', () async {
+    int requests = 0;
+    final gate = Completer<Response>();
+    Future<Response> load() {
+      requests++;
+      return gate.future;
+    }
 
-      await SourceRequestSession.run(() async {
-        final session = SourceRequestSession.current!;
-        final first = session.repositoryResponse('repo', load);
-        final second = session.repositoryResponse('repo', load);
-        expect(requests, 1);
-        gate.complete(Response('index', 200));
-        expect(identical(await first, await second), isTrue);
-        await SourceRequestSession.run(() async {
-          await SourceRequestSession.current!.repositoryResponse('repo', load);
-        });
-        expect(requests, 1);
-        await session.repositoryResponse('other-repo', load);
-        expect(requests, 2);
-      });
-      expect(SourceRequestSession.current, isNull);
+    await SourceRequestSession.run(() async {
+      final session = SourceRequestSession.current!;
+      final first = session.repositoryResponse('repo', load);
+      final second = session.repositoryResponse('repo', load);
+      expect(requests, 1);
+      gate.complete(Response('index', 200));
+      expect(identical(await first, await second), isTrue);
       await SourceRequestSession.run(() async {
         await SourceRequestSession.current!.repositoryResponse('repo', load);
       });
-      expect(requests, 3);
-    },
-  );
+      expect(requests, 1);
+      await session.repositoryResponse('other-repo', load);
+      expect(requests, 2);
+    });
+    expect(SourceRequestSession.current, isNull);
+    await SourceRequestSession.run(() async {
+      await SourceRequestSession.current!.repositoryResponse('repo', load);
+    });
+    expect(requests, 3);
+  });
 
   test(
     'failed repository responses can be retried within the operation',

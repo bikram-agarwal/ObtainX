@@ -194,56 +194,53 @@ void main() {
     );
   });
 
-  test(
-    'direct APK sources preserve the migration baseline through their HTML delegate',
-    () async {
-      // The hash probe reads the certificate-pinning setting (D9).
-      SharedPreferences.setMockInitialValues({});
-      await HttpOverrides.runWithHttpOverrides(() async {
-        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-        addTearDown(() => server.close(force: true));
-        int contentByte = 1;
-        server.listen((request) async {
-          request.response.add(List.filled(3000, contentByte));
-          await request.response.close();
-        });
-        final url = 'http://127.0.0.1:${server.port}/app.apk';
-        final settings = <String, dynamic>{
-          'defaultPseudoVersioningMethod': 'partialAPKHash',
-        };
-        final source = DirectAPKLink()
-          ..previouslyCheckedApp = _app().copyWith(
-            url: url,
-            latestVersion: 'abc12345',
-            installedVersion: 'abc12345',
-            apkUrls: [MapEntry('app.apk', url)],
-            additionalSettings: settings,
-          );
-        final first = await source.getLatestAPKDetails(url, settings);
-        expect(first.version, 'abc12345');
-        expect(settings[partialDownloadFingerprintKey], isA<Map>());
-        final second = await source.getLatestAPKDetails(url, settings);
-        expect(second.version, first.version);
-        contentByte = 2;
-        final changed = await source.getLatestAPKDetails(url, settings);
-        expect(changed.version, isNot(first.version));
-        final live = source.previouslyCheckedApp!;
-        final merged = mergeFetchedUpdateWithLiveState(
-          requestedApp: live,
-          liveApp: live,
-          fetchedApp: live.copyWith(
-            latestVersion: changed.version,
-            additionalSettings: settings,
-          ),
-        )!;
-        expect(
-          merged.additionalSettings[partialDownloadFingerprintKey],
-          settings[partialDownloadFingerprintKey],
+  test('direct APK sources preserve the migration baseline through their HTML delegate', () async {
+    // The hash probe reads the certificate-pinning setting (D9).
+    SharedPreferences.setMockInitialValues({});
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      int contentByte = 1;
+      server.listen((request) async {
+        request.response.add(List.filled(3000, contentByte));
+        await request.response.close();
+      });
+      final url = 'http://127.0.0.1:${server.port}/app.apk';
+      final settings = <String, dynamic>{
+        'defaultPseudoVersioningMethod': 'partialAPKHash',
+      };
+      final source = DirectAPKLink()
+        ..previouslyCheckedApp = _app().copyWith(
+          url: url,
+          latestVersion: 'abc12345',
+          installedVersion: 'abc12345',
+          apkUrls: [MapEntry('app.apk', url)],
+          additionalSettings: settings,
         );
-        expect(merged.installedVersion, 'abc12345');
-      }, _RealHttpOverrides());
-    },
-  );
+      final first = await source.getLatestAPKDetails(url, settings);
+      expect(first.version, 'abc12345');
+      expect(settings[partialDownloadFingerprintKey], isA<Map>());
+      final second = await source.getLatestAPKDetails(url, settings);
+      expect(second.version, first.version);
+      contentByte = 2;
+      final changed = await source.getLatestAPKDetails(url, settings);
+      expect(changed.version, isNot(first.version));
+      final live = source.previouslyCheckedApp!;
+      final merged = mergeFetchedUpdateWithLiveState(
+        requestedApp: live,
+        liveApp: live,
+        fetchedApp: live.copyWith(
+          latestVersion: changed.version,
+          additionalSettings: settings,
+        ),
+      )!;
+      expect(
+        merged.additionalSettings[partialDownloadFingerprintKey],
+        settings[partialDownloadFingerprintKey],
+      );
+      expect(merged.installedVersion, 'abc12345');
+    }, _RealHttpOverrides());
+  });
 
   test('optimized version-list policy matches all-pairs compatibility', () {
     final labels = [
@@ -414,9 +411,8 @@ void main() {
     'cancel releases a download waiting on an existing partial file',
     () async {
       final directory = await _tempDirectory();
-      final partial = await File(
-        '${directory.path}/app.apk.part',
-      ).writeAsBytes([1, 2]);
+      final partial = await File('${directory.path}/app.apk.part')
+          .writeAsBytes([1, 2]);
       await HttpOverrides.runWithHttpOverrides(() async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));
@@ -580,74 +576,71 @@ void main() {
     },
   );
 
-  test(
-    'saving a check keeps JSON untouched and targeted reload sees the timestamp',
-    () async {
-      SharedPreferences.setMockInitialValues({
-        'folderCriteriaMigrationVersion': 1000,
-      });
-      final directory = await _tempDirectory();
-      final provider = _StorageProvider()
-        ..cachedAppsDir = directory
-        ..appCheckStore = AppCheckStore('${directory.path}/checks.db');
-      provider.settingsProvider.prefs = await SharedPreferences.getInstance();
-      addTearDown(() async {
-        await provider.appCheckStore?.close();
-      });
-      final calls = <MethodCall>[];
-      const channel = MethodChannel('dev.imranr.obtainium/device_apps');
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        calls.add(call);
-        if (call.method == 'getInstalledPackageInfo') return null;
-        throw StateError('A targeted load must not enumerate installed apps');
-      });
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      await provider.saveApps(
-        [_app()],
-        onlyIfExists: false,
-        attemptToCorrectInstallStatus: false,
-        updateInstalledInfo: false,
-        autoExportAfterSave: false,
-      );
-      final file = File('${directory.path}/${_app().id}.json');
-      final originalJson = await file.readAsString();
-      final originalStat = await file.stat();
-      final timestamp = DateTime.utc(2026, 3, 1);
-      final checked = provider.apps[_app().id]!.app.copyWith(
-        lastUpdateCheck: timestamp,
-      );
-      await provider.saveApps(
-        [checked],
-        attemptToCorrectInstallStatus: false,
-        updateInstalledInfo: false,
-        autoExportAfterSave: false,
-      );
-      expect(await file.readAsString(), originalJson);
-      expect((await file.stat()).modified, originalStat.modified);
-      provider.apps.clear();
-      await provider.loadApps(singleId: _app().id, silent: true);
-      expect(provider.apps[_app().id]!.app.lastUpdateCheck?.toUtc(), timestamp);
-      expect(calls.map((call) => call.method), ['getInstalledPackageInfo']);
-      // Restoring an older record must also restore its own timestamp.
-      final restored = jsonDecode(originalJson) as Map<String, dynamic>;
-      restored[appRecordRevisionKey] = 'restored-record';
-      await file.writeAsString(jsonEncode(restored));
-      await provider.loadApps(singleId: _app().id, silent: true);
-      expect(
-        provider.apps[_app().id]!.app.lastUpdateCheck?.toUtc(),
-        _app().lastUpdateCheck,
-      );
-      final beforeFailure = provider.apps[_app().id];
-      messenger.setMockMethodCallHandler(channel, (_) async {
-        throw PlatformException(code: 'PACKAGE_QUERY_FAILED');
-      });
-      await expectLater(
-        provider.loadApps(singleId: _app().id, silent: true),
-        throwsA(isA<PlatformException>()),
-      );
-      expect(identical(provider.apps[_app().id], beforeFailure), isTrue);
-    },
-  );
+  test('saving a check keeps JSON untouched and targeted reload sees the timestamp', () async {
+    SharedPreferences.setMockInitialValues({
+      'folderCriteriaMigrationVersion': 1000,
+    });
+    final directory = await _tempDirectory();
+    final provider = _StorageProvider()
+      ..cachedAppsDir = directory
+      ..appCheckStore = AppCheckStore('${directory.path}/checks.db');
+    provider.settingsProvider.prefs = await SharedPreferences.getInstance();
+    addTearDown(() async {
+      await provider.appCheckStore?.close();
+    });
+    final calls = <MethodCall>[];
+    const channel = MethodChannel('dev.imranr.obtainium/device_apps');
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'getInstalledPackageInfo') return null;
+      throw StateError('A targeted load must not enumerate installed apps');
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await provider.saveApps(
+      [_app()],
+      onlyIfExists: false,
+      attemptToCorrectInstallStatus: false,
+      updateInstalledInfo: false,
+      autoExportAfterSave: false,
+    );
+    final file = File('${directory.path}/${_app().id}.json');
+    final originalJson = await file.readAsString();
+    final originalStat = await file.stat();
+    final timestamp = DateTime.utc(2026, 3, 1);
+    final checked = provider.apps[_app().id]!.app.copyWith(
+      lastUpdateCheck: timestamp,
+    );
+    await provider.saveApps(
+      [checked],
+      attemptToCorrectInstallStatus: false,
+      updateInstalledInfo: false,
+      autoExportAfterSave: false,
+    );
+    expect(await file.readAsString(), originalJson);
+    expect((await file.stat()).modified, originalStat.modified);
+    provider.apps.clear();
+    await provider.loadApps(singleId: _app().id, silent: true);
+    expect(provider.apps[_app().id]!.app.lastUpdateCheck?.toUtc(), timestamp);
+    expect(calls.map((call) => call.method), ['getInstalledPackageInfo']);
+    // Restoring an older record must also restore its own timestamp.
+    final restored = jsonDecode(originalJson) as Map<String, dynamic>;
+    restored[appRecordRevisionKey] = 'restored-record';
+    await file.writeAsString(jsonEncode(restored));
+    await provider.loadApps(singleId: _app().id, silent: true);
+    expect(
+      provider.apps[_app().id]!.app.lastUpdateCheck?.toUtc(),
+      _app().lastUpdateCheck,
+    );
+    final beforeFailure = provider.apps[_app().id];
+    messenger.setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(code: 'PACKAGE_QUERY_FAILED');
+    });
+    await expectLater(
+      provider.loadApps(singleId: _app().id, silent: true),
+      throwsA(isA<PlatformException>()),
+    );
+    expect(identical(provider.apps[_app().id], beforeFailure), isTrue);
+  });
 
   test(
     'resume reloads only changed tracked packages with a full-scan fallback',
@@ -689,9 +682,8 @@ void main() {
       () async {
         final directory = await _tempDirectory();
         final content = List.generate(200, (index) => index);
-        final partial = await File(
-          '${directory.path}/app.apk.part',
-        ).writeAsBytes(content.take(40).toList());
+        final partial = await File('${directory.path}/app.apk.part')
+            .writeAsBytes(content.take(40).toList());
         await HttpOverrides.runWithHttpOverrides(() async {
           final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
           addTearDown(() => server.close(force: true));
@@ -842,9 +834,8 @@ void main() {
 
   test('favicon disk cache stays bounded and evicts expired files', () async {
     final directory = await _tempDirectory();
-    final expired = await File(
-      '${directory.path}/expired.ico',
-    ).writeAsString('old');
+    final expired = await File('${directory.path}/expired.ico')
+        .writeAsString('old');
     await expired.setLastModified(
       DateTime.now().subtract(const Duration(days: 8)),
     );

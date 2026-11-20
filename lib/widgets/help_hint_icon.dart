@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Inline tappable help-icon that pops a tooltip with [message] or
 /// [richMessage].

@@ -1,6 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
@@ -203,9 +203,8 @@ class _CustomAppBarState extends State<CustomAppBar> {
                 titlePadding: expandingTitlePadding,
                 title: Text(
                   widget.title,
-                  style: Theme.of(context).textTheme.titleLarge!.copyWith(
-                    color: colorScheme.onSurface,
-                  ),
+                  style: Theme.of(context).textTheme.titleLarge!
+                      .copyWith(color: colorScheme.onSurface),
                 ),
               ),
             ],

@@ -794,9 +794,8 @@ String reproducibleBuildStatusForEnforcement(App app) {
 /// rather than a human-readable app name. Used to decide when a source's
 /// readable name should replace a stale package-id-looking stored name.
 bool looksLikeAndroidPackageId(String value) {
-  return RegExp(
-    r'^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$',
-  ).hasMatch(value.trim());
+  return RegExp(r'^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$')
+      .hasMatch(value.trim());
 }
 
 /// Tolerant parser for stored date fields (lastUpdateCheck / releaseDate).

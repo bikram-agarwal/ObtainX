@@ -22,12 +22,12 @@ void main() {
       overrideSource: 'Forgejo',
     );
 
-    final Map<String, dynamic> shared =
-        jsonDecode(linkJson(Uri.parse(appConfigLink(app))))
-            as Map<String, dynamic>;
-    final Map<String, dynamic> settings =
-        jsonDecode(shared['additionalSettings'] as String)
-            as Map<String, dynamic>;
+    final Map<String, dynamic> shared = jsonDecode(
+      linkJson(Uri.parse(appConfigLink(app))),
+    ) as Map<String, dynamic>;
+    final Map<String, dynamic> settings = jsonDecode(
+      shared['additionalSettings'] as String,
+    ) as Map<String, dynamic>;
 
     expect(settings.keys, isNot(contains('github-creds')));
     expect(settings.keys, isNot(contains('forgejo-creds')));

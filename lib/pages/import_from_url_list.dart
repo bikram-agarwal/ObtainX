@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/backup_import_sheet.dart';
 import 'package:obtainium/components/ui_widgets.dart' show ExplainedWhenOff;
 import 'package:obtainium/custom_errors.dart';
@@ -15,6 +15,7 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/pick_file.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 
 /// The apps an `obtainium://app/` or `apps/` [link] carries, as entries that
 /// keep what it says about them ([UrlImportEntry.seed]), except how each is
@@ -433,12 +434,14 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
                                         mainAxisSize: MainAxisSize.min,
                                         spacing: 8,
                                         children: [
-                                          const ExpressiveLoadingIndicator(
-                                            constraints:
-                                                BoxConstraints.tightFor(
-                                                  width: 24,
-                                                  height: 24,
-                                                ),
+                                          const LegacyMaterialBridge(
+                                            child: ExpressiveLoadingIndicator(
+                                              constraints:
+                                                  BoxConstraints.tightFor(
+                                                    width: 24,
+                                                    height: 24,
+                                                  ),
+                                            ),
                                           ),
                                           Text(tr('import')),
                                         ],
@@ -480,9 +483,8 @@ class _ImportFromUrlListHelp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final TextStyle? style = Theme.of(context).textTheme.bodyMedium?.copyWith(
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-    );
+    final TextStyle? style = Theme.of(context).textTheme.bodyMedium
+        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
     return Card.filled(
       margin: EdgeInsets.zero,
       child: Padding(

@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:html/dom.dart';
 import 'package:obtainium/custom_errors.dart';

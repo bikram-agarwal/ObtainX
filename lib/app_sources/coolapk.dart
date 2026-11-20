@@ -156,8 +156,7 @@ class CoolApk extends AppSource {
   }) async {
     final tokenPair = _getToken();
     return {
-      'User-Agent':
-          'Dalvik/2.1.0 (Linux; U; Android 9; MI 8 SE MIUI/9.5.9) (#Build; Xiaomi; MI 8 SE; PKQ1.181121.001; 9) +CoolMarket/12.4.2-2208241-universal',
+      'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 9; MI 8 SE MIUI/9.5.9) (#Build; Xiaomi; MI 8 SE; PKQ1.181121.001; 9) +CoolMarket/12.4.2-2208241-universal',
       'X-App-Id': 'com.coolapk.market',
       'X-Requested-With': 'XMLHttpRequest',
       'X-Sdk-Int': '30',

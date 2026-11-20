@@ -161,9 +161,8 @@ class VivoAppStore extends AppSource {
   }
 
   String parseVivoAppId(String url) {
-    final appId = Uri.parse(
-      url.replaceFirst('/#', ''),
-    ).queryParameters['appId'];
+    final appId = Uri.parse(url.replaceFirst('/#', ''))
+        .queryParameters['appId'];
     if (appId == null || appId.isEmpty) {
       throw InvalidURLError(name);
     }
@@ -173,9 +172,8 @@ class VivoAppStore extends AppSource {
   String? _packageName(Object? value) {
     if (value is! String) return null;
     final package = value.trim();
-    return RegExp(
-          r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$',
-        ).hasMatch(package)
+    return RegExp(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$')
+            .hasMatch(package)
         ? package
         : null;
   }

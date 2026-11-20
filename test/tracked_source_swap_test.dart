@@ -234,26 +234,23 @@ void main() {
     expect(prepared.additionalSettings['trackOnly'], true);
   });
 
-  test(
-    'prepareAppForTrackedSourceSwap clears enforced track-only when leaving APKMirror',
-    () {
-      final App app = _app(
-        id: 'com.example.app',
-        url: 'https://www.apkmirror.com/apk/example/example/',
-        additionalSettings: const {'trackOnly': true},
-      );
+  test('prepareAppForTrackedSourceSwap clears enforced track-only when leaving APKMirror', () {
+    final App app = _app(
+      id: 'com.example.app',
+      url: 'https://www.apkmirror.com/apk/example/example/',
+      additionalSettings: const {'trackOnly': true},
+    );
 
-      final App prepared = prepareAppForTrackedSourceSwap(
-        app: app,
-        previousSource: APKMirror(),
-        destinationSource: FDroid(),
-        standardizedDestinationUrl:
-            'https://f-droid.org/packages/com.example.app/',
-      );
+    final App prepared = prepareAppForTrackedSourceSwap(
+      app: app,
+      previousSource: APKMirror(),
+      destinationSource: FDroid(),
+      standardizedDestinationUrl:
+          'https://f-droid.org/packages/com.example.app/',
+    );
 
-      expect(prepared.additionalSettings.containsKey('trackOnly'), false);
-    },
-  );
+    expect(prepared.additionalSettings.containsKey('trackOnly'), false);
+  });
 
   test(
     'mergeTrackedSourceSwap commits fetched metadata after a source swap',

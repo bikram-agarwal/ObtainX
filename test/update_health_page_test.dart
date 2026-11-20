@@ -3,7 +3,7 @@ import 'package:easy_localization/src/localization.dart';
 // ignore: implementation_imports
 import 'package:easy_localization/src/translations.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/pages/additional_options_page.dart';
@@ -66,9 +66,8 @@ void main() {
       const Locale('en'),
       translations: Translations(translations),
     );
-    icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    icon = (await rootBundle.load('assets/graphics/logo_remember.png')).buffer
+        .asUint8List();
   });
 
   setUp(() async {
@@ -144,9 +143,8 @@ void main() {
   test('the actions change only update health, from the live listing', () {
     // A check finished after the page was built: the live listing has a new
     // release and a new installed version.
-    final App live = _app(
-      'Flagged',
-    ).copyWith(latestVersion: '2.0', installedVersion: '1.5');
+    final App live = _app('Flagged')
+        .copyWith(latestVersion: '2.0', installedVersion: '1.5');
 
     final App forVersion = ignoreUpdateHealthForCurrentVersion(live);
     expect(forVersion.updateHealthDismissedVersion, '2.0');

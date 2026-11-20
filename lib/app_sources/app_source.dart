@@ -813,9 +813,9 @@ abstract class AppSource {
     String standardUrl, {
     Map<String, dynamic> additionalSettings = const {},
   }) async {
-    return Uri.parse(
-      standardUrl,
-    ).pathSegments.where((s) => s.isNotEmpty).lastOrNull;
+    return Uri.parse(standardUrl).pathSegments
+        .where((s) => s.isNotEmpty)
+        .lastOrNull;
   }
 
   Future<String?> tryInferringAppId(

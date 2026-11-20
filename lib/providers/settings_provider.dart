@@ -6,7 +6,7 @@ import 'dart:math' show log;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -175,6 +175,12 @@ int snapToOption(int value, List<int> options) {
   return nearest;
 }
 
+/// Prefix of the per-section expanded flags the Settings page persisted until
+/// 2026-11-20. No longer written; purged on start, and still classed as
+/// ObtainX-only in backups so an older backup's keys stay out of the
+/// Obtainium-compatible settings.
+const String obtainXSettingsSectionPrefix = 'settingsSection_';
+
 /// Upstream Obtainium settings ObtainX doesn't adopt. They're purged from
 /// prefs on start and skipped on import, so they can't ride along in a backup
 /// either way.
@@ -253,6 +259,7 @@ class SettingsProvider with ChangeNotifier {
     _appFoldersMemory = null;
     _folderViewCache.clear();
     _removeUnusedUpstreamSettings();
+    _removeLegacySettingsSectionState();
     _migrateProgressiveBlurDefaultForExistingUsers();
     defaultAppDir = (await getAppStorageDir()).path;
     _migrateInstallMethodSetting();
@@ -285,6 +292,22 @@ class SettingsProvider with ChangeNotifier {
     await prefs?.clear();
     _settingsInitialized = false;
     await initializeSettings();
+  }
+
+  /// Settings used to persist each section's expanded flag
+  /// (`settingsSection_<key>`). That state is in-memory only now (see
+  /// `SettingsPageState`), so leftover keys are removed and can't ride along
+  /// in later backups. The scan reads the prefs' in-memory key set; a remove
+  /// (a platform write) happens only when a key is found.
+  void _removeLegacySettingsSectionState() {
+    if (prefs == null) return;
+    final List<String> stale = prefs!
+        .getKeys()
+        .where((String key) => key.startsWith(obtainXSettingsSectionPrefix))
+        .toList();
+    for (final String key in stale) {
+      prefs!.remove(key);
+    }
   }
 
   void _removeUnusedUpstreamSettings() {

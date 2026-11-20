@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,9 +56,8 @@ void main() {
       'assets/translations',
       const Locale('en'),
     ))!;
-    icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    icon = (await rootBundle.load('assets/graphics/logo_remember.png')).buffer
+        .asUint8List();
   });
 
   testWidgets('static details are not rebuilt for every card morph frame', (
@@ -263,9 +262,8 @@ void main() {
             final image = await boundary.toImage();
             final png = await image.toByteData(format: ui.ImageByteFormat.png);
             await Directory(directory).create(recursive: true);
-            await File(
-              '$directory/details-$mode-$reducedEffects-$label.png',
-            ).writeAsBytes(png!.buffer.asUint8List());
+            await File('$directory/details-$mode-$reducedEffects-$label.png')
+                .writeAsBytes(png!.buffer.asUint8List());
             image.dispose();
           });
         }
@@ -338,8 +336,7 @@ void main() {
         expect(
           painters.map((painter) => painter.paints).toList(),
           initialPaints,
-          reason:
-              'Scrolling must move retained cards, not repaint their shadows, clips and text.',
+          reason: 'Scrolling must move retained cards, not repaint their shadows, clips and text.',
         );
         expectEffects(reducedEffects);
         // A mounted details page must update even when blur and gradients were

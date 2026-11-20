@@ -3,7 +3,7 @@ import 'dart:io' show HandshakeException, HttpException, SocketException;
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:android_package_installer/android_package_installer.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' show ClientException;
 import 'package:obtainium/main.dart';
@@ -207,9 +207,8 @@ class InstallError extends ObtainiumError {
           'errorCode': code,
           // Strip the enum's 'STATUS_' prefix so messages read
           // 'FAILURE_ABORTED', not 'STATUS_FAILURE_ABORTED' (parity with main).
-          'message': PackageInstallerStatus.byCode(
-            code,
-          ).name.replaceFirst('STATUS_', ''),
+          'message': PackageInstallerStatus.byCode(code).name
+              .replaceFirst('STATUS_', ''),
         },
       );
 }

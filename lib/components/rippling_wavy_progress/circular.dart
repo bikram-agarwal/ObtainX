@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 

@@ -838,9 +838,8 @@ class APKMirror extends AppSource {
       releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
       iconUrl = apkMirrorIconUrlFromFeedXml(chosenBlock);
     } else {
-      final parsedItems = (await parseHtmlOffIsolate(
-        res.body,
-      )).querySelectorAll('item');
+      final parsedItems = (await parseHtmlOffIsolate(res.body))
+          .querySelectorAll('item');
       for (int scanIndex = 0; scanIndex < parsedItems.length; scanIndex++) {
         collectReleaseTitleCandidate(
           parsedItems[scanIndex].querySelector('title')?.innerHtml,

@@ -204,43 +204,40 @@ void main() {
   );
 
   group('a stalled plugin call (D15, #3369)', () {
-    test(
-      'is released after the grace with one sacrificial call, freeing the queue',
-      () async {
-        final Duration defaultGrace = shizukuStalledCallGrace;
-        shizukuStalledCallGrace = const Duration(milliseconds: 200);
-        addTearDown(() => shizukuStalledCallGrace = defaultGrace);
-        fake.stalledInstall = Completer<int?>();
-        final installer = ShizukuInstaller(settings);
-        final Future<Object?> stalled = installer
-            .installApk(['/tmp/base.apk'], appId: 'com.example.app')
-            .then<Object?>((r) => r, onError: (Object e) => e);
-        await pumpEventQueue();
-        expect(fake.installs, hasLength(1));
+    test('is released after the grace with one sacrificial call, freeing the queue', () async {
+      final Duration defaultGrace = shizukuStalledCallGrace;
+      shizukuStalledCallGrace = const Duration(milliseconds: 200);
+      addTearDown(() => shizukuStalledCallGrace = defaultGrace);
+      fake.stalledInstall = Completer<int?>();
+      final installer = ShizukuInstaller(settings);
+      final Future<Object?> stalled = installer
+          .installApk(['/tmp/base.apk'], appId: 'com.example.app')
+          .then<Object?>((r) => r, onError: (Object e) => e);
+      await pumpEventQueue();
+      expect(fake.installs, hasLength(1));
 
-        // Queued behind the stalled install: can't reach the plugin yet.
-        final Future<String?> next = runExclusiveShizukuPluginCall(
-          () => fake.checkPermission(),
-        );
-        await pumpEventQueue();
-        expect(fake.checkCalls, 0);
+      // Queued behind the stalled install: can't reach the plugin yet.
+      final Future<String?> next = runExclusiveShizukuPluginCall(
+        () => fake.checkPermission(),
+      );
+      await pumpEventQueue();
+      expect(fake.checkCalls, 0);
 
-        var released = false;
-        final Future<void> release = installer.releaseStalledInstall().then(
-          (_) => released = true,
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        expect(released, isFalse, reason: 'still within the grace');
-        expect(fake.platformVersionCalls, 0);
+      var released = false;
+      final Future<void> release = installer.releaseStalledInstall().then(
+        (_) => released = true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(released, isFalse, reason: 'still within the grace');
+      expect(fake.platformVersionCalls, 0);
 
-        await release;
-        expect(fake.platformVersionCalls, 1);
-        expect(await next, 'granted_adb');
-        final Object? stalledOutcome = await stalled;
-        expect(stalledOutcome, isA<PlatformException>());
-        expect((stalledOutcome! as PlatformException).code, 'cancelled');
-      },
-    );
+      await release;
+      expect(fake.platformVersionCalls, 1);
+      expect(await next, 'granted_adb');
+      final Object? stalledOutcome = await stalled;
+      expect(stalledOutcome, isA<PlatformException>());
+      expect((stalledOutcome! as PlatformException).code, 'cancelled');
+    });
 
     test('waits out the grace and leaves a call that returns alone', () async {
       final Completer<int?> slow = Completer<int?>();

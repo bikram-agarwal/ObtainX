@@ -2,10 +2,11 @@ import 'dart:async' show unawaited;
 import 'dart:io' show File;
 import 'dart:ui' show PlatformDispatcher, PointerDeviceKind;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/app_ui_scaling.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/custom_errors.dart' show setAppLocale;
 import 'package:obtainium/theme/app_dialog_theme.dart';
@@ -60,10 +61,7 @@ List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('tr'), 'Türkçe'),
   MapEntry(Locale('uk'), 'Українська'),
   MapEntry(Locale('da'), 'Dansk'),
-  MapEntry(
-    Locale('en', 'EO'),
-    'Esperanto',
-  ), // https://github.com/aissat/easy_localization/issues/220#issuecomment-846035493
+  MapEntry(Locale('en', 'EO'), 'Esperanto'), // https://github.com/aissat/easy_localization/issues/220#issuecomment-846035493
   MapEntry(Locale('in'), 'Bahasa Indonesia'),
   MapEntry(Locale('ko'), '한국어'),
   MapEntry(Locale('ca'), 'Català'),
@@ -957,7 +955,13 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
           return MaterialApp(
             title: 'ObtainX',
             scrollBehavior: const AppScrollBehavior(),
-            localizationsDelegates: context.localizationDelegates,
+            // easy_localization's delegates carry the framework Material
+            // localizations (for the packages still on flutter/material);
+            // material_ui's widgets read material_ui's own (upstream #3258).
+            localizationsDelegates: [
+              ...context.localizationDelegates,
+              ...GlobalMaterialLocalizations.delegates,
+            ],
             supportedLocales: context.supportedLocales,
             locale: renderableLocale,
             navigatorKey: globalNavigatorKey,
@@ -968,7 +972,7 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // system text scaler. This keeps text, controls, icons, spacing,
             // overlays, and touch targets at the same user-selected scale.
             //
-            // Nothing else belongs in this builder. It used to also install
+            // No Overlay belongs in this builder. It used to also install
             // FToastBuilder's app-wide Overlay around this MediaQuery, and an
             // Overlay consumes [Overlay.initialEntries] exactly once in
             // initState — so the entry kept serving the child instance it was
@@ -976,10 +980,16 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // That froze MediaQuery at the launch size and pinned the
             // phone/tablet layout to whichever one the app started in. The
             // toast host now lives under [home] instead; see [AppToastHost].
+            //
+            // The one other wrapper, [LegacyMaterialBridge], is a plain Theme
+            // (no Overlay, no Localizations): the app-wide fallback that gives
+            // any package still on flutter/material the app theme.
             builder: (BuildContext context, Widget? child) {
-              return AppUiScaler(
-                scale: settingsProvider.appUiScale,
-                child: child ?? const SizedBox.shrink(),
+              return LegacyMaterialBridge(
+                child: AppUiScaler(
+                  scale: settingsProvider.appUiScale,
+                  child: child ?? const SizedBox.shrink(),
+                ),
               );
             },
             // Best-of-both M3E theme, built and memoized by

@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -13,6 +13,7 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:provider/provider.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 
 class BackupImportSelection {
   const BackupImportSelection({
@@ -445,8 +446,10 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                 style: TextStyle(color: colorScheme.error),
               ),
         trailing: error == null
-            ? const ExpressiveLoadingIndicator(
-                constraints: BoxConstraints.tightFor(width: 24, height: 24),
+            ? const LegacyMaterialBridge(
+                child: ExpressiveLoadingIndicator(
+                  constraints: BoxConstraints.tightFor(width: 24, height: 24),
+                ),
               )
             : Icon(Icons.error_outline_rounded, color: colorScheme.error),
       ),
@@ -1036,9 +1039,9 @@ class _BackupImportSheetState extends State<BackupImportSheet> {
                                     items: const [],
                                     initValid: true,
                                     message: tr('restoreBackupConfirmBody'),
-                                    primaryActionColour: Theme.of(
-                                      dialogContext,
-                                    ).colorScheme.error,
+                                    primaryActionColour: Theme.of(dialogContext)
+                                        .colorScheme
+                                        .error,
                                   );
                                 },
                               )) !=

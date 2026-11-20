@@ -94,9 +94,9 @@ final RegExp _certHashHex = RegExp(r'^[0-9a-fA-F]{64}$');
 String normalizeCertHash(String raw) {
   final hex = raw.replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
   if (!_certHashHex.hasMatch(hex)) return raw.trim().toUpperCase();
-  return [
-    for (var i = 0; i < hex.length; i += 2) hex.substring(i, i + 2),
-  ].join(':').toUpperCase();
+  return [for (var i = 0; i < hex.length; i += 2) hex.substring(i, i + 2)]
+      .join(':')
+      .toUpperCase();
 }
 
 /// Parses the `allowedSigningCertHashes` setting (hashes separated by newlines,

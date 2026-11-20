@@ -4,7 +4,7 @@
 // options page look the same (they had drifted: the form used Material's
 // default thumb). The shapes also paint disabled colours.
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Text style for a slider row's title and value: the list-tile title style
 /// (bodyLarge), so slider rows read at the same size as the switch and link

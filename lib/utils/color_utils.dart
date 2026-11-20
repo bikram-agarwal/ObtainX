@@ -1,6 +1,6 @@
 import 'dart:math';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:hsluv/hsluv.dart';
 
 // Generates a color in the HSLuv (Pastel) color space

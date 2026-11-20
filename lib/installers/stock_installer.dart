@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:android_package_installer/android_package_installer.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -41,9 +41,8 @@ class StockInstaller extends Installer {
     String? installerPackageName;
     try {
       installerPackageName = osInfo.version.sdkInt >= 30
-          ? (await packageManager.getInstallSourceInfo(
-              packageName: app.id,
-            ))?.installingPackageName
+          ? (await packageManager.getInstallSourceInfo(packageName: app.id))
+                ?.installingPackageName
           : (await packageManager.getInstallerPackageName(packageName: app.id));
     } catch (e) {
       AppLogger.info(

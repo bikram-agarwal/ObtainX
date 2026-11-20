@@ -3,8 +3,7 @@ import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/backup_import_sheet.dart';
@@ -916,9 +915,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                   menuWidth: appDropdownMenuWidth(
                                     context,
                                     labels,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge,
                                     horizontalPadding: 96,
                                     minWidth: 150,
                                     maxWidthInset: 120,
@@ -1760,9 +1759,8 @@ class _SelectionModalState extends State<SelectionModal> {
           children: [
             Text(
               widget.title ?? tr('pick'),
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (filterFormWidget != null) ...[
               const SizedBox(height: 12),

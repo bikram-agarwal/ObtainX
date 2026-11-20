@@ -319,17 +319,15 @@ class FDroid extends AppSource {
               bool isGitHub = false;
               bool isGitLab = false;
               try {
-                GitHub(
-                  hostChanged: true,
-                ).sourceSpecificStandardizeURL(details.changeLog!);
+                GitHub(hostChanged: true)
+                    .sourceSpecificStandardizeURL(details.changeLog!);
                 isGitHub = true;
               } on InvalidURLError {
                 // URL does not match GitHub format, silently skipped
               }
               try {
-                GitLab(
-                  hostChanged: true,
-                ).sourceSpecificStandardizeURL(details.changeLog!);
+                GitLab(hostChanged: true)
+                    .sourceSpecificStandardizeURL(details.changeLog!);
                 isGitLab = true;
               } on InvalidURLError {
                 // URL does not match GitLab format, silently skipped
@@ -668,9 +666,9 @@ class FDroid extends AppSource {
       if (rawPackageName is String && rawPackageName.trim().isNotEmpty) {
         packageLabel = rawPackageName.trim();
       } else {
-        final String? queryAppId = Uri.parse(
-          standardUrl,
-        ).queryParameters['appId']?.trim();
+        final String? queryAppId = Uri.parse(standardUrl)
+            .queryParameters['appId']
+            ?.trim();
         if (queryAppId != null && queryAppId.isNotEmpty) {
           packageLabel = queryAppId;
         } else {
@@ -815,9 +813,8 @@ class FDroid extends AppSource {
             0,
             prevApp.apkUrls.length - 1,
           );
-          final RegExpMatch? versionCodeMatch = RegExp(
-            r'_(\d+)\.apk$',
-          ).firstMatch(prevApp.apkUrls[previousIndex].key);
+          final RegExpMatch? versionCodeMatch = RegExp(r'_(\d+)\.apk$')
+              .firstMatch(prevApp.apkUrls[previousIndex].key);
           previouslySelectedVersionCode = int.tryParse(
             versionCodeMatch?.group(1) ?? '',
           );

@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:http/http.dart';
 import 'package:intl/intl.dart';
@@ -118,9 +119,8 @@ class SourceHut extends AppSource {
           DateTime? releaseDate;
           try {
             releaseDate = releaseDateString != null
-                ? DateFormat(
-                    'EEE, dd MMM yyyy HH:mm:ss Z',
-                  ).parse(releaseDateString)
+                ? DateFormat('EEE, dd MMM yyyy HH:mm:ss Z')
+                      .parse(releaseDateString)
                 : null;
           } catch (e) {
             AppLogger.warn(

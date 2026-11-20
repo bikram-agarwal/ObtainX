@@ -162,8 +162,7 @@ const _grant = {
   'versionCode': '940207000',
   'contentsSize': '106232505',
   'binaryArch': '32n64',
-  'downLoadURI':
-      'https://cdnet-dn.galaxyappstore.com/App_20260923000000.apk?token=temporary',
+  'downLoadURI': 'https://cdnet-dn.galaxyappstore.com/App_20260923000000.apk?token=temporary',
   'deltaDownloadURI': 'https://cdnet-dn.galaxyappstore.com/delta.apk',
 };
 const _china = {'deviceId': 'SM-S9480', 'csc': 'CHC'};
@@ -339,16 +338,12 @@ void main() {
     final fields = source.combinedAppSpecificSettingFormItems
         .expand((row) => row)
         .toList();
-    final googlePlay =
-        fields.singleWhere(
-              (field) => field.key == 'shizukuPretendToBeGooglePlay',
-            )
-            as GeneratedFormSwitch;
-    final galaxyStore =
-        fields.singleWhere(
-              (field) => field.key == 'shizukuPretendToBeGalaxyStore',
-            )
-            as GeneratedFormSwitch;
+    final googlePlay = fields.singleWhere(
+      (field) => field.key == 'shizukuPretendToBeGooglePlay',
+    ) as GeneratedFormSwitch;
+    final galaxyStore = fields.singleWhere(
+      (field) => field.key == 'shizukuPretendToBeGalaxyStore',
+    ) as GeneratedFormSwitch;
     expect(fields.indexOf(galaxyStore), fields.indexOf(googlePlay) + 1);
     expect(googlePlay.value, isFalse);
     expect(galaxyStore.value, isFalse);
@@ -372,9 +367,9 @@ void main() {
       otherFields.map((field) => field.key),
       isNot(contains(galaxyStore.key)),
     );
-    final otherGooglePlay =
-        otherFields.singleWhere((field) => field.key == googlePlay.key)
-            as GeneratedFormSwitch;
+    final otherGooglePlay = otherFields.singleWhere(
+      (field) => field.key == googlePlay.key,
+    ) as GeneratedFormSwitch;
     expect(otherGooglePlay.value, isFalse);
     expect(otherGooglePlay.turnsOffKeys, isEmpty);
   });
@@ -570,103 +565,93 @@ void main() {
     expect(result.changeLog, notes);
   });
 
-  test(
-    'wrong interface responses cannot supply metadata or optional release details',
-    () async {
-      final metadataSource = _OdsGalaxyStore([
-        Response('Unavailable', 503),
-        _ods(_metadata, id: '2290'),
-        _ods(_grant),
-      ]);
-      await expectLater(
-        metadataSource.getLatestAPKDetails(url, _china),
-        throwsA(isA<ObtainiumError>()),
-      );
-      expect(metadataSource.coreRequests.length, 2);
-      for (final id in [null, '2290']) {
-        final result = await _withDetails(
-          overview: _ods(_overview, id: id),
-        ).getLatestAPKDetails(url, _china);
-        expect(result.releaseDate, isNull);
-        expect(result.changeLog, isNull);
-      }
-    },
-  );
+  test('wrong interface responses cannot supply metadata or optional release details', () async {
+    final metadataSource = _OdsGalaxyStore([
+      Response('Unavailable', 503),
+      _ods(_metadata, id: '2290'),
+      _ods(_grant),
+    ]);
+    await expectLater(
+      metadataSource.getLatestAPKDetails(url, _china),
+      throwsA(isA<ObtainiumError>()),
+    );
+    expect(metadataSource.coreRequests.length, 2);
+    for (final id in [null, '2290']) {
+      final result = await _withDetails(overview: _ods(_overview, id: id))
+          .getLatestAPKDetails(url, _china);
+      expect(result.releaseDate, isNull);
+      expect(result.changeLog, isNull);
+    }
+  });
 
-  test(
-    'critical fields disguised as complex lists cannot supply release details',
-    () async {
-      for (final key in [
-        'GUID',
-        'productID',
-        'version',
-        'versionCode',
-        'realContentsSize',
-        'lastUpdateDate',
-        'updateDescription',
-      ]) {
-        final result = await _withDetails(
-          overview: _ods(
-            _overview,
-            extra:
-                '<extList name="$key"><value name="nested">shadow</value></extList>',
+  test('critical fields disguised as complex lists cannot supply release details', () async {
+    for (final key in [
+      'GUID',
+      'productID',
+      'version',
+      'versionCode',
+      'realContentsSize',
+      'lastUpdateDate',
+      'updateDescription',
+    ]) {
+      final result = await _withDetails(
+        overview: _ods(
+          _overview,
+          extra:
+              '<extList name="$key"><value name="nested">shadow</value></extList>',
+        ),
+      ).getLatestAPKDetails(url, _china);
+      expect(result.releaseDate, isNull);
+      expect(result.changeLog, isNull);
+    }
+  });
+
+  test('successful stub keeps its APK and binds optional details to the same global product', () async {
+    final source = _OdsGalaxyStore(
+      [
+        _stubResponse(),
+        _ods({
+          'countryURL': 'http://us-odc.samsungapps.com/ods.as',
+          'countryCode': 'USA',
+          'MCC': '310',
+        }),
+        _ods(_metadata),
+        _ods(_overview),
+        _ods(_metadata),
+      ],
+      explicitDiscovery: true,
+      explicitDetails: true,
+    );
+    final result = await source.getLatestAPKDetails(url, {
+      'csc': 'XAA',
+      'mcc': '310',
+      'mnc': '260',
+    });
+    expect(
+      result.apkUrls.single.value,
+      'https://apps.samsungapps.com/app_20260923000000.apk',
+    );
+    expect(result.releaseDate, DateTime(2026, 8, 25));
+    expect(result.changeLog, _overview['updateDescription']);
+    expect(source.requests.map((r) => r.uri.queryParameters['reqId']), [
+      null,
+      '2300',
+      '2290',
+      '2291',
+      '2290',
+    ]);
+    expect(
+      source.requests
+          .skip(2)
+          .every(
+            (r) =>
+                r.uri.scheme == 'https' &&
+                r.uri.host == 'us-odc.samsungapps.com',
           ),
-        ).getLatestAPKDetails(url, _china);
-        expect(result.releaseDate, isNull);
-        expect(result.changeLog, isNull);
-      }
-    },
-  );
-
-  test(
-    'successful stub keeps its APK and binds optional details to the same global product',
-    () async {
-      final source = _OdsGalaxyStore(
-        [
-          _stubResponse(),
-          _ods({
-            'countryURL': 'http://us-odc.samsungapps.com/ods.as',
-            'countryCode': 'USA',
-            'MCC': '310',
-          }),
-          _ods(_metadata),
-          _ods(_overview),
-          _ods(_metadata),
-        ],
-        explicitDiscovery: true,
-        explicitDetails: true,
-      );
-      final result = await source.getLatestAPKDetails(url, {
-        'csc': 'XAA',
-        'mcc': '310',
-        'mnc': '260',
-      });
-      expect(
-        result.apkUrls.single.value,
-        'https://apps.samsungapps.com/app_20260923000000.apk',
-      );
-      expect(result.releaseDate, DateTime(2026, 8, 25));
-      expect(result.changeLog, _overview['updateDescription']);
-      expect(source.requests.map((r) => r.uri.queryParameters['reqId']), [
-        null,
-        '2300',
-        '2290',
-        '2291',
-        '2290',
-      ]);
-      expect(
-        source.requests
-            .skip(2)
-            .every(
-              (r) =>
-                  r.uri.scheme == 'https' &&
-                  r.uri.host == 'us-odc.samsungapps.com',
-            ),
-        isTrue,
-      );
-      expect(SamsungGalaxyStore().changeLogIfAnyIsMarkDown, isFalse);
-    },
-  );
+      isTrue,
+    );
+    expect(SamsungGalaxyStore().changeLogIfAnyIsMarkDown, isFalse);
+  });
 
   test(
     'main and overview version drift never attaches other release details',
@@ -715,56 +700,48 @@ void main() {
     },
   );
 
-  test(
-    'missing or invalid store dates stay unknown without rewriting publisher notes',
-    () async {
-      for (final date in [
-        null,
-        '2026;02;30;',
-        '2026-08-25',
-        '20260825',
-        '2026;8;25;',
-      ]) {
-        final fields = {..._overview}..remove('lastUpdateDate');
-        if (date != null) fields['lastUpdateDate'] = date;
-        final result = await _withDetails(
-          overview: _ods(fields),
-        ).getLatestAPKDetails(url, _china);
-        expect(result.releaseDate, isNull);
-        expect(result.changeLog, _overview['updateDescription']);
-      }
-    },
-  );
-
-  test(
-    'overview ignores structured display branches but rejects duplicate release fields',
-    () async {
-      const complex =
-          '<extList name="dataSafetyList"><value name="dataSafety">A</value><value name="dataSafety">B</value></extList>'
-          '<extList name="curatedComponentList"><extList name="componentInfo"><value name="type">A</value></extList>'
-          '<extList name="componentInfo"><value name="type">B</value></extList></extList>';
-      final result = await _withDetails(
-        overview: _ods(_overview, extra: complex),
-      ).getLatestAPKDetails(url, _china);
-      expect(result.releaseDate, DateTime(2026, 8, 25));
+  test('missing or invalid store dates stay unknown without rewriting publisher notes', () async {
+    for (final date in [
+      null,
+      '2026;02;30;',
+      '2026-08-25',
+      '20260825',
+      '2026;8;25;',
+    ]) {
+      final fields = {..._overview}..remove('lastUpdateDate');
+      if (date != null) fields['lastUpdateDate'] = date;
+      final result = await _withDetails(overview: _ods(fields))
+          .getLatestAPKDetails(url, _china);
+      expect(result.releaseDate, isNull);
       expect(result.changeLog, _overview['updateDescription']);
-      for (final field in [
-        'version',
-        'realContentsSize',
-        'lastUpdateDate',
-        'updateDescription',
-      ]) {
-        final result = await _withDetails(
-          overview: _ods(
-            _overview,
-            extra: '<value name="$field">duplicate</value>',
-          ),
-        ).getLatestAPKDetails(url, _china);
-        expect(result.releaseDate, isNull);
-        expect(result.changeLog, isNull);
-      }
-    },
-  );
+    }
+  });
+
+  test('overview ignores structured display branches but rejects duplicate release fields', () async {
+    const complex =
+        '<extList name="dataSafetyList"><value name="dataSafety">A</value><value name="dataSafety">B</value></extList>'
+        '<extList name="curatedComponentList"><extList name="componentInfo"><value name="type">A</value></extList>'
+        '<extList name="componentInfo"><value name="type">B</value></extList></extList>';
+    final result = await _withDetails(overview: _ods(_overview, extra: complex))
+        .getLatestAPKDetails(url, _china);
+    expect(result.releaseDate, DateTime(2026, 8, 25));
+    expect(result.changeLog, _overview['updateDescription']);
+    for (final field in [
+      'version',
+      'realContentsSize',
+      'lastUpdateDate',
+      'updateDescription',
+    ]) {
+      final result = await _withDetails(
+        overview: _ods(
+          _overview,
+          extra: '<value name="$field">duplicate</value>',
+        ),
+      ).getLatestAPKDetails(url, _china);
+      expect(result.releaseDate, isNull);
+      expect(result.changeLog, isNull);
+    }
+  });
 
   test(
     'detail transport or protocol failures preserve the authorized APK',
@@ -982,62 +959,59 @@ void main() {
     },
   );
 
-  test(
-    'discovery upgrades only trusted same-region endpoints and safely falls back',
-    () async {
-      final valid = {
-        'countryURL': 'http://cn-ms.galaxyappstore.com/ods.as',
-        'countryCode': 'CHN',
-        'MCC': '460',
-      };
-      for (final discovery in <Object>[
-        _ods(valid),
-        const SocketException('unavailable'),
+  test('discovery upgrades only trusted same-region endpoints and safely falls back', () async {
+    final valid = {
+      'countryURL': 'http://cn-ms.galaxyappstore.com/ods.as',
+      'countryCode': 'CHN',
+      'MCC': '460',
+    };
+    for (final discovery in <Object>[
+      _ods(valid),
+      const SocketException('unavailable'),
+      Response('Unavailable', 503),
+      for (final changes in [
+        {'countryURL': 'http://cn-ms.galaxyappstore.com.evil.test/ods.as'},
+        {'countryURL': 'https://user@cn-ms.galaxyappstore.com/ods.as'},
+        {'countryURL': 'https://cn-ms.galaxyappstore.com:444/ods.as'},
+        {'countryURL': 'https://cn-ms.galaxyappstore.com/other'},
+        {'countryURL': 'https://cn-ms.galaxyappstore.com/ods.as?secret=x'},
+        {'countryURL': 'https://cn-ms.galaxyappstore.com/ods.as#fragment'},
+        {'countryURL': 'https://us-odc.samsungapps.com/ods.as'},
+        {'countryCode': 'USA'},
+        {'MCC': '310'},
+      ])
+        _ods({...valid, ...changes}),
+    ]) {
+      final source = _OdsGalaxyStore([
         Response('Unavailable', 503),
-        for (final changes in [
-          {'countryURL': 'http://cn-ms.galaxyappstore.com.evil.test/ods.as'},
-          {'countryURL': 'https://user@cn-ms.galaxyappstore.com/ods.as'},
-          {'countryURL': 'https://cn-ms.galaxyappstore.com:444/ods.as'},
-          {'countryURL': 'https://cn-ms.galaxyappstore.com/other'},
-          {'countryURL': 'https://cn-ms.galaxyappstore.com/ods.as?secret=x'},
-          {'countryURL': 'https://cn-ms.galaxyappstore.com/ods.as#fragment'},
-          {'countryURL': 'https://us-odc.samsungapps.com/ods.as'},
-          {'countryCode': 'USA'},
-          {'MCC': '310'},
-        ])
-          _ods({...valid, ...changes}),
-      ]) {
-        final source = _OdsGalaxyStore([
-          Response('Unavailable', 503),
-          discovery,
-          _ods(_metadata),
-          _ods(_grant),
-        ], explicitDiscovery: true);
-        await source.getLatestAPKDetails(url, _china);
-        expect(
-          source.requests
-              .skip(2)
-              .every(
-                (r) =>
-                    r.uri.scheme == 'https' &&
-                    r.uri.host == 'cn-ms.galaxyappstore.com' &&
-                    r.uri.path == '/ods.as',
-              ),
-          isTrue,
-        );
-        final discoveryEnvelope = XmlDocument.parse(
-          source.requests[1].body as String,
-        ).rootElement.getElement('request')!;
-        expect(
-          discoveryEnvelope.childElements
-              .firstWhere((n) => n.getAttribute('name') == 'latestCountryCode')
-              .innerText,
-          '460',
-        );
-        expect(source.responses, isEmpty);
-      }
-    },
-  );
+        discovery,
+        _ods(_metadata),
+        _ods(_grant),
+      ], explicitDiscovery: true);
+      await source.getLatestAPKDetails(url, _china);
+      expect(
+        source.requests
+            .skip(2)
+            .every(
+              (r) =>
+                  r.uri.scheme == 'https' &&
+                  r.uri.host == 'cn-ms.galaxyappstore.com' &&
+                  r.uri.path == '/ods.as',
+            ),
+        isTrue,
+      );
+      final discoveryEnvelope = XmlDocument.parse(
+        source.requests[1].body as String,
+      ).rootElement.getElement('request')!;
+      expect(
+        discoveryEnvelope.childElements
+            .firstWhere((n) => n.getAttribute('name') == 'latestCountryCode')
+            .innerText,
+        '460',
+      );
+      expect(source.responses, isEmpty);
+    }
+  });
 
   test(
     'invalid stub identity or URI falls back without importing its metadata',
@@ -1133,47 +1107,44 @@ void main() {
     expect(source.responses.length, 1);
   });
 
-  test(
-    'CN mirror is bounded to rejected authorization and exact full APK identity',
-    () async {
-      final source = _OdsGalaxyStore([
-        Response('Unavailable', 503),
-        _ods(_metadata),
-        _ods({}, code: '4002'),
-        _ods({}, code: '4002'),
-        _ods({..._grant, 'GUID': _metadata['GUID']!}),
-      ]);
-      final result = await source.getLatestAPKDetails(url, _china);
-      expect(result.version, _metadata['version']);
-      expect(
-        source.coreRequests.skip(1).map((r) => r.uri.queryParameters['reqId']),
-        ['2298', '2311', '2316', '2801'],
-      );
-      expect(
-        source.requests.every(
-          (r) => [
-            'vas.samsungapps.com',
-            'cn-ms.galaxyappstore.com',
-          ].contains(r.uri.host),
-        ),
-        isTrue,
-      );
-      final request = XmlDocument.parse(
-        source.coreRequests.last.body as String,
-      ).rootElement.getElement('request')!;
-      expect(request.getAttribute('name'), 'downloadInfoForTencent');
-      expect(
-        request.childElements
-            .firstWhere((n) => n.getAttribute('name') == 'lastInterfaceName')
-            .innerText,
-        'searchProductListEx2Notc',
-      );
-      expect(
-        request.childElements.map((n) => n.getAttribute('name')),
-        isNot(contains('orderID')),
-      );
-    },
-  );
+  test('CN mirror is bounded to rejected authorization and exact full APK identity', () async {
+    final source = _OdsGalaxyStore([
+      Response('Unavailable', 503),
+      _ods(_metadata),
+      _ods({}, code: '4002'),
+      _ods({}, code: '4002'),
+      _ods({..._grant, 'GUID': _metadata['GUID']!}),
+    ]);
+    final result = await source.getLatestAPKDetails(url, _china);
+    expect(result.version, _metadata['version']);
+    expect(
+      source.coreRequests.skip(1).map((r) => r.uri.queryParameters['reqId']),
+      ['2298', '2311', '2316', '2801'],
+    );
+    expect(
+      source.requests.every(
+        (r) => [
+          'vas.samsungapps.com',
+          'cn-ms.galaxyappstore.com',
+        ].contains(r.uri.host),
+      ),
+      isTrue,
+    );
+    final request = XmlDocument.parse(source.coreRequests.last.body as String)
+        .rootElement
+        .getElement('request')!;
+    expect(request.getAttribute('name'), 'downloadInfoForTencent');
+    expect(
+      request.childElements
+          .firstWhere((n) => n.getAttribute('name') == 'lastInterfaceName')
+          .innerText,
+      'searchProductListEx2Notc',
+    );
+    expect(
+      request.childElements.map((n) => n.getAttribute('name')),
+      isNot(contains('orderID')),
+    );
+  });
 
   test(
     'CN linked products use the version-bound Tencent full APK directly',
@@ -1237,30 +1208,32 @@ void main() {
     },
   );
 
-  test('linked metadata rejects unknown flags and structured shadows', () async {
-    for (final response in [
-      for (final flag in ['', 'Y', '2', '-1'])
-        _ods({..._linkedMetadata, 'linkProductYn': flag}),
-      _ods(_linkedMetadata, extra: '<value name="linkProductYn">0</value>'),
-      _ods(
-        _linkedMetadata,
-        extra:
-            '<extList name="linkProductYn"><value name="nested">1</value></extList>',
-      ),
-    ]) {
-      final source = _OdsGalaxyStore([
-        Response('Unavailable', 503),
-        response,
-        _ods(_linkedGrant),
-      ]);
-      await expectLater(
-        source.getLatestAPKDetails(_linkedUrl, _china),
-        throwsA(isA<ObtainiumError>()),
-      );
-      expect(source.coreRequests.length, 2);
-      expect(source.responses.length, 1);
-    }
-  });
+  test(
+    'linked metadata rejects unknown flags and structured shadows',
+    () async {
+      for (final response in [
+        for (final flag in ['', 'Y', '2', '-1'])
+          _ods({..._linkedMetadata, 'linkProductYn': flag}),
+        _ods(_linkedMetadata, extra: '<value name="linkProductYn">0</value>'),
+        _ods(
+          _linkedMetadata,
+          extra: '<extList name="linkProductYn"><value name="nested">1</value></extList>',
+        ),
+      ]) {
+        final source = _OdsGalaxyStore([
+          Response('Unavailable', 503),
+          response,
+          _ods(_linkedGrant),
+        ]);
+        await expectLater(
+          source.getLatestAPKDetails(_linkedUrl, _china),
+          throwsA(isA<ObtainiumError>()),
+        );
+        expect(source.coreRequests.length, 2);
+        expect(source.responses.length, 1);
+      }
+    },
+  );
 
   test(
     'linked authorization requires China and a known full package size',
@@ -1381,36 +1354,33 @@ void main() {
     },
   );
 
-  test(
-    'linked authorization rejection and rate limits never enter native fallback',
-    () async {
-      for (final response in [
-        _ods({}, code: '4002'),
-        Response('Rate limited', 429, headers: {'retry-after': '600'}),
-      ]) {
-        final source = _OdsGalaxyStore([
-          Response('Unavailable', 503),
-          _ods(_linkedMetadata),
-          response,
-          _ods(_grant),
-        ]);
-        await expectLater(
-          source.getLatestAPKDetails(_linkedUrl, _china),
-          throwsA(
-            response.statusCode == 429
-                ? isA<RateLimitError>().having(
-                    (error) => error.remainingMinutes,
-                    'remainingMinutes',
-                    10,
-                  )
-                : isA<ObtainiumError>(),
-          ),
-        );
-        expect(source.coreRequests.last.uri.queryParameters['reqId'], '2801');
-        expect(source.responses.length, 1);
-      }
-    },
-  );
+  test('linked authorization rejection and rate limits never enter native fallback', () async {
+    for (final response in [
+      _ods({}, code: '4002'),
+      Response('Rate limited', 429, headers: {'retry-after': '600'}),
+    ]) {
+      final source = _OdsGalaxyStore([
+        Response('Unavailable', 503),
+        _ods(_linkedMetadata),
+        response,
+        _ods(_grant),
+      ]);
+      await expectLater(
+        source.getLatestAPKDetails(_linkedUrl, _china),
+        throwsA(
+          response.statusCode == 429
+              ? isA<RateLimitError>().having(
+                  (error) => error.remainingMinutes,
+                  'remainingMinutes',
+                  10,
+                )
+              : isA<ObtainiumError>(),
+        ),
+      );
+      expect(source.coreRequests.last.uri.queryParameters['reqId'], '2801');
+      expect(source.responses.length, 1);
+    }
+  });
 
   testWidgets('linked authorization timeout stops after its single request', (
     tester,
@@ -1585,9 +1555,9 @@ void main() {
             .map((request) => request.uri.queryParameters['reqId']),
         ['2298', '2311', '2316'],
       );
-      final request = XmlDocument.parse(
-        source.coreRequests.last.body as String,
-      ).rootElement.getElement('request')!;
+      final request = XmlDocument.parse(source.coreRequests.last.body as String)
+          .rootElement
+          .getElement('request')!;
       expect(request.getAttribute('name'), 'downloadForRestore');
       final params = {
         for (final node in request.childElements)

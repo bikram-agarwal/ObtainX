@@ -2,8 +2,7 @@ import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
@@ -785,9 +784,8 @@ class AddAppPageState extends State<AddAppPage> {
     final bool showSupportedSourcesButton = userInput.trim().isEmpty;
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     final TextStyle? launcherTextStyle = matchLauncherButton
-        ? Theme.of(context).textTheme.labelLarge?.copyWith(
-            color: colorScheme.onSecondaryContainer,
-          )
+        ? Theme.of(context).textTheme.labelLarge
+              ?.copyWith(color: colorScheme.onSecondaryContainer)
         : null;
     final Widget supportedSourcesButton = TweenAnimationBuilder<double>(
       tween: Tween<double>(end: showSupportedSourcesButton ? 1 : 0),
@@ -846,9 +844,8 @@ class AddAppPageState extends State<AddAppPage> {
               : null,
           labelStyle: launcherTextStyle,
           floatingLabelStyle: matchLauncherButton
-              ? Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: colorScheme.onSecondaryContainer,
-                )
+              ? Theme.of(context).textTheme.bodyLarge
+                    ?.copyWith(color: colorScheme.onSecondaryContainer)
               : null,
           contentPadding: matchLauncherButton
               ? const EdgeInsetsDirectional.fromSTEB(50, 16, 14, 16)
@@ -942,9 +939,8 @@ class AddAppPageState extends State<AddAppPage> {
     // whether the navigation pill is drawn with a BackdropFilter, not where it
     // sits, and the system navigation bar is there either way. Gating on it left
     // the last row of content under both whenever the blur was off.
-    final double bottomChromeClearance = MediaQuery.viewPaddingOf(
-      context,
-    ).bottom;
+    final double bottomChromeClearance = MediaQuery.viewPaddingOf(context)
+        .bottom;
 
     final bool useTwoPaneLayout =
         MediaQuery.sizeOf(context).width >= kLargeScreenWidthBreakpoint &&
@@ -1435,9 +1431,8 @@ class AddAppPageState extends State<AddAppPage> {
     // viewInsets grow, which would drop the FAB onto the navigation bar mid
     // animation. See the note in _buildLauncher on why the blur setting has no
     // say in this.
-    final double bottomChromeClearance = MediaQuery.viewPaddingOf(
-      context,
-    ).bottom;
+    final double bottomChromeClearance = MediaQuery.viewPaddingOf(context)
+        .bottom;
     final double appVaultFabBottomPadding =
         (bottomChromeClearance > _fabMinimumSafeBottomPadding
             ? bottomChromeClearance
@@ -2889,9 +2884,9 @@ class AddAppPageState extends State<AddAppPage> {
                                           val.data!.isNotEmpty
                                       ? Text(
                                           val.data!,
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
                                         )
                                       : const SizedBox();
                                 },
@@ -2912,9 +2907,9 @@ class AddAppPageState extends State<AddAppPage> {
                                   : tr('storesToSearch'),
                               style: Theme.of(context).textTheme.labelMedium
                                   ?.copyWith(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
                                   ),
                             ),
                             const SizedBox(height: 6),
@@ -3168,9 +3163,9 @@ class _DownloadApkToIdentifyAppDialogState
           ),
           if (!_isDownloading) ...[
             TextButton(
-              onPressed: () => Navigator.of(
-                context,
-              ).pop(const _PackageIdDetectionResult.trackOnly()),
+              onPressed: () =>
+                  Navigator.of(context)
+                      .pop(const _PackageIdDetectionResult.trackOnly()),
               child: Text(tr('trackOnly')),
             ),
             FilledButton(

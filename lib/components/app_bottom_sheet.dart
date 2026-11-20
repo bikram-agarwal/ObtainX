@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' show FlutterView;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Presents [builder] as a modal bottom sheet with the app's standard chrome:
 /// the themed M3 Expressive shape, the framework drag handle, and (optionally)

@@ -86,8 +86,7 @@ class GitLab extends AppSource {
       label: tr('gitlabPATLabel'),
       password: true,
       required: false,
-      helpUrl:
-          'https://docs.gitlab.com/user/profile/personal_access_tokens/#create-a-personal-access-token',
+      helpUrl: 'https://docs.gitlab.com/user/profile/personal_access_tokens/#create-a-personal-access-token',
     ),
   ];
 

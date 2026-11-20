@@ -8,10 +8,10 @@ import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:flutter/foundation.dart'
     show Factory, Listenable, listEquals, visibleForTesting;
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
@@ -477,9 +477,8 @@ Future<Map<String, String>?> checkAndCacheStoresForListing(
   }
   if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
       (storeData['PlayStore'] ?? '').isEmpty) {
-    lookups['PlayStore'] = _checkPlayStoreAvailability(
-      appId,
-    ).then((url) => <String, String?>{appId: url});
+    lookups['PlayStore'] = _checkPlayStoreAvailability(appId)
+        .then((url) => <String, String?>{appId: url});
   }
 
   void logStoreError(String store, Object error) => unawaited(
@@ -3059,9 +3058,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         swappableStoreName != null || trackedListingKey != null;
     return Builder(
       builder: (BuildContext iconBuilderContext) {
-        final ColorScheme colorScheme = Theme.of(
-          iconBuilderContext,
-        ).colorScheme;
+        final ColorScheme colorScheme = Theme.of(iconBuilderContext)
+            .colorScheme;
         final Widget picture = assetPath != null
             ? StoreSourceIconImage(
                 assetPath: assetPath,
@@ -3698,27 +3696,30 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             ),
           );
         },
-        child: Markdown(
-          physics: const NeverScrollableScrollPhysics(),
-          shrinkWrap: true,
-          styleSheet: MarkdownStyleSheet(
-            blockquoteDecoration: BoxDecoration(
-              color: Theme.of(themeContext).cardColor,
+        // flutter_markdown_plus is still on flutter/material.
+        child: LegacyMaterialBridge(
+          child: Markdown(
+            physics: const NeverScrollableScrollPhysics(),
+            shrinkWrap: true,
+            styleSheet: MarkdownStyleSheet(
+              blockquoteDecoration: BoxDecoration(
+                color: Theme.of(themeContext).cardColor,
+              ),
+              textAlign: WrapAlignment.center,
             ),
-            textAlign: WrapAlignment.center,
-          ),
-          data: aboutForMarkdown,
-          onTapLink: (text, href, title) {
-            if (href != null) {
-              launchUrlString(href, mode: LaunchMode.externalApplication);
-            }
-          },
-          extensionSet: md.ExtensionSet(
-            md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-            [
-              md.EmojiSyntax(),
-              ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-            ],
+            data: aboutForMarkdown,
+            onTapLink: (text, href, title) {
+              if (href != null) {
+                launchUrlString(href, mode: LaunchMode.externalApplication);
+              }
+            },
+            extensionSet: md.ExtensionSet(
+              md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+              [
+                md.EmojiSyntax(),
+                ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+              ],
+            ),
           ),
         ),
       );
@@ -4840,19 +4841,16 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           reproducibleBuildUnknown
           ? Colors.orange.withValues(alpha: 0.16)
           : reproducibleBuildUsesErrorColors
-          ? Theme.of(
-              pageThemeContext,
-            ).colorScheme.errorContainer.withValues(alpha: 0.55)
-          : Theme.of(
-              pageThemeContext,
-            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.75);
+          ? Theme.of(pageThemeContext).colorScheme.errorContainer
+                .withValues(alpha: 0.55)
+          : Theme.of(pageThemeContext).colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.75);
       final Color reproducibleBuildProblemBorderColor = reproducibleBuildUnknown
           ? Colors.orange.withValues(alpha: 0.55)
           : reproducibleBuildUsesErrorColors
           ? Theme.of(pageThemeContext).colorScheme.error.withValues(alpha: 0.55)
-          : Theme.of(
-              pageThemeContext,
-            ).colorScheme.outline.withValues(alpha: 0.45);
+          : Theme.of(pageThemeContext).colorScheme.outline
+                .withValues(alpha: 0.45);
       final Color reproducibleBuildProblemContentColor =
           reproducibleBuildUnknown
           ? Colors.orange.shade800
@@ -4960,9 +4958,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   borderColor: githubAttestationCantCheck
                       ? Colors.orange.withValues(alpha: 0.55)
                       : githubAttestationUnsupported
-                      ? Theme.of(
-                          pageThemeContext,
-                        ).colorScheme.outline.withValues(alpha: 0.45)
+                      ? Theme.of(pageThemeContext).colorScheme.outline
+                            .withValues(alpha: 0.45)
                       : null,
                   contentColor: githubAttestationCantCheck
                       ? Colors.orange.shade800
@@ -4979,16 +4976,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               if (malwareScanHasStatus)
                 statusBadge(
                   backgroundColor: malwareScanFlagged
-                      ? Theme.of(
-                          pageThemeContext,
-                        ).colorScheme.errorContainer.withValues(alpha: 0.55)
+                      ? Theme.of(pageThemeContext).colorScheme.errorContainer
+                            .withValues(alpha: 0.55)
                       : malwareScanError
                       ? Colors.orange.withValues(alpha: 0.16)
                       : Colors.green.withValues(alpha: 0.15),
                   borderColor: malwareScanFlagged
-                      ? Theme.of(
-                          pageThemeContext,
-                        ).colorScheme.error.withValues(alpha: 0.55)
+                      ? Theme.of(pageThemeContext).colorScheme.error
+                            .withValues(alpha: 0.55)
                       : malwareScanError
                       ? Colors.orange.withValues(alpha: 0.55)
                       : Colors.green.withValues(alpha: 0.5),
@@ -5342,9 +5337,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       tr('appType'),
                       style: Theme.of(pageThemeContext).textTheme.bodySmall
                           ?.copyWith(
-                            color: Theme.of(
-                              pageThemeContext,
-                            ).colorScheme.onSurfaceVariant,
+                            color: Theme.of(pageThemeContext)
+                                .colorScheme
+                                .onSurfaceVariant,
                             fontSize: 12,
                           ),
                     ),
@@ -5712,9 +5707,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
                         style: bylineStyle?.copyWith(
-                          color: Theme.of(
-                            themeContext,
-                          ).colorScheme.onSurfaceVariant,
+                          color: Theme.of(themeContext)
+                              .colorScheme
+                              .onSurfaceVariant,
                           fontSize:
                               (bylineStyle.fontSize ?? 12) * heroScale * 1.08,
                         ),
@@ -5900,12 +5895,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           border: Border(
             top: BorderSide(
               color: Theme.of(themeContext).brightness == Brightness.dark
-                  ? Theme.of(
-                      themeContext,
-                    ).colorScheme.outlineVariant.withAlpha(140)
-                  : Theme.of(
-                      themeContext,
-                    ).colorScheme.outlineVariant.withAlpha(70),
+                  ? Theme.of(themeContext).colorScheme.outlineVariant
+                        .withAlpha(140)
+                  : Theme.of(themeContext).colorScheme.outlineVariant
+                        .withAlpha(70),
             ),
           ),
           boxShadow: [
@@ -6023,6 +6016,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   // morphing shape, same default placement), so refreshing
                   // looks the same on both pages.
                   ExpressiveRefreshIndicator(
+                    // expressive_refresh is still on flutter/material, so it
+                    // can't see this page's material_ui theme: pass the
+                    // colours it would take from there.
+                    color: pageThemeForPage.colorScheme.primary,
+                    backgroundColor:
+                        pageThemeForPage.colorScheme.surfaceContainerHighest,
                     child: Stack(
                       fit: StackFit.expand,
                       children: [

@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/app_details_container.dart';
@@ -205,9 +205,8 @@ void main() {
             final sheet = await picture.toImage(1080, 688);
             final png = await sheet.toByteData(format: ui.ImageByteFormat.png);
             await Directory(captureDirectory).create(recursive: true);
-            await File(
-              '$captureDirectory/$mode.png',
-            ).writeAsBytes(png!.buffer.asUint8List());
+            await File('$captureDirectory/$mode.png')
+                .writeAsBytes(png!.buffer.asUint8List());
             picture.dispose();
             sheet.dispose();
           });

@@ -148,40 +148,37 @@ void main() {
       expect(fields.extension, equals('apk'));
     });
 
-    test(
-      'parseUptodownTechnicalFields handles the real full-page cell list',
-      () {
-        // Verbatim non-empty `#technical-information td` texts served for VLC on
-        // 2026-08-12. `#technical-information` is a container of several tables
-        // (basic info, distribution model, system requirements, then the file
-        // details), so the real list is much longer than the file rows alone.
-        // The old fixed offsets pick 'APK' as the date and '45.77 MB' as the
-        // extension here, which is why fields are matched by content instead.
-        final fields = parseUptodownTechnicalFields([
-          'VideoLabs',
-          'Video',
-          '+3',
-          'English 46 more',
-          'Free',
-          'GPL 2.0',
-          '(More information)',
-          'Android',
-          'arm64-v8a',
-          'See 30 permissions',
-          '511fea1a22a7b62ebc01950c167c0406',
-          '14,949,927',
-          'Jul 1, 2026',
-          'APK',
-          '45.77 MB',
-          'c493c167de52724dbdd727fd6e20ec43d89200a847fb7b7d88da850faf336bcd',
-          'Matches the published version',
-          'org.videolan.vlc',
-        ]);
-        expect(fields.appId, equals('org.videolan.vlc'));
-        expect(fields.dateStr, equals('Jul 1, 2026'));
-        expect(fields.extension, equals('apk'));
-      },
-    );
+    test('parseUptodownTechnicalFields handles the real full-page cell list', () {
+      // Verbatim non-empty `#technical-information td` texts served for VLC on
+      // 2026-08-12. `#technical-information` is a container of several tables
+      // (basic info, distribution model, system requirements, then the file
+      // details), so the real list is much longer than the file rows alone.
+      // The old fixed offsets pick 'APK' as the date and '45.77 MB' as the
+      // extension here, which is why fields are matched by content instead.
+      final fields = parseUptodownTechnicalFields([
+        'VideoLabs',
+        'Video',
+        '+3',
+        'English 46 more',
+        'Free',
+        'GPL 2.0',
+        '(More information)',
+        'Android',
+        'arm64-v8a',
+        'See 30 permissions',
+        '511fea1a22a7b62ebc01950c167c0406',
+        '14,949,927',
+        'Jul 1, 2026',
+        'APK',
+        '45.77 MB',
+        'c493c167de52724dbdd727fd6e20ec43d89200a847fb7b7d88da850faf336bcd',
+        'Matches the published version',
+        'org.videolan.vlc',
+      ]);
+      expect(fields.appId, equals('org.videolan.vlc'));
+      expect(fields.dateStr, equals('Jul 1, 2026'));
+      expect(fields.extension, equals('apk'));
+    });
 
     test(
       'parseUptodownTechnicalFields ignores versions and digests as ids',
@@ -422,32 +419,29 @@ void main() {
       },
     );
 
-    test(
-      'a selected search result works with the source override used by the add flow',
-      () async {
-        final source = _UptodownWithPage(
-          page('APK'),
-          searchResults: [
-            {
-              'url': 'https://character-ai.en.uptodown.com/android',
-              'name': 'Character AI',
-              'platformURL': '/android',
-            },
-          ],
-        );
-        final selected = (await source.search('Character AI')).keys.single;
-        source.hostChanged = true;
-        source.hostIdenticalDespiteAnyChange = true;
-        final result = await source.getLatestAPKDetails(
-          source.standardizeUrl(selected),
-          {},
-        );
-        expect(source.requests.last, url);
-        expect(result.version, '1.17.3');
-        expect(result.apkUrls.single.value, '$url/1213975188-x');
-        expect(result.releaseDate, DateTime(2026, 9, 11));
-      },
-    );
+    test('a selected search result works with the source override used by the add flow', () async {
+      final source = _UptodownWithPage(
+        page('APK'),
+        searchResults: [
+          {
+            'url': 'https://character-ai.en.uptodown.com/android',
+            'name': 'Character AI',
+            'platformURL': '/android',
+          },
+        ],
+      );
+      final selected = (await source.search('Character AI')).keys.single;
+      source.hostChanged = true;
+      source.hostIdenticalDespiteAnyChange = true;
+      final result = await source.getLatestAPKDetails(
+        source.standardizeUrl(selected),
+        {},
+      );
+      expect(source.requests.last, url);
+      expect(result.version, '1.17.3');
+      expect(result.apkUrls.single.value, '$url/1213975188-x');
+      expect(result.releaseDate, DateTime(2026, 9, 11));
+    });
 
     test('English page dates do not depend on the app locale', () async {
       await initializeDateFormatting('zh');
@@ -597,17 +591,15 @@ void main() {
     test(
       'keeps split-set types and falls back to .apk without a type',
       () async {
-        final apks = await _UptodownWithPage(
-          page('APKS'),
-        ).getLatestAPKDetails(url, {});
+        final apks = await _UptodownWithPage(page('APKS'))
+            .getLatestAPKDetails(url, {});
         expect(apks.apkUrls.single.key, 'ai.character.app.apks');
 
         // No file-type row: the positional fallback lands on the size cell,
         // which must not end up as the extension.
         final unlabelled = await _UptodownWithPage(
-          page(
-            'APK',
-          ).replaceFirst('<tr><th>File type</th><td> APK </td></tr>', ''),
+          page('APK')
+              .replaceFirst('<tr><th>File type</th><td> APK </td></tr>', ''),
         ).getLatestAPKDetails(url, {});
         expect(unlabelled.apkUrls.single.key, 'ai.character.app.apk');
       },

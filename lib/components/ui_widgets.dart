@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/widgets/app_toast.dart';
@@ -11,9 +11,8 @@ import 'package:url_launcher/url_launcher_string.dart';
 Future<void> copyToClipboard(BuildContext context, String text) async {
   await Clipboard.setData(ClipboardData(text: text));
   if (context.mounted) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(buildAppSnackBar(context, tr('copiedToClipboard')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(buildAppSnackBar(context, tr('copiedToClipboard')));
   }
 }
 
@@ -266,9 +265,8 @@ class EmptyState extends StatelessWidget {
               const SizedBox(height: 16),
               Text(
                 message!,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
+                style: Theme.of(context).textTheme.headlineSmall
+                    ?.copyWith(color: colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
             ],

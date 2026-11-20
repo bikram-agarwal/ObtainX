@@ -246,9 +246,8 @@ void main() {
       expect(details.apkSizeBytes, 2048 * 1024);
       expect(details.appId, 'com.example.app');
 
-      final fallback = await _Vivo(
-        _vivoDetail,
-      ).getLatestAPKDetails(_vivoUrl, {});
+      final fallback = await _Vivo(_vivoDetail)
+          .getLatestAPKDetails(_vivoUrl, {});
       expect(fallback.apkUrls.single.value, '${VivoAppStore.apkDownloadUrl}1');
     });
 
