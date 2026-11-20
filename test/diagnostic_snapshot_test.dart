@@ -153,6 +153,50 @@ void main() {
     expect(dump, isNot(contains('All prefs')));
   });
 
+  testWidgets('background conditions show the tri-state guards', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'updateInterval': 360,
+      // A legacy "Wi-Fi only" ON means no checks off Wi-Fi (v1.7.4 sync, D5).
+      'bgUpdatesOnWiFiOnly': true,
+      'bgGuardWhileCharging': 'checksOnly',
+      'globalVersionExtractionRegEx': r'\d+(\.\d+)*',
+    });
+    final SettingsProvider settings = SettingsProvider()
+      ..prefs = await SharedPreferences.getInstance();
+    addTearDown(settings.dispose);
+
+    await tester.pumpWidget(
+      const MediaQuery(
+        data: MediaQueryData(size: Size(360, 800), devicePixelRatio: 2),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox.expand(),
+        ),
+      ),
+    );
+
+    final String dump = await buildObtainxDiagnosticLog(
+      settings: settings,
+      trackedAppCount: 1,
+      display: DiagnosticDisplayInfo.fromContext(
+        tester.element(find.byType(SizedBox)),
+      ),
+      appLocale: 'en',
+      probeNativePlatform: false,
+    );
+
+    expect(
+      dump,
+      contains(
+        'Background conditions: off Wi-Fi nothing, not charging checksOnly, '
+        'foreground service false',
+      ),
+    );
+    expect(dump, contains('global version regex true'));
+  });
+
   testWidgets('conditional sections stay out when their feature is off', (
     WidgetTester tester,
   ) async {

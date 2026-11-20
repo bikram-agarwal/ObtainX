@@ -59,6 +59,16 @@ class APKDetails {
   String? reproducibleStatus;
   String? attestationStatus;
 
+  /// Package id the source already knows (e.g. from APKMirror's feed icon,
+  /// Huawei or Vivo metadata), so getApp can skip a separate lookup. An
+  /// explicit per-app `appId` setting still wins.
+  String? appId;
+
+  /// Update health (#1753): whether the source reports the project as
+  /// archived, and how many newer releases the release filters skipped.
+  bool? isArchived;
+  int? newerReleasesFilteredOut;
+
   APKDetails(
     this.version,
     this.apkUrls,
@@ -75,6 +85,9 @@ class APKDetails {
     this.isReproducible,
     this.reproducibleStatus,
     this.attestationStatus,
+    this.appId,
+    this.isArchived,
+    this.newerReleasesFilteredOut,
   });
 
   /// Copies every field, so a source that rewrites one of them (e.g. GitLab's
@@ -96,6 +109,9 @@ class APKDetails {
     Object? isReproducible = _sentinel,
     Object? reproducibleStatus = _sentinel,
     Object? attestationStatus = _sentinel,
+    Object? appId = _sentinel,
+    Object? isArchived = _sentinel,
+    Object? newerReleasesFilteredOut = _sentinel,
   }) {
     return APKDetails(
       version ?? this.version,
@@ -128,6 +144,13 @@ class APKDetails {
       attestationStatus: attestationStatus == _sentinel
           ? this.attestationStatus
           : attestationStatus as String?,
+      appId: appId == _sentinel ? this.appId : appId as String?,
+      isArchived: isArchived == _sentinel
+          ? this.isArchived
+          : isArchived as bool?,
+      newerReleasesFilteredOut: newerReleasesFilteredOut == _sentinel
+          ? this.newerReleasesFilteredOut
+          : newerReleasesFilteredOut as int?,
     );
   }
 }
@@ -206,6 +229,30 @@ class App {
   final String? latestMalwareScanDetail;
   final String? latestMalwareScanReportUrl;
 
+  /// When [latestVersion] last changed to a new value. Feeds update health
+  /// (#1753) and, with the per-app `detectionDateAsReleaseDate` option
+  /// (#3453), stands in for a release date the source doesn't give.
+  final DateTime? latestVersionChangedAt;
+
+  /// Checks in a row that failed with a persistent (non-transient) error.
+  /// Reset by a successful check. Update health only.
+  final int consecutiveFailedChecks;
+
+  /// Update health: the source reported the project as archived.
+  final bool? isArchived;
+
+  /// Update health: newer releases the release filters skipped at the last
+  /// successful check.
+  final int? newerReleasesFilteredOut;
+
+  /// Whether update health is evaluated for this app. Users can turn it off
+  /// for good, e.g. for a finished or quiet project.
+  final bool updateHealthEnabled;
+
+  /// Update health: the latest version at which the user dismissed the
+  /// current warning. A new version shows warnings again.
+  final String? updateHealthDismissedVersion;
+
   const App({
     required this.id,
     this.listingId,
@@ -238,6 +285,12 @@ class App {
     this.latestMalwareScanStatus,
     this.latestMalwareScanDetail,
     this.latestMalwareScanReportUrl,
+    this.latestVersionChangedAt,
+    this.consecutiveFailedChecks = 0,
+    this.isArchived,
+    this.newerReleasesFilteredOut,
+    this.updateHealthEnabled = true,
+    this.updateHealthDismissedVersion,
   });
 
   @override
@@ -340,6 +393,12 @@ class App {
     Object? latestMalwareScanStatus = _sentinel,
     Object? latestMalwareScanDetail = _sentinel,
     Object? latestMalwareScanReportUrl = _sentinel,
+    Object? latestVersionChangedAt = _sentinel,
+    int? consecutiveFailedChecks,
+    Object? isArchived = _sentinel,
+    Object? newerReleasesFilteredOut = _sentinel,
+    bool? updateHealthEnabled,
+    Object? updateHealthDismissedVersion = _sentinel,
   }) {
     return App(
       id: id ?? this.id,
@@ -413,6 +472,21 @@ class App {
       latestMalwareScanReportUrl: latestMalwareScanReportUrl == _sentinel
           ? this.latestMalwareScanReportUrl
           : latestMalwareScanReportUrl?.toString(),
+      latestVersionChangedAt: latestVersionChangedAt == _sentinel
+          ? this.latestVersionChangedAt
+          : latestVersionChangedAt as DateTime?,
+      consecutiveFailedChecks:
+          consecutiveFailedChecks ?? this.consecutiveFailedChecks,
+      isArchived: isArchived == _sentinel
+          ? this.isArchived
+          : isArchived as bool?,
+      newerReleasesFilteredOut: newerReleasesFilteredOut == _sentinel
+          ? this.newerReleasesFilteredOut
+          : newerReleasesFilteredOut as int?,
+      updateHealthEnabled: updateHealthEnabled ?? this.updateHealthEnabled,
+      updateHealthDismissedVersion: updateHealthDismissedVersion == _sentinel
+          ? this.updateHealthDismissedVersion
+          : updateHealthDismissedVersion?.toString(),
     );
   }
 
@@ -497,6 +571,20 @@ class App {
         latestMalwareScanDetail: json['latestMalwareScanDetail']?.toString(),
         latestMalwareScanReportUrl: json['latestMalwareScanReportUrl']
             ?.toString(),
+        latestVersionChangedAt: dateTimeFromJsonValue(
+          json['latestVersionChangedAt'],
+        ),
+        consecutiveFailedChecks:
+            intFromJsonValue(json['consecutiveFailedChecks']) ?? 0,
+        isArchived: json['isArchived'] is bool
+            ? json['isArchived'] as bool
+            : null,
+        newerReleasesFilteredOut: intFromJsonValue(
+          json['newerReleasesFilteredOut'],
+        ),
+        updateHealthEnabled: json['updateHealthEnabled'] != false,
+        updateHealthDismissedVersion: json['updateHealthDismissedVersion']
+            ?.toString(),
       );
     } on TypeError catch (e) {
       unawaited(
@@ -560,6 +648,16 @@ class App {
       'latestMalwareScanDetail': latestMalwareScanDetail,
     if (latestMalwareScanReportUrl != null)
       'latestMalwareScanReportUrl': latestMalwareScanReportUrl,
+    if (latestVersionChangedAt != null)
+      'latestVersionChangedAt': latestVersionChangedAt!.microsecondsSinceEpoch,
+    if (consecutiveFailedChecks != 0)
+      'consecutiveFailedChecks': consecutiveFailedChecks,
+    if (isArchived != null) 'isArchived': isArchived,
+    if (newerReleasesFilteredOut != null)
+      'newerReleasesFilteredOut': newerReleasesFilteredOut,
+    if (!updateHealthEnabled) 'updateHealthEnabled': false,
+    if (updateHealthDismissedVersion != null)
+      'updateHealthDismissedVersion': updateHealthDismissedVersion,
   };
 }
 
@@ -576,6 +674,13 @@ bool isTempId(App app) {
   return RegExp(r'^[0-9]+$').hasMatch(app.id) ||
       RegExp(r'^[0-9a-f]{12}$').hasMatch(app.id);
 }
+
+/// Whether [app] was added without a check (upstream #3345, D10) and hasn't
+/// had a successful one yet: its only APK URLs are placeholders, so there's
+/// nothing to install. The first successful check replaces them.
+bool hasOnlyPlaceholderApks(App app) =>
+    app.apkUrls.isNotEmpty &&
+    app.apkUrls.every((apk) => apk.value == 'placeholder');
 
 /// Returns true when the app uses pseudo-versioning (track-only or disabled version detection).
 bool isVersionPseudo(App app) =>
@@ -716,6 +821,18 @@ DateTime? dateTimeFromJsonValue(dynamic value) {
     if (microsecondsSinceEpoch != null) {
       return DateTime.fromMicrosecondsSinceEpoch(microsecondsSinceEpoch);
     }
+  }
+  return null;
+}
+
+/// Tolerant parser for stored int fields: accepts a number or a numeric
+/// string (legacy and third-party backups), otherwise null.
+int? intFromJsonValue(dynamic value) {
+  if (value is num) {
+    return value.toInt();
+  }
+  if (value is String) {
+    return int.tryParse(value.trim());
   }
   return null;
 }

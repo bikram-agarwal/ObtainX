@@ -24,6 +24,7 @@ class _RecordingShizukuPlatform extends ShizukuApkInstallerPlatform {
   String? selectedInstallerMode;
   String permissionResult = 'services_not_found';
   String? receivedFakeInstallSource;
+  bool? receivedRequestUpdateOwnership;
 
   @override
   Future<void> setInstallerMode(String mode) async {
@@ -35,12 +36,16 @@ class _RecordingShizukuPlatform extends ShizukuApkInstallerPlatform {
     return permissionResult;
   }
 
+  // shizuku_apk_installer 1.4.0 (447d88a0) signature (INST-H9).
   @override
   Future<int?> installAPKs(
     List<String> apkFilesURIs,
-    String fakeInstallSource,
-  ) async {
+    String fakeInstallSource, {
+    String? packageName,
+    bool requestUpdateOwnership = false,
+  }) async {
     receivedFakeInstallSource = fakeInstallSource;
+    receivedRequestUpdateOwnership = requestUpdateOwnership;
     return installSuccessCode;
   }
 }
@@ -417,24 +422,30 @@ void main() {
       expect(await dhizukuInstaller.checkPermission(), isTrue);
       expect(recordingPlatform.selectedInstallerMode, 'dhizuku');
 
+      // One `installerPackageName` contract for every installer (D14).
       await shizukuInstaller.installApk(
         const ['test.apk'],
         appId: 'dev.example.app',
-        installOptions: const {'shizukuPretendToBeGooglePlay': true},
+        installOptions: const {
+          'installerPackageName': 'com.android.vending',
+          'requestUpdateOwnership': true,
+        },
       );
       expect(recordingPlatform.selectedInstallerMode, 'shizuku');
       expect(
         recordingPlatform.receivedFakeInstallSource,
         'com.android.vending',
       );
+      expect(recordingPlatform.receivedRequestUpdateOwnership, isTrue);
 
       await dhizukuInstaller.installApk(
         const ['test.apk'],
         appId: 'dev.example.app',
-        installOptions: const {'shizukuPretendToBeGooglePlay': true},
+        installOptions: const {'installerPackageName': 'com.android.vending'},
       );
       expect(recordingPlatform.selectedInstallerMode, 'dhizuku');
       expect(recordingPlatform.receivedFakeInstallSource, isEmpty);
+      expect(recordingPlatform.receivedRequestUpdateOwnership, isFalse);
     },
   );
 

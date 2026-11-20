@@ -61,22 +61,43 @@ class ExplainedWhenOff extends StatelessWidget {
 /// A Material switch that supplies the platform tap feedback omitted by
 /// Flutter's stock [Switch]. On Android this respects the system's touch-sound
 /// setting and plays the same click as buttons and tappable list rows.
+///
+/// Pass [semanticLabel] when the switch sits next to its label instead of
+/// inside a [SwitchListTile] (which merges its title in): TalkBack otherwise
+/// announces a bare "switch" with no name (upstream #3398).
 class AppSwitch extends StatelessWidget {
-  const AppSwitch({super.key, required this.value, required this.onChanged});
+  const AppSwitch({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.semanticLabel,
+  });
 
   final bool value;
   final ValueChanged<bool>? onChanged;
+  final String? semanticLabel;
 
   @override
   Widget build(BuildContext context) {
-    return Switch(
-      value: value,
-      onChanged: onChanged == null
-          ? null
-          : (bool newValue) {
-              unawaited(Feedback.forTap(context));
-              onChanged!(newValue);
-            },
+    final ValueChanged<bool>? handler = onChanged == null
+        ? null
+        : (bool newValue) {
+            unawaited(Feedback.forTap(context));
+            onChanged!(newValue);
+          };
+    final Widget control = Switch(value: value, onChanged: handler);
+    final String? label = semanticLabel;
+    if (label == null) return control;
+    // One labelled node; its tap action goes through [handler], so a
+    // TalkBack double-tap gets the same feedback as a finger tap.
+    return Semantics(
+      container: true,
+      label: label,
+      toggled: value,
+      enabled: handler != null,
+      excludeSemantics: true,
+      onTap: handler == null ? null : () => handler(!value),
+      child: control,
     );
   }
 }
@@ -135,6 +156,10 @@ Future<bool> showConfirmDialog(
       content: content,
       actions: [
         TextButton(
+          // On TV, focus the safe option unless the caller asked for the
+          // confirm button: an unfocused dialog would let remote input fall
+          // through to the page behind it.
+          autofocus: !autofocusConfirm && context.read<SettingsProvider>().isTV,
           onPressed: () => Navigator.of(ctx).pop(false),
           child: Text(cancelText ?? tr('no')),
         ),

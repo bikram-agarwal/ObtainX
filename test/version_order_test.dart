@@ -163,6 +163,84 @@ class AbiAwareReleaseAPKMirror extends APKMirror {
   }
 }
 
+/// Serves [feed] as the RSS feed and [listing] (if any) as the listing page
+/// at its canonical, slash-terminated URL, recording every request.
+class RecordingAPKMirror extends APKMirror {
+  RecordingAPKMirror(this.feed, {this.listing});
+
+  final String feed;
+  final String? listing;
+  final List<String> requestedUrls = [];
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    requestedUrls.add(url);
+    if (url.endsWith('/feed/')) return Response(feed, 200);
+    if (listing != null &&
+        url == 'https://www.apkmirror.com/apk/example/example/') {
+      return Response(listing!, 200);
+    }
+    return Response('', 404);
+  }
+}
+
+/// One feed item whose `content:encoded` shows [iconUrl], like the live feed.
+String apkMirrorFeedWithIcon(String iconUrl) =>
+    '<rss><channel><item><title>Example 2.0 by Example</title>'
+    '<link>https://www.apkmirror.com/apk/example/example/example-2-0-release/</link>'
+    '<content:encoded><![CDATA[<p><img src="$iconUrl"></p><p>Example 2.0 by Example</p>]]></content:encoded>'
+    '</item></channel></rss>';
+
+/// A release page listing a universal, an arm64-v8a and an armeabi-v7a APK.
+/// [blockReleasePageOnce] makes the first release-page request fail the way
+/// the request gate fails a blocked request: before anything is sent.
+class VariantReleaseAPKMirror extends APKMirror {
+  VariantReleaseAPKMirror({this.blockReleasePageOnce = false});
+
+  bool blockReleasePageOnce;
+  final List<String> requestedUrls = [];
+
+  static const String releasePageUrl =
+      'https://www.apkmirror.com/apk/example/variants/variants-3-0-release/';
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (url == releasePageUrl) {
+      if (blockReleasePageOnce) {
+        blockReleasePageOnce = false;
+        throw RateLimitError(5);
+      }
+      requestedUrls.add(url);
+      return Response('''
+<div><div>3.0 APK universal nodpi <a href="variants-3-0-1-android-apk-download/">download</a></div></div>
+<div><div>3.0 APK arm64-v8a nodpi <a href="variants-3-0-2-android-apk-download/">download</a></div></div>
+<div><div>3.0 APK armeabi-v7a nodpi <a href="variants-3-0-3-android-apk-download/">download</a></div></div>
+''', 200);
+    }
+    requestedUrls.add(url);
+    if (url.endsWith('/variants-3-0-1-android-apk-download/')) {
+      return Response('Download APK 90.00 MB (94,371,840 bytes)', 200);
+    }
+    if (url.endsWith('/variants-3-0-2-android-apk-download/')) {
+      return Response('Download APK 40.00 MB (41,943,040 bytes)', 200);
+    }
+    if (url.endsWith('/variants-3-0-3-android-apk-download/')) {
+      return Response('Download APK 35.00 MB (36,700,160 bytes)', 200);
+    }
+    return Response('', 404);
+  }
+}
+
 class FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
   @override
   Future<BaseDeviceInfo> deviceInfo() async {
@@ -1050,11 +1128,12 @@ void main() {
   // success rate was abysmal. The lazy size resolver now only walks the
   // actual download links found on the release page HTML.
 
-  // APKMirror's Cloudflare rule allowlists HTML pages by a substring match on
-  // `APKUpdater`; a browser-style UA is answered with a 403 challenge, which
-  // silently disables icon/size/changelog/app-id scraping. Pin both the token
-  // and the ObtainX attribution so a future header cleanup can't quietly undo
-  // it.
+  // APKMirror's Cloudflare rule lets HTML pages through on a substring match
+  // on `APKUpdater`; a browser-style UA (and, on pages, the ObtainX UA) is
+  // answered with a 403 challenge, which silently disables size/changelog/
+  // app-id scraping. Pin both the token and the ObtainX attribution on page
+  // requests so a future header cleanup can't quietly undo it, and pin the
+  // feed's ObtainX identity, which APKMirror's admin asked for (#339).
   test('apk mirror user agent carries the allowlisted token', () async {
     expect(apkMirrorAllowlistedUserAgentToken.contains('APKUpdater'), true);
     expect(apkMirrorUserAgent('2.9.9'), contains('APKUpdater'));
@@ -1077,7 +1156,250 @@ void main() {
         .firstWhere((e) => e.key.toLowerCase() == 'user-agent')
         .value;
     expect(sentUserAgent, contains('APKUpdater'));
+
+    // The feed identifies as ObtainX, with the project URL and a version even
+    // when the running one can't be read (the test VM has none).
+    final Map<String, String>?
+    feedHeaders = await APKMirror().getRequestHeaders(
+      const <String, dynamic>{},
+      'https://www.apkmirror.com/apk/signal-foundation/signal-private-messenger/feed/',
+    );
+    final String feedUserAgent = feedHeaders!['user-agent']!;
+    expect(feedUserAgent, startsWith('ObtainX/'));
+    expect(
+      feedUserAgent,
+      endsWith(' (+https://github.com/bikram-agarwal/ObtainX)'),
+    );
+    expect(feedUserAgent, isNot(startsWith('ObtainX/ ')));
+    expect(feedUserAgent, isNot(contains('APKUpdater')));
   });
+
+  test('apk mirror requests go through the per-host gate', () {
+    final apkMirror = APKMirror();
+    expect(apkMirror.enableHostRequestGate, isTrue);
+    expect(apkMirror.maxConcurrentRequestsPerHost, 2);
+  });
+
+  test('apk mirror icon urls name the package after the first underscore', () {
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/wp-content/uploads/2024/01/11/65a71d34ecd19_com.android.chrome.png',
+      ),
+      'com.android.chrome',
+    );
+    // Feed icons carry a size suffix (cases from upstream's apkmirror_test).
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/65a71d34ecd19_com.android.chrome-384x384.png',
+      ),
+      'com.android.chrome',
+    );
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/67189d60d72a1_com.google.android.youtube-480x640.png',
+      ),
+      'com.google.android.youtube',
+    );
+    // Upstream takes the last `_` segment, which reads Firefox Beta's icon as
+    // Firefox's package.
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/5f2a1b_org.mozilla.firefox_beta-384x384.png',
+      ),
+      'org.mozilla.firefox_beta',
+    );
+    // Hash-only icons name no package.
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/5b466f2e62102-384x384.png',
+      ),
+      isNull,
+    );
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/wp-content/uploads/2024/01/11/65a71d34ecd19.png',
+      ),
+      isNull,
+    );
+    expect(apkMirrorPackageFromIconUrl(null), isNull);
+    expect(apkMirrorPackageFromIconUrl(''), isNull);
+  });
+
+  test('apk mirror feed carries the app icon', () {
+    const feed = '''
+<rss><channel><item><content:encoded><![CDATA[
+<p><img src="https://downloadr2.apkmirror.com/x/65a_com.android.chrome-384x384.png"></p>
+]]></content:encoded></item></channel></rss>''';
+    expect(
+      apkMirrorIconUrlFromFeedXml(feed),
+      'https://downloadr2.apkmirror.com/x/65a_com.android.chrome-384x384.png',
+    );
+    expect(
+      apkMirrorPackageFromIconUrl(apkMirrorIconUrlFromFeedXml(feed)),
+      'com.android.chrome',
+    );
+    expect(
+      apkMirrorIconUrlFromFeedXml('<item><title>x</title></item>'),
+      isNull,
+    );
+  });
+
+  test(
+    'apk mirror takes the icon and package from the feed, without the listing',
+    () async {
+      const iconUrl =
+          'https://downloadr2.apkmirror.com/x/65a71d34ecd19_com.example.app-384x384.png';
+      final apkMirror = RecordingAPKMirror(apkMirrorFeedWithIcon(iconUrl));
+      final details = await apkMirror.getLatestAPKDetails(
+        'https://www.apkmirror.com/apk/example/example',
+        const {},
+      );
+      expect(details.iconUrl, iconUrl);
+      expect(details.appId, 'com.example.app');
+      // One request per check: no listing page for the icon any more (#339).
+      expect(apkMirror.requestedUrls, [
+        'https://www.apkmirror.com/apk/example/example/feed/',
+      ]);
+    },
+  );
+
+  test(
+    'apk mirror reads a hash-only icon app id from its listing page',
+    () async {
+      final apkMirror = RecordingAPKMirror(
+        apkMirrorFeedWithIcon(
+          'https://downloadr2.apkmirror.com/x/630d0e65afd4f-384x384.png',
+        ),
+        listing:
+            '<a title="View on Play Store" href="https://play.google.com/store/apps/details?id=com.android.vending"></a>',
+      );
+      final details = await apkMirror.getLatestAPKDetails(
+        'https://www.apkmirror.com/apk/example/example',
+        const {},
+      );
+      expect(details.appId, isNull);
+      expect(
+        await apkMirror.tryInferringAppId(
+          'https://www.apkmirror.com/apk/example/example',
+        ),
+        'com.android.vending',
+      );
+      // The canonical, slash-terminated listing URL: no 301 first.
+      expect(
+        apkMirror.requestedUrls.last,
+        'https://www.apkmirror.com/apk/example/example/',
+      );
+    },
+  );
+
+  test('apk mirror title filter can be inverted', () async {
+    expect(
+      APKMirror().additionalSourceAppSpecificSettingFormItems
+          .expand((row) => row)
+          .map((item) => item.key),
+      contains('invertReleaseTitlesFilter'),
+    );
+    final feed = apkMirrorFeedWithReleases([
+      ('2.0-beta', const Duration(days: 1)),
+      ('1.9', const Duration(days: 2)),
+    ]);
+    const url = 'https://www.apkmirror.com/apk/example/example';
+    const settings = {
+      'filterReleaseTitlesByRegEx': 'beta',
+      'fallbackToOlderReleases': true,
+    };
+    expect(
+      (await FeedFixtureAPKMirror(
+        feed,
+      ).getLatestAPKDetails(url, settings)).changeLog,
+      contains('example-2-0-beta-release'),
+    );
+    expect(
+      (await FeedFixtureAPKMirror(feed).getLatestAPKDetails(url, {
+        ...settings,
+        'invertReleaseTitlesFilter': true,
+      })).changeLog,
+      contains('example-1-9-release'),
+    );
+  });
+
+  test('apk mirror walks a release for its size once per app', () async {
+    final originalDeviceInfoPlatform = DeviceInfoPlatform.instance;
+    DeviceInfoPlatform.instance = FakeAndroidDeviceInfoPlatform();
+    addTearDown(() {
+      DeviceInfoPlatform.instance = originalDeviceInfoPlatform;
+    });
+    final first = VariantReleaseAPKMirror();
+    expect(
+      await first.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'once-per-release',
+      ),
+      94371840,
+    );
+    expect(first.requestedUrls, isNotEmpty);
+    // Reopening the app page (a fresh source, as getSource hands out) reuses
+    // the first walk.
+    final second = VariantReleaseAPKMirror();
+    expect(
+      await second.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'once-per-release',
+      ),
+      94371840,
+    );
+    expect(second.requestedUrls, isEmpty);
+
+    // A walk the gate stopped before sending anything doesn't count.
+    final blocked = VariantReleaseAPKMirror(blockReleasePageOnce: true);
+    expect(
+      await blocked.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'blocked-once',
+      ),
+      isNull,
+    );
+    expect(blocked.requestedUrls, isEmpty);
+    expect(
+      await blocked.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'blocked-once',
+      ),
+      94371840,
+    );
+  });
+
+  test(
+    'apk mirror size skips universal variants next to the ABI match',
+    () async {
+      final originalDeviceInfoPlatform = DeviceInfoPlatform.instance;
+      DeviceInfoPlatform.instance = FakeAndroidDeviceInfoPlatform();
+      addTearDown(() {
+        DeviceInfoPlatform.instance = originalDeviceInfoPlatform;
+      });
+      final apkMirror = VariantReleaseAPKMirror();
+      expect(
+        await apkMirror.resolveLatestApkSizeBytes(
+          releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+          additionalSettings: const {'autoApkFilterByArch': true},
+          listingKey: 'universal-variants',
+        ),
+        41943040,
+      );
+      expect(
+        apkMirror.requestedUrls
+            .where((url) => url.contains('android-apk-download'))
+            .toList(),
+        [
+          '${VariantReleaseAPKMirror.releasePageUrl}variants-3-0-2-android-apk-download/',
+        ],
+      );
+    },
+  );
 
   test('apk mirror app slug aliases standardize to canonical app slug', () {
     expect(

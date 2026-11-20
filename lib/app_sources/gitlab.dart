@@ -199,10 +199,16 @@ class GitLab extends AppSource {
         additionalSettings,
       );
       ensureHttpSuccess(res0);
-      final int? projectId = jsonDecode(res0.body)['id'];
+      final dynamic projectJson = jsonDecode(res0.body);
+      final int? projectId = projectJson['id'];
       if (projectId == null) {
         throw NoReleasesError();
       }
+      // Update health (#1753): the project response already says whether the
+      // project is archived, so this costs no request.
+      final bool? projectArchived = projectJson['archived'] is bool
+          ? projectJson['archived'] as bool
+          : null;
 
       // Request data from REST API
       final String releasesPath = trackOnly ? 'repository/tags' : 'releases';
@@ -307,6 +313,8 @@ class GitLab extends AppSource {
             (rawChangeLog != null && rawChangeLog.trim().isNotEmpty)
             ? rawChangeLog.trim()
             : null;
+        // No `releaseUrl` (upstream d3c88e0a): ObtainX resolves relative
+        // changelog links against the repository instead (v1.7.4 sync D21).
         return APKDetails(
           version,
           apkUrls.entries.toList(),
@@ -356,6 +364,7 @@ class GitLab extends AppSource {
         '^${RegExp.escape(standardUrl)}/-/jobs/[0-9]+/artifacts/file/[^/]+',
       );
       finalResult = finalResult.copyWith(
+        isArchived: projectArchived,
         apkUrls: finalResult.apkUrls.map((apkUrl) {
           if (jobArtifactRegex.hasMatch(apkUrl.value)) {
             return MapEntry(

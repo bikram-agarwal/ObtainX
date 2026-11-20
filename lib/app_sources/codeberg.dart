@@ -49,6 +49,10 @@ class Codeberg extends AppSource {
     // out of it instead of making the user download an APK first. Optional
     // because a Gradle scrape is a guess — see [tryInferringAppId].
     appIdInferIsOptional = true;
+    // Release dates come through [_gh] (published_at, commit or asset dates),
+    // so "Release date" can be the version string here too (upstream #3339).
+    // Unlike upstream, no includeAdditionalOptsInMainSearch: see [Forgejo].
+    showReleaseDateAsVersionToggle = true;
   }
 
   /// Forgejo's contents endpoint is GitHub's, path for path and payload for
@@ -206,6 +210,8 @@ class Codeberg extends AppSource {
   /// source swap.
   @override
   App postProcessApp(App app) {
+    // [_gh] records when this check read the repository's archived flag.
+    app = _gh.postProcessApp(app);
     if (!app.additionalSettings.keys.any(_githubOnlySettingKeys.contains)) {
       return app;
     }
@@ -215,13 +221,30 @@ class Codeberg extends AppSource {
     );
   }
 
+  /// The port is part of a self-hosted instance's address (upstream #3472).
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
     return standardizeUrlWithRegex(
       url,
       subdomainPrefix: r'(www\.)?',
-      pathPattern: r'/[^/]+/[^/]+',
+      pathPattern: r'(?::[0-9]+)?/[^/]+/[^/]+',
     );
+  }
+
+  /// Always reduces the URL to the repository root, also on an overridden
+  /// host (upstream #3290): the base skips that step when the host changed,
+  /// which left `…/owner/repo/releases` as the stored URL of a self-hosted
+  /// instance.
+  @override
+  String standardizeUrl(String url) =>
+      sourceSpecificStandardizeURL(preStandardizeUrl(url));
+
+  /// The repository's API URL, also used for its archived flag (D8).
+  static String _repoApiUrl(String standardUrl) {
+    final Uri standardUri = Uri.parse(standardUrl);
+    return standardUri
+        .replace(path: '/api/v1/repos${standardUri.path}')
+        .toString();
   }
 
   @override
@@ -234,6 +257,9 @@ class Codeberg extends AppSource {
     Map<String, dynamic> additionalSettings,
   ) async {
     try {
+      // The delegate decides from the previous check what it can skip, e.g.
+      // re-reading the repository's archived flag.
+      _gh.previouslyCheckedApp = previouslyCheckedApp;
       return await _gh.fetchReleaseDetailsWithTagFallback(
         standardUrl,
         await _requestSettings(additionalSettings),
@@ -246,6 +272,7 @@ class Codeberg extends AppSource {
               .toString();
         },
         null,
+        repoApiUrl: _repoApiUrl(standardUrl),
       );
     } catch (e) {
       rethrowOrWrapError(e);

@@ -87,5 +87,9 @@ App applyMinAgeSuppression(App currentApp, App fetchedApp) {
     latestMalwareScanStatus: currentApp.latestMalwareScanStatus,
     latestMalwareScanDetail: currentApp.latestMalwareScanDetail,
     latestMalwareScanReportUrl: currentApp.latestMalwareScanReportUrl,
+    // Release-scoped update-health data (D8). `isArchived` describes the
+    // project, not the release, so the fresh value is kept.
+    newerReleasesFilteredOut: currentApp.newerReleasesFilteredOut,
+    latestVersionChangedAt: currentApp.latestVersionChangedAt,
   );
 }

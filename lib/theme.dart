@@ -8,14 +8,14 @@ import 'package:flutter/material.dart';
 /// screen without per-widget styling.
 ThemeData buildObtainiumTheme(ColorScheme colorScheme, String? fontFamily) {
   final cardShape = RoundedSuperellipseBorder(
-    borderRadius: BorderRadius.circular(24),
+    borderRadius: BorderRadius.circular(AppRadii.large),
   );
   const buttonShape = StadiumBorder();
   final dialogShape = RoundedSuperellipseBorder(
-    borderRadius: BorderRadius.circular(28),
+    borderRadius: BorderRadius.circular(AppRadii.xlarge),
   );
   final fieldShape = RoundedSuperellipseBorder(
-    borderRadius: BorderRadius.circular(16),
+    borderRadius: BorderRadius.circular(AppRadii.medium),
   );
 
   const pillButtonStyle = ButtonStyle(
@@ -51,7 +51,9 @@ ThemeData buildObtainiumTheme(ColorScheme colorScheme, String? fontFamily) {
     ),
     bottomSheetTheme: const BottomSheetThemeData(
       shape: RoundedSuperellipseBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadii.xlarge),
+        ),
       ),
     ),
     appBarTheme: const AppBarThemeData(centerTitle: false),
@@ -71,7 +73,9 @@ ThemeData buildObtainiumTheme(ColorScheme colorScheme, String? fontFamily) {
     // it, and that style's non-null fields win.
     textButtonTheme: const TextButtonThemeData(style: pillButtonStyle),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
-      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedSuperellipseBorder(
+        borderRadius: BorderRadius.circular(AppRadii.fab),
+      ),
       // FAB shadow depth. Tweak these to try different values (M3 default is 6).
       // `elevation` is the resting shadow; the others apply on interaction.
       elevation: 4,
@@ -93,7 +97,9 @@ ThemeData buildObtainiumTheme(ColorScheme colorScheme, String? fontFamily) {
       ),
       menuStyle: MenuStyle(
         shape: WidgetStatePropertyAll(
-          RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(16)),
+          RoundedSuperellipseBorder(
+            borderRadius: BorderRadius.circular(AppRadii.medium),
+          ),
         ),
       ),
     ),
@@ -148,13 +154,91 @@ abstract final class ExpressiveMotion {
   static const Duration medium = Durations.medium2;
 }
 
-abstract final class AppPaddings {
-  static const EdgeInsets pageHorizontal = EdgeInsets.symmetric(horizontal: 16);
-  static const EdgeInsets page = EdgeInsets.fromLTRB(16, 0, 16, 0);
-  static const EdgeInsets cardInner = EdgeInsets.all(16);
+// Upstream's spacing/radius tokens (790fabb9), kept as shared vocabulary so
+// ported upstream code compiles unchanged (v1.7.4 sync, D3). Fork surfaces
+// don't use them: card and tile corners go through
+// `SettingsProvider.cardCornerRadiusFor` and the `kM3e*` constants in
+// theme/m3e_expressive_list.dart, never [AppRadii], whose fixed values would
+// bypass the user's card-corner scale. [AppSpacings.sectionGap] is upstream's
+// 24, not the fork's old 20; no fork widget reads it.
+abstract final class AppSpacings {
+  static const double xxs = 2;
+  static const double xs = 4;
+  static const double sm = 8;
+  static const double md = 12;
+  static const double lg = 16;
+  static const double xl = 24;
+  static const double xxl = 32;
+
+  static const double elementGap = sm;
+  static const double sectionGap = xl;
+  static const double connectedGap = 3;
+  static const double listGap = xs;
 }
 
-abstract final class AppSpacings {
-  static const double sectionGap = 20;
-  static const double elementGap = 8;
+abstract final class AppPaddings {
+  static const EdgeInsets pageHorizontal = EdgeInsets.symmetric(
+    horizontal: AppSpacings.lg,
+  );
+  static const EdgeInsets page = EdgeInsets.fromLTRB(
+    AppSpacings.lg,
+    0,
+    AppSpacings.lg,
+    0,
+  );
+  static const EdgeInsets cardInner = EdgeInsets.all(AppSpacings.lg);
+  static const EdgeInsets inputContent = EdgeInsets.symmetric(
+    horizontal: AppSpacings.lg,
+    vertical: AppSpacings.lg,
+  );
+  static const EdgeInsets listOuter = EdgeInsets.fromLTRB(
+    AppSpacings.md,
+    AppSpacings.xs,
+    AppSpacings.md,
+    AppSpacings.xs,
+  );
+  static const EdgeInsets rowHorizontal = EdgeInsets.symmetric(
+    horizontal: AppSpacings.lg,
+  );
+  static const EdgeInsets sliderTile = EdgeInsets.fromLTRB(
+    AppSpacings.lg,
+    AppSpacings.sm,
+    AppSpacings.lg,
+    AppSpacings.sm,
+  );
+  static const EdgeInsets sectionHeader = EdgeInsets.fromLTRB(
+    AppSpacings.lg,
+    AppSpacings.xl,
+    AppSpacings.lg,
+    AppSpacings.sm,
+  );
+  static const EdgeInsets listSectionHeader = EdgeInsets.fromLTRB(
+    28,
+    0,
+    28,
+    AppSpacings.sm,
+  );
 }
+
+abstract final class AppRadii {
+  static const double inline = 4;
+  static const double xs = 8;
+  static const double small = 12;
+  static const double medium = 16;
+  static const double fab = 20;
+  static const double large = 24;
+  static const double xlarge = 28;
+}
+
+abstract final class AppIconSizes {
+  static const double small = 16;
+  static const double medium = 20;
+  static const double large = 24;
+}
+
+/// The type style used for section labels throughout the app.
+TextStyle? sectionHeaderTextStyle(BuildContext context) =>
+    Theme.of(context).textTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.w600,
+      color: Theme.of(context).colorScheme.onSurface,
+    );

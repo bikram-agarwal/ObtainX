@@ -1235,6 +1235,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
                       else
                         const SizedBox(width: 8),
                       AppSwitch(
+                        // The label is a sibling Text, not merged in.
+                        semanticLabel: switchItem.label,
                         value: values[fieldKey],
                         onChanged: switchItem.disabled
                             ? null

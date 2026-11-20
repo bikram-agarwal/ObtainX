@@ -1,4 +1,11 @@
 // HTTP client creation, streaming requests, redirect/error handling.
+//
+// Intentional divergence (v1.7.4 sync, D1): upstream Obtainium 1.7.2 moved
+// to an embedded Cronet stack (package:http + cronet_http, the Android trust
+// store, a DCL fallback for GrapheneOS). ObtainX stays on dart:io: Cronet
+// adds ~7 MB per APK, needs an F-Droid recipe change, and would have to
+// re-implement this file's cancel, timeout, resume and redirect guards. Do
+// not port Cronet hunks into this file.
 
 import 'dart:async';
 import 'dart:convert';
@@ -11,6 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/http/response_bytes.dart';
+import 'package:obtainium/services/pinned_certificates.dart';
 
 // ========================================================================
 // HttpService — HTTP client creation, streaming requests, and error mapping.
@@ -42,82 +50,41 @@ class HttpService {
     'x-requested-with',
   };
 
-  /// Opt-in certificate pinning (the `enableCertificatePinning` setting): the
-  /// CA roots each pinned host (and its subdomains) may chain to.
-  static final Map<String, Future<List<Uint8List>>> _certificatePins = {
-    'github.com': _loadCertificateFromAsset([
-      'assets/ca-certs/sectigo-pub-serv-auth-r46.crt',
-      'assets/ca-certs/sectigo-pub-serv-auth-e46.crt',
+  /// The `enableCertificatePinning` setting, pushed here by SettingsProvider
+  /// (on init and on change) so a request whose caller doesn't pass
+  /// `certificatePinning` still honours it. Before this, helper paths that
+  /// omitted the flag (e.g. some probes) bypassed pinning.
+  static bool defaultCertificatePinning = false;
 
-      // redirects from api.github.com for obtaining release assets point to
-      // release-assets.githubusercontent.com which uses ISRG (Let's Encrypt)
-      // adding that as another section doesn't work because of
-      // HttpClient follows redirects (as intended)
-      'assets/ca-certs/isrg-root-x1.crt',
-      'assets/ca-certs/isrg-root-x2.crt',
-      'assets/ca-certs/isrg-root-ye.crt',
-      'assets/ca-certs/isrg-root-yr.crt',
-    ]),
-    'codeberg.org': _loadCertificateFromAsset([
-      'assets/ca-certs/isrg-root-x1.crt',
-      'assets/ca-certs/isrg-root-x2.crt',
-      'assets/ca-certs/isrg-root-ye.crt',
-      'assets/ca-certs/isrg-root-yr.crt',
-    ]),
-    'gitlab.com': _loadCertificateFromAsset([
-      'assets/ca-certs/sectigo-pub-serv-auth-r46.crt',
-      'assets/ca-certs/sectigo-pub-serv-auth-e46.crt',
-    ]),
-    'rustore.ru': _loadCertificateFromAsset([
-      'assets/ca-certs/harica-tls-root-2021-rsa.crt',
-      'assets/ca-certs/harica-tls-root-2021-ecc.crt',
-      'assets/ca-certs/russian-mintsifry-root.crt',
-    ]),
-  };
+  static void setDefaultCertificatePinning(bool enabled) {
+    defaultCertificatePinning = enabled;
+  }
 
   final Duration responseTimeout;
 
   HttpService({this.responseTimeout = sourceResponseTimeout});
-
-  static Future<List<Uint8List>> _loadCertificateFromAsset(
-    List<String> assetsPath,
-  ) async {
-    final List<Uint8List> certsBytes = [];
-    for (final certPath in assetsPath) {
-      final cert = await rootBundle.load(certPath);
-      certsBytes.add(cert.buffer.asUint8List());
-    }
-    return certsBytes;
-  }
 
   static String extractRootHost(String host) {
     final parts = host.split('.');
     return parts.length > 2 ? parts.sublist(parts.length - 2).join('.') : host;
   }
 
-  /// Whether certificate pinning, when enabled, applies to [host].
-  static bool isPinnedHost(String host) =>
-      _certificatePins.containsKey(host) ||
-      _certificatePins.containsKey(extractRootHost(host));
+  /// Whether certificate pinning, when enabled, applies to [host]. The pinned
+  /// hosts and their roots live in `pinned_certificates.dart`.
+  static bool isPinnedHost(String host) => builtInPinnedHostFor(host) != null;
 
   /// Whether a request to [url] needs a client with its own trust store, and
   /// so must not run on a shared or pooled client: RuStore hosts always (they
   /// may be signed by the Mintsifry root), pinned hosts while pinning is on.
-  static bool needsDedicatedClient(
-    Uri url, {
-    required bool certificatePinning,
-  }) =>
+  static bool needsDedicatedClient(Uri url, {bool? certificatePinning}) =>
       extractRootHost(url.host) == 'rustore.ru' ||
-      (certificatePinning && isPinnedHost(url.host));
+      ((certificatePinning ?? defaultCertificatePinning) &&
+          isPinnedHost(url.host));
 
   Future<SecurityContext?> _createCertPinning(Uri url) async {
-    final host = url.host;
-    final rootHost = extractRootHost(host);
-    final String? pinKey = _certificatePins.containsKey(host)
-        ? host
-        : (_certificatePins.containsKey(rootHost) ? rootHost : null);
-    if (pinKey == null) return null;
-    final certsBytes = await _certificatePins[pinKey]!;
+    final BuiltInPinnedHost? pinned = builtInPinnedHostFor(url.host);
+    if (pinned == null) return null;
+    final certsBytes = await pinnedCertificateBytes(pinned);
     final securityContext = SecurityContext();
     for (final certBytes in certsBytes) {
       securityContext.setTrustedCertificatesBytes(certBytes);
@@ -130,12 +97,17 @@ class HttpService {
      Chrome Root Store. This is workaround to trust Mintsifry CA for network
      requests made to RuStore domains and subdomains
    */
+  static Future<Uint8List>? _mintsifryRootBytes;
+
   Future<SecurityContext> _ruStoreWorkaroundSecurityContext() async {
     final securityContext = SecurityContext(withTrustedRoots: true);
-    final cert = await rootBundle.load(
-      'assets/ca-certs/russian-mintsifry-root.crt',
-    );
-    securityContext.setTrustedCertificatesBytes(cert.buffer.asUint8List());
+    final Uint8List cert = await (_mintsifryRootBytes ??= rootBundle
+        .load(russianMintsifryAssetPath)
+        .then(
+          (data) =>
+              data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        ));
+    securityContext.setTrustedCertificatesBytes(cert);
     return securityContext;
   }
 
@@ -154,10 +126,11 @@ class HttpService {
   Future<HttpClient> createHttpClientForUrl(
     Uri url, {
     required bool insecure,
-    bool certificatePinning = false,
+    bool? certificatePinning,
   }) async {
+    final bool pinningOn = certificatePinning ?? defaultCertificatePinning;
     SecurityContext? securityContext;
-    if (certificatePinning) {
+    if (pinningOn) {
       securityContext = await _createCertPinning(url);
     }
     if (securityContext == null && extractRootHost(url.host) == 'rustore.ru') {
@@ -171,7 +144,7 @@ class HttpService {
           (X509Certificate cert, String host, int port) {
             // Pinned sites (and subdomains of a pinned root) must still
             // reject bad certificates even when insecure mode is enabled.
-            return !(certificatePinning && isPinnedHost(host));
+            return !(pinningOn && isPinnedHost(host));
           };
     }
     return client;
@@ -219,8 +192,9 @@ class HttpService {
     Object? postBody,
     HttpClient? sharedClient,
     bool allowInsecureRedirects = false,
-    bool certificatePinning = false,
+    bool? certificatePinning,
   }) async {
+    certificatePinning ??= defaultCertificatePinning;
     var currentUrl = Uri.parse(url);
     var redirectCount = 0;
     List<Cookie> cookies = [];
@@ -265,7 +239,9 @@ class HttpService {
           request.followRedirects = false;
           if (postBody != null) {
             if (postBody is String) {
-              request.write(postBody);
+              // Bytes, not write(): with no charset set, write() encodes as
+              // latin1 and mangles anything outside it (upstream 80bc82f8).
+              request.add(utf8.encode(postBody));
             } else {
               request.headers.contentType = ContentType.json;
               request.write(jsonEncode(postBody));
@@ -307,7 +283,7 @@ class HttpService {
                       );
                 cookies = [];
               } else {
-                cookies = response.cookies;
+                cookies = _cookiesFromResponse(response);
               }
               currentUrl = nextUrl;
               redirectCount++;
@@ -333,6 +309,26 @@ class HttpService {
       ownedClient?.close(force: true);
       rethrow;
     }
+  }
+
+  /// The response's cookies, skipping any malformed `Set-Cookie` value. The
+  /// dart:io getter parses them all at once and throws (FormatException or
+  /// HttpException) on the first bad one, which used to fail the whole
+  /// request (upstream 80bc82f8 catches only FormatException).
+  static List<Cookie> _cookiesFromResponse(HttpClientResponse response) {
+    final List<String>? values = response.headers[HttpHeaders.setCookieHeader];
+    if (values == null || values.isEmpty) return [];
+    final List<Cookie> cookies = [];
+    for (final String value in values) {
+      try {
+        cookies.add(Cookie.fromSetCookieValue(value));
+      } on FormatException {
+        // Malformed cookie: skip it.
+      } on HttpException {
+        // Malformed cookie: skip it.
+      }
+    }
+    return cookies;
   }
 
   Future<http.Response> httpClientResponseStreamToFinalResponse(
@@ -436,7 +432,7 @@ sourceRequestStreamResponse(
   bool followRedirects = true,
   Object? postBody,
   bool allowInsecureRedirects = false,
-  bool certificatePinning = false,
+  bool? certificatePinning,
 }) => HttpService().sourceRequestStreamResponse(
   method,
   url,

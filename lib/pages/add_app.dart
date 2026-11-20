@@ -11,6 +11,7 @@ import 'package:obtainium/components/bulk_add_widget.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
+import 'package:obtainium/components/ui_widgets.dart' show showConfirmDialog;
 import 'package:obtainium/components/version_regex_assist_dialog.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/main.dart';
@@ -87,6 +88,31 @@ List<String> searchPromptAutoCompleteOptions({
 }
 
 enum _AddMode { launcher, byUrl, search }
+
+/// One way to search a store: its search profile (D20, upstream 310cca1e).
+/// [source] is a template; searches run on fresh instances.
+class _SearchProfileOption {
+  const _SearchProfileOption(
+    this.source,
+    this.profile, {
+    required this.storeHasProfiles,
+  });
+
+  final AppSource source;
+  final SourceSearchProfile profile;
+
+  /// Whether the store has several profiles, so its results say which one
+  /// found them.
+  final bool storeHasProfiles;
+}
+
+/// A search result's key (D20): `profileId|url`, so one URL that two profiles
+/// found stays two results, each adding with its own profile's settings.
+String _searchResultKey(String profileId, String url) => '$profileId|$url';
+
+String _searchResultProfileId(String key) => key.substring(0, key.indexOf('|'));
+
+String _searchResultUrl(String key) => key.substring(key.indexOf('|') + 1);
 
 enum _AddAppLauncherDestination {
   addByUrl,
@@ -188,6 +214,15 @@ class AddAppPageState extends State<AddAppPage> {
   Map<String, dynamic> additionalSettings = {};
   bool additionalSettingsValid = true;
   bool inferAppIdIfOptional = true;
+
+  /// Values the options form built after the last source change starts with
+  /// instead of its defaults: a kept On-demand choice, and a picked search
+  /// profile's settings (see [changeUserInput]).
+  Map<String, dynamic> _formCarriedSettings = {};
+
+  /// Part of the options form's key, so picking a search result whose profile
+  /// has settings of its own builds the form again, even for the same source.
+  int _additionalOptsFormGeneration = 0;
 
   /// Whether the "App ID - Custom" box currently holds a value, debounced.
   ///
@@ -362,9 +397,11 @@ class AddAppPageState extends State<AddAppPage> {
   static final Map<String, Map<String, MapEntry<String, List<String>>>>
   _searchCache = {};
   static const int _searchCacheMaxEntries = 50;
-  // Searchable-source names the user has selected (null = not yet initialised)
+  // Search profile IDs the user has selected (null = not yet initialised). A
+  // source with one profile has its name as the ID (D20).
   Set<String>? _searchSelectedStores;
-  // Interleaved search results: key=URL/identifier, value=(sourceName, subtitleLines)
+  // Interleaved search results: key=[_searchResultKey], value=(source
+  // identifier, subtitleLines)
   Map<String, MapEntry<String, List<String>>> _searchResults = {};
   final Set<String> _searchSelectedResultUrls = {};
   bool _searchHasSearched = false;
@@ -456,6 +493,98 @@ class AddAppPageState extends State<AddAppPage> {
     return _searchSelectedStores!;
   }
 
+  /// The ways the stores can be searched, one chip each, in chip order: global
+  /// stores first, then by store name, each store's profiles in its own order
+  /// (D20: Galaxy Store has Global and China). Retired sources aren't offered
+  /// (D19).
+  List<_SearchProfileOption> _searchProfileOptions() {
+    final List<AppSource> searchableSources =
+        sourceProvider.sourceTemplates
+            .where((AppSource source) => source.canSearch && !source.retired)
+            .toList()
+          ..sort((AppSource a, AppSource b) {
+            if (a.regionalStore != b.regionalStore) {
+              return a.regionalStore ? 1 : -1;
+            }
+            return a.name.compareTo(b.name);
+          });
+    return [
+      for (final AppSource source in searchableSources)
+        for (final SourceSearchProfile profile in source.searchProfiles)
+          _SearchProfileOption(
+            source,
+            profile,
+            storeHasProfiles: source.searchProfiles.length > 1,
+          ),
+    ];
+  }
+
+  /// Adds [urls] that a search profile with settings of its own found (D20,
+  /// e.g. Galaxy Store China's device and CSC), as [AppsProvider.addAppsByURL]
+  /// adds the others: that takes no settings, so each app is fetched with
+  /// them here, then saved the same way. Errors are `[url or ID, message]`.
+  Future<List<List<String>>> _addSearchResultsWithSettings(
+    AppsProvider appsProvider,
+    List<String> urls,
+    AppSource source,
+    Map<String, dynamic> settings,
+    bool includePrereleases,
+  ) async {
+    final Set<String> trackedUrls = appsProvider.apps.values
+        .map((AppInMemory listing) => listing.app.url)
+        .toSet();
+    final List<List<String>> errors = [];
+    for (
+      int start = 0;
+      start < urls.length;
+      start += kDefaultFetchConcurrency
+    ) {
+      final List<String> batch = urls.sublist(
+        start,
+        (start + kDefaultFetchConcurrency).clamp(0, urls.length),
+      );
+      final List<Object> results = await Future.wait(
+        batch.map((String url) async {
+          try {
+            if (trackedUrls.contains(url)) {
+              throw ObtainiumError(tr('appAlreadyAdded'));
+            }
+            return await sourceProvider.getAppByURLNaive(
+              url,
+              sourceOverride: source,
+              includePrereleases: includePrereleases,
+              settings: settings,
+            );
+          } catch (error) {
+            return error;
+          }
+        }),
+      );
+      for (int index = 0; index < batch.length; index++) {
+        final Object result = results[index];
+        if (result is! App) {
+          errors.add([batch[index], result.toString()]);
+          continue;
+        }
+        final AppInMemory? existingListing = sameStoreListingIn(
+          appsProvider.apps,
+          result,
+        );
+        if (existingListing != null) {
+          errors.add([
+            result.id,
+            '${tr('appAlreadyAdded')}: ${existingListing.name}',
+          ]);
+          continue;
+        }
+        await appsProvider.saveApps([
+          appsProvider.withAllocatedListingId(result),
+        ], onlyIfExists: false);
+      }
+    }
+    return errors;
+  }
+
   bool _isUrlInputValid(String value) {
     if (value.trim().isEmpty) {
       return false;
@@ -470,12 +599,17 @@ class AddAppPageState extends State<AddAppPage> {
     }
   }
 
+  /// [appSettings]: a search profile's own app settings (D20, e.g. Galaxy
+  /// Store China's device and CSC). Picking such a result always starts the
+  /// options over from the source's defaults plus these, even when the source
+  /// is the one already picked.
   void changeUserInput(
     String input,
     bool valid,
     bool isBuilding, {
     bool updateUrlInput = false,
     String? overrideSource,
+    Map<String, dynamic>? appSettings,
   }) {
     userInput = input;
     if (!isBuilding) {
@@ -513,7 +647,8 @@ class AddAppPageState extends State<AddAppPage> {
             : null;
         if (pickedSource.runtimeType != source.runtimeType ||
             overrideChanged ||
-            (prevHost != null && prevHost != source?.hosts[0])) {
+            (prevHost != null && prevHost != source?.hosts[0]) ||
+            (appSettings != null && source != null)) {
           pickedSource = source;
           pickedSource?.runOnAddAppInputChange(userInput);
           final dynamic preservedOnDemandOnly =
@@ -523,9 +658,15 @@ class AddAppPageState extends State<AddAppPage> {
                   source.combinedAppSpecificSettingFormItems,
                 )
               : {};
-          if (preservedOnDemandOnly == true) {
-            additionalSettings['onDemandOnly'] = true;
-          }
+          // Carried into the new form too (buildAdditionalSettingsItems):
+          // the form reports its values when it's built (DET-14), and would
+          // otherwise put the defaults back.
+          _formCarriedSettings = {
+            if (preservedOnDemandOnly == true) 'onDemandOnly': true,
+            if (source != null) ...?appSettings,
+          };
+          additionalSettings.addAll(_formCarriedSettings);
+          if (appSettings != null) _additionalOptsFormGeneration++;
           additionalSettingsValid = source != null
               ? !sourceProvider.ifRequiredAppSpecificSettingsExist(source)
               : true;
@@ -543,6 +684,7 @@ class AddAppPageState extends State<AddAppPage> {
     additionalSettings = {};
     additionalSettingsValid = true;
     inferAppIdIfOptional = true;
+    _formCarriedSettings = {};
     pickedCategories = [];
     _urlFieldController.clear();
   }
@@ -593,7 +735,8 @@ class AddAppPageState extends State<AddAppPage> {
           items: const [],
           additionalWidgets: [
             ...sourceProvider.sourceTemplates
-                .where((source) => source.name != 'RockMods')
+                // A retired source only keeps its apps loading (D19).
+                .where((source) => source.name != 'RockMods' && !source.retired)
                 .map(
                   (source) => Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1452,16 +1595,64 @@ class AddAppPageState extends State<AddAppPage> {
           }
           final trackOnly =
               pickedSource!.enforceTrackOnly || userPickedTrackOnly;
-          app = await sourceProvider.getApp(
-            pickedSource!,
-            userInput.trim(),
-            additionalSettings,
-            trackOnlyOverride: trackOnly,
-            sourceIsOverriden: pickedSourceOverride != null,
-            inferAppIdIfOptional: inferAppIdIfOptional,
-          );
-          // Only download the APK here if you need to for the package ID
-          if (isTempId(app) && app.additionalSettings['trackOnly'] != true) {
+          bool addedWithoutCheck = false;
+          try {
+            app = await sourceProvider.getApp(
+              pickedSource!,
+              userInput.trim(),
+              additionalSettings,
+              trackOnlyOverride: trackOnly,
+              sourceIsOverriden: pickedSourceOverride != null,
+              inferAppIdIfOptional: inferAppIdIfOptional,
+            );
+          } catch (e) {
+            // "Add anyway" (upstream #3345, D10), opt-in: only for a failure
+            // nobody expected (no connection, a source bug). An answer from
+            // the source, such as no matching release or a release too new
+            // for the minimum age, is shown as it is.
+            final bool unexpected =
+                (e is! ObtainiumError || e.unexpected) &&
+                e is! MinUpdateAgeError;
+            if (!unexpected ||
+                !settingsProvider.allowAddingAppsWithoutCheck ||
+                !context.mounted) {
+              rethrow;
+            }
+            final bool addAnyway = await showConfirmDialog(
+              context,
+              title: tr('addWithoutCheckQuestion'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(tr('addWithoutCheckExplanation')),
+                    const SizedBox(height: 8),
+                    Text('$e'),
+                  ],
+                ),
+              ),
+              confirmText: tr('addAnyway'),
+              cancelText: tr('cancel'),
+            );
+            if (!addAnyway || !context.mounted) {
+              throw ObtainiumError(tr('cancelled'));
+            }
+            app = sourceProvider.buildPlaceholderApp(
+              pickedSource!,
+              userInput.trim(),
+              additionalSettings,
+              trackOnlyOverride: trackOnly,
+              sourceIsOverriden: pickedSourceOverride != null,
+            );
+            addedWithoutCheck = true;
+          }
+          // Only download the APK here if you need to for the package ID. Not
+          // for an app added without a check: it has no APK yet, and its first
+          // install finds the package.
+          if (!addedWithoutCheck &&
+              isTempId(app) &&
+              app.additionalSettings['trackOnly'] != true) {
             final detectionResult = await showDownloadApkToIdentifyAppDialog(
               app,
             );
@@ -1581,6 +1772,19 @@ class AddAppPageState extends State<AddAppPage> {
             item.value = true;
           }
         }
+      }
+      // Shown, so the form's first report (below) keeps them; see
+      // [_formCarriedSettings]. A dropdown keeps its default unless the value
+      // is one of its options.
+      for (final GeneratedFormItem item in items.expand((row) => row)) {
+        if (!_formCarriedSettings.containsKey(item.key)) continue;
+        final dynamic carried = _formCarriedSettings[item.key];
+        if (item is GeneratedFormDropdown &&
+            item.opts?.any((option) => option.key == carried.toString()) !=
+                true) {
+          continue;
+        }
+        item.value = carried;
       }
       // Mirrors AdditionalOptionsPage: the per-app VirusTotal switch stays visible
       // but inert when scanning isn't usable (global toggle off or no validated
@@ -1705,10 +1909,24 @@ class AddAppPageState extends State<AddAppPage> {
     }
 
     Future<void> addSelectedSearchResults() async {
-      final List<String> selectedUrls = _searchResults.keys
+      final List<String> selectedKeys = _searchResults.keys
           .where(_searchSelectedResultUrls.contains)
           .toList();
-      if (selectedUrls.isEmpty) return;
+      if (selectedKeys.isEmpty) return;
+      final List<String> selectedUrls = selectedKeys
+          .map(_searchResultUrl)
+          .toList();
+      // One chip at a time here, so one profile found them all.
+      final String profileId = _searchResultProfileId(selectedKeys.first);
+      final Map<String, dynamic> profileSettings =
+          _searchProfileOptions()
+              .where(
+                (_SearchProfileOption option) => option.profile.id == profileId,
+              )
+              .firstOrNull
+              ?.profile
+              .appSettings ??
+          const {};
 
       bool saveCompleted = false;
       final bool embeddedDetail = widget._embeddedDetail;
@@ -1721,17 +1939,26 @@ class AddAppPageState extends State<AddAppPage> {
       });
       try {
         final String? sourceIdentifier =
-            _searchResults[selectedUrls.first]?.key;
+            _searchResults[selectedKeys.first]?.key;
         final AppSource? sourceOverride = sourceIdentifier == null
             ? null
             : sourceProvider.getSource(
                 selectedUrls.first,
                 overrideSource: sourceIdentifier,
               );
-        final List<List<String>> errors = await appsProvider.addAppsByURL(
-          selectedUrls,
-          sourceOverride: sourceOverride,
-        );
+        final List<List<String>> errors =
+            profileSettings.isEmpty || sourceOverride == null
+            ? await appsProvider.addAppsByURL(
+                selectedUrls,
+                sourceOverride: sourceOverride,
+              )
+            : await _addSearchResultsWithSettings(
+                appsProvider,
+                selectedUrls,
+                sourceOverride,
+                profileSettings,
+                settingsProvider.includePrereleasesByDefault,
+              );
         if (!context.mounted) return;
         saveCompleted = true;
         setState(() {
@@ -1868,7 +2095,9 @@ class AddAppPageState extends State<AddAppPage> {
                         ...sourceProvider.sourceTemplates
                             .where(
                               (s) =>
-                                  s.allowOverride ||
+                                  // Not a retired source (D19), unless it's
+                                  // the one the URL already picked.
+                                  (s.allowOverride && !s.retired) ||
                                   (pickedSource != null &&
                                       pickedSource.runtimeType ==
                                           s.runtimeType),
@@ -1913,30 +2142,44 @@ class AddAppPageState extends State<AddAppPage> {
         children: [
           GeneratedForm(
             key: Key(
-              '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}',
+              '${pickedSource.runtimeType.toString()}-${pickedSource?.hostChanged.toString()}-${pickedSource?.hostIdenticalDespiteAnyChange.toString()}-$_additionalOptsFormGeneration',
             ),
             outlinedInputFields: true,
             prominentSectionHeaders: true,
             wrapFormSectionsInCards: true,
             items: buildAdditionalSettingsItems(),
             onValueChanges: (values, valid, isBuilding) {
-              if (!isBuilding) {
-                setState(() {
-                  // 'inferAppIdIfOptional' is an add-time-only choice passed
-                  // straight to SourceProvider.getApp, not a per-app setting —
-                  // take it out before the rest becomes additionalSettings so it
-                  // is never written to the app's stored JSON.
-                  final Map<String, dynamic> settings =
-                      Map<String, dynamic>.from(values);
-                  if (settings.containsKey('inferAppIdIfOptional')) {
-                    inferAppIdIfOptional =
-                        settings.remove('inferAppIdIfOptional') == true;
-                  }
-                  _scheduleCustomAppIdCheck(settings['appId']);
-                  additionalSettings = settings;
-                  additionalSettingsValid = valid;
-                });
+              // 'inferAppIdIfOptional' is an add-time-only choice passed
+              // straight to SourceProvider.getApp, not a per-app setting —
+              // take it out before the rest becomes additionalSettings so it
+              // is never written to the app's stored JSON. A copy: the form
+              // hands over its own map.
+              final Map<String, dynamic> settings = Map<String, dynamic>.from(
+                values,
+              );
+              final bool hasInferChoice = settings.containsKey(
+                'inferAppIdIfOptional',
+              );
+              final dynamic inferChoice = settings.remove(
+                'inferAppIdIfOptional',
+              );
+              if (isBuilding) {
+                // The form's values as first shown, kept without a rebuild:
+                // what it shows on its own (the global "include pre-releases"
+                // default, say) is what an untouched add saves (upstream
+                // #3377/#3346, 3291e9b4).
+                additionalSettings = settings;
+                additionalSettingsValid = valid;
+                return;
               }
+              setState(() {
+                if (hasInferChoice) {
+                  inferAppIdIfOptional = inferChoice == true;
+                }
+                _scheduleCustomAppIdCheck(settings['appId']);
+                additionalSettings = settings;
+                additionalSettingsValid = valid;
+              });
             },
           ),
           Container(
@@ -1973,6 +2216,12 @@ class AddAppPageState extends State<AddAppPage> {
     // ── Search mode widgets ────────────────────────────────────────────
 
     final Set<String> searchSelectedStores = _getSearchSelectedStores();
+    final List<_SearchProfileOption> searchProfileOptions =
+        _searchProfileOptions();
+    final Map<String, _SearchProfileOption> searchProfileOptionsById = {
+      for (final _SearchProfileOption option in searchProfileOptions)
+        option.profile.id: option,
+    };
 
     // ── Inline search runner ───────────────────────────────────────────
 
@@ -1981,14 +2230,18 @@ class AddAppPageState extends State<AddAppPage> {
       FocusManager.instance.primaryFocus?.unfocus();
       _searchResultFilterController.clear();
 
-      final List<AppSource> selectedSources = sourceProvider.sourceTemplates
-          .where((e) => searchSelectedStores.contains(e.name))
+      final List<_SearchProfileOption> selectedOptions = searchProfileOptions
+          .where(
+            (_SearchProfileOption option) =>
+                searchSelectedStores.contains(option.profile.id),
+          )
           .toList();
       // Results from sources that prompt for per-search options depend on that
       // dialog input, so such searches must not be served from / written to the
       // cache (doing so would skip the prompt and reuse stale option values).
-      final bool cacheable = !selectedSources.any(
-        (e) => e.includeAdditionalOptsInMainSearch,
+      final bool cacheable = !selectedOptions.any(
+        (_SearchProfileOption option) =>
+            option.source.includeAdditionalOptsInMainSearch,
       );
       // Key on the query *and* the selected sources, so changing the source
       // selection doesn't return the previous selection's results.
@@ -2019,73 +2272,88 @@ class AddAppPageState extends State<AddAppPage> {
       });
 
       try {
-        final List<String> selectedSourceNames = searchSelectedStores.toList();
-        if (selectedSourceNames.isEmpty) {
+        if (selectedOptions.isEmpty) {
           throw ObtainiumError(tr('noResults'));
         }
+        // Fresh instances to search with, one per store: a store's profiles
+        // share it.
+        final Set<String> selectedSourceIds = {
+          for (final _SearchProfileOption option in selectedOptions)
+            option.source.sourceIdentifier,
+        };
+        final Map<String, AppSource> searchSources = {
+          for (final AppSource source in sourceProvider.sources)
+            if (selectedSourceIds.contains(source.sourceIdentifier))
+              source.sourceIdentifier: source,
+        };
 
         // A store that can't answer (credentials needed, the store down, a
         // changed page) must not lose the other stores' results, so its error
         // is kept and reported once they are shown.
         final Map<String, Object> failures = {};
-        final List<MapEntry<String, Map<String, List<String>>>?>
+        final List<MapEntry<_SearchProfileOption, Map<String, List<String>>>?>
         results = (await Future.wait(
-          sourceProvider.sources
-              .where((e) => selectedSourceNames.contains(e.name))
-              .map((e) async {
-                try {
-                  Map<String, dynamic>? querySettings = {};
-                  if (e.includeAdditionalOptsInMainSearch) {
-                    querySettings = await showDialog<Map<String, dynamic>?>(
-                      context: context,
-                      builder: (BuildContext ctx) {
-                        return GeneratedFormModal(
-                          title: tr('searchX', args: [e.name]),
-                          items: [
-                            ...e.searchQuerySettingFormItems.map((e) => [e]),
-                            [
-                              GeneratedFormTextField(
-                                'url',
-                                label: plural('url', 1).substring(2),
-                                autoCompleteOptions:
-                                    searchPromptAutoCompleteOptions(
-                                      trackedAppUrls: appsProvider.apps.values
-                                          .where(
-                                            (a) =>
-                                                sourceProvider
-                                                    .getSource(
-                                                      a.app.url,
-                                                      overrideSource:
-                                                          a.app.overrideSource,
-                                                    )
-                                                    .runtimeType ==
-                                                e.runtimeType,
-                                          )
-                                          .map((a) => a.app.url),
-                                    ),
-                                value: '',
-                                required: true,
-                              ),
-                            ],
-                          ],
-                        );
-                      },
+          selectedOptions.map((_SearchProfileOption option) async {
+            final AppSource e = searchSources[option.source.sourceIdentifier]!;
+            try {
+              Map<String, dynamic>? querySettings = {};
+              if (e.includeAdditionalOptsInMainSearch) {
+                querySettings = await showDialog<Map<String, dynamic>?>(
+                  context: context,
+                  builder: (BuildContext ctx) {
+                    return GeneratedFormModal(
+                      title: tr('searchX', args: [e.name]),
+                      items: [
+                        ...e.searchQuerySettingFormItems.map((e) => [e]),
+                        [
+                          GeneratedFormTextField(
+                            'url',
+                            label: plural('url', 1).substring(2),
+                            autoCompleteOptions:
+                                searchPromptAutoCompleteOptions(
+                                  trackedAppUrls: appsProvider.apps.values
+                                      .where(
+                                        (a) =>
+                                            sourceProvider
+                                                .getSource(
+                                                  a.app.url,
+                                                  overrideSource:
+                                                      a.app.overrideSource,
+                                                )
+                                                .runtimeType ==
+                                            e.runtimeType,
+                                      )
+                                      .map((a) => a.app.url),
+                                ),
+                            value: '',
+                            required: true,
+                          ),
+                        ],
+                      ],
                     );
-                    if (querySettings == null) {
-                      return null;
-                    }
-                  }
-                  return MapEntry(
-                    e.runtimeType.toString(),
-                    await e.search(searchQuery, querySettings: querySettings),
-                  );
-                } catch (err) {
-                  // A dialog, as before: it says how to add the credentials.
-                  if (err is CredsNeededError) err.unexpected = true;
-                  failures[e.name] = err;
+                  },
+                );
+                if (querySettings == null) {
                   return null;
                 }
-              }),
+              }
+              return MapEntry(
+                option,
+                await e.search(
+                  searchQuery,
+                  querySettings: {
+                    ...option.profile.querySettings,
+                    ...querySettings,
+                  },
+                ),
+              );
+            } catch (err) {
+              // A dialog, as before: it says how to add the credentials.
+              if (err is CredsNeededError) err.unexpected = true;
+              failures[option.profile.name] = err;
+              return null;
+            }
+          }),
         )).where((a) => a != null).toList();
 
         // Interleave results from multiple sources
@@ -2095,11 +2363,12 @@ class AddAppPageState extends State<AddAppPage> {
         while (!done) {
           done = true;
           for (var r in results) {
-            final sourceName = r!.key;
+            final _SearchProfileOption option = r!.key;
             if (r.value.length > si) {
               done = false;
               final singleRes = r.value.entries.elementAt(si);
-              res[singleRes.key] = MapEntry(sourceName, singleRes.value);
+              res[_searchResultKey(option.profile.id, singleRes.key)] =
+                  MapEntry(option.source.sourceIdentifier, singleRes.value);
             }
           }
           si++;
@@ -2123,7 +2392,7 @@ class AddAppPageState extends State<AddAppPage> {
         _scrollEmbeddedSearchResultsToFilter();
         if (failures.isNotEmpty) {
           showError(
-            selectedSourceNames.length == 1
+            selectedOptions.length == 1
                 ? failures.values.single
                 : ObtainiumError(
                     failures.entries
@@ -2250,32 +2519,22 @@ class AddAppPageState extends State<AddAppPage> {
     }
 
     Widget getSearchStoreChips() {
-      final searchableSources = sourceProvider.sourceTemplates
-          .where((e) => e.canSearch)
-          .toList();
-      if (searchableSources.isEmpty) return const SizedBox.shrink();
-
-      searchableSources.sort((a, b) {
-        if (a.regionalStore && !b.regionalStore) {
-          return 1;
-        } else if (!a.regionalStore && b.regionalStore) {
-          return -1;
-        }
-        return a.name.compareTo(b.name);
-      });
+      if (searchProfileOptions.isEmpty) return const SizedBox.shrink();
 
       return Wrap(
         spacing: 8,
         runSpacing: 4,
-        children: searchableSources.map((source) {
-          final selected = searchSelectedStores.contains(source.name);
+        children: searchProfileOptions.map((_SearchProfileOption option) {
+          final AppSource source = option.source;
+          final String profileId = option.profile.id;
+          final selected = searchSelectedStores.contains(profileId);
           final Widget? avatar = source.hosts.isNotEmpty
               ? StoreSourceChipAvatar(host: source.hosts.first, size: 16)
               : null;
           final Widget label = Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(source.name),
+              Text(option.profile.name),
               if (selected) ...[
                 const SizedBox(width: 4),
                 const Icon(Icons.check_rounded, size: 14),
@@ -2287,7 +2546,7 @@ class AddAppPageState extends State<AddAppPage> {
               if (widget._searchAddsMultipleApps) {
                 searchSelectedStores.clear();
                 if (value) {
-                  searchSelectedStores.add(source.name);
+                  searchSelectedStores.add(profileId);
                 }
                 _searchResults = {};
                 _searchSelectedResultUrls.clear();
@@ -2296,9 +2555,9 @@ class AddAppPageState extends State<AddAppPage> {
                 _searchResultFilterController.clear();
               } else {
                 if (value) {
-                  searchSelectedStores.add(source.name);
+                  searchSelectedStores.add(profileId);
                 } else {
-                  searchSelectedStores.remove(source.name);
+                  searchSelectedStores.remove(profileId);
                 }
               }
             });
@@ -2338,7 +2597,7 @@ class AddAppPageState extends State<AddAppPage> {
       final String filterQ = _searchResultFilter.trim().toLowerCase();
       final entries = _searchResults.entries.where((e) {
         if (filterQ.isEmpty) return true;
-        final title = e.key.toLowerCase();
+        final title = _searchResultUrl(e.key).toLowerCase();
         final subtitle = e.value.value.join(' ').toLowerCase();
         return title.contains(filterQ) || subtitle.contains(filterQ);
       }).toList();
@@ -2388,31 +2647,42 @@ class AddAppPageState extends State<AddAppPage> {
             ),
           const SizedBox(height: 8),
           ...entries.map((entry) {
-            final displayTitle = entry.key;
+            final String resultKey = entry.key;
+            final displayTitle = _searchResultUrl(resultKey);
             final sourceName = entry.value.key;
             final subtitleLines = entry.value.value;
-            final bool selected = _searchSelectedResultUrls.contains(
-              displayTitle,
-            );
+            final _SearchProfileOption? profileOption =
+                searchProfileOptionsById[_searchResultProfileId(resultKey)];
+            // Which of the store's profiles found it, beside its address.
+            final String displayAddress =
+                profileOption != null && profileOption.storeHasProfiles
+                ? '${profileOption.profile.name} · $displayTitle'
+                : displayTitle;
+            final bool selected = _searchSelectedResultUrls.contains(resultKey);
 
             void updateResultSelection(bool value) {
               setState(() {
                 if (value) {
-                  _searchSelectedResultUrls.add(displayTitle);
+                  _searchSelectedResultUrls.add(resultKey);
                 } else {
-                  _searchSelectedResultUrls.remove(displayTitle);
+                  _searchSelectedResultUrls.remove(resultKey);
                 }
               });
             }
 
             void proceedWithSelection() {
               clearInputFocus();
+              final Map<String, dynamic>? profileSettings =
+                  profileOption?.profile.appSettings;
               changeUserInput(
                 displayTitle,
                 true,
                 false,
                 updateUrlInput: true,
                 overrideSource: sourceName,
+                appSettings: profileSettings == null || profileSettings.isEmpty
+                    ? null
+                    : profileSettings,
               );
               setState(() {
                 _byUrlOpenedFromSearchPick = true;
@@ -2449,13 +2719,13 @@ class AddAppPageState extends State<AddAppPage> {
                             overflow: TextOverflow.ellipsis,
                           )
                         : Text(
-                            displayTitle,
+                            displayAddress,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                     subtitle: subtitleLines.isNotEmpty
                         ? Text(
-                            displayTitle,
+                            displayAddress,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall,

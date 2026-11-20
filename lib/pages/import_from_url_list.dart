@@ -17,15 +17,26 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
 
 /// The apps an `obtainium://app/` or `apps/` [link] carries, as entries that
-/// keep what it says about them ([UrlImportEntry.seed]). Throws on apps that
-/// can't be read.
+/// keep what it says about them ([UrlImportEntry.seed]), except how each is
+/// installed: a link can't choose an app's install method (D13, upstream
+/// #3457), so that stays the global one. Throws on apps that can't be read.
 List<UrlImportEntry> urlImportEntriesFromLink(
   Uri link,
   AppsProvider appsProvider,
 ) => [
   for (final App app in appsProvider.parseBackupContent(linkPayload(link)).apps)
-    UrlImportEntry(app.url, seed: app),
+    UrlImportEntry(app.url, seed: withoutLinkInstallSettings(app)),
 ];
+
+/// The per-app settings a link may not set: the install method ([App]'s
+/// `installerMode` setting).
+App withoutLinkInstallSettings(App app) {
+  if (!app.additionalSettings.containsKey('installerMode')) return app;
+  return app.copyWith(
+    additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+      ..remove('installerMode'),
+  );
+}
 
 /// What the Import from URL list box holds, as the apps to add.
 ///
@@ -387,6 +398,9 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
                                 enabled: !_isImporting,
                                 decoration: InputDecoration(
                                   labelText: tr('appURLList'),
+                                  // Top-left, not in the middle of the tall
+                                  // empty box (upstream fa5755b6).
+                                  alignLabelWithHint: true,
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(24),
                                   ),

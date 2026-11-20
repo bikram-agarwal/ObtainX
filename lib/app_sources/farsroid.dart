@@ -104,18 +104,30 @@ class Farsroid extends AppSource {
       if (apkLinks.isEmpty) {
         throw NoAPKError();
       }
+      // The single-APK paths below pick from these: the arch filter now keeps
+      // universal APKs as alternatives next to the ABI match (v1.7.4 sync
+      // D12), and picking one of those would switch apps to the universal
+      // build (useFirstApkOfVersion) or fail with "no version"
+      // (releaseTitleAsVersion).
+      var singleApkCandidates = apkLinks;
       if (additionalSettings['autoApkFilterByArch'] == true) {
         apkLinks = await filterApksByArch(apkLinks);
+        final abiSpecificLinks = apkLinks
+            .where((link) => !ApkFilterService.isUniversalApkName(link.key))
+            .toList();
+        singleApkCandidates = abiSpecificLinks.isNotEmpty
+            ? abiSpecificLinks
+            : apkLinks;
       }
       if (additionalSettings['useFirstApkOfVersion'] == true) {
-        apkLinks = [apkLinks.first];
+        apkLinks = singleApkCandidates = [singleApkCandidates.first];
       }
 
       if (additionalSettings['releaseTitleAsVersion'] == true) {
-        if (apkLinks.length != 1) {
+        if (singleApkCandidates.length != 1) {
           throw NoVersionError();
         }
-        version = apkLinks.single.key;
+        version = singleApkCandidates.single.key;
       }
 
       return APKDetails(version, apkLinks, AppNames(name, appName));

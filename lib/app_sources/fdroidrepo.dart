@@ -182,6 +182,8 @@ class FDroidRepo extends AppSource {
   /// matching [appIdOrName]. [authorFallback] is used when the index has no
   /// repo or per-app author. Used by [IzzyOnDroid] (which supplies its own
   /// reproducible-status resolver).
+  ///
+  /// [supportedAbis] defaults to the device's ABIs (a seam for tests).
   static Future<APKDetails> apkDetailsFromIndexXmlResponse(
     Response indexXmlResponse,
     String appIdOrName,
@@ -191,6 +193,7 @@ class FDroidRepo extends AppSource {
     isReproducibleRelease,
     Future<String?> Function(String appId, int versionCode, String? apkSha256)?
     reproducibleReleaseStatus,
+    Future<List<String>> Function()? supportedAbis,
   }) async {
     final index = await parseRepositoryIndex(indexXmlResponse);
     final application = index.findApplication(appIdOrName);
@@ -293,21 +296,29 @@ class FDroidRepo extends AppSource {
         )
         .toList();
     if (selectedReleases.length > 1) {
-      final List<String> supportedAbis = await _deviceSupportedAbis();
-      if (supportedAbis.isNotEmpty) {
-        // A release with no <nativecode> element is architecture-universal.
-        final compatible = selectedReleases.where((e) {
-          final String? nativecode = e.querySelector('nativecode')?.innerHtml;
-          if (nativecode == null || nativecode.trim().isEmpty) return true;
-          return nativecode
+      final List<String> deviceAbis = await _supportedAbisOrNone(supportedAbis);
+      List<String> nativecodeOf(dynamic release) =>
+          (release.querySelector('nativecode')?.innerHtml as String? ?? '')
               .split(',')
               .map((s) => s.trim())
-              .any(supportedAbis.contains);
+              .where((s) => s.isNotEmpty)
+              .toList();
+      if (deviceAbis.isNotEmpty) {
+        // A release with no <nativecode> element is architecture-universal.
+        final compatible = selectedReleases.where((e) {
+          final List<String> nativecode = nativecodeOf(e);
+          return nativecode.isEmpty || nativecode.any(deviceAbis.contains);
         }).toList();
         if (compatible.isNotEmpty) {
           selectedReleases = compatible;
         }
       }
+      selectedReleases = newestBuildPerNativecode(
+        selectedReleases,
+        nativecodeOf: nativecodeOf,
+        versionCodeOf: (release) =>
+            int.tryParse(release.querySelector('versioncode')?.innerHtml ?? ''),
+      );
       if (selectedReleases.length > 1 && pickHighestVersionCode) {
         selectedReleases.sort((e1, e2) {
           return int.parse(
@@ -379,10 +390,19 @@ class FDroidRepo extends AppSource {
     );
   }
 
-  /// The device's ABIs, or none (which skips ABI matching) if unreadable.
-  static Future<List<String>> _deviceSupportedAbis() async {
+  /// This device's supported ABIs, in preference order. Overridable so tests
+  /// run without a device (upstream be7fa0c9).
+  Future<List<String>> getSupportedAbis() async =>
+      (await DeviceInfoPlugin().androidInfo).supportedAbis;
+
+  /// [supportedAbis] (the device's by default), or none (which skips ABI
+  /// matching) if unreadable.
+  static Future<List<String>> _supportedAbisOrNone(
+    Future<List<String>> Function()? supportedAbis,
+  ) async {
     try {
-      return (await DeviceInfoPlugin().androidInfo).supportedAbis;
+      return await (supportedAbis?.call() ??
+          DeviceInfoPlugin().androidInfo.then((info) => info.supportedAbis));
     } catch (e) {
       unawaited(
         LogsProvider().add(
@@ -392,6 +412,31 @@ class FDroidRepo extends AppSource {
       );
       return [];
     }
+  }
+
+  /// Keeps only the newest build (highest versionCode) of each nativecode
+  /// set, in the original order (upstream #3455). A repo can publish several
+  /// builds under one version name (KDE does), and the default APK of a new
+  /// app is the last one, which would otherwise be the oldest build.
+  static List<T> newestBuildPerNativecode<T>(
+    List<T> releases, {
+    required List<String> Function(T release) nativecodeOf,
+    required int? Function(T release) versionCodeOf,
+  }) {
+    String keyOf(T release) =>
+        (nativecodeOf(release).toList()..sort()).join(' ');
+    final Map<String, T> newest = {};
+    for (final T release in releases) {
+      final String key = keyOf(release);
+      final T? kept = newest[key];
+      if (kept == null ||
+          (versionCodeOf(release) ?? -1) > (versionCodeOf(kept) ?? -1)) {
+        newest[key] = release;
+      }
+    }
+    return releases
+        .where((release) => identical(newest[keyOf(release)], release))
+        .toList();
   }
 
   /// [parseIndexXmlSearchResults] for an `index-v2.json`: the same keys, and
@@ -423,8 +468,9 @@ class FDroidRepo extends AppSource {
     RepositoryIndexV2 index,
     String appIdOrName,
     Map<String, dynamic> additionalSettings,
-    String authorFallback,
-  ) async {
+    String authorFallback, {
+    Future<List<String>> Function()? supportedAbis,
+  }) async {
     final application = index.findApplication(appIdOrName);
     if (application == null) {
       throw ObtainiumError(tr('appWithIdOrNameNotFound'));
@@ -459,19 +505,24 @@ class FDroidRepo extends AppSource {
         .where((release) => release.versionName == target.versionName)
         .toList();
     if (selectedReleases.length > 1) {
-      final List<String> supportedAbis = await _deviceSupportedAbis();
-      if (supportedAbis.isNotEmpty) {
+      final List<String> deviceAbis = await _supportedAbisOrNone(supportedAbis);
+      if (deviceAbis.isNotEmpty) {
         final compatible = selectedReleases
             .where(
               (release) =>
                   release.nativecode.isEmpty ||
-                  release.nativecode.any(supportedAbis.contains),
+                  release.nativecode.any(deviceAbis.contains),
             )
             .toList();
         if (compatible.isNotEmpty) {
           selectedReleases = compatible;
         }
       }
+      selectedReleases = newestBuildPerNativecode(
+        selectedReleases,
+        nativecodeOf: (release) => release.nativecode,
+        versionCodeOf: (release) => release.versionCode,
+      );
       if (selectedReleases.length > 1 && pickHighestVersionCode) {
         // Releases are already newest (highest versionCode) first.
         selectedReleases = [selectedReleases.first];
@@ -633,6 +684,7 @@ class FDroidRepo extends AppSource {
             appIdOrName,
             additionalSettings,
             name,
+            supportedAbis: getSupportedAbis,
           );
         }
       }
@@ -642,6 +694,7 @@ class FDroidRepo extends AppSource {
           appIdOrName,
           additionalSettings,
           name,
+          supportedAbis: getSupportedAbis,
         );
       } else {
         throw getObtainiumHttpError(res);

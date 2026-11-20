@@ -173,7 +173,9 @@ class MinUpdateAgeError extends ObtainiumError {
 }
 
 /// RuStore lists some apps only as aggregated cards pulled from an external
-/// source and does not host an APK for them (see #3298).
+/// source and does not host an APK for them (see #3298). Upstream removed
+/// this error in v1.7.2 (#3422); ObtainX keeps it so such cards fail with a
+/// clear message instead of a generic "no APK" (v1.7.4 sync).
 class RuStoreAggregatedAppError extends ObtainiumError {
   RuStoreAggregatedAppError() : super.withCode('RUSTORE_AGGREGATED_APP');
 }
@@ -319,6 +321,39 @@ class MultiAppMultiError extends ObtainiumError {
     bool includeIdsWithNames = false,
   }) =>
       '$errString [${list2FriendlyString(appIds.map((id) => appIdNames.containsKey(id) == true ? '${appIdNames[id]}${includeIdsWithNames ? ' ($id)' : ''}' : id).toList())}]';
+
+  String _notificationErrorSummary(int remaining) => remaining <= 0
+      ? ''
+      : '\n\n${remaining == 1 ? tr('andOneMoreError') : plural('andNMoreErrors', remaining)}';
+
+  /// Joins all error groups for a single notification, capping the body below
+  /// Android's notification text limit and summarizing any surplus groups.
+  String notificationErrorString({int maxChars = 900}) {
+    final entries = idsByErrorString.entries.toList();
+    if (entries.isEmpty) return '';
+    final groupTexts = entries
+        .map((entry) => errorsAppsString(entry.key, entry.value))
+        .toList();
+    final full = groupTexts.join('\n\n');
+    if (full.length <= maxChars) return full;
+
+    const summaryReserve = 80;
+    final contentBudget = maxChars - summaryReserve;
+    var included = '';
+    var includedGroups = 0;
+    for (final text in groupTexts) {
+      final candidate = included.isEmpty ? text : '$included\n\n$text';
+      if (candidate.length > contentBudget) break;
+      included = candidate;
+      includedGroups++;
+    }
+    if (includedGroups == 0) {
+      final cutoff = (contentBudget - 1).clamp(0, groupTexts.first.length);
+      included = '${groupTexts.first.substring(0, cutoff).trimRight()}…';
+      return '$included${_notificationErrorSummary(groupTexts.length - 1)}';
+    }
+    return '$included${_notificationErrorSummary(groupTexts.length - includedGroups)}';
+  }
 
   @override
   String toString() => idsByErrorString.entries

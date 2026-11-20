@@ -597,6 +597,23 @@ class MainActivity : FlutterActivity() {
                         packageName?.let { getSigningCertificates(it) },
                     )
                 }
+                "getApkArchiveSignatures" -> {
+                    val archiveFilePath = call.argument<String>("archiveFilePath")
+                    if (archiveFilePath == null) {
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    // Parsing an archive and verifying its signature block is
+                    // too slow for the platform thread.
+                    deviceAppsExecutor.execute {
+                        val signatures = try {
+                            getApkArchiveSignatures(archiveFilePath)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        mainHandler.post { result.success(signatures) }
+                    }
+                }
                 "uses24HourFormat" -> {
                     result.success(DateFormat.is24HourFormat(this))
                 }
@@ -1324,6 +1341,23 @@ class MainActivity : FlutterActivity() {
             "hasMultipleSigners" to hasMultipleSigners,
             "signatures" to (signatures?.map { it.toByteArray() } ?: emptyList<ByteArray>()),
         )
+    }
+
+    /// Signer certificates (DER bytes) of the APK at [archiveFilePath] on
+    /// Android 8/8.1, null elsewhere or when it can't be read (v1.7.4 sync
+    /// D16 b). PackageInfo.signingInfo only exists from Android 9, so the
+    /// android_package_manager plugin returns no signer there, and a pinned
+    /// expected certificate would block every install. GET_SIGNATURES makes
+    /// getPackageArchiveInfo collect the archive's certificates on these
+    /// versions. Android 9+ reads them through the plugin (upstream #3475).
+    @Suppress("DEPRECATION")
+    private fun getApkArchiveSignatures(archiveFilePath: String): List<ByteArray>? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return null
+        val packageInfo = packageManager.getPackageArchiveInfo(
+            archiveFilePath,
+            PackageManager.GET_SIGNATURES,
+        ) ?: return null
+        return packageInfo.signatures?.map { it.toByteArray() }
     }
 
     /**

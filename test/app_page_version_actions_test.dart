@@ -21,6 +21,10 @@ class _Apps extends ChangeNotifier implements AppsProvider {
   final AppListings apps = AppListings();
   @override
   final Map<String, ({String? title, String message})> appPageErrors = {};
+  // The app page's Downgrade gate asks the app's installer (v1.7.4 D13,
+  // getInstaller(app)), which reads the global install method from here.
+  @override
+  late SettingsProvider settingsProvider;
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
@@ -194,7 +198,7 @@ void main() {
         const Locale('en'),
         translations: Translations(translations),
       );
-      final provider = _Apps();
+      final provider = _Apps()..settingsProvider = settings;
       final model = _app('2.21.0', '2.20.0', trackOnly: false);
       provider.apps[model.id] = AppInMemory(model, null, null, icon);
       addTearDown(provider.dispose);

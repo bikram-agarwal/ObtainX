@@ -26,12 +26,14 @@ import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/utils/format_utils.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/pages/settings.dart';
+import 'package:obtainium/pages/update_health.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -656,11 +658,20 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
     packageInfo?.packageName,
     model.iconUrl,
     model.apkSizeBytes,
+    // The Update health line (D8).
+    model.latestVersionChangedAt,
+    model.consecutiveFailedChecks,
+    model.isArchived,
+    model.newerReleasesFilteredOut,
+    model.updateHealthEnabled,
+    model.updateHealthDismissedVersion,
   ]);
 }
 
 int appPageSettingsRebuildToken(SettingsProvider settings) {
   return Object.hash(
+    // The Update health line's thresholds (D8).
+    updateHealthSettingsToken(settings),
     settings.matchAppPageToIconColors,
     settings.blackThemeActive,
     settings.showAppWebpage,
@@ -987,6 +998,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   // mount and won't run again until the user navigates to a different app.
   // Re-resets in [didUpdateWidget] when [widget.appId] changes.
   bool _attemptedApkMirrorSizeResolution = false;
+
+  /// `listingKey|latestVersion` of every APKMirror release whose size this
+  /// process has already walked for, failed walks included (#339, D2): a
+  /// reopened page, a refresh that found the same release, or a 403 never
+  /// sends the walk again. A new release walks once.
+  static final Set<String> _apkMirrorSizeWalkedReleases = <String>{};
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
   bool _swappingTrackedSource = false;
@@ -1197,7 +1214,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        unawaited(_maybeLazyResolveApkMirrorSize());
+        unawaited(_maybeLazyResolveApkMirrorSize(onPageOpen: true));
       });
     } else if (oldWidget.openInEditMode != widget.openInEditMode) {
       _scheduledOpenInEditMode = false;
@@ -2174,6 +2191,18 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     } else {
       iconChild = GestureDetector(onTap: onTap, child: emptyPlaceholder);
     }
+    if (onTap != null) {
+      // One TalkBack button that says what a tap does (upstream #3398,
+      // 1002b143), instead of an unlabelled tap target.
+      iconChild = Semantics(
+        container: true,
+        button: true,
+        label: tr('openApp', args: [appInMemory?.name ?? '']),
+        excludeSemantics: true,
+        onTap: onTap,
+        child: iconChild,
+      );
+    }
     if (heroTag != null) {
       return Hero(
         tag: heroTag,
@@ -2270,7 +2299,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     // SourceProvider lookup. The actual HTTP walk inside is fully async.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(_maybeLazyResolveApkMirrorSize());
+      unawaited(_maybeLazyResolveApkMirrorSize(onPageOpen: true));
     });
     _notesEditFocusNode.addListener(() {
       if (!_notesEditFocusNode.hasFocus || !mounted) return;
@@ -2595,9 +2624,18 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   /// [SourceProvider.getApp] preserves it across refreshes that don't
   /// change [App.latestVersion] and clears it when the version changes,
   /// so the cache key is effectively `(appId, latestVersion)`.
-  Future<void> _maybeLazyResolveApkMirrorSize() async {
+  ///
+  /// [onPageOpen]: opening the page only walks when "check for updates on
+  /// opening an app detail page" is on (upstream ec2001b1, #2988); a manual
+  /// refresh or a store swap always may. Either way at most once per release
+  /// ([_apkMirrorSizeWalkedReleases]).
+  Future<void> _maybeLazyResolveApkMirrorSize({bool onPageOpen = false}) async {
     if (!mounted) return;
     if (_attemptedApkMirrorSizeResolution) return;
+    if (onPageOpen &&
+        !context.read<SettingsProvider>().checkUpdateOnDetailPage) {
+      return;
+    }
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
       context,
       listen: false,
@@ -2615,6 +2653,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     );
     if (source is! APKMirror) return;
     _attemptedApkMirrorSizeResolution = true;
+    // Recorded before the walk, so a failure counts too.
+    if (!_apkMirrorSizeWalkedReleases.add(
+      '${currentApp.listingKey}|${currentApp.latestVersion}',
+    )) {
+      return;
+    }
     try {
       final int? resolvedSize = await source.resolveLatestApkSizeBytes(
         releasePageUrl: currentApp.changeLog,
@@ -2641,6 +2685,26 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     } catch (error) {
       _logApkMirrorSizeDebugFromAppPage(
         'lazy resolve error id=${widget.appId} error=${error.toString()}',
+      );
+    }
+  }
+
+  /// Opens this app's options, at the [scrollToSection] card if given, and
+  /// checks again when the version settings changed.
+  Future<void> _openAdditionalOptions({String? scrollToSection}) async {
+    final bool? versionDetectionJustEnabled = await Navigator.push<bool>(
+      context,
+      slideUpPageRoute(
+        (_) => AdditionalOptionsPage(
+          appId: widget.appId,
+          scrollToSection: scrollToSection,
+        ),
+      ),
+    );
+    if (versionDetectionJustEnabled != null && mounted) {
+      await _runCheckUpdate(
+        widget.appId,
+        resetVersion: versionDetectionJustEnabled,
       );
     }
   }
@@ -3542,6 +3606,75 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
+    // Update health (D8): advisory, so a line of its own under Changes, never
+    // part of Needs attention, which covers blocking states only. It opens the
+    // app's options at the Update-health card, where its thresholds are set.
+    Widget? updateHealthRow(BuildContext ctx, AppInMemory? listing) {
+      if (listing == null) return null;
+      final List<String> reasons = updateHealthReasonLabelsFor(
+        listing.app,
+        settingsProvider,
+      );
+      if (reasons.isEmpty) return null;
+      final ThemeData theme = Theme.of(ctx);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: _versionRowLabelWidth,
+              child: Text(
+                tr('updateHealth'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Semantics(
+                button: true,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: updating
+                      ? null
+                      : () => _openAdditionalOptions(
+                          scrollToSection: updateHealthSectionKey,
+                        ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 1, right: 6),
+                        child: Icon(
+                          Icons.warning_amber_rounded,
+                          size: 16,
+                          color: theme.colorScheme.error,
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          reasons.join('\n'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            decoration: TextDecoration.underline,
+                            fontWeight: FontWeight.w500,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     Widget buildAboutBlock(BuildContext themeContext) {
       if (app?.app.additionalSettings['about'] is! String ||
           (app?.app.additionalSettings['about'] as String).isEmpty) {
@@ -3718,10 +3851,15 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               settingsProvider,
             )
           : null;
+      // Added without a check (D10) and not checked successfully since: there
+      // is no APK to install yet.
+      final bool placeholderOnly =
+          !trackOnly && app != null && hasOnlyPlaceholderApks(app.app);
       final bool installActionBlocked =
           actionBlocked ||
           (!trackOnly && areDownloadsRunning) ||
-          buildVerificationBlocked;
+          buildVerificationBlocked ||
+          placeholderOnly;
       final installedVersion = app?.app.installedVersion;
       final bool installedVersionIsNull = installedVersion == null;
       final bool actionableUpdate =
@@ -3752,11 +3890,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       // track-only app just opens the release page, and whatever installs the
       // APK from there decides.
       final bool offersDowngrade = app != null && appOffersDowngrade(app.app);
+      // The installer this app installs with: its own install method, else
+      // the global one (D13, upstream #3457).
       final bool canDowngrade =
           offersDowngrade &&
           (trackOnly ||
               installerCanDowngrade(
-                installerModeKey: settingsProvider.installerMode,
+                installerModeKey: appsProvider.getInstaller(app.app).modeKey,
                 downgradeModuleUsable:
                     settingsProvider.enableDowngradeModules &&
                     _downgradeModuleInstalled,
@@ -4161,6 +4301,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           ? null
           : buildVerificationBlocked
           ? buildVerificationBlockedMessage!
+          : placeholderOnly
+          ? tr('noAPKFound')
           : skipActive
           ? tr('updateDisabledWhileVersionSkipped')
           : offersDowngrade && !canDowngrade
@@ -4503,6 +4645,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             ),
           );
         }
+        if (updateHealthRow(pageThemeContext, app) case final Widget row) {
+          versionCardChildren.add(row);
+        }
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
             versionRowWithLink(
@@ -4569,6 +4714,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               changeLogFn,
             ),
           );
+        }
+        if (updateHealthRow(pageThemeContext, app) case final Widget row) {
+          versionCardChildren.add(row);
         }
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
@@ -5632,23 +5780,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       iconSize: 24,
                       onPressed: app?.downloadProgress != null || updating
                           ? null
-                          : () async {
-                              final bool? versionDetectionJustEnabled =
-                                  await Navigator.push<bool>(
-                                    context,
-                                    slideUpPageRoute(
-                                      (_) => AdditionalOptionsPage(
-                                        appId: widget.appId,
-                                      ),
-                                    ),
-                                  );
-                              if (versionDetectionJustEnabled != null) {
-                                await _runCheckUpdate(
-                                  widget.appId,
-                                  resetVersion: versionDetectionJustEnabled,
-                                );
-                              }
-                            },
+                          : _openAdditionalOptions,
                       tooltip: actionBarTooltip(tr('appOptions')),
                       icon: const Icon(Icons.tune),
                     ),

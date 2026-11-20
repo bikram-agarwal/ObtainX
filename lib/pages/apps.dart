@@ -24,6 +24,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_details_container.dart';
@@ -46,9 +47,11 @@ import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/pages/settings.dart';
+import 'package:obtainium/pages/update_health.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
@@ -61,6 +64,7 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/utils/locale_utils.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
@@ -704,6 +708,9 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
     s.alwaysUsePhoneLayout,
     s.appFolders.length,
     s.globalApkFilterRegEx,
+    // The rows' update-health marker and the main page's Update health button
+    // (D8) read these.
+    updateHealthSettingsToken(s),
     // Per-view overrides: relevant for real folders and the synthetic
     // On-Demand Only view; a hash-as-zero collapse for the main page.
     viewSettingsId == null
@@ -918,6 +925,11 @@ class _AppListItem extends StatelessWidget {
           source,
           settingsProvider,
         );
+    // Advisory (D8): a marker after the name, never a row state of its own.
+    final List<String> updateHealthReasonLabels =
+        settingsProvider.showUpdateHealthIndicator
+        ? updateHealthReasonLabelsFor(app.app, settingsProvider)
+        : const <String>[];
 
     void onUpdateOrOpenReleasePressed() {
       if (buildVerificationBlocked) {
@@ -1019,51 +1031,70 @@ class _AppListItem extends StatelessWidget {
               children: [
                 if (showVersionColumn)
                   Flexible(
-                    child: GestureDetector(
+                    // Its own TalkBack target (upstream #3398, b7e32b00), so
+                    // the row keeps reading the app and opening it, and the
+                    // changelog stays reachable. No label on the row itself:
+                    // that merged the two nodes again (d5d75b8a).
+                    child: Semantics(
+                      container: true,
+                      button: showChangesFn != null,
+                      label: '$versionText $changesButtonString'.trim(),
+                      excludeSemantics: true,
                       onTap: showChangesFn,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          color: highlightTouchTargets && showChangesFn != null
-                              ? (theme.brightness == Brightness.light
-                                        ? theme.primaryColor
-                                        : theme.primaryColorLight)
-                                    .withAlpha(
-                                      theme.brightness == Brightness.light
-                                          ? 20
-                                          : 40,
-                                    )
-                              : null,
-                        ),
-                        padding: highlightTouchTargets
-                            ? const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 0)
-                            : EdgeInsets.zero,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              versionText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
-                              style: isVersionPseudo(app.app)
-                                  ? const TextStyle(fontStyle: FontStyle.italic)
-                                  : null,
-                            ),
-                            Text(
-                              changesButtonString,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
-                              style: TextStyle(
-                                fontStyle: FontStyle.italic,
-                                decoration: showChangesFn != null
-                                    ? TextDecoration.underline
-                                    : TextDecoration.none,
+                      child: GestureDetector(
+                        onTap: showChangesFn,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            color:
+                                highlightTouchTargets && showChangesFn != null
+                                ? (theme.brightness == Brightness.light
+                                          ? theme.primaryColor
+                                          : theme.primaryColorLight)
+                                      .withAlpha(
+                                        theme.brightness == Brightness.light
+                                            ? 20
+                                            : 40,
+                                      )
+                                : null,
+                          ),
+                          padding: highlightTouchTargets
+                              ? const EdgeInsetsDirectional.fromSTEB(
+                                  12,
+                                  0,
+                                  12,
+                                  0,
+                                )
+                              : EdgeInsets.zero,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                versionText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.end,
+                                style: isVersionPseudo(app.app)
+                                    ? const TextStyle(
+                                        fontStyle: FontStyle.italic,
+                                      )
+                                    : null,
                               ),
-                            ),
-                          ],
+                              Text(
+                                changesButtonString,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.end,
+                                style: TextStyle(
+                                  fontStyle: FontStyle.italic,
+                                  decoration: showChangesFn != null
+                                      ? TextDecoration.underline
+                                      : TextDecoration.none,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1361,7 +1392,12 @@ class _AppListItem extends StatelessWidget {
                             color: colorScheme.primary,
                           ),
                         ),
-                      Expanded(
+                      Flexible(
+                        // Loose only with the marker, so it sits right after
+                        // the name; without it the row lays out as before.
+                        fit: updateHealthReasonLabels.isEmpty
+                            ? FlexFit.tight
+                            : FlexFit.loose,
                         child: Text(
                           app.name,
                           maxLines: 1,
@@ -1373,6 +1409,20 @@ class _AppListItem extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (updateHealthReasonLabels.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(start: 4),
+                          // The reasons are the tooltip, which TalkBack reads
+                          // with the row.
+                          child: Tooltip(
+                            message: updateHealthReasonLabels.join('\n'),
+                            child: Icon(
+                              Icons.warning_amber_rounded,
+                              size: 16,
+                              color: colorScheme.error,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                   subtitle: showAuthorBadge
@@ -2065,6 +2115,53 @@ String resolveChangeLogImageSrc({
   }
 }
 
+/// The repository's file view at its default branch, for the forge that
+/// published [appUri] (`https://github.com/o/r/blob/HEAD`), or null for other
+/// sources. Same repository rule as [resolveChangeLogImageSrc].
+String? _changeLogRepoBlobBase(Uri appUri, AppSource appSource) {
+  final List<String> segments = appUri.pathSegments
+      .where((String segment) => segment.isNotEmpty)
+      .toList();
+  if (segments.length < 2) return null;
+  final String repo = '${appUri.origin}/${segments[0]}/${segments[1]}';
+  if (appSource is GitHub || appUri.host.contains('github.com')) {
+    return '$repo/blob/HEAD';
+  }
+  if (appSource is GitLab || appUri.host.contains('gitlab.com')) {
+    return '$repo/-/blob/HEAD';
+  }
+  if (appSource is Codeberg) return '$repo/src/branch/HEAD';
+  return null;
+}
+
+/// Where a link in [appUrl]'s changelog goes (upstream #3470, D21 B).
+///
+/// A relative link in forge release notes names a file in the repository, so
+/// it resolves against `<repo>/blob/HEAD/`, as [resolveChangeLogImageSrc] does
+/// for images. Upstream resolves it against the release's own tag instead,
+/// from an `App.releaseUrl` the fork doesn't keep (v1.6.17 D14); HEAD is right
+/// for every file that hasn't moved since the release. Root-relative,
+/// protocol-relative and same-page (`#…`, `?…`) links resolve as a browser
+/// would on the app's page, and links with a scheme are kept.
+String resolveChangeLogLink({
+  required String href,
+  required String appUrl,
+  required AppSource appSource,
+}) {
+  final Uri? link = Uri.tryParse(href);
+  final Uri? appUri = Uri.tryParse(appUrl);
+  if (link == null || appUri == null || !appUri.hasAuthority) return href;
+  if (link.hasScheme) return href;
+  if (link.hasAuthority || link.path.isEmpty || link.path.startsWith('/')) {
+    return appUri.resolveUri(link).toString();
+  }
+  final String? repoBlobBase = _changeLogRepoBlobBase(appUri, appSource);
+  if (repoBlobBase == null) return '${appUri.origin}/$href';
+  // Resolved against the root first, so `./` and `../` can't climb out of
+  // the repository.
+  return '$repoBlobBase${Uri(path: '/').resolveUri(link)}';
+}
+
 void showChangeLogDialog(
   BuildContext context,
   App app,
@@ -2156,12 +2253,17 @@ void showChangeLogDialog(
                   ),
                 ),
                 data: displayChangeLog,
+                // Single newlines are line breaks in release notes (upstream
+                // #2101, ad1c208e).
+                softLineBreak: true,
                 onTapLink: (text, href, title) {
                   if (href != null) {
                     launchUrlString(
-                      href.startsWith('http://') || href.startsWith('https://')
-                          ? href
-                          : '${Uri.parse(app.url).origin}/$href',
+                      resolveChangeLogLink(
+                        href: href,
+                        appUrl: app.url,
+                        appSource: appSource,
+                      ),
                       mode: LaunchMode.externalApplication,
                     );
                   }
@@ -2714,6 +2816,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                       ),
                       AppSwitch(
                         value: settingsProvider.showFolderedAppsOnMainPage,
+                        semanticLabel: tr('showFolderedAppsOnMainPage'),
                         onChanged: (value) {
                           settingsProvider.showFolderedAppsOnMainPage = value;
                           setSheetState(() {});
@@ -3125,6 +3228,9 @@ class AppsPageState extends State<AppsPage> {
   // [AppsPage] without changing any of these counts.
   int? _lastFolderCountsToken;
   int _onDemandOnlyAppCountCache = 0;
+  // Apps the Update health page lists: flagged, and ignored (D8).
+  int _updateHealthAppCountCache = 0;
+  int _updateHealthFlaggedCountCache = 0;
   Map<String, int> _folderAppCountsCache = const {};
   Map<String, int> _folderUpdateCountsCache = const {};
 
@@ -3792,10 +3898,24 @@ class AppsPageState extends State<AppsPage> {
       // by the last build. An explicit ID list bypasses the background
       // freshness interval while [checkUpdates] still applies the
       // installed/track-only preference.
+      final NotificationsProvider notificationsProvider = context
+          .read<NotificationsProvider>();
       final Future<List<App>> refreshFuture = appsProvider.checkUpdates(
         specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
       );
       return refreshFuture
+          .then((List<App> updates) {
+            // A successful check can leave the update notification behind
+            // once nothing installed has an update any more (upstream #3415).
+            // Only after success: a failed check keeps it.
+            unawaited(
+              clearStaleUpdateNotification(
+                notificationsProvider,
+                appsProvider.findExistingUpdates(installedOnly: true),
+              ),
+            );
+            return updates;
+          })
           .catchError((e) {
             if (!context.mounted) return <App>[];
             showError(e is CheckUpdatesException ? e.errors : e);
@@ -4256,15 +4376,23 @@ class AppsPageState extends State<AppsPage> {
     final int folderCountsToken = Object.hash(
       appsToken,
       Object.hashAll(appFolders.map((f) => f.id)),
+      updateHealthSettingsToken(settingsProvider),
     );
     if (folderCountsToken != _lastFolderCountsToken) {
       _lastFolderCountsToken = folderCountsToken;
       int onDemand = 0;
+      int updateHealthFlagged = 0;
+      int updateHealthIgnored = 0;
       final Map<String, int> appCounts = {for (final f in appFolders) f.id: 0};
       final Map<String, int> updateCounts = {
         for (final f in appFolders) f.id: 0,
       };
       for (final a in appsProvider.apps.values) {
+        if (isUpdateHealthIgnored(a.app)) {
+          updateHealthIgnored++;
+        } else if (hasUpdateHealthIssues(a.app, settingsProvider)) {
+          updateHealthFlagged++;
+        }
         if (a.app.additionalSettings['onDemandOnly'] == true) {
           onDemand++;
           continue;
@@ -4279,10 +4407,14 @@ class AppsPageState extends State<AppsPage> {
         }
       }
       _onDemandOnlyAppCountCache = onDemand;
+      _updateHealthFlaggedCountCache = updateHealthFlagged;
+      _updateHealthAppCountCache = updateHealthFlagged + updateHealthIgnored;
       _folderAppCountsCache = appCounts;
       _folderUpdateCountsCache = updateCounts;
     }
     final int onDemandOnlyAppCount = _onDemandOnlyAppCountCache;
+    final int updateHealthAppCount = _updateHealthAppCountCache;
+    final int updateHealthFlaggedCount = _updateHealthFlaggedCountCache;
     final Map<String, int> folderAppCounts = _folderAppCountsCache;
     final Map<String, int> folderUpdateCounts = _folderUpdateCountsCache;
     final String? currentFolderName = widget.folderId != null
@@ -4808,6 +4940,7 @@ class AppsPageState extends State<AppsPage> {
                       footer += 8 + appFolders.length * (btn + 8);
                     }
                     if (onDemandOnlyAppCount > 0) footer += btn + 8;
+                    if (updateHealthAppCount > 0) footer += btn + 8;
                     if (footer > 0) footer += 20; // footer's own top padding
                     final double navClear = isLargeScreen ? 52.0 : 80.0;
                     final double footerReserve =
@@ -6657,6 +6790,34 @@ class AppsPageState extends State<AppsPage> {
                                                 textAlign: TextAlign.center,
                                               ),
                                             ),
+                                          // Update health (D8), after the
+                                          // lists: it's advisory, so it's
+                                          // here rather than in the app bar,
+                                          // and only while it has apps to
+                                          // show (flagged or ignored).
+                                          if (updateHealthAppCount > 0) ...[
+                                            if (onDemandOnlyAppCount > 0)
+                                              const SizedBox(height: 8),
+                                            FilledButton.tonalIcon(
+                                              onPressed: () {
+                                                Navigator.push(
+                                                  context,
+                                                  slideUpPageRoute(
+                                                    (_) =>
+                                                        const UpdateHealthPage(),
+                                                  ),
+                                                );
+                                              },
+                                              icon: const Icon(
+                                                Icons.warning_amber_rounded,
+                                              ),
+                                              label: Text(
+                                                '${tr('updateHealth')} '
+                                                '($updateHealthFlaggedCount)',
+                                                textAlign: TextAlign.center,
+                                              ),
+                                            ),
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -8679,11 +8840,21 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
     }.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     if (categories.isEmpty) {
-      return Text(
-        tr('noCategories'),
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+      // An icon beside it, like the other empty states (upstream 83b0e73d).
+      final Color emptyColor = Theme.of(context).colorScheme.onSurfaceVariant;
+      return Row(
+        children: [
+          Icon(Icons.label_outline, size: 18, color: emptyColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              tr('noCategories'),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: emptyColor),
+            ),
+          ),
+        ],
       );
     }
 

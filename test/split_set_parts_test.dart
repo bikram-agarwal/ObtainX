@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -101,5 +102,69 @@ void main() {
     expect(zip.existsSync(), isFalse);
     expect(Directory('${zip.path}-parts').existsSync(), isFalse);
     expect(setDir.listSync(), isEmpty);
+  });
+
+  // Upstream #3372 (INST-8): a corrupt archive is reported as one, and no
+  // partial extraction or bad file is left for a retry to reuse.
+  group('extractArchiveOrThrow', () {
+    Future<void> failingExtraction(String destinationPath) async {
+      File('$destinationPath/half.apk')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('partial');
+      throw const FormatException('Could not find End of Central Directory');
+    }
+
+    test('a failed extraction is couldNotExtractArchive, cleaned up', () async {
+      final File zip = part('app.zip');
+      final String destination = '${zip.path}-dir';
+      await expectLater(
+        extractArchiveOrThrow(
+          () => failingExtraction(destination),
+          destinationPath: destination,
+          sourceFile: zip,
+          appUrl: 'https://example.com/app',
+        ),
+        throwsA(
+          isA<ObtainiumError>()
+              .having((e) => e.message, 'message', tr('couldNotExtractArchive'))
+              .having((e) => e.url, 'url', 'https://example.com/app'),
+        ),
+      );
+      expect(zip.existsSync(), isFalse);
+      expect(Directory(destination).existsSync(), isFalse);
+    });
+
+    test('a split part that fails to extract leaves nothing behind', () async {
+      final File zip = part('app-1.zip');
+      await expectLater(
+        addSplitSetPart(
+          zip,
+          setDir,
+          unzip: (String zipPath, String destinationPath) =>
+              extractArchiveOrThrow(
+                () => failingExtraction(destinationPath),
+                destinationPath: destinationPath,
+                sourceFile: File(zipPath),
+              ),
+        ),
+        throwsA(isA<ObtainiumError>()),
+      );
+      expect(zip.existsSync(), isFalse);
+      expect(Directory('${zip.path}-parts').existsSync(), isFalse);
+      expect(setDir.listSync(), isEmpty);
+    });
+
+    test('an ObtainiumError from the extraction passes through', () async {
+      final File zip = part('app.zip');
+      await expectLater(
+        extractArchiveOrThrow(
+          () async => throw NoAPKError(),
+          destinationPath: '${zip.path}-dir',
+          sourceFile: zip,
+        ),
+        throwsA(isA<NoAPKError>()),
+      );
+      expect(zip.existsSync(), isTrue);
+    });
   });
 }

@@ -83,6 +83,25 @@ class ApkFilterService {
     'x86_64': ['x64'],
   };
 
+  static RegExp _abiRegex(String abi) {
+    final variants = [abi, ...?abiNameAliases[abi]];
+    return RegExp('.*(?:${variants.join('|')}).*', caseSensitive: false);
+  }
+
+  /// The fork matches an ABI on the asset name OR its URL (some stores put
+  /// the ABI only in the URL).
+  static bool _matchesAbi(MapEntry<String, String> apk, RegExp abiRegex) =>
+      abiRegex.hasMatch(apk.key) || abiRegex.hasMatch(apk.value);
+
+  /// Whether [apkName] (an asset name, not a URL) names a universal APK.
+  /// Only the name counts, so a host or path containing "universal" doesn't
+  /// make every APK of a source look universal.
+  static bool isUniversalApkName(String apkName) =>
+      apkName.toLowerCase().contains('universal');
+
+  /// Keeps the APKs matching the device's first matched ABI. Universal APKs
+  /// (upstream #3349) stay too, as alternatives placed **first**, so the
+  /// ABI-specific match stays last and remains the default selection.
   Future<List<MapEntry<String, String>>> filterApksByArch(
     List<MapEntry<String, String>> apkUrls,
     List<String> abis, {
@@ -90,25 +109,60 @@ class ApkFilterService {
   }) async {
     if (apkUrls.length > 1) {
       for (var abi in abis) {
-        final variants = [abi, ...?abiNameAliases[abi]];
-        final RegExp architecturePattern = RegExp(
-          '.*(?:${variants.join('|')}).*',
-          caseSensitive: false,
-        );
+        final RegExp architecturePattern = _abiRegex(abi);
         final urls2 = apkUrls
-            .where(
-              (element) =>
-                  architecturePattern.hasMatch(element.key) ||
-                  architecturePattern.hasMatch(element.value),
-            )
+            .where((element) => _matchesAbi(element, architecturePattern))
             .toList();
         if (urls2.isNotEmpty && urls2.length < apkUrls.length) {
-          apkUrls = urls2;
+          final universal = apkUrls.where(
+            (element) =>
+                isUniversalApkName(element.key) &&
+                !urls2.any((match) => match.value == element.value),
+          );
+          apkUrls = [...universal, ...urls2];
           break;
         }
       }
     }
     return apkUrls;
+  }
+
+  /// Upstream #3473: a saved choice that points at a universal APK resolves
+  /// to the first APK matching the device's ABIs, so the arch filter keeps
+  /// installing the specific build. Any other choice is kept.
+  int preferredApkIndexForArchFilter(
+    List<MapEntry<String, String>> apkUrls,
+    int preferredIndex,
+    List<String> abis,
+  ) {
+    if (preferredIndex < 0 || preferredIndex >= apkUrls.length) {
+      return preferredIndex;
+    }
+    final MapEntry<String, String> preferred = apkUrls[preferredIndex];
+    if (abis.any((abi) => _matchesAbi(preferred, _abiRegex(abi)))) {
+      return preferredIndex;
+    }
+    if (!isUniversalApkName(preferred.key)) {
+      return preferredIndex;
+    }
+    for (final abi in abis) {
+      final abiRegex = _abiRegex(abi);
+      final index = apkUrls.indexWhere((e) => _matchesAbi(e, abiRegex));
+      if (index >= 0) return index;
+    }
+    return preferredIndex;
+  }
+
+  /// Whether every APK other than [apkUrls]'s ABI-specific ones is a
+  /// universal alternative, i.e. the choice between them is one the user
+  /// needn't be asked about (v1.7.4 sync, D12 C: no picker for that alone).
+  static bool onlyUniversalAlternatives(
+    List<MapEntry<String, String>> apkUrls,
+  ) {
+    final nonUniversal = apkUrls
+        .where((apk) => !isUniversalApkName(apk.key))
+        .toList();
+    return nonUniversal.length == 1 && apkUrls.length > 1;
   }
 }
 
@@ -130,6 +184,20 @@ Future<List<MapEntry<String, String>>> filterApksByArch(
 ) async {
   final abis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
   return ApkFilterService().filterApksByArch(apkUrls, abis);
+}
+
+/// Delegates to [ApkFilterService.preferredApkIndexForArchFilter] with the
+/// device's ABIs.
+Future<int> resolvePreferredApkIndexForArchFilter(
+  List<MapEntry<String, String>> apkUrls,
+  int preferredIndex,
+) async {
+  final abis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
+  return ApkFilterService().preferredApkIndexForArchFilter(
+    apkUrls,
+    preferredIndex,
+    abis,
+  );
 }
 
 /// Delegates to [ApkFilterService.filterApks].

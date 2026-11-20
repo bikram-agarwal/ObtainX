@@ -377,6 +377,15 @@ Map<String, dynamic> appJSONCompatibilityModifiers(Map<String, dynamic> json) {
     _migrateHuaweiAppGallery(json, additionalSettings);
   }
 
+  // Obtainium 1.7.0 (#3375) can disable an app, which keeps it but skips its
+  // checks. ObtainX has no separate disabled state (v1.7.4 sync, D6): its
+  // per-app "on-demand only" means the same, so an imported disabled app
+  // stays out of automatic checks. `disabled` isn't written back.
+  if (json['disabled'] == true) {
+    additionalSettings['onDemandOnly'] = true;
+  }
+  json.remove('disabled');
+
   json['additionalSettings'] = jsonEncode(additionalSettings);
   _migrateFdroidOverrides(json);
   return json;

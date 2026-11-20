@@ -250,13 +250,24 @@ class Uptodown extends AppSource {
   /// lookup, so a per-instance session would log in again for each download.
   static ({String token, int expiresAt})? _session;
 
+  /// Every app page as `<app>.en.uptodown.com/android/download`, including
+  /// hosts that carry no language label at all (upstream 1a78315b), so the
+  /// technical-information labels come back in English.
   @override
   String sourceSpecificStandardizeURL(String url, {bool forSelection = false}) {
-    url = url.replaceFirst(
-      RegExp(r'\.([a-z]{2,3})\.uptodown\.', caseSensitive: false),
-      '.en.uptodown.',
+    final uri = Uri.parse(
+      standardizeUrlWithRegex(
+        url,
+        subdomainPrefix: r'([^\\.]+\.)+',
+        pathPattern: '',
+      ),
     );
-    return '${standardizeUrlWithRegex(url, subdomainPrefix: r'([^\\.]+\.)+', pathPattern: '')}/android/download';
+    return uri
+        .replace(
+          host: '${uri.host.split('.').first}.en.uptodown.com',
+          path: '/android/download',
+        )
+        .toString();
   }
 
   @override
@@ -324,8 +335,18 @@ class Uptodown extends AppSource {
           if (url == null || url.isEmpty || name == null || name.isEmpty) {
             continue;
           }
+          // Results link the landing page, which lacks the download path the
+          // add flow reads (upstream bf33619c, #3450).
+          final String standardUrl;
+          try {
+            standardUrl = sourceSpecificStandardizeURL(url);
+          } on ObtainiumError {
+            continue;
+          } on FormatException {
+            continue;
+          }
           final author = app['author']?.toString().trim();
-          results[url] = [
+          results[standardUrl] = [
             name,
             (author != null && author.isNotEmpty)
                 ? author
@@ -364,9 +385,20 @@ class Uptodown extends AppSource {
     final nameElement = html.querySelector('#detail-app-name');
     final String? name = nameElement?.text.trim();
     final String? author = html.querySelector('#author-link')?.text.trim();
+    // A row whose <th> isn't one of these labels (still localized, or
+    // missing) is named by its icon instead (upstream d1a17a30, #3327).
+    const iconLabels = {
+      'icon-40-package': 'package name',
+      'icon-40-date': 'date',
+      'icon-40-type': 'file type',
+    };
     final labelledCells = <String, String>{};
     for (final row in html.querySelectorAll('#technical-information tr')) {
-      final label = row.querySelector('th')?.text.trim().toLowerCase();
+      String? label = row.querySelector('th')?.text.trim().toLowerCase();
+      if (!iconLabels.values.contains(label)) {
+        final iconSrc = row.querySelector('td img')?.attributes['src'];
+        label = iconLabels[Uri.tryParse(iconSrc ?? '')?.fragment] ?? label;
+      }
       if (label == null || label.isEmpty) continue;
       final values = row.querySelectorAll('td');
       final value = values.isEmpty ? null : values.last.text.trim();
@@ -394,6 +426,7 @@ class Uptodown extends AppSource {
       MapEntry('dateStr', technicalFields.dateStr),
       MapEntry('fileId', fileId),
       MapEntry('extension', technicalFields.extension),
+      MapEntry('labelledFileType', labelledCells['file type']?.toLowerCase()),
     ]);
   }
 
@@ -411,10 +444,18 @@ class Uptodown extends AppSource {
       final appId = appDetails['appId'];
       final fileId = appDetails['fileId'];
       final extension = appDetails['extension'];
+      final labelledFileType = appDetails['labelledFileType'];
       if (version == null || version.isEmpty) {
         throw NoVersionError();
       }
-      if (fileId == null) {
+      // Only a file type the page itself names, and that isn't one ObtainX
+      // installs, means there's no APK (upstream d1a17a30). Upstream also
+      // rejects a missing type, and apks/apkm; the fork installs those and
+      // treats an unknown type as `.apk`, so a layout change that loses the
+      // labels doesn't make every Uptodown app fail.
+      if (fileId == null ||
+          (labelledFileType != null &&
+              !_uptodownFileExtensions.contains(labelledFileType))) {
         throw NoAPKError();
       }
       final apkUrl = '$standardUrl/$fileId-x';
@@ -428,14 +469,12 @@ class Uptodown extends AppSource {
       if (dateStr != null) {
         relDate = parseUptodownDate(dateStr);
       }
+      final String assetExtension = _uptodownFileExtensions.contains(extension)
+          ? extension!
+          : 'apk';
       return APKDetails(
         version,
-        [
-          MapEntry(
-            '$appId.${(extension != null && extension.isNotEmpty) ? extension : 'apk'}',
-            apkUrl,
-          ),
-        ],
+        [MapEntry('$appId.$assetExtension', apkUrl)],
         AppNames(author, appName),
         releaseDate: relDate,
       );

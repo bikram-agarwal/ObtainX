@@ -388,7 +388,9 @@ class ItchIO extends AppSource {
       'Referer': '$baseUrl?download',
     }, additionalSettings);
 
-    // Peek into the Content-Disposition header
+    // Peek into the Content-Disposition header. ObtainX keeps dart:io's
+    // stream API (no Cronet, v1.7.4 sync D1), so its client is closed here
+    // rather than upstream's cancelStreamedResponse.
     final response = streamRes.value.value;
     final cd = response.headers.value('content-disposition');
     streamRes.value.key.close(force: true);

@@ -83,7 +83,9 @@ class HuaweiAppGallery extends AppSource {
       final mergedSettings = await buildMergedSettings(additionalSettings, sp);
       final cId = standardUrl.split('/').last;
       final info = await _fetchAppDetail(cId, mergedSettings, sp);
-      return info?['package']?.toString();
+      return _packageName(info?['package']);
+    } on RateLimitError {
+      rethrow;
     } catch (e) {
       AppLogger.info('Failed to infer app ID from Huawei AppGallery API: $e');
       return null;
@@ -103,7 +105,7 @@ class HuaweiAppGallery extends AppSource {
       final info = await _fetchAppDetail(cId, mergedSettings, sp);
       if (info != null) {
         final version = info['versionName'].toString();
-        final package = info['package']?.toString();
+        final package = _packageName(info['package']);
         final appName = info['name']?.toString() ?? package ?? tr('app');
         final developer = info['developer']?.toString();
         return APKDetails(
@@ -114,6 +116,7 @@ class HuaweiAppGallery extends AppSource {
             appName,
           ),
           releaseDate: DateTime.tryParse(info['releaseDate']?.toString() ?? ''),
+          appId: package,
         );
       }
       // The store API is the only source of the real version name. The legacy
@@ -292,7 +295,6 @@ class HuaweiAppGallery extends AppSource {
     return session;
   }
 
-  /// Fetches app details from the store API. Returns null on any failure.
   Future<Map<String, dynamic>?> _fetchAppDetail(
     String cId,
     Map<String, dynamic> mergedSettings,
@@ -331,10 +333,22 @@ class HuaweiAppGallery extends AppSource {
       }
       AppLogger.warn('$name: appDetailById failed ($lastError)');
       return null;
+    } on RateLimitError {
+      rethrow;
     } catch (e) {
       AppLogger.warn('$name: store API failed ($e)');
       return null;
     }
+  }
+
+  String? _packageName(Object? value) {
+    if (value is! String) return null;
+    final package = value.trim();
+    return RegExp(
+          r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$',
+        ).hasMatch(package)
+        ? package
+        : null;
   }
 }
 

@@ -51,6 +51,14 @@ const List<String> _releaseFilterSettingKeys = [
 bool appHasNoMatchingRelease(App app) =>
     app.additionalSettings[noMatchingReleaseKey] == true;
 
+/// Filter inversion switches. They change what a filter matches, so flipping
+/// one alone must count as a filter change (the Needs-attention entry clears).
+const List<String> _invertFilterSettingKeys = [
+  'invertAPKFilter',
+  'invertReleaseTitlesFilter',
+  'invertReleaseNotesFilter',
+];
+
 String releaseFilterFingerprint(App app) => [
   ..._releaseFilterSettingKeys.map(
     (String key) => app.additionalSettings[key]?.toString() ?? '',
@@ -58,6 +66,9 @@ String releaseFilterFingerprint(App app) => [
   // Only when it applies, so fingerprints saved before the global filter
   // existed still match.
   ?_globalApkFilterApplyingTo(app),
+  // Only when on, for the same reason.
+  for (final String key in _invertFilterSettingKeys)
+    if (app.additionalSettings[key] == true) '$key=true',
 ].join('\n');
 
 /// The global APK filter when it stands in for [app]'s unset own filter (see

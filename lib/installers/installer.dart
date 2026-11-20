@@ -1,6 +1,40 @@
 import 'package:flutter/material.dart';
+import 'package:obtainium/app_sources/samsunggalaxystore.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+
+/// The installer of record to claim for [app]'s install, or '' for none: the
+/// Samsung Galaxy Store for a Samsung app that opts in, otherwise Google Play
+/// when the global or per-app "pretend to be Google Play" switch is on
+/// (upstream a652ee08, D14).
+///
+/// This is the one `installerPackageName` install option every privileged
+/// installer reads (Shizuku and Root; Dhizuku can't set a source and ignores
+/// it), so the two can't drift apart again (INST-H2).
+String installerPackageNameForApp(App app, {required bool googlePlayDefault}) {
+  var isGalaxyStore = false;
+  if (app.settings.getBool('shizukuPretendToBeGalaxyStore')) {
+    try {
+      // Only a type test, so the cached template is enough: no per-install
+      // source instance (guide §3.2).
+      isGalaxyStore =
+          SourceProvider().getSourceTemplate(
+                app.url,
+                overrideSource: app.overrideSource,
+              )
+              is SamsungGalaxyStore;
+    } catch (_) {
+      isGalaxyStore = false;
+    }
+  }
+  if (isGalaxyStore) {
+    return 'com.sec.android.app.samsungapps';
+  }
+  return googlePlayDefault ||
+          app.settings.getBool('shizukuPretendToBeGooglePlay')
+      ? 'com.android.vending'
+      : '';
+}
 
 /// Android PackageInstaller status codes. 0 = success (public: the fork's tests
 /// use it); 3 = STATUS_FAILURE_ABORTED, i.e. the user cancelled.
@@ -92,11 +126,18 @@ abstract class Installer {
   Future<void> ensurePermission({ThemeData? toastTheme});
 
   /// Installs one or more APK file paths (a base APK plus optional splits).
-  /// [installOptions] carries installer-specific key-value flags (e.g. Shizuku's
-  /// `shizukuPretendToBeGooglePlay`).
+  /// [installOptions] carries installer-specific key-value flags:
+  /// `installerPackageName` (see [installerPackageNameForApp]; Shizuku and
+  /// Root) and `requestUpdateOwnership` (a first install; Shizuku and Dhizuku).
   Future<InstallResult> installApk(
     List<String> apkFilePaths, {
     required String appId,
     Map<String, dynamic> installOptions = const {},
   });
+
+  /// Called when the provider's install race (#3369, D15) has settled an
+  /// install's outcome by polling the package while this installer's own
+  /// [installApk] call is still pending. Installers whose platform call holds
+  /// a shared resource release it here; the default holds nothing.
+  Future<void> releaseStalledInstall() async {}
 }

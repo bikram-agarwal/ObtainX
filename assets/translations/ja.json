@@ -20,7 +20,7 @@
     "dismiss": "閉じる",
     "functionNotImplemented": "このクラスはこの機能を実装していません",
     "placeholder": "プレースホルダー",
-    "someErrors": "何らかのエラーが発生しました",
+    "someErrors": "エラーが発生しました",
     "unexpectedError": "予期せぬエラーが発生しました",
     "ok": "OK",
     "and": "と",
@@ -81,7 +81,7 @@
     "removeSelectedApps": "選択したアプリを削除する",
     "changeX": "{} を変更する",
     "installUpdateSelectedApps": "選択したアプリのインストール/アップデート",
-    "markXSelectedAppsAsUpdated": "{}個の選択したアプリをアップデート済みとしてマークしますか？",
+    "markXSelectedAppsAsUpdated": "選択した{}個のアプリをアップデート済みとしてマークしますか？",
     "no": "いいえ",
     "yes": "はい",
     "markSelectedAppsUpdated": "選択したアプリをアップデート済みとしてマークする",
@@ -248,9 +248,9 @@
     "overrideSource": "ソースの上書き",
     "dontShowAgain": "今後表示しない",
     "moveNonInstalledAppsToBottom": "未インストールのアプリをアプリ一覧の下部に移動させる",
-    "gitlabPATLabel": "GitLab パーソナルアクセストークン",
+    "gitlabPATLabel": "GitLab アクセストークン",
     "about": "概要",
-    "requiresCredentialsInSettings": "{}: これには追加の認証が必要です (設定にて)",
+    "requiresCredentialsInSettings": "{}には追加の認証情報が必要です（設定で指定してください）",
     "checkOnStart": "起動時にアップデートを確認する",
     "tryInferAppIdFromCode": "ソースコードからアプリIDを推測する",
     "inferAppIdOverriddenByCustom": "下でカスタムアプリIDが設定されている間は使用されません。カスタム値が優先されます。",
@@ -352,7 +352,7 @@
     "fileDeletionError": "ファイルの削除に失敗しました（手動で削除してから再試行してください）：\"{}\"",
     "foregroundService": "ObtainX フォアグラウンドサービス",
     "fgServiceNotice": "この通知は、バックグラウンドでアップデートを確認するために必要です（OSの設定で非表示にできます）。",
-    "GHReqPrefix": "GitHub リクエスト用の 'sky22333/hubproxy' インスタンス",
+    "GHReqPrefix": "GitHub リクエスト用プロキシ",
     "includeZips": "ZIPファイルを含む",
     "zippedApkFilterRegEx": "ZIP内のAPKをフィルタリングする",
     "includeTarballs": "tarアーカイブファイル（tar.gzなど）を含める",
@@ -391,20 +391,20 @@
         "other": "{n}件のログをクリアしました（前 = {before}, 後 = {after}）"
     },
     "xAndNMoreUpdatesAvailable": {
-        "one": "{} とさらに 1 個のアプリのアップデートが利用可能です。",
-        "other": "{} とさらに {} 個のアプリのアップデートが利用可能です。"
+        "one": "{}とほか1個のアプリのアップデートが利用可能です。",
+        "other": "{}とほか{}個のアプリのアップデートが利用可能です。"
     },
     "xAndNMoreUpdatesInstalled": {
-        "one": "{} とさらに 1 個のアプリがアップデートされました。",
-        "other": "{} とさらに {} 個のアプリがアップデートされました。"
+        "one": "{}とほか1個のアプリがアップデートされました。",
+        "other": "{}とほか{}個のアプリがアップデートされました。"
     },
     "xAndNMoreUpdatesFailed": {
-        "one": "{} とさらに 1 個のアプリのアップデートに失敗しました。",
-        "other": "{} とさらに {} 個のアプリのアップデートに失敗しました。"
+        "one": "{}とほか1個のアプリのアップデートに失敗しました。",
+        "other": "{}とほか{}個のアプリのアップデートに失敗しました。"
     },
     "xAndNMoreUpdatesPossiblyInstalled": {
-        "one": "{} とさらに 1 個のアプリがアップデートされた可能性があります。",
-        "other": "{} とさらに {} 個のアプリがアップデートされた可能性があります。"
+        "one": "{}とほか1個のアプリがアップデートされた可能性があります。",
+        "other": "{}とほか{}個のアプリがアップデートされた可能性があります。"
     },
     "apk": {
         "one": "{} APK",
@@ -505,7 +505,7 @@
     "onDemandOnlyAppsTitle": "必要時のみ",
     "onDemandOnlyEmptyTitle": "「必要時のみ」のアプリはありません",
     "onDemandOnlyEmpty": "「必要時のみ」のアプリはありません。任意のアプリの追加オプションで「必要時のみ」を有効にしてください。",
-    "openApp": "アプリを開く",
+    "openApp": "{}を開く",
     "appIconActionsTitle": "アプリアイコン",
     "changeAppIcon": "アイコンを変更…",
     "searchWebForAppIcon": "Webで検索",
@@ -886,5 +886,71 @@
     "verifySigningCertHashes": "署名証明書の変更を警告する",
     "verifySigningCertHashesHelp": "インストール前に、ダウンロードしたAPKがインストール済みのアプリと同じ証明書で署名されているか確認します。想定する署名証明書ハッシュが設定されているアプリは、常に確認されます。",
     "categoryAlreadyExists": "この名前のカテゴリはすでに存在します",
-    "noMatchingReleaseFound": "一致するリリースが見つかりません"
+    "noMatchingReleaseFound": "一致するリリースが見つかりません",
+    "addAnyway": "そのまま追加",
+    "addWithoutCheckExplanation": "リリースの確認中に予期しないエラーが発生しました。そのままアプリを追加しますか？接続できるようになるとアップデートの確認が行われ、初回インストール時にパッケージIDが確定します。",
+    "addWithoutCheckQuestion": "確認せずにアプリを追加しますか？",
+    "allowAddingAppsWithoutCheck": "リリース確認に失敗した場合にアプリの追加を提案する",
+    "allowAddingAppsWithoutCheckHelp": "アプリの追加時にリリースの確認で予期しないエラーが発生した場合、そのまま追加するかどうかを確認します。接続できるようになると、通常どおりアプリの確認とアップデートが行われます。パッケージIDは初回インストール時に確定します。",
+    "andNMoreErrors": {
+        "one": "…ほかに {} 件のエラー",
+        "other": "…ほかに {} 件のエラー"
+    },
+    "andOneMoreError": "…ほかに 1 件のエラー",
+    "bgGuardChecksAndUpdates": "確認とアップデートを行う",
+    "bgGuardChecksOnly": "確認のみ行う",
+    "bgGuardNothing": "何もしない",
+    "checks": {
+        "one": "{} 回の確認",
+        "other": "{} 回の確認"
+    },
+    "couldNotExtractArchive": "ダウンロードしたアーカイブを展開できませんでした",
+    "disabled": "無効",
+    "enabled": "有効",
+    "globalVersionExtractionRegEx": "グローバルのバージョン文字列トリム用正規表現",
+    "ignoreForThisVersion": "現在のバージョンでは無視する",
+    "ignorePermanently": "無期限に無視する",
+    "includeDrafts": "Include drafts (needs a token with write access to the repository)",
+    "updateHealth": "アップデートの健全性",
+    "updateHealthArchivedCheck": "アーカイブ済みのソースを警告する（GitHub/GitLab）",
+    "updateHealthDetectedApps": "検出されたアプリ",
+    "updateHealthFailedChecksCheck": "アップデート確認の連続失敗に対する警告の基準回数",
+    "updateHealthFilteredReleasesCheck": "フィルターで非表示になった新しいリリース数の警告基準",
+    "updateHealthIgnoredApps": "無視しているアプリ",
+    "updateHealthIgnoredForVersion": "現在のバージョンでは無視しています",
+    "updateHealthIgnoredPermanently": "無期限に無視しています",
+    "updateHealthNoApps": "アップデートの健全性に関する問題は検出されていません。",
+    "updateHealthOverrideArchived": "アップデートの健全性 - アーカイブ済みソース",
+    "updateHealthOverrideFailedChecks": "アップデートの健全性 - 確認の失敗回数",
+    "updateHealthOverrideFilteredReleases": "アップデートの健全性 - 非表示になった新しいリリース",
+    "updateHealthOverrideStaleRelease": "アップデートの健全性 - リリースからの経過期間",
+    "updateHealthOverrideStaleVersion": "アップデートの健全性 - 最新バージョンに変化がない期間",
+    "updateHealthReasonArchived": "ソースがアーカイブされています",
+    "updateHealthReasonFailedChecks": {
+        "one": "アップデートの確認に {} 回連続で失敗しています",
+        "other": "アップデートの確認に {} 回連続で失敗しています"
+    },
+    "updateHealthReasonFilteredReleases": {
+        "one": "設定したフィルターによって、新しいリリースが {} 件非表示になっています",
+        "other": "設定したフィルターによって、新しいリリースが {} 件非表示になっています"
+    },
+    "updateHealthReasonStaleRelease": "最新リリースから {} 日を超えて経過しています",
+    "updateHealthReasonStaleVersion": "最新バージョンが {} 日を超えて変わっていません",
+    "updateHealthStaleReleaseCheck": "最新リリースから時間が経過したアプリを警告するまでの期間",
+    "updateHealthStaleVersionCheck": "最新バージョンに変化がないアプリを警告するまでの期間",
+    "detectionDateAsReleaseDate": "Use the time an update was found as its release date when the source gives none",
+    "releaseDateDateFormat": "リリース日の日付形式（intlのパターン、例: 'EEE. MMMM d, yyyy - h:mma'）",
+    "releaseDateRegEx": "リリース日抽出の正規表現",
+    "releases": {
+        "one": "{} 件のリリース",
+        "other": "{} 件のリリース"
+    },
+    "restore": "元に戻す",
+    "samsungGalaxyStoreCN": "Samsung Galaxy Store (CN)",
+    "samsungGalaxyStoreLoginRequired": "このGalaxy StoreアプリにはSamsungアカウントが必要なため、匿名ではダウンロードできません。",
+    "sectionUpdateHealthDetection": "アップデートの健全性チェック",
+    "shizukuPretendToBeGalaxyStore": "Samsung Galaxy Storeをインストール元として設定する（ShizukuまたはRootを使用する場合。Google Playのグローバル設定より優先）",
+    "showUpdateHealthIndicator": "アプリ一覧にアップデートの健全性の警告マークを表示する",
+    "whenNotCharging": "充電していないとき",
+    "whenNotOnWiFi": "Wi-Fiに接続していないとき"
 }

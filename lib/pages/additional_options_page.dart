@@ -155,9 +155,18 @@ Future<bool> persistAdditionalOptionsForm({
 
 /// Full-screen editor for per-app additional options (keyboard-friendly).
 class AdditionalOptionsPage extends StatefulWidget {
-  const AdditionalOptionsPage({super.key, required this.appId});
+  const AdditionalOptionsPage({
+    super.key,
+    required this.appId,
+    this.scrollToSection,
+  });
 
   final String appId;
+
+  /// The key of a [GeneratedFormSectionHeader] whose card the page opens
+  /// scrolled to (upstream's `scrollToSection`, for the Update health card,
+  /// `updateHealthSectionKey`). Unknown keys open at the top.
+  final String? scrollToSection;
 
   @override
   State<AdditionalOptionsPage> createState() => _AdditionalOptionsPageState();
@@ -178,6 +187,46 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
   ThemeData? _cachedPageTheme;
   String? _cachedPageThemeKey;
   bool _requestedMissingIconLoad = false;
+
+  /// Marks the [AdditionalOptionsPage.scrollToSection] card: an empty widget
+  /// rendered right under that card's header (the form renders an item's
+  /// `belowWidgets` after it), so no form-renderer change is needed.
+  final GlobalKey _scrollTargetKey = GlobalKey();
+
+  /// Puts [_scrollTargetKey] under the header keyed [sectionKey], if any.
+  bool _markScrollTarget(String sectionKey) {
+    for (final List<GeneratedFormItem> row in _items) {
+      for (final GeneratedFormItem item in row) {
+        if (item is GeneratedFormSectionHeader && item.key == sectionKey) {
+          item.belowWidgets = [SizedBox.shrink(key: _scrollTargetKey)];
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void _scrollToMarkedSection({int framesLeft = 3}) {
+    if (!mounted) return;
+    final BuildContext? targetContext = _scrollTargetKey.currentContext;
+    if (targetContext == null) {
+      // Not laid out yet; the form builds its rows after the first frame.
+      if (framesLeft > 0) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _scrollToMarkedSection(framesLeft: framesLeft - 1),
+        );
+      }
+      return;
+    }
+    Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      // Below the pinned app bar, with the card's header in view above.
+      alignment: 0.2,
+      alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+    );
+  }
 
   @override
   void initState() {
@@ -295,6 +344,12 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
           },
     );
     _valid = _items.isEmpty;
+    final String? scrollToSection = widget.scrollToSection;
+    if (scrollToSection != null && _markScrollTarget(scrollToSection)) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _scrollToMarkedSection(),
+      );
+    }
   }
 
   void _startIconSchemeLoadIfNeeded(Uint8List iconBytes, String cacheKey) {

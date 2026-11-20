@@ -59,7 +59,8 @@ export 'package:obtainium/models/app.dart';
 export 'package:obtainium/models/typed_settings.dart';
 export 'package:obtainium/services/apk_filter_service.dart';
 export 'package:obtainium/services/http_service.dart';
-export 'package:obtainium/utils/string_utils.dart' show getSourceRegex;
+export 'package:obtainium/utils/string_utils.dart'
+    show getSourceRegex, passesRegExFilter;
 export 'package:obtainium/utils/url_utils.dart' show preStandardizeUrl;
 
 // Version semantics live in lib/version/ and are re-exported here so the ~40
@@ -349,17 +350,56 @@ class SourceProvider {
       .toString()
       .substring(0, 12);
 
+  /// A placeholder [App] for [url] whose check failed unexpectedly during
+  /// add, when the user chose "Add anyway" (upstream #3345, D10). Its URL is
+  /// its name until the first successful check names it
+  /// ([hasOnlyPlaceholderApks] apps can't be installed until then), and it
+  /// keeps a temporary ID until the first install finds the package.
+  App buildPlaceholderApp(
+    AppSource source,
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool trackOnlyOverride = false,
+    bool sourceIsOverriden = false,
+  }) {
+    final standardUrl = source.standardizeUrl(url);
+    final settings = Map<String, dynamic>.from(additionalSettings);
+    if (trackOnlyOverride || source.enforceTrackOnly) {
+      settings['trackOnly'] = true;
+    }
+    syncVersionStringSourceSettings(settings);
+    final app = App(
+      id: generateTempID(standardUrl, settings),
+      url: standardUrl,
+      author: source.name,
+      name: standardUrl,
+      latestVersion: tr('unknown'),
+      apkUrls: const [MapEntry('placeholder', 'placeholder')],
+      preferredApkIndex: 0,
+      additionalSettings: settings,
+      overrideSource: sourceIsOverriden ? source.sourceIdentifier : null,
+      // The real package ID is only known once an APK is downloaded.
+      allowIdChange: true,
+    );
+    return source.postProcessApp(app);
+  }
+
   Future<String> _resolveAppId(
     AppSource source,
     App? currentApp,
     Map<String, dynamic> additionalSettings,
     bool trackOnly,
     String standardUrl,
-    bool inferAppIdIfOptional,
-  ) async {
+    bool inferAppIdIfOptional, {
+    String? inferredAppId,
+  }) async {
     if (currentApp?.id != null) return currentApp!.id;
     final String? explicitId = explicitAppIdFromSettings(additionalSettings);
     if (explicitId != null) return explicitId;
+    // A package ID the source already knows (APKMirror's feed, Huawei, Vivo)
+    // saves a lookup request (upstream bb782a74, #339).
+    final String? knownId = inferredAppId?.trim();
+    if (knownId != null && knownId.isNotEmpty) return knownId;
     if ((!trackOnly || source.inferAppIdEvenWhenTrackOnly) &&
         (!source.appIdInferIsOptional ||
             (source.appIdInferIsOptional && inferAppIdIfOptional))) {
@@ -448,10 +488,17 @@ class SourceProvider {
     }
 
     if (!source.suppressStandardVersionExtraction) {
-      final String? extractedVersion = extractVersion(
-        additionalSettings['versionExtractionRegEx'] as String?,
-        additionalSettings['matchGroupToUse'] as String?,
+      // The global regex (D9) applies only where the per-app one would.
+      final bool globalApplies = !source.excludeCommonSettingKeys.contains(
+        'versionExtractionRegEx',
+      );
+      final String? extractedVersion = extractVersionWithGlobalDefault(
+        additionalSettings,
         apk.version,
+        globalRegEx: globalApplies
+            ? settings.globalVersionExtractionRegEx
+            : null,
+        globalMatchGroup: settings.globalMatchGroupToUse,
       );
       if (extractedVersion != null) {
         apk.version = extractedVersion;
@@ -497,7 +544,7 @@ class SourceProvider {
         throw NoAPKError()..url = standardUrl;
       }
     }
-    final int preferredApkIndex;
+    int preferredApkIndex;
     if (apk.apkUrls.isEmpty) {
       preferredApkIndex = 0;
     } else if (currentApp == null) {
@@ -506,6 +553,15 @@ class SourceProvider {
       preferredApkIndex = currentApp.preferredApkIndex.clamp(
         0,
         apk.apkUrls.length - 1,
+      );
+    }
+    if (additionalSettings['autoApkFilterByArch'] == true &&
+        apk.apkUrls.isNotEmpty) {
+      // Universal APKs now stay as alternatives (D12): a saved choice of one
+      // resolves to the device's ABI build (upstream #3473).
+      preferredApkIndex = await resolvePreferredApkIndexForArchFilter(
+        apk.apkUrls,
+        preferredApkIndex,
       );
     }
     final String sourceName = apk.names.name.trim();
@@ -543,6 +599,8 @@ class SourceProvider {
     var name = currentApp != null ? currentApp.name.trim() : '';
     if (name.isEmpty ||
         name == currentApp?.id ||
+        // An app added without a check (D10) is named by its URL until now.
+        name == currentApp?.url ||
         (looksLikeAndroidPackageId(name) &&
             sourceName.isNotEmpty &&
             sourceName != name)) {
@@ -567,6 +625,7 @@ class SourceProvider {
         trackOnly,
         standardUrl,
         inferAppIdIfOptional,
+        inferredAppId: apk.appId,
       ),
       url: standardUrl,
       author: apk.names.author,
@@ -605,6 +664,14 @@ class SourceProvider {
       latestAttestationStatus:
           apk.attestationStatus ??
           (sameVersionAsPrevious ? currentApp.latestAttestationStatus : null),
+      // Update health (D8) and the detection date (D11): kept from the
+      // stored app; AppsProvider stamps them after the check.
+      latestVersionChangedAt: currentApp?.latestVersionChangedAt,
+      consecutiveFailedChecks: currentApp?.consecutiveFailedChecks ?? 0,
+      isArchived: apk.isArchived ?? currentApp?.isArchived,
+      newerReleasesFilteredOut: apk.newerReleasesFilteredOut,
+      updateHealthEnabled: currentApp?.updateHealthEnabled ?? true,
+      updateHealthDismissedVersion: currentApp?.updateHealthDismissedVersion,
     );
     return source.resolveVersionComparison(source.postProcessApp(finalApp));
   }

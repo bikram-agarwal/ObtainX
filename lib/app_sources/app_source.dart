@@ -13,8 +13,10 @@ import 'package:obtainium/models/app.dart';
 import 'package:obtainium/models/typed_settings.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/services/apk_filter_service.dart';
+import 'package:obtainium/services/host_request_gate.dart';
 import 'package:obtainium/services/http_service.dart';
 import 'package:obtainium/utils/signing_cert_utils.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/utils/string_utils.dart';
 import 'package:obtainium/utils/url_utils.dart';
 import 'package:obtainium/version/version_detection_mode.dart';
@@ -28,6 +30,25 @@ import 'package:obtainium/version/version_strings.dart';
 /// the delay; the empty string means "use the global default" for per-app
 /// overrides.
 const List<int> minimumUpdateAgeOptions = [0, 1, 2, 3, 5, 7, 14, 30];
+
+/// One way to search a source (upstream, v1.7.2). Most sources have a single
+/// profile named after themselves; Samsung Galaxy Store has Global and China,
+/// each with its own query settings and the settings a found app gets.
+/// [id] keys the `searchDeselected` setting; a single profile's id is the
+/// source name, so lists saved before profiles still apply.
+class SourceSearchProfile {
+  final String id;
+  final String name;
+  final Map<String, dynamic> querySettings;
+  final Map<String, dynamic> appSettings;
+
+  const SourceSearchProfile({
+    required this.id,
+    required this.name,
+    this.querySettings = const {},
+    this.appSettings = const {},
+  });
+}
 
 abstract class AppSource {
   List<String> hosts = [];
@@ -66,6 +87,19 @@ abstract class AppSource {
   bool allowIncludeZips = false;
   bool allowIncludeTarballs = false;
   bool regionalStore = false;
+
+  /// Routes this source's requests through [HostRequestGate] (#339): at most
+  /// [maxConcurrentRequestsPerHost] in flight per host, page requests spaced
+  /// out, and a request class that got a challenge or rate limit fails fast
+  /// until the block expires.
+  bool enableHostRequestGate = false;
+  int maxConcurrentRequestsPerHost = 2;
+
+  /// A source kept only so apps already tracked from it still load under the
+  /// right name (e.g. APKCombo, v1.7.4 sync D19). Never offered for adding,
+  /// searching or in the supported-sources list; its checks fail with a
+  /// message telling the user to move the app to another store.
+  bool retired = false;
   String get sourceIdentifier => runtimeType.toString();
 
   /// Transient per-check context: the app as it was known before this update
@@ -164,6 +198,16 @@ abstract class AppSource {
       );
     }
 
+    // The gate wraps only the network load, so a response the session already
+    // cached (the index.xml dedupe below) never takes a slot.
+    Future<http.Response> gatedLoadResponse() => enableHostRequestGate
+        ? HostRequestGate.instance.runResponse(
+            Uri.parse(url),
+            maxConcurrentRequestsPerHost,
+            loadResponse,
+          )
+        : loadResponse();
+
     final String requestPath = Uri.parse(url).path;
     if (session != null &&
         method == 'GET' &&
@@ -180,9 +224,9 @@ abstract class AppSource {
         followRedirects,
         for (final name in headerNames) [name, requestHeaders![name]],
       ]);
-      return session.repositoryResponse(key, loadResponse);
+      return session.repositoryResponse(key, gatedLoadResponse);
     }
-    return loadResponse();
+    return gatedLoadResponse();
   }
 
   void runOnAddAppInputChange(String inputUrl) {}
@@ -311,6 +355,16 @@ abstract class AppSource {
       ),
     ],
     [
+      // Upstream #3453: with no release date from the source, use the time
+      // ObtainX first saw the version (App.latestVersionChangedAt). Sits
+      // after the minimum age because that age is measured from this date.
+      GeneratedFormSwitch(
+        'detectionDateAsReleaseDate',
+        label: tr('detectionDateAsReleaseDate'),
+        value: false,
+      ),
+    ],
+    [
       GeneratedFormSectionHeader(
         '__formSectionVersion',
         label: tr('additionalOptionsSectionVersion'),
@@ -389,6 +443,26 @@ abstract class AppSource {
       GeneratedFormSectionHeader(
         '__formSectionAdvanced',
         label: tr('additionalOptionsSectionAdvanced'),
+      ),
+    ],
+    [
+      // Per-app install method (upstream #3457), fork-shaped (v1.7.4 sync,
+      // D13): the fork's modes, Dhizuku and Root included, with the labels
+      // the Settings page uses. '' = the global setting. Values are
+      // InstallerMode names; the stock installer is 'system'.
+      GeneratedFormDropdown(
+        'installerMode',
+        [
+          MapEntry('', tr('useGlobalDefault')),
+          MapEntry(InstallerMode.system.name, tr('installerModeStock')),
+          MapEntry(InstallerMode.shizuku.name, tr('installerModeShizuku')),
+          MapEntry(InstallerMode.dhizuku.name, tr('installerModeDhizuku')),
+          MapEntry(InstallerMode.root.name, tr('installMethodRoot')),
+          MapEntry(InstallerMode.external.name, tr('installerModeThirdParty')),
+        ],
+        label: tr('installMethod'),
+        value: '',
+        required: false,
       ),
     ],
     [
@@ -528,6 +602,8 @@ abstract class AppSource {
         .where((e) => e.isNotEmpty)
         .toList();
 
+    // Zip/tarball options belong to the APK card (they used to be appended
+    // after the Advanced rows, so they rendered in the wrong card).
     final moreConditionalItems = <List<GeneratedFormItem>>[];
     if (allowIncludeZips) {
       moreConditionalItems.addAll([
@@ -602,13 +678,24 @@ abstract class AppSource {
       }
     }
 
+    if (moreConditionalItems.isNotEmpty) {
+      final int apkCardEnd = agnosticItems.indexWhere(
+        (row) => row.length == 1 && row.first.key == '__formSectionAdvanced',
+      );
+      agnosticItems.insertAll(
+        apkCardEnd >= 0 ? apkCardEnd : agnosticItems.length,
+        moreConditionalItems,
+      );
+    }
+
     final combined = [
       // Clone so callers (e.g. the add-app form pre-filling default values)
       // can't mutate the source-owned items. Sources are now cached/shared, so
       // an in-place edit here would otherwise leak across apps.
       ...cloneFormItems(additionalSourceAppSpecificSettingFormItems),
       ...agnosticItems,
-      ...moreConditionalItems,
+      // Fifth card: per-app update-health overrides (v1.7.4 sync, D8).
+      ...updateHealthOverrideFormItems(),
     ];
 
     final List<List<GeneratedFormItem>> pruned = [];
@@ -695,6 +782,12 @@ abstract class AppSource {
   }
 
   bool canSearch = false;
+
+  /// The ways this source can be searched; one per source unless it
+  /// overrides this (see [SourceSearchProfile]).
+  List<SourceSearchProfile> get searchProfiles => [
+    SourceSearchProfile(id: name, name: name),
+  ];
   bool includeAdditionalOptsInMainSearch = false;
   List<GeneratedFormItem> get searchQuerySettingFormItems => [];
   Future<Map<String, List<String>>> search(

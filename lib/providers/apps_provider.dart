@@ -37,6 +37,7 @@ import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/utils/bg_update_guards.dart';
 import 'package:obtainium/utils/translation_loader.dart';
 import 'package:obtainium/version/app_version.dart';
 export 'package:obtainium/version/app_version.dart';
@@ -50,6 +51,7 @@ export 'apps_provider_updates.dart';
 // Named constants for magic numbers and hardcoded values
 const int _defaultRetries = 3;
 const int _retryDelaySeconds = 5;
+const Duration _backgroundRetryWait = Duration(minutes: 5);
 const int _partialHashCheckStartingSize = 1024;
 const int _partialHashCheckLowerLimit = 128;
 const int _partialHashCheckDecrement = 256;
@@ -331,6 +333,12 @@ Future<File> downloadFileWithRetry(
   bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
+  // Upstream #2894's retry hold, kept only as a fallback: a download normally
+  // runs under the native download foreground service, which keeps network
+  // access while ObtainX is in the background, so holding its retries would
+  // turn a 5-second retry into a stall of up to 5 minutes. Pass true only for
+  // a download running without that service.
+  bool holdRetry = false,
 }) async {
   try {
     return await downloadFile(
@@ -358,6 +366,14 @@ Future<File> downloadFileWithRetry(
             e is TimeoutException ||
             e is HttpException ||
             _isRetryableDownloadError(e))) {
+      // The original error is reported when the app doesn't come back.
+      if (holdRetry &&
+          !await waitForForegroundBeforeRetry(
+            cancellationToken: cancellationToken,
+            logs: logs,
+          )) {
+        rethrow;
+      }
       await Future.delayed(const Duration(seconds: _retryDelaySeconds));
       return await downloadFileWithRetry(
         url,
@@ -373,11 +389,62 @@ Future<File> downloadFileWithRetry(
         certificatePinning: certificatePinning,
         logs: logs,
         cancellationToken: cancellationToken,
+        holdRetry: holdRetry,
       );
     } else {
       rethrow;
     }
   }
+}
+
+/// Before a held download retry, waits up to [timeout] for ObtainX to return
+/// to the foreground: Android cuts a backgrounded app's network access, so a
+/// retry made while the user is away fails again (upstream #2894). Returns
+/// whether to retry; false means the app stayed away and the error stands.
+///
+/// [isForeground] and [events] default to flutter_fgbg's current state and
+/// event stream. A cancellation while waiting throws [CancellationException]
+/// at once rather than when the wait ends.
+Future<bool> waitForForegroundBeforeRetry({
+  CancellationToken? cancellationToken,
+  LogsProvider? logs,
+  bool Function()? isForeground,
+  Stream<FGBGType>? events,
+  Duration timeout = _backgroundRetryWait,
+}) async {
+  final bool Function() inForeground =
+      isForeground ?? () => FGBGEvents.last == FGBGType.foreground;
+  if (inForeground()) return true;
+  unawaited(
+    logs?.add(
+      'Download interrupted in the background, waiting for the app to return '
+      'before retrying',
+    ),
+  );
+  final Future<FGBGType> returned = (events ?? FGBGEvents.instance.stream)
+      .firstWhere((FGBGType event) => event == FGBGType.foreground)
+      .timeout(timeout, onTimeout: () => FGBGType.background)
+      // No usable event stream: decided below by the state as it is now.
+      .catchError((Object _) => FGBGType.background);
+  final FGBGType outcome = await Future.any(<Future<FGBGType>>[
+    returned,
+    if (cancellationToken != null)
+      cancellationToken.whenCancelled.then((_) => FGBGType.background),
+  ]);
+  // A cancellation is the user's choice, not a failure: surface it as one so
+  // no error is shown for a download stopped on purpose.
+  cancellationToken?.throwIfCancelled();
+  if (outcome == FGBGType.foreground) return true;
+  // The process can be frozen while away, so the timeout may fire before a
+  // queued foreground event is delivered: retry if the app is back now.
+  if (inForeground()) return true;
+  unawaited(
+    logs?.add(
+      'App did not return within ${timeout.inMinutes} minutes, reporting the '
+      'download error',
+    ),
+  );
+  return false;
 }
 
 /// A download failure worth retrying: HTTP 429/5xx (statusCode kept in
@@ -1220,7 +1287,11 @@ Future<App> appPreparedForAdding(App app) async {
         app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = true;
       }
     }
-  } else if (!app.usesStandardVersionDetection) {
+  } else if (!app.usesStandardVersionDetection &&
+      // An app added without a check (D10) has no real latest version yet;
+      // pinning "installed = Unknown" would show a false update after its
+      // first real check.
+      !hasOnlyPlaceholderApks(app)) {
     app = app.copyWith(installedVersion: app.latestVersion);
   }
   return app;
@@ -1287,6 +1358,29 @@ Future<Directory> getAppStorageDir() async {
     }
   } catch (_) {}
   return await getApplicationDocumentsDirectory();
+}
+
+/// The external cache directory on the same volume as [primaryExternal] (the
+/// app's primary external files directory), or null when none is.
+///
+/// `getExternalCacheDirectories()` lists every volume's cache, and the first
+/// one isn't always on the primary volume. An APK cached on an SD card can't
+/// be shared with an installer, because the FileProvider's external paths
+/// only cover primary storage (upstream #3356).
+Directory? selectPrimaryExternalCache(
+  List<Directory>? cacheDirs,
+  Directory? primaryExternal,
+) {
+  if (cacheDirs == null || cacheDirs.isEmpty || primaryExternal == null) {
+    return null;
+  }
+  final String primaryDataDir = primaryExternal.absolute.parent.parent.path;
+  for (final Directory dir in cacheDirs) {
+    if (dir.absolute.parent.parent.path == primaryDataDir) {
+      return dir;
+    }
+  }
+  return null;
 }
 
 /// The listing in [listings] that already tracks [app]'s package from the same
@@ -1737,27 +1831,28 @@ class AppsProvider with ChangeNotifier {
     }
     () async {
       await this.settingsProvider.initializeSettings();
-      var useExternalCache = false;
+      Directory? cacheRoot;
       try {
-        final cacheDirs = await getExternalCacheDirectories();
-        if (cacheDirs?.isNotEmpty ?? false) {
-          _apkDir = cacheDirs!.first;
-          _iconsCacheDir = Directory('${cacheDirs.first.path}/icons');
-          if (!_iconsCacheDir!.existsSync()) {
-            _iconsCacheDir!.createSync();
-          }
-          useExternalCache = true;
-        }
+        cacheRoot = selectPrimaryExternalCache(
+          await getExternalCacheDirectories(),
+          await getExternalStorageDirectory(),
+        );
       } catch (_) {}
-      if (!useExternalCache) {
-        _apkDir = Directory('${(await getAppStorageDir()).path}/apks');
-        if (!_apkDir!.existsSync()) {
-          _apkDir!.createSync();
-        }
-        _iconsCacheDir = Directory('${(await getAppStorageDir()).path}/icons');
-        if (!_iconsCacheDir!.existsSync()) {
-          _iconsCacheDir!.createSync();
-        }
+      if (cacheRoot == null) {
+        // Internal cache, which the FileProvider shares too
+        // (`internal_cache` in file_paths.xml).
+        final Directory internalCache = await getApplicationCacheDirectory();
+        _apkDir = Directory('${internalCache.path}/apks');
+        _iconsCacheDir = Directory('${internalCache.path}/icons');
+      } else {
+        _apkDir = cacheRoot;
+        _iconsCacheDir = Directory('${cacheRoot.path}/icons');
+      }
+      if (!_apkDir!.existsSync()) {
+        _apkDir!.createSync(recursive: true);
+      }
+      if (!_iconsCacheDir!.existsSync()) {
+        _iconsCacheDir!.createSync(recursive: true);
       }
       _userAppIconsDir = Directory(
         '${(await getAppStorageDir()).path}/user_icons',
@@ -1915,12 +2010,16 @@ class AppsProvider with ChangeNotifier {
 }
 
 /// The WorkManager constraints every background task runs under, from the
-/// user's Wi-Fi-only and charging-only settings.
+/// user's background guards (#3370, D5). Only "do nothing" becomes an Android
+/// constraint, as the old Wi-Fi-only/charging-only switches did, so the task
+/// doesn't even start; "check only" has to run to check, and is enforced in
+/// the task by [evaluateBgGuards]. Keep in step with main.dart's periodic
+/// task constraints.
 Constraints _bgTaskConstraints(SettingsProvider settings) => Constraints(
-  networkType: settings.bgUpdatesOnWiFiOnly
+  networkType: settings.bgGuardOnWiFi == BgGuardMode.nothing
       ? NetworkType.unmetered
       : NetworkType.connected,
-  requiresCharging: settings.bgUpdatesWhileChargingOnly,
+  requiresCharging: settings.bgGuardWhileCharging == BgGuardMode.nothing,
   requiresBatteryNotLow: false,
   requiresDeviceIdle: false,
   requiresStorageNotLow: false,
@@ -1965,29 +2064,24 @@ Future<bool> _runBGInstallMode(
       // attempts only the ones that failed.
       failed = true;
       e.idsByErrorString.forEach((key, value) {
-        final String failure = e.errorsAppsString(key, value);
         // Logged as well as notified: otherwise a failed download reads as a
         // clean "Done installing updates" in the log (#317).
         unawaited(
           logs.add(
-            'BG install task: Failed: $failure',
+            'BG install task: Failed: ${e.errorsAppsString(key, value)}',
             level: LogLevel.warning,
           ),
         );
-        unawaited(
-          notificationsProvider.notify(
-            // One notification per error group, so one install failure
-            // doesn't replace another (upstream f5ee3bd7).
-            ErrorInstallingUpdatesNotification(
-              failure,
-              id:
-                  errorInstallingUpdatesNotificationId +
-                  200 +
-                  key.hashCode.abs(),
-            ),
-          ),
-        );
       });
+      // One notification for the whole run, listing every error group
+      // (upstream #3362), instead of one per group stacking in the tray.
+      // Install failures keep their own type: upstream posts them as check
+      // errors.
+      unawaited(
+        notificationsProvider.notify(
+          ErrorInstallingUpdatesNotification(e.notificationErrorString()),
+        ),
+      );
     } else {
       unawaited(logs.add('Fatal error in BG install task: ${e.toString()}'));
       rethrow;
@@ -2041,6 +2135,68 @@ Future<void> bgUpdateCheck(
   await TranslationLoader.load();
   unawaited(bgLogs.add('BG task started $taskId: $params'));
 
+  // The network and the background guards need no app record, so a wake-up
+  // that may not check skips loading them.
+  final netResult = await (Connectivity().checkConnectivity());
+  if (netResult.contains(ConnectivityResult.none) ||
+      netResult.isEmpty ||
+      (netResult.contains(ConnectivityResult.vpn) && netResult.length == 1)) {
+    unawaited(bgLogs.add('BG update task: No network.'));
+    return;
+  }
+
+  // "While charging" means plugged in. A phone plugged in at 100% reports
+  // full, and one held at a charge limit (Samsung's "Protect battery", say)
+  // reports connectedNotCharging; neither is actively charging, and treating
+  // them as unplugged meant installs never ran overnight. Upstream counts only
+  // `charging`; keep this set.
+  final bool pluggedIn = const {
+    BatteryState.charging,
+    BatteryState.full,
+    BatteryState.connectedNotCharging,
+  }.contains(await Battery().batteryState);
+  // Evaluated here in both WorkManager and foreground-service mode. Only
+  // WorkManager gets "do nothing" as a constraint (see [_bgTaskConstraints]);
+  // the foreground service wakes regardless, and used to check anyway.
+  final BgGuardDecision guards = evaluateBgGuards(
+    wifiMode: settingsProvider.bgGuardOnWiFi,
+    chargingMode: settingsProvider.bgGuardWhileCharging,
+    onUnmeteredNetwork:
+        netResult.contains(ConnectivityResult.wifi) ||
+        netResult.contains(ConnectivityResult.ethernet),
+    charging: pluggedIn,
+  );
+  if (guards.skipChecks) {
+    if (!forceAll) {
+      unawaited(
+        bgLogs.add(
+          'BG update task: Skipped (background guards do nothing while off '
+          'Wi-Fi or unplugged).',
+        ),
+      );
+      return;
+    }
+    unawaited(
+      bgLogs.add('BG update task: Manual run overriding a "do nothing" guard.'),
+    );
+  } else if (!guards.allowInstalls) {
+    unawaited(
+      bgLogs.add(
+        'BG update task: Background guards allow checks only, no installs.',
+      ),
+    );
+  }
+  // A manual run only checks (upstream 1b0b45e9).
+  final bool canInstall = canInstallInBackground(
+    forceAll: forceAll,
+    decision: guards,
+  );
+  if (forceAll) {
+    unawaited(
+      bgLogs.add('BG update task: Manual run: checks only, no installs.'),
+    );
+  }
+
   final NotificationsProvider notificationsProvider =
       notifs ?? NotificationsProvider();
   final AppsProvider appsProvider = AppsProvider(
@@ -2050,14 +2206,6 @@ Future<void> bgUpdateCheck(
   );
 
   await appsProvider.loadApps();
-
-  final netResult = await (Connectivity().checkConnectivity());
-  if (netResult.contains(ConnectivityResult.none) ||
-      netResult.isEmpty ||
-      (netResult.contains(ConnectivityResult.vpn) && netResult.length == 1)) {
-    unawaited(bgLogs.add('BG update task: No network.'));
-    return;
-  }
 
   if (appsProvider.settingsProvider.updateInterval == 0) {
     if (!forceAll) {
@@ -2090,32 +2238,6 @@ Future<void> bgUpdateCheck(
             .map((e) => MapEntry(e, 0))),
   ];
 
-  final networkRestricted =
-      appsProvider.settingsProvider.bgUpdatesOnWiFiOnly &&
-      !netResult.contains(ConnectivityResult.wifi) &&
-      !netResult.contains(ConnectivityResult.ethernet);
-
-  // "While charging" means plugged in. A phone plugged in at 100% reports
-  // full, and one held at a charge limit (Samsung's "Protect battery", say)
-  // reports connectedNotCharging; neither is actively charging, and treating
-  // them as unplugged meant installs never ran overnight.
-  final chargingRestricted =
-      appsProvider.settingsProvider.bgUpdatesWhileChargingOnly &&
-      !const {
-        BatteryState.charging,
-        BatteryState.full,
-        BatteryState.connectedNotCharging,
-      }.contains(await Battery().batteryState);
-
-  if (networkRestricted) {
-    unawaited(bgLogs.add('BG update task: Network restriction in effect.'));
-  }
-
-  if (chargingRestricted) {
-    unawaited(bgLogs.add('BG update task: Charging restriction in effect.'));
-  }
-
-  final canInstall = !networkRestricted && !chargingRestricted;
   final silentlyInstallable = <String>[];
 
   if (toCheck.isNotEmpty) {
@@ -2209,21 +2331,16 @@ Future<void> bgUpdateCheck(
     );
 
     if (result.toThrow.rawErrors.isNotEmpty && result.errors != null) {
-      for (var element in result.toThrow.idsByErrorString.entries) {
-        unawaited(
-          notificationsProvider.notify(
-            ErrorCheckingUpdatesNotification(
-              result.errors!.errorsAppsString(element.key, element.value),
-              // Stable per error, so a repeat replaces its notification
-              // instead of stacking another (upstream 8c33f251).
-              id:
-                  errorCheckingUpdatesNotificationId +
-                  100 +
-                  element.key.hashCode.abs(),
-            ),
+      // One notification for the run, every error group in it (upstream
+      // #3362), at the fixed ID so the next run's replaces it. toThrow carries
+      // the app names, taken from the check's errors.
+      unawaited(
+        notificationsProvider.notify(
+          ErrorCheckingUpdatesNotification(
+            result.toThrow.notificationErrorString(),
           ),
-        );
-      }
+        ),
+      );
     }
   } else {
     unawaited(bgLogs.add('BG update task: No apps due for checking.'));
@@ -2253,9 +2370,8 @@ Future<void> bgUpdateCheck(
     );
   }
   // Whether a background install is still waiting after this run: one that
-  // failed or was postponed for the screen, or one held back by the charging or
-  // Wi-Fi limit. That last case is the foreground service's: WorkManager does
-  // not start this task until both limits are met.
+  // failed or was postponed for the screen, or one held back because this run
+  // may only check (a "check only" guard, or a manual run).
   final bool installWaiting = canInstall
       ? await _runBGInstallMode(
           silentlyInstallable,
@@ -2320,6 +2436,12 @@ _bgRunUpdateCheck(
     updates = await appsProvider.checkUpdates(
       specificIds: toCheck.map((e) => e.key).toList(),
       sp: appsProvider.settingsProvider,
+      // A retry re-asks, within seconds, a source whose failure this run
+      // already counted: four retries mustn't read as five failed checks.
+      retriedIds: {
+        for (final MapEntry<String, int> entry in toCheck)
+          if (entry.value > 0) entry.key,
+      },
     );
   } catch (e) {
     if (e is CheckUpdatesException) {

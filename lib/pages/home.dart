@@ -399,6 +399,8 @@ class HomePageState extends State<HomePage> {
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
     final AppsProvider appsProvider = context.read<AppsProvider>();
+    final NotificationsProvider notificationsProvider = context
+        .read<NotificationsProvider>();
     final NavigatorState navigator = Navigator.of(context);
 
     Future<void> goToAddApp(String data) async {
@@ -533,19 +535,28 @@ class HomePageState extends State<HomePage> {
         final String? targetId = uri.queryParameters['id']?.trim();
         if (targetId == null || targetId.isEmpty) {
           await appsProvider.checkUpdates(forceAll: true);
-          return;
+        } else {
+          final List<String> listingKeys = appsProvider.apps.values
+              .where(
+                (AppInMemory listing) =>
+                    listing.listingKey == targetId ||
+                    listing.app.id == targetId,
+              )
+              .map((AppInMemory listing) => listing.listingKey)
+              .toList();
+          if (listingKeys.isEmpty) {
+            throw ObtainiumError(tr('appNotFound'));
+          }
+          await appsProvider.checkUpdates(specificIds: listingKeys);
         }
-        final List<String> listingKeys = appsProvider.apps.values
-            .where(
-              (AppInMemory listing) =>
-                  listing.listingKey == targetId || listing.app.id == targetId,
-            )
-            .map((AppInMemory listing) => listing.listingKey)
-            .toList();
-        if (listingKeys.isEmpty) {
-          throw ObtainiumError(tr('appNotFound'));
-        }
-        await appsProvider.checkUpdates(specificIds: listingKeys);
+        // As after a pull-to-refresh: a successful check clears an update
+        // notification nothing installed needs any more (upstream #3415).
+        unawaited(
+          clearStaleUpdateNotification(
+            notificationsProvider,
+            appsProvider.findExistingUpdates(installedOnly: true),
+          ),
+        );
       } catch (e) {
         showError(e is CheckUpdatesException ? e.errors : e);
       }

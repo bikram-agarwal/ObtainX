@@ -18,6 +18,7 @@ import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
+import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/performance_recording_control.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
@@ -45,6 +46,14 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/services/pick_file.dart';
+import 'package:obtainium/utils/update_health.dart'
+    show
+        updateHealthDayOptions,
+        updateHealthDaysLabel,
+        updateHealthFailedChecksLabel,
+        updateHealthFailedChecksOptions,
+        updateHealthFilteredReleasesLabel,
+        updateHealthFilteredReleasesOptions;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -1046,14 +1055,15 @@ class _UpdatesSection extends StatelessWidget {
     sp.updateInterval,
     sp.useFGService,
     sp.enableBackgroundUpdates,
-    sp.bgUpdatesOnWiFiOnly,
-    sp.bgUpdatesWhileChargingOnly,
+    sp.bgGuardOnWiFi,
+    sp.bgGuardWhileCharging,
     sp.checkOnStart,
     sp.checkUpdateOnDetailPage,
     sp.onlyCheckInstalledOrTrackOnlyApps,
     sp.removeOnExternalUninstall,
     sp.parallelDownloads,
     sp.includePrereleasesByDefault,
+    sp.allowAddingAppsWithoutCheck,
     sp.skipBulkUpdateConfirmation,
     // The background rows below depend on the installer.
     sp.installerMode,
@@ -1080,6 +1090,7 @@ class _UpdatesSection extends StatelessWidget {
             return _buildSettingsCardContent(context, sp, cs, snapshot);
           },
         ),
+        _UpdateHealthGroup(cs: cs),
       ],
     );
   }
@@ -1112,6 +1123,7 @@ class _UpdatesSection extends StatelessWidget {
                   padding: EdgeInsets.zero,
                 ),
                 AppSwitch(
+                  semanticLabel: tr('foregroundServiceForUpdateChecking'),
                   value: sp.useFGService,
                   onChanged: (bool value) => sp.useFGService = value,
                 ),
@@ -1133,6 +1145,7 @@ class _UpdatesSection extends StatelessWidget {
                   padding: EdgeInsets.zero,
                 ),
                 AppSwitch(
+                  semanticLabel: tr('enableBackgroundUpdates'),
                   value: sp.enableBackgroundUpdates,
                   onChanged: (bool value) => sp.enableBackgroundUpdates = value,
                 ),
@@ -1143,24 +1156,28 @@ class _UpdatesSection extends StatelessWidget {
           ),
         );
     }
-    // The Wi-Fi and charging constraints hold back every background check,
+    // The Wi-Fi and charging guards can hold back every background check,
     // not just installs, so they show whenever checks run (upstream #3070).
+    // Tri-state since the v1.7.4 sync (upstream #3370, D5); the old switch ON
+    // is "Nothing" (see [BgGuardMode]).
     if (sp.updateInterval > 0) {
       rows
         ..add(
-          AppSwitchListTile(
-            key: const ValueKey<String>('background_install_wifi_only'),
-            title: Text(tr('bgUpdatesOnWiFiOnly')),
-            value: sp.bgUpdatesOnWiFiOnly,
-            onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
+          _bgGuardRow(
+            context,
+            rowKey: 'background_guard_on_wifi',
+            label: tr('whenNotOnWiFi'),
+            value: sp.bgGuardOnWiFi,
+            onChanged: (BgGuardMode mode) => sp.bgGuardOnWiFi = mode,
           ),
         )
         ..add(
-          AppSwitchListTile(
-            key: const ValueKey<String>('background_install_charging_only'),
-            title: Text(tr('bgUpdatesWhileChargingOnly')),
-            value: sp.bgUpdatesWhileChargingOnly,
-            onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
+          _bgGuardRow(
+            context,
+            rowKey: 'background_guard_while_charging',
+            label: tr('whenNotCharging'),
+            value: sp.bgGuardWhileCharging,
+            onChanged: (BgGuardMode mode) => sp.bgGuardWhileCharging = mode,
           ),
         );
     }
@@ -1183,8 +1200,30 @@ class _UpdatesSection extends StatelessWidget {
         value: sp.includePrereleasesByDefault,
         onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
+      // Opt-in "Add anyway" when the check during add fails (upstream #3345).
+      ListTile(
+        key: const ValueKey<String>('allow_adding_apps_without_check'),
+        title: Text(tr('allowAddingAppsWithoutCheck')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            HelpHintIcon(
+              message: tr('allowAddingAppsWithoutCheckHelp'),
+              padding: EdgeInsets.zero,
+            ),
+            AppSwitch(
+              semanticLabel: tr('allowAddingAppsWithoutCheck'),
+              value: sp.allowAddingAppsWithoutCheck,
+              onChanged: (bool value) => sp.allowAddingAppsWithoutCheck = value,
+            ),
+          ],
+        ),
+        onTap: () =>
+            sp.allowAddingAppsWithoutCheck = !sp.allowAddingAppsWithoutCheck,
+      ),
       _MinimumUpdateAgeSlider(cs: cs),
       const _GlobalApkFilterField(),
+      const _GlobalVersionRegExFields(),
       AppSwitchListTile(
         key: const ValueKey<String>('only_check_installed_or_track_only_apps'),
         title: Text(tr('onlyCheckInstalledOrTrackOnlyApps')),
@@ -1211,6 +1250,51 @@ class _UpdatesSection extends StatelessWidget {
       ),
     ]);
     return M3eExpressiveSettingsCard(colorScheme: cs, items: rows);
+  }
+
+  Widget _bgGuardRow(
+    BuildContext context, {
+    required String rowKey,
+    required String label,
+    required BgGuardMode value,
+    required ValueChanged<BgGuardMode> onChanged,
+  }) {
+    String modeLabel(BgGuardMode mode) => switch (mode) {
+      BgGuardMode.nothing => tr('bgGuardNothing'),
+      BgGuardMode.checksOnly => tr('bgGuardChecksOnly'),
+      BgGuardMode.checksAndUpdates => tr('bgGuardChecksAndUpdates'),
+    };
+    return Padding(
+      key: ValueKey<String>(rowKey),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        12,
+        kM3eSettingsCardHorizontalInset,
+        12,
+      ),
+      child: appDropdownField<BgGuardMode>(
+        // Keyed by value so an import that changes the mode re-seeds it.
+        key: ValueKey<String>('${rowKey}_${value.name}'),
+        context: context,
+        value: value,
+        labelText: label,
+        menuWidth: appDropdownMenuWidth(
+          context,
+          BgGuardMode.values.map(modeLabel),
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
+        items: <DropdownMenuItem<BgGuardMode>>[
+          for (final BgGuardMode mode in BgGuardMode.values)
+            DropdownMenuItem<BgGuardMode>(
+              value: mode,
+              child: Text(modeLabel(mode)),
+            ),
+        ],
+        onChanged: (BgGuardMode? mode) {
+          if (mode != null) onChanged(mode);
+        },
+      ),
+    );
   }
 }
 
@@ -1643,6 +1727,356 @@ class _GlobalApkFilterFieldState extends State<_GlobalApkFilterField> {
   }
 }
 
+/// Global version-trimming regex and its match group (upstream #3368), used
+/// by apps without a version regex of their own. Like [_GlobalApkFilterField],
+/// the regex is saved as typed while it's valid or empty.
+class _GlobalVersionRegExFields extends StatefulWidget {
+  const _GlobalVersionRegExFields();
+
+  @override
+  State<_GlobalVersionRegExFields> createState() =>
+      _GlobalVersionRegExFieldsState();
+}
+
+class _GlobalVersionRegExFieldsState extends State<_GlobalVersionRegExFields> {
+  late final TextEditingController _regExController;
+  late final TextEditingController _matchGroupController;
+  String? _storedRegEx;
+  String? _storedMatchGroup;
+  String? _regExError;
+
+  @override
+  void initState() {
+    super.initState();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    _storedRegEx = sp.globalVersionExtractionRegEx;
+    _storedMatchGroup = sp.globalMatchGroupToUse;
+    _regExController = TextEditingController(text: _storedRegEx ?? '');
+    _matchGroupController = TextEditingController(
+      text: _storedMatchGroup ?? '',
+    );
+  }
+
+  // An import can rewrite the prefs while this stays mounted, as for
+  // [_GlobalApkFilterFieldState.didChangeDependencies].
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String? regEx = sp.globalVersionExtractionRegEx;
+    if (regEx != _storedRegEx) {
+      _storedRegEx = regEx;
+      if (_regExController.text.trim() != (regEx ?? '')) {
+        _regExController.text = regEx ?? '';
+        _regExError = null;
+      }
+    }
+    final String? matchGroup = sp.globalMatchGroupToUse;
+    if (matchGroup != _storedMatchGroup) {
+      _storedMatchGroup = matchGroup;
+      if (_matchGroupController.text.trim() != (matchGroup ?? '')) {
+        _matchGroupController.text = matchGroup ?? '';
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _regExController.dispose();
+    _matchGroupController.dispose();
+    super.dispose();
+  }
+
+  void _onRegExChanged(String value) {
+    final String trimmed = value.trim();
+    final String? error = trimmed.isEmpty ? null : regExValidator(trimmed);
+    setState(() => _regExError = error);
+    if (error != null) return;
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    sp.globalVersionExtractionRegEx = trimmed;
+    _storedRegEx = sp.globalVersionExtractionRegEx;
+  }
+
+  void _onMatchGroupChanged(String value) {
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    sp.globalMatchGroupToUse = value;
+    _storedMatchGroup = sp.globalMatchGroupToUse;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Registers the dependency [didChangeDependencies] syncs from.
+    context.select<SettingsProvider, int>(
+      (s) =>
+          Object.hash(s.globalVersionExtractionRegEx, s.globalMatchGroupToUse),
+    );
+    final String regExLabel = tr('globalVersionExtractionRegEx');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        12,
+        kM3eSettingsCardHorizontalInset,
+        12,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _regExController,
+            decoration:
+                appPageOutlinedInputDecoration(
+                  context,
+                  labelText: regExLabel,
+                  isDense: true,
+                ).copyWith(
+                  errorText: _regExError,
+                  // Warns that pseudo-version apps change version once.
+                  suffixIcon: HelpHintIcon(
+                    message: tr('globalVersionExtractionRegExHelp'),
+                    padding: const EdgeInsets.only(right: 8),
+                  ),
+                ),
+            onChanged: _onRegExChanged,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _matchGroupController,
+            decoration: appPageOutlinedInputDecoration(
+              context,
+              labelText: tr('matchGroupToUseForX', args: [regExLabel]),
+              isDense: true,
+            ).copyWith(hintText: '\$0'),
+            onChanged: _onMatchGroupChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The global update-health thresholds (upstream #1753), a labelled group at
+/// the end of the Updates section; apps can override each one on their
+/// options page. 0 ("Disabled") turns a heuristic off. Upstream shows these
+/// on its update-health page with its own slider tile; ObtainX keeps them in
+/// Settings with the fork's sliders (v1.7.4 sync, D8).
+class _UpdateHealthGroup extends StatelessWidget {
+  const _UpdateHealthGroup({required this.cs});
+
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    // The sliders select their own values.
+    final bool archivedEnabled = context.select<SettingsProvider, bool>(
+      (s) => s.updateHealthArchivedEnabled,
+    );
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            20,
+            kM3eSettingsCardHorizontalInset,
+            8,
+          ),
+          child: appPageCardSectionHeaderLabel(context, tr('updateHealth')),
+        ),
+        M3eExpressiveSettingsCard(
+          colorScheme: cs,
+          items: [
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_stale_release'),
+              cs: cs,
+              icon: Icons.event_busy_rounded,
+              title: tr('updateHealthStaleReleaseCheck'),
+              options: updateHealthDayOptions,
+              read: (SettingsProvider s) => s.updateHealthStaleReleaseDays,
+              write: (SettingsProvider s, int days) =>
+                  s.updateHealthStaleReleaseDays = days,
+              labelFor: updateHealthDaysLabel,
+            ),
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_stale_version'),
+              cs: cs,
+              icon: Icons.history_rounded,
+              title: tr('updateHealthStaleVersionCheck'),
+              options: updateHealthDayOptions,
+              read: (SettingsProvider s) => s.updateHealthStaleVersionDays,
+              write: (SettingsProvider s, int days) =>
+                  s.updateHealthStaleVersionDays = days,
+              labelFor: updateHealthDaysLabel,
+            ),
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_failed_checks'),
+              cs: cs,
+              icon: Icons.error_outline_rounded,
+              title: tr('updateHealthFailedChecksCheck'),
+              options: updateHealthFailedChecksOptions,
+              read: (SettingsProvider s) => s.updateHealthFailedChecksCount,
+              write: (SettingsProvider s, int count) =>
+                  s.updateHealthFailedChecksCount = count,
+              labelFor: updateHealthFailedChecksLabel,
+            ),
+            AppSwitchListTile(
+              key: const ValueKey<String>('update_health_archived'),
+              title: Text(tr('updateHealthArchivedCheck')),
+              value: archivedEnabled,
+              onChanged: (bool value) => sp.updateHealthArchivedEnabled = value,
+            ),
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_filtered_releases'),
+              cs: cs,
+              icon: Icons.filter_alt_outlined,
+              title: tr('updateHealthFilteredReleasesCheck'),
+              options: updateHealthFilteredReleasesOptions,
+              read: (SettingsProvider s) => s.updateHealthFilteredReleasesCount,
+              write: (SettingsProvider s, int count) =>
+                  s.updateHealthFilteredReleasesCount = count,
+              labelFor: updateHealthFilteredReleasesLabel,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// A settings slider over a fixed list of int [options], shaped like
+/// [_MinimumUpdateAgeSlider]: a drag stays local and [write] runs when the
+/// finger lifts. [read] must return one of [options] (the getters snap).
+class _IntOptionSlider extends StatefulWidget {
+  const _IntOptionSlider({
+    super.key,
+    required this.cs,
+    required this.icon,
+    required this.title,
+    required this.options,
+    required this.read,
+    required this.write,
+    required this.labelFor,
+  });
+
+  final ColorScheme cs;
+  final IconData icon;
+  final String title;
+  final List<int> options;
+  final int Function(SettingsProvider settings) read;
+  final void Function(SettingsProvider settings, int value) write;
+  final String Function(int value) labelFor;
+
+  @override
+  State<_IntOptionSlider> createState() => _IntOptionSliderState();
+}
+
+class _IntOptionSliderState extends State<_IntOptionSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  int _valueForVal(double val) =>
+      widget.options[val.round().clamp(0, widget.options.length - 1)];
+
+  double _valForValue(int value) {
+    final int index = widget.options.indexOf(value);
+    return (index < 0 ? 0 : index).toDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double sliderVal =
+        _dragValue ??
+        _valForValue(context.select<SettingsProvider, int>(widget.read));
+    final String label = widget.labelFor(_valueForVal(sliderVal));
+    final bool isTV = context.read<SettingsProvider>().isTV;
+    final double max = (widget.options.length - 1).toDouble();
+    void save(double value) {
+      widget.write(context.read<SettingsProvider>(), _valueForVal(value));
+      setState(() => _dragValue = null);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(widget.icon, color: widget.cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(widget.title)),
+                      const SizedBox(width: 8),
+                      Text(label),
+                    ],
+                  ),
+                ),
+                TVSliderWrapper(
+                  value: sliderVal,
+                  min: 0,
+                  max: max,
+                  divisions: widget.options.length - 1,
+                  onChanged: (double value) {
+                    setState(() => _dragValue = value);
+                  },
+                  onChangeEnd: save,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 16,
+                      trackShape: const _GappedTrackShape(),
+                      thumbShape: const _VerticalBarThumbShape(),
+                      activeTickMarkColor: Theme.of(
+                        context,
+                      ).colorScheme.onPrimary,
+                      inactiveTickMarkColor: Theme.of(
+                        context,
+                      ).colorScheme.primary,
+                      overlayShape: SliderComponentShape.noOverlay,
+                    ),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      value: sliderVal.clamp(0, max),
+                      max: max,
+                      divisions: widget.options.length - 1,
+                      label: label,
+                      onChanged: (double value) {
+                        setState(() => _dragValue = value);
+                      },
+                      onChangeEnd: save,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Source-specific settings section — reads/writes generic source config.
 class _SourceSpecificSection extends StatefulWidget {
   const _SourceSpecificSection({super.key});
@@ -1783,6 +2217,7 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                 padding: EdgeInsets.zero,
               ),
               AppSwitch(
+                semanticLabel: tr('enableCertificatePinning'),
                 value: sp.enableCertificatePinning,
                 onChanged: (bool value) => sp.enableCertificatePinning = value,
               ),
@@ -2771,6 +3206,7 @@ class _WarningsSection extends StatelessWidget {
     sp.hideAPKOriginWarning,
     sp.verifySigningCertHashes,
     sp.showAppDowngradeError,
+    sp.showUpdateHealthIndicator,
   );
 
   @override
@@ -2812,6 +3248,7 @@ class _WarningsSection extends StatelessWidget {
                 padding: EdgeInsets.zero,
               ),
               AppSwitch(
+                semanticLabel: tr('verifySigningCertHashes'),
                 value: sp.verifySigningCertHashes,
                 onChanged: (bool value) => sp.verifySigningCertHashes = value,
               ),
@@ -2823,6 +3260,13 @@ class _WarningsSection extends StatelessWidget {
           title: Text(tr('showAppDowngradeError')),
           value: sp.showAppDowngradeError,
           onChanged: (value) => sp.showAppDowngradeError = value,
+        ),
+        // A show toggle, so it lives here; the update-health thresholds are
+        // in the Updates section (v1.7.4 sync, D8).
+        AppSwitchListTile(
+          title: Text(tr('showUpdateHealthIndicator')),
+          value: sp.showUpdateHealthIndicator,
+          onChanged: (value) => sp.showUpdateHealthIndicator = value,
         ),
       ],
     );
@@ -3072,6 +3516,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   icon: const Icon(Icons.open_in_new_rounded),
                 ),
                 AppSwitch(
+                  semanticLabel: tr('openAppInfoInAppManager'),
                   value:
                       !_loading &&
                       _appManagerInstalled &&
@@ -3100,6 +3545,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 padding: EdgeInsets.zero,
               ),
               AppSwitch(
+                semanticLabel: tr('beforeNewInstallsShareToAppVerifier'),
                 value: !_loading && sp.beforeNewInstallsShareToAppVerifier,
                 onChanged: !_loading
                     ? (bool value) =>
@@ -3133,6 +3579,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   padding: EdgeInsets.zero,
                 ),
                 AppSwitch(
+                  semanticLabel: tr('enableDowngradeModules'),
                   value:
                       !_loading &&
                       _downgradeModuleInstalled &&
@@ -3173,6 +3620,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                       padding: EdgeInsets.zero,
                     ),
                     AppSwitch(
+                      semanticLabel: tr('enableVirusTotalScanning'),
                       value: hasValidatedKey && sp.enableVirusTotalScanning,
                       onChanged: hasValidatedKey
                           ? (bool value) => sp.enableVirusTotalScanning = value

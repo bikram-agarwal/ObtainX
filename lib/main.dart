@@ -30,6 +30,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('en'), 'English'),
+  MapEntry(Locale('bn'), 'বাংলা'),
   MapEntry(
     Locale.fromSubtags(
       languageCode: 'zh',
@@ -43,6 +44,7 @@ List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('ja'), '日本語'),
   MapEntry(Locale('hu'), 'Magyar'),
   MapEntry(Locale('de'), 'Deutsch'),
+  MapEntry(Locale('el'), 'Ελληνικά'),
   MapEntry(Locale('fa'), 'فارسی'),
   MapEntry(Locale('fr'), 'Français'),
   MapEntry(Locale('es'), 'Español'),
@@ -349,8 +351,9 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     // Every [_backgroundWakePeriod], not the update interval: 2.20 woke only
     // once per interval, and then anything that missed its moment waited a
     // whole interval for the next try (#317). Android still decides when within
-    // the period to run. Charging and Wi-Fi limits are constraints on the wake,
-    // so while unplugged or off Wi-Fi it doesn't run at all.
+    // the period to run. Charging and Wi-Fi guards set to Nothing are
+    // constraints on the wake, so while unplugged or off Wi-Fi it doesn't run
+    // at all.
     final int intervalMinutes = _backgroundWakePeriod.inMinutes;
     if (_desiredIntervalMinutes == intervalMinutes &&
         _desiredRequiresCharging == requiresCharging &&
@@ -761,8 +764,8 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
       (s) => Object.hash(
         s.updateInterval,
         s.useFGService,
-        s.bgUpdatesWhileChargingOnly,
-        s.bgUpdatesOnWiFiOnly,
+        s.bgGuardWhileCharging,
+        s.bgGuardOnWiFi,
         s.prefs == null,
         s.forcedLocale,
         s.appAccentColorSource,
@@ -821,10 +824,16 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
         startForegroundService(false);
       } else {
         stopForegroundService();
+        // Only a guard set to Nothing becomes a job constraint (the job
+        // doesn't run at all). Check only must still let the job run off
+        // Wi-Fi / unplugged; the task itself then holds back installs
+        // (`evaluateBgGuards`). Upstream schedules with no constraint.
         unawaited(
           _scheduleWorkManager(
-            requiresCharging: settingsProvider.bgUpdatesWhileChargingOnly,
-            unmeteredNetworkOnly: settingsProvider.bgUpdatesOnWiFiOnly,
+            requiresCharging:
+                settingsProvider.bgGuardWhileCharging == BgGuardMode.nothing,
+            unmeteredNetworkOnly:
+                settingsProvider.bgGuardOnWiFi == BgGuardMode.nothing,
           ),
         );
       }

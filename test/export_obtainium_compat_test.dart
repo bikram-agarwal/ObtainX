@@ -185,29 +185,94 @@ void main() {
     expect(merged?['installMethod'], InstallerMode.dhizuku.name);
   });
 
-  test(
-    'dhizuku installMethod sanitizes to shizuku for Obtainium export and round-trips via overlay',
-    () {
+  test('dhizuku installMethod exports as Obtainium\'s Shizuku mode with the '
+      'Dhizuku backend and round-trips via overlay', () {
+    final SplitExportSettings split = splitSettingsForExport(<String, dynamic>{
+      'installMethod': InstallerMode.dhizuku.name,
+    });
+
+    // Shared block is Obtainium-compatible: Shizuku mode on its Dhizuku
+    // backend (Obtainium #2844), so Obtainium really installs via Dhizuku.
+    expect(split.settings['installMethod'], InstallerMode.shizuku.name);
+    expect(split.settings['shizukuInstallerMode'], 'dhizuku');
+    // ObtainX overlay retains 'dhizuku'
+    expect(split.settingsObtainX?['installMethod'], InstallerMode.dhizuku.name);
+    expect(
+      split.settingsObtainX?.containsKey('shizukuInstallerMode'),
+      isNot(true),
+    );
+
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      split.settings,
+      split.settingsObtainX,
+    );
+    // ObtainX import restores 'dhizuku'
+    expect(merged?['installMethod'], InstallerMode.dhizuku.name);
+  });
+
+  test('other installer modes export without a Shizuku backend', () {
+    for (final InstallerMode mode in [
+      InstallerMode.system,
+      InstallerMode.shizuku,
+      InstallerMode.external,
+      InstallerMode.root,
+    ]) {
       final SplitExportSettings split = splitSettingsForExport(
-        <String, dynamic>{'installMethod': InstallerMode.dhizuku.name},
+        <String, dynamic>{'installMethod': mode.name},
       );
+      expect(split.settings['installMethod'], mode.name);
+      expect(split.settings.containsKey('shizukuInstallerMode'), isFalse);
+    }
+  });
 
-      // Shared block is Obtainium-compatible ('shizuku')
-      expect(split.settings['installMethod'], InstallerMode.shizuku.name);
-      // ObtainX overlay retains 'dhizuku'
-      expect(
-        split.settingsObtainX?['installMethod'],
-        InstallerMode.dhizuku.name,
-      );
+  test('an Obtainium Dhizuku backend imports as ObtainX\'s Dhizuku mode', () {
+    final Map<String, dynamic>? merged =
+        mergeImportedSettingsMaps(<String, dynamic>{
+          'installMethod': InstallerMode.shizuku.name,
+          'shizukuInstallerMode': 'dhizuku',
+        }, null);
 
-      final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
-        split.settings,
-        split.settingsObtainX,
-      );
-      // ObtainX import restores 'dhizuku'
-      expect(merged?['installMethod'], InstallerMode.dhizuku.name);
-    },
-  );
+    expect(merged?['installMethod'], InstallerMode.dhizuku.name);
+    // The upstream key itself is skipped when the settings are applied.
+    expect(droppedUpstreamSettingKeys, contains('shizukuInstallerMode'));
+  });
+
+  test('an Obtainium auto or Shizuku backend imports as Shizuku mode', () {
+    for (final String backend in ['auto', 'shizuku']) {
+      final Map<String, dynamic>? merged =
+          mergeImportedSettingsMaps(<String, dynamic>{
+            'installMethod': InstallerMode.shizuku.name,
+            'shizukuInstallerMode': backend,
+          }, null);
+      expect(merged?['installMethod'], InstallerMode.shizuku.name);
+    }
+    // The backend only qualifies Shizuku mode.
+    final Map<String, dynamic>? system =
+        mergeImportedSettingsMaps(<String, dynamic>{
+          'installMethod': InstallerMode.system.name,
+          'shizukuInstallerMode': 'dhizuku',
+        }, null);
+    expect(system?['installMethod'], InstallerMode.system.name);
+  });
+
+  test('import keeps only a content:// export folder (SET-H8)', () {
+    // Obtainium on a TV stores its Downloads sentinel; there's no folder
+    // behind it in ObtainX, and every auto-export would fail.
+    final Map<String, dynamic>? tv = mergeImportedSettingsMaps(
+      <String, dynamic>{'exportDir': 'tv-downloads:', 'theme': 1},
+      null,
+    );
+    expect(tv?.containsKey('exportDir'), isFalse);
+    expect(tv?['theme'], 1);
+
+    const String tree =
+        'content://com.android.externalstorage.documents/tree/primary%3ABackups';
+    final Map<String, dynamic>? saf = mergeImportedSettingsMaps(
+      <String, dynamic>{'exportDir': tree},
+      null,
+    );
+    expect(saf?['exportDir'], tree);
+  });
 
   test(
     'ObtainX self-import round-trips groupBy=appType via the shared block',

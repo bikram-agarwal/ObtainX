@@ -16,6 +16,7 @@ import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -115,6 +116,17 @@ enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 // Values persist by name, so Obtainium backups carrying 'root' still match.
 enum InstallerMode { system, shizuku, external, dhizuku, root }
 
+/// What background work may run while a guard's condition (on Wi-Fi, on
+/// charge) is unmet (upstream #3370). When the condition is met, the mode
+/// doesn't matter.
+///
+/// ObtainX mapping of the old switches (v1.7.4 sync, D5): the old "Wi-Fi
+/// only" / "charging only" switch ON meant *no background check at all*
+/// (an Android WorkManager constraint), so a stored legacy `true` maps to
+/// [nothing], not to upstream's [checksOnly]. OFF maps to [checksAndUpdates].
+/// Only [nothing] is enforced through Android's job constraints.
+enum BgGuardMode { nothing, checksOnly, checksAndUpdates }
+
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
 
 /// Order for settings dropdowns: alphabetical by localized action label,
@@ -149,11 +161,16 @@ int snapUpdateInterval(int minutes) {
 
 /// The [minimumUpdateAgeOptions] entry nearest [days]. A stored value that
 /// isn't one (an imported one) is applied as the slider shows it.
-int snapMinimumUpdateAgeDays(int days) {
-  if (days <= 0) return 0;
-  int nearest = minimumUpdateAgeOptions.first;
-  for (final int option in minimumUpdateAgeOptions) {
-    if ((option - days).abs() < (nearest - days).abs()) nearest = option;
+int snapMinimumUpdateAgeDays(int days) =>
+    snapToOption(days, minimumUpdateAgeOptions);
+
+/// The entry of [options] (ascending, starting at 0) nearest [value]; 0 for
+/// anything at or below 0.
+int snapToOption(int value, List<int> options) {
+  if (value <= 0) return 0;
+  int nearest = options.first;
+  for (final int option in options) {
+    if ((option - value).abs() < (nearest - value).abs()) nearest = option;
   }
   return nearest;
 }
@@ -169,6 +186,14 @@ const Set<String> droppedUpstreamSettingKeys = {
   'collapseGroupsOnStartup',
   'appListDensity',
   'exportInstalledOnly',
+  // v1.7.4 sync: category "skip update checks" (D7), Cronet's Android
+  // certificate store and its DCL warning (D1), and upstream's Shizuku
+  // sub-backend (ObtainX has Dhizuku as its own mode; backups map it on
+  // import before this skip applies).
+  'categoriesExcludedFromChecks',
+  'useAndroidCertStore',
+  'dclWarningShown',
+  'shizukuInstallerMode',
 };
 
 class SettingsProvider with ChangeNotifier {
@@ -220,6 +245,7 @@ class SettingsProvider with ChangeNotifier {
       // top-level mirrors (the global APK filter, haptics) are re-read here too.
       _globalApkFilterRegExMirror = globalApkFilterRegEx;
       _tactileFeedbackEnabled = tactileFeedbackEnabled;
+      HttpService.setDefaultCertificatePinning(enableCertificatePinning);
       notifyListeners();
       return;
     }
@@ -241,6 +267,7 @@ class SettingsProvider with ChangeNotifier {
         info.systemFeatures.contains('android.software.leanback');
     _tactileFeedbackEnabled = prefs?.getBool('tactileFeedbackEnabled') ?? true;
     _globalApkFilterRegExMirror = globalApkFilterRegEx;
+    HttpService.setDefaultCertificatePinning(enableCertificatePinning);
     _settingsInitialized = true;
     notifyListeners();
   }
@@ -1554,23 +1581,38 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  bool get bgUpdatesOnWiFiOnly {
-    return prefs?.getBool('bgUpdatesOnWiFiOnly') ?? false;
+  BgGuardMode _bgGuardMode(String key, String legacyKey) {
+    final Object? stored = prefs?.get(key);
+    if (stored is String) {
+      for (final BgGuardMode mode in BgGuardMode.values) {
+        if (mode.name == stored) return mode;
+      }
+    }
+    final Object? legacy = prefs?.get(legacyKey);
+    if (legacy is bool) {
+      // See [BgGuardMode]: the old ON meant no checks at all.
+      return legacy ? BgGuardMode.nothing : BgGuardMode.checksAndUpdates;
+    }
+    return BgGuardMode.checksAndUpdates;
   }
 
-  set bgUpdatesOnWiFiOnly(bool val) {
-    prefs?.setBool('bgUpdatesOnWiFiOnly', val);
+  void _setBgGuardMode(String key, BgGuardMode mode) {
+    prefs?.setString(key, mode.name);
     notifyListeners();
   }
 
-  bool get bgUpdatesWhileChargingOnly {
-    return prefs?.getBool('bgUpdatesWhileChargingOnly') ?? false;
-  }
+  /// What background work may run while not on Wi-Fi (an unmetered network).
+  BgGuardMode get bgGuardOnWiFi =>
+      _bgGuardMode('bgGuardOnWiFi', 'bgUpdatesOnWiFiOnly');
 
-  set bgUpdatesWhileChargingOnly(bool val) {
-    prefs?.setBool('bgUpdatesWhileChargingOnly', val);
-    notifyListeners();
-  }
+  set bgGuardOnWiFi(BgGuardMode mode) => _setBgGuardMode('bgGuardOnWiFi', mode);
+
+  /// What background work may run while not charging.
+  BgGuardMode get bgGuardWhileCharging =>
+      _bgGuardMode('bgGuardWhileCharging', 'bgUpdatesWhileChargingOnly');
+
+  set bgGuardWhileCharging(BgGuardMode mode) =>
+      _setBgGuardMode('bgGuardWhileCharging', mode);
 
   DateTime get lastCompletedBGCheckTime {
     final int? temp = prefs?.getInt('lastCompletedBGCheckTime');
@@ -1910,6 +1952,8 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // Intentional: ObtainX defaults this ON for new installs (OOTB defaults,
+  // 911aca75). Upstream's default is false; don't "fix" it back.
   bool get onlyCheckInstalledOrTrackOnlyApps {
     return prefs?.getBool('onlyCheckInstalledOrTrackOnlyApps') ?? true;
   }
@@ -1974,6 +2018,134 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Version-trimming regex applied to apps without their own (upstream
+  /// #3368). Null when unset, blank, or not a valid regex (an invalid one
+  /// imported from a backup is ignored rather than failing every check).
+  String? get globalVersionExtractionRegEx {
+    final String? value = prefs
+        ?.getString('globalVersionExtractionRegEx')
+        ?.trim();
+    if (value == null || value.isEmpty) return null;
+    try {
+      RegExp(value);
+    } on FormatException {
+      return null;
+    }
+    return value;
+  }
+
+  set globalVersionExtractionRegEx(String? val) {
+    final cleaned = val?.trim();
+    if (cleaned == null || cleaned.isEmpty) {
+      prefs?.remove('globalVersionExtractionRegEx');
+    } else {
+      prefs?.setString('globalVersionExtractionRegEx', cleaned);
+    }
+    notifyListeners();
+  }
+
+  /// Match group of [globalVersionExtractionRegEx] to keep; null = `$0`.
+  String? get globalMatchGroupToUse {
+    final String? value = prefs?.getString('globalMatchGroupToUse')?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  set globalMatchGroupToUse(String? val) {
+    final cleaned = val?.trim();
+    if (cleaned == null || cleaned.isEmpty) {
+      prefs?.remove('globalMatchGroupToUse');
+    } else {
+      prefs?.setString('globalMatchGroupToUse', cleaned);
+    }
+    notifyListeners();
+  }
+
+  /// Opt-in (upstream #3345): when the check during add fails unexpectedly,
+  /// offer to add the app anyway with placeholder details.
+  bool get allowAddingAppsWithoutCheck {
+    return prefs?.getBool('allowAddingAppsWithoutCheck') ?? false;
+  }
+
+  set allowAddingAppsWithoutCheck(bool val) {
+    prefs?.setBool('allowAddingAppsWithoutCheck', val);
+    notifyListeners();
+  }
+
+  // Update health (upstream #1753). Upstream's defaults, kept on purpose
+  // (v1.7.4 sync, D8). 0 turns a heuristic off. Stored values are snapped to
+  // the slider options, so an odd imported value can't break the sliders.
+  int get updateHealthStaleReleaseDays => snapToOption(
+    prefs?.getInt('updateHealthStaleReleaseDays') ?? 180,
+    updateHealthDayOptions,
+  );
+
+  set updateHealthStaleReleaseDays(int val) {
+    prefs?.setInt(
+      'updateHealthStaleReleaseDays',
+      snapToOption(val, updateHealthDayOptions),
+    );
+    notifyListeners();
+  }
+
+  int get updateHealthStaleVersionDays => snapToOption(
+    prefs?.getInt('updateHealthStaleVersionDays') ?? 180,
+    updateHealthDayOptions,
+  );
+
+  set updateHealthStaleVersionDays(int val) {
+    prefs?.setInt(
+      'updateHealthStaleVersionDays',
+      snapToOption(val, updateHealthDayOptions),
+    );
+    notifyListeners();
+  }
+
+  int get updateHealthFailedChecksCount => snapToOption(
+    prefs?.getInt('updateHealthFailedChecksCount') ?? 5,
+    updateHealthFailedChecksOptions,
+  );
+
+  set updateHealthFailedChecksCount(int val) {
+    prefs?.setInt(
+      'updateHealthFailedChecksCount',
+      snapToOption(val, updateHealthFailedChecksOptions),
+    );
+    notifyListeners();
+  }
+
+  bool get updateHealthArchivedEnabled {
+    return prefs?.getBool('updateHealthArchivedEnabled') ?? true;
+  }
+
+  set updateHealthArchivedEnabled(bool val) {
+    prefs?.setBool('updateHealthArchivedEnabled', val);
+    notifyListeners();
+  }
+
+  int get updateHealthFilteredReleasesCount => snapToOption(
+    prefs?.getInt('updateHealthFilteredReleasesCount') ?? 5,
+    updateHealthFilteredReleasesOptions,
+  );
+
+  set updateHealthFilteredReleasesCount(int val) {
+    prefs?.setInt(
+      'updateHealthFilteredReleasesCount',
+      snapToOption(val, updateHealthFilteredReleasesOptions),
+    );
+    notifyListeners();
+  }
+
+  /// Show the update-health marker in the app list (a show toggle, so it
+  /// lives in Settings > Warnings).
+  bool get showUpdateHealthIndicator {
+    return prefs?.getBool('showUpdateHealthIndicator') ?? true;
+  }
+
+  set showUpdateHealthIndicator(bool val) {
+    prefs?.setBool('showUpdateHealthIndicator', val);
+    notifyListeners();
+  }
+
   int get exportSettings {
     try {
       return prefs?.getInt('exportSettings') ??
@@ -1999,9 +2171,14 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Search profiles left out of a search. Keyed by profile id: a source
+  /// with one profile uses its name, so lists saved before search profiles
+  /// (v1.7.4 sync, D20) still apply.
   List<String> get searchDeselected {
     return prefs?.getStringList('searchDeselected') ??
-        SourceProvider().sourceTemplates.map((s) => s.name).toList();
+        SourceProvider().sourceTemplates
+            .expand((s) => s.searchProfiles.map((profile) => profile.id))
+            .toList();
   }
 
   set searchDeselected(List<String> list) {
@@ -2057,6 +2234,7 @@ class SettingsProvider with ChangeNotifier {
 
   set enableCertificatePinning(bool val) {
     prefs?.setBool('enableCertificatePinning', val);
+    HttpService.setDefaultCertificatePinning(val);
     notifyListeners();
   }
 

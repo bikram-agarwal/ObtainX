@@ -110,6 +110,7 @@ List<Widget> buildThemesSettingsCardItems(
             padding: EdgeInsets.zero,
           ),
           AppSwitch(
+            semanticLabel: tr('settingsProgressiveBlur'),
             value: settings.progressiveBlurEnabled,
             onChanged: settings.reduceVisualEffects
                 ? null
@@ -152,6 +153,7 @@ List<Widget> buildThemesSettingsCardItems(
             padding: EdgeInsets.zero,
           ),
           AppSwitch(
+            semanticLabel: tr('settingsReduceVisualEffects'),
             value: settings.reduceVisualEffects,
             onChanged: (bool value) {
               settings.reduceVisualEffects = value;

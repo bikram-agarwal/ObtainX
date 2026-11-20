@@ -1,6 +1,9 @@
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' show parse;
 import 'package:http/http.dart' as http;
+import 'package:obtainium/app_sources/apkmirror.dart'
+    show apkMirrorMaxConcurrentRequests;
+import 'package:obtainium/services/host_request_gate.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
 
 const Duration _storeListingIconFetchTimeout = Duration(seconds: 10);
@@ -71,13 +74,46 @@ Future<String?> iconUrlFromStoreListingHtmlOffIsolate(
   return iconUrlFromStoreListingDocument(doc, pageUrl);
 }
 
+/// GETs a store listing page with the browser UA. APKMirror listings go
+/// through [HostRequestGate] (#339) for load only, in the same page class as
+/// the APKMirror source: the host's concurrency limit, the page spacing, and
+/// failing fast while pages are blocked. Unlike `runResponse`, a 403 here
+/// isn't recorded: APKMirror challenges this browser UA however light the
+/// load, and that mustn't pause the source's page requests, which still load
+/// with their own UA. A 429/503 is about load, so it still counts.
+Future<http.Response> _getStoreListingPage(Uri uri) {
+  Future<http.Response> get() => http
+      .get(uri, headers: {'User-Agent': _storeListingUserAgent})
+      .timeout(_storeListingIconFetchTimeout);
+  final String host = HostRequestGate.hostKeyFor(uri);
+  if (host != 'apkmirror.com') return get();
+  // The key `HostRequestGate.runResponse` uses for this request class.
+  final String blockKey = '$host|${HostRequestGate.requestClassFor(uri)}';
+  return HostRequestGate.instance
+      .run(
+        host,
+        blockKey,
+        apkMirrorMaxConcurrentRequests,
+        get,
+        minInterval: HostRequestGate.htmlMinInterval,
+      )
+      .then((http.Response response) {
+        if (response.statusCode != 403) {
+          HostRequestGate.instance.observe(
+            blockKey,
+            response.statusCode,
+            response.headers,
+          );
+        }
+        return response;
+      });
+}
+
 /// Fetches [listingUrl] and extracts a raster icon URL from the page.
 Future<String?> fetchIconUrlFromStoreListingPage(String listingUrl) async {
   try {
     final Uri uri = normalizeApkPureHost(Uri.parse(listingUrl));
-    final http.Response response = await http
-        .get(uri, headers: {'User-Agent': _storeListingUserAgent})
-        .timeout(_storeListingIconFetchTimeout);
+    final http.Response response = await _getStoreListingPage(uri);
     if (response.statusCode != 200) {
       return null;
     }

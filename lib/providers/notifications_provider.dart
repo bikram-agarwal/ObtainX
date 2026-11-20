@@ -31,6 +31,21 @@ const int errorInstallingUpdatesNotificationId = 10;
 const int versionReviewNotificationId = 11;
 const int downloadNotificationBaseId = 100;
 
+/// Cancels the update notification [id] once nothing it could list is pending
+/// ([pendingUpdateIds] is empty), after a successful check (upstream #3415).
+/// ObtainX posts track-only updates separately, so it also clears
+/// [trackOnlyUpdateNotificationId]; see
+/// `AppsProviderUpdates.clearStaleUpdateNotifications`.
+Future<void> clearStaleUpdateNotification(
+  NotificationsProvider notificationsProvider,
+  List<String> pendingUpdateIds, {
+  int id = updateNotificationId,
+}) async {
+  if (pendingUpdateIds.isEmpty) {
+    await notificationsProvider.cancel(id);
+  }
+}
+
 /// Size of the ID space for per-download notifications. Kept just under the
 /// 32-bit signed max (minus [downloadNotificationBaseId]) so download IDs stay
 /// positive and clear of the small fixed IDs above, while making collisions
@@ -133,6 +148,7 @@ class ObtainiumNotification {
   /// The listing key a tap opens (replaces [payload]); null for no app.
   String? appId;
   List<AndroidNotificationAction>? androidActions;
+  StyleInformation? style;
 
   ObtainiumNotification(
     this.id,
@@ -147,6 +163,7 @@ class ObtainiumNotification {
     this.payload,
     this.appId,
     this.androidActions,
+    this.style,
   });
 }
 
@@ -261,6 +278,7 @@ class ErrorCheckingUpdatesNotification extends ObtainiumNotification {
         tr('errorCheckingUpdatesNotifDescription'),
         Importance.high,
         payload: "${tr('errorCheckingUpdates')}\n$error",
+        style: BigTextStyleInformation(error),
       );
 }
 
@@ -321,6 +339,9 @@ class ErrorInstallingUpdatesNotification extends ObtainiumNotification {
         tr('errorInstallingUpdateNotifDescription'),
         Importance.high,
         payload: "${tr('errorInstallingUpdate')}\n$error",
+        // Expandable, like the check-error one: it lists every failed group
+        // of the run (#3362).
+        style: BigTextStyleInformation(error),
       );
 }
 
@@ -622,6 +643,7 @@ class NotificationsProvider {
     bool onlyAlertOnce = false,
     String? payload,
     List<AndroidNotificationAction>? androidActions,
+    StyleInformation? style,
   }) async {
     if (cancelExisting) {
       await cancel(id);
@@ -648,6 +670,7 @@ class NotificationsProvider {
           onlyAlertOnce: onlyAlertOnce,
           indeterminate: progPercent != null && progPercent < 0,
           actions: androidActions,
+          styleInformation: style,
         ),
       ),
       payload: payload,
@@ -672,5 +695,6 @@ class NotificationsProvider {
         ? '$appIdTapPayloadPrefix${notif.appId}'
         : notif.payload,
     androidActions: notif.androidActions,
+    style: notif.style,
   );
 }

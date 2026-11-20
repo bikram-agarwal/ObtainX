@@ -17,6 +17,7 @@ import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/components/app_detail_widgets.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/dhizuku_installer.dart';
 import 'package:obtainium/installers/external_installer.dart';
@@ -75,6 +76,9 @@ const int _bgInstallConfirmAttempts = 20; // 20 × 500ms = 10 seconds
 /// minutes, and give up on the install result after ten.
 const int _installConfirmPollAttempts = 300;
 const Duration _installConfirmTimeout = Duration(minutes: 10);
+
+/// How long a download retry waits for the user to bring the app back (#2894);
+/// the same wait an install that needs the user uses.
 
 @visibleForTesting
 bool isCleartextDownloadUrl(String url) {
@@ -406,6 +410,61 @@ bool installerCanDowngrade({
   required bool downgradeModuleUsable,
 }) => installerModeKey == 'external' || downgradeModuleUsable;
 
+/// Whether an install races its result against polling for the package to
+/// land (upstream #3255, #3369, D15). Stock, Shizuku, Dhizuku and Root are
+/// raced, so a lost result can't stall the install chain. Not raced: the
+/// background stock workaround, whose result never arrives by design (#896),
+/// and the external installer, which reports no result and is confirmed by
+/// the native package-broadcast watcher instead. Keyed on [Installer.modeKey]
+/// ('system', never upstream's 'stock').
+bool shouldPollForInstallConfirmation(
+  String installerModeKey, {
+  required bool needsBGWorkaround,
+}) {
+  if (needsBGWorkaround) return false;
+  return installerModeKey != 'external';
+}
+
+/// The installer mode for [app] (upstream #3457, D13): its own `installerMode`
+/// setting when that names a known [InstallerMode] (the fork's set, Dhizuku
+/// and Root included), otherwise [globalMode]. '' means "use the global
+/// method".
+String installerModeFor(App? app, String globalMode) {
+  final String? own = app?.settings.getStringOrNull('installerMode');
+  return own != null && InstallerMode.values.any((m) => m.name == own)
+      ? own
+      : globalMode;
+}
+
+/// Runs [extraction] of a downloaded archive into [destinationPath]. A
+/// failure removes the partial extraction and [sourceFile], so a retry
+/// downloads afresh rather than reusing a bad file, and surfaces as
+/// `couldNotExtractArchive` instead of a raw FormatException or
+/// PlatformException (upstream #3372).
+@visibleForTesting
+Future<void> extractArchiveOrThrow(
+  Future<void> Function() extraction, {
+  required String destinationPath,
+  required File sourceFile,
+  String? appUrl,
+}) async {
+  try {
+    await extraction();
+  } on ObtainiumError {
+    rethrow;
+  } catch (e) {
+    AppLogger.info('Archive extraction failed: ${e.toString()}');
+    final Directory destination = Directory(destinationPath);
+    if (destination.existsSync()) {
+      await destination.delete(recursive: true);
+    }
+    if (sourceFile.existsSync()) {
+      await sourceFile.delete();
+    }
+    throw ObtainiumError(tr('couldNotExtractArchive'))..url = appUrl;
+  }
+}
+
 /// App download, install, and on-device package operations for [AppsProvider].
 extension AppsProviderInstall on AppsProvider {
   /// Starts recording third-party installs the moment the system confirms them.
@@ -519,11 +578,16 @@ extension AppsProviderInstall on AppsProvider {
     await saveApps([entry.app], attemptToCorrectInstallStatus: false);
   }
 
-  /// Installs via the stock installer while racing the intent-based result
-  /// against polling for the package to land; the first conclusive outcome
-  /// wins, and the overall wait is capped, so a lost install result can never
-  /// stall the install chain (upstream #3255). The polling compares version
-  /// codes when the baseline has no update time, so it can't confirm early.
+  /// Installs via [installer] while racing its result against polling for the
+  /// package to land; the first conclusive outcome wins, and the overall wait
+  /// is capped, so a lost install result can never stall the install chain
+  /// (upstream #3255, #3369). The polling compares version codes when the
+  /// baseline has no update time, so it can't confirm early.
+  ///
+  /// When the race settles without the installer's own result, the installer
+  /// is told so it can free what its pending call holds: Shizuku and Dhizuku
+  /// hold the exclusive plugin queue, and a stalled call there would hang
+  /// every later install (D15 a; see `ShizukuPluginCall.releaseIfStalled`).
   Future<InstallResult> _installWithPollConfirmation(
     Installer installer,
     List<String> apkPaths,
@@ -587,6 +651,10 @@ extension AppsProviderInstall on AppsProvider {
       );
       throw ObtainiumError(tr('installConfirmationError'))
         ..url = apps[appId]?.app.url;
+    } finally {
+      if (!intentCompleter.isCompleted) {
+        unawaited(installer.releaseStalledInstall());
+      }
     }
   }
 
@@ -662,9 +730,12 @@ extension AppsProviderInstall on AppsProvider {
     return sayInstalled;
   }
 
-  /// Returns the [Installer] strategy for the current installer mode setting.
-  Installer getInstaller() {
-    switch (settingsProvider.installerMode) {
+  /// Returns the [Installer] strategy for [app]'s own install method, or for
+  /// the global installer mode when the app sets none (upstream #3457, D13).
+  /// Pass the app wherever one is known: silent-install eligibility, the
+  /// downgrade checks and the permission prompt all follow its method.
+  Installer getInstaller([App? app]) {
+    switch (installerModeFor(app, settingsProvider.installerMode)) {
       case 'shizuku':
         return ShizukuInstaller(settingsProvider);
       case 'dhizuku':
@@ -824,6 +895,11 @@ extension AppsProviderInstall on AppsProvider {
         notify();
       }
       if (app.apkUrls.isEmpty) throw NoAPKError();
+      // Added without a check (D10) and not checked successfully since: its
+      // APK URLs are placeholders, so there is nothing to download yet.
+      if (hasOnlyPlaceholderApks(app)) {
+        throw ObtainiumError(tr('appNotCheckedYet'))..url = app.url;
+      }
       if (app.preferredApkIndex >= app.apkUrls.length) {
         app = app.copyWith(preferredApkIndex: app.apkUrls.length - 1);
       }
@@ -994,6 +1070,10 @@ extension AppsProviderInstall on AppsProvider {
           certificatePinning: settingsProvider.enableCertificatePinning,
           logs: logs,
           cancellationToken: cancellationToken,
+          // Upstream #2894: hold a retry until the app is back on screen, but
+          // only when the native download service (which keeps network access
+          // in the background) didn't start, and never for WorkManager.
+          holdRetry: !nativeDownloadServiceStarted && !isBg,
         );
       }
 
@@ -1069,7 +1149,7 @@ extension AppsProviderInstall on AppsProvider {
       String? parsedArchivePath;
       final originalAssetName = app.apkUrls[app.preferredApkIndex].key
           .toLowerCase();
-      final isAPK = downloadedFile.path.toLowerCase().endsWith('.apk');
+      var isAPK = downloadedFile.path.toLowerCase().endsWith('.apk');
       final isXAPK = downloadedFile.path.toLowerCase().endsWith('.xapk');
       final isTarball =
           originalAssetName.endsWith('.tar.gz') ||
@@ -1084,17 +1164,28 @@ extension AppsProviderInstall on AppsProvider {
         final Directory setDir = Directory('${downloadedFile.path}-dir');
         if (setDir.existsSync()) setDir.deleteSync(recursive: true);
         setDir.createSync(recursive: true);
+        // A part that won't extract is reported as such (upstream #3372).
+        Future<void> unzipPart(String zipPath, String destinationPath) =>
+            extractArchiveOrThrow(
+              () => unzipFile(zipPath, destinationPath),
+              destinationPath: destinationPath,
+              sourceFile: File(zipPath),
+              appUrl: app.url,
+            );
         try {
           downloadedFile = (await addSplitSetPart(
             downloadedFile,
             setDir,
-            unzip: unzipFile,
+            unzip: unzipPart,
           )).first;
           for (final File splitFile in splitFiles) {
-            await addSplitSetPart(splitFile, setDir, unzip: unzipFile);
+            await addSplitSetPart(splitFile, setDir, unzip: unzipPart);
           }
         } catch (_) {
           setDir.deleteSync(recursive: true);
+          for (final File splitFile in splitFiles) {
+            if (splitFile.existsSync()) splitFile.deleteSync();
+          }
           rethrow;
         }
         apkDir = setDir;
@@ -1103,17 +1194,29 @@ extension AppsProviderInstall on AppsProvider {
           archiveFilePath: downloadedFile.path,
         );
       } else if (isAPK) {
-        parsedArchivePath = downloadedFile.path;
         newInfo = await packageManager.getPackageArchiveInfo(
           archiveFilePath: downloadedFile.path,
         );
-      } else {
-        final String apkDirPath = '${downloadedFile.path}-dir';
-        if (isTarball) {
-          await extractTarballFile(downloadedFile.path, apkDirPath);
+        if (newInfo != null) {
+          parsedArchivePath = downloadedFile.path;
         } else {
-          await unzipFile(downloadedFile.path, apkDirPath);
+          // Not readable as an APK although it is named like one: an APK URL
+          // that redirects to a ZIP. Extract it like any container (upstream
+          // #3372).
+          isAPK = false;
         }
+      }
+      if (!isAPK && !multipleApks) {
+        final String apkDirPath = '${downloadedFile.path}-dir';
+        final String archivePath = downloadedFile.path;
+        await extractArchiveOrThrow(
+          () => isTarball
+              ? extractTarballFile(archivePath, apkDirPath)
+              : unzipFile(archivePath, apkDirPath),
+          destinationPath: apkDirPath,
+          sourceFile: downloadedFile,
+          appUrl: app.url,
+        );
         apkDir = Directory(apkDirPath);
         var apks = apkDir
             .listSync(recursive: true)
@@ -1272,8 +1375,9 @@ extension AppsProviderInstall on AppsProvider {
       return false; // Manual API selection means silent install is not possible
     }
     // Installer-specific eligibility (target SDK, installer of record, OS
-    // version, Shizuku, etc.) is delegated to the active installer strategy.
-    return getInstaller().canInstallSilently(app);
+    // version, Shizuku, etc.) is delegated to the app's installer strategy,
+    // so background-silent gating follows a per-app install method too.
+    return getInstaller(app).canInstallSilently(app);
   }
 
   /// Whether [app] should be installed silently in the background: the
@@ -1374,7 +1478,7 @@ extension AppsProviderInstall on AppsProvider {
     }
     // Try installing all APKs; succeed if at least one installed.
     var somethingInstalled = false;
-    final installer = getInstaller();
+    final installer = getInstaller(apps[dir.appId]?.app);
     try {
       final MultiAppMultiError errors = MultiAppMultiError();
       List<File> apkFiles = [];
@@ -1585,10 +1689,13 @@ extension AppsProviderInstall on AppsProvider {
     );
     final newVersionCode = newInfo.versionCode;
     final oldVersionCode = appInfo?.versionCode;
+    // The app's own install method (D13) decides both the stock-downgrade
+    // pre-check and the install itself.
+    final Installer installer = getInstaller(apps[file.appId]?.app);
     if (isStockInstallerDowngrade(
           installedVersionCode: oldVersionCode,
           newVersionCode: newVersionCode,
-          installerModeKey: getInstaller().modeKey,
+          installerModeKey: installer.modeKey,
         ) &&
         !(await canDowngradeApps()) &&
         settingsProvider.showAppDowngradeError) {
@@ -1612,12 +1719,14 @@ extension AppsProviderInstall on AppsProvider {
     allAPKs.addAll(additionalAPKs.map((a) => a.file.path));
     final InstallResult result;
     try {
-      final Installer installer = getInstaller();
-      // A foreground stock install races its result against polling for the
-      // package, so a lost result can't stall the install chain (upstream
-      // #3255). Gated on the installer type: upstream's `modeKey != 'stock'`
-      // never matches ObtainX's 'system' key.
-      result = installer is StockInstaller && !needsBGWorkaround
+      // Every install but the background stock workaround and the external
+      // installer races its result against polling for the package, so a lost
+      // result can't stall the install chain (upstream #3255, #3369, D15).
+      result =
+          shouldPollForInstallConfirmation(
+            installer.modeKey,
+            needsBGWorkaround: needsBGWorkaround,
+          )
           ? await _installWithPollConfirmation(
               installer,
               allAPKs,
@@ -1830,10 +1939,27 @@ extension AppsProviderInstall on AppsProvider {
     final List<String> archs =
         (await DeviceInfoPlugin().androidInfo).supportedAbis;
 
+    // The arch filter keeps universal APKs next to the ABI build (upstream
+    // #3349). When they are the only alternatives there is no real choice to
+    // offer, so the ABI build is taken without the picker rather than asking
+    // on every update (D12 C; upstream #3473 resolves a universal choice to
+    // the ABI build the same way).
+    final bool onlyUniversalAlternatives =
+        !pickAnyAsset &&
+        !evenIfSingleChoice &&
+        app.settings.getBool('autoApkFilterByArch') &&
+        ApkFilterService.onlyUniversalAlternatives(urlsToSelectFrom);
+    if (onlyUniversalAlternatives) {
+      appFileUrl = urlsToSelectFrom.firstWhere(
+        (apk) => !ApkFilterService.isUniversalApkName(apk.key),
+      );
+    }
+
     final NavigatorState? navigator = allowUserInteraction
         ? globalNavigatorKey.currentState
         : null;
-    if ((urlsToSelectFrom.length > 1 || evenIfSingleChoice) &&
+    if (!onlyUniversalAlternatives &&
+        (urlsToSelectFrom.length > 1 || evenIfSingleChoice) &&
         navigator != null &&
         navigator.mounted) {
       appFileUrl = await showDialog(
@@ -1922,6 +2048,16 @@ extension AppsProviderInstall on AppsProvider {
           errors.add(id, e, appName: apps[id]?.name);
           continue;
         }
+      }
+      // Added without a check (D10) and still not checked successfully: there
+      // is no release to download, install or mark as installed yet.
+      if (hasOnlyPlaceholderApks(apps[id]!.app)) {
+        errors.add(
+          id,
+          ObtainiumError(tr('appNotCheckedYet'))..url = apps[id]!.app.url,
+          appName: apps[id]?.name,
+        );
+        continue;
       }
       if (!trackOnly) {
         apkUrl = await confirmAppFileUrl(
@@ -2026,14 +2162,37 @@ extension AppsProviderInstall on AppsProvider {
     // check per app racing all the others (and, for Shizuku, racing the first
     // install) as soon as the APKs were ready - the batch stalled with nothing
     // in the logs (ObtainX#283). One prompt up front is also less intrusive.
+    // With per-app install methods (D13) that is one prompt per distinct
+    // method in the batch; a method whose permission is refused fails only
+    // its own apps.
     if (appsToInstall.isNotEmpty) {
-      try {
-        await getInstaller().ensurePermission(toastTheme: dialogTheme);
-      } catch (error) {
-        for (final id in appsToInstall) {
-          errors.add(id, error, appName: apps[id]?.name);
+      final Map<String, List<String>> idsByInstallerMode = {};
+      for (final id in appsToInstall) {
+        idsByInstallerMode
+            .putIfAbsent(
+              installerModeFor(apps[id]?.app, settingsProvider.installerMode),
+              () => [],
+            )
+            .add(id);
+      }
+      final Set<String> refusedIds = {};
+      for (final List<String> ids in idsByInstallerMode.values) {
+        try {
+          await getInstaller(
+            apps[ids.first]?.app,
+          ).ensurePermission(toastTheme: dialogTheme);
+        } catch (error) {
+          for (final id in ids) {
+            errors.add(id, error, appName: apps[id]?.name);
+          }
+          refusedIds.addAll(ids);
         }
-        throw errors;
+      }
+      if (refusedIds.isNotEmpty) {
+        appsToInstall = appsToInstall
+            .where((id) => !refusedIds.contains(id))
+            .toList();
+        if (appsToInstall.isEmpty) throw errors;
       }
     }
 
@@ -2153,6 +2312,10 @@ extension AppsProviderInstall on AppsProvider {
       if (refreshBeforeDownload) {
         await checkUpdate(id);
       }
+      // Added without a check (D10) and still not checked successfully.
+      if (hasOnlyPlaceholderApks(apps[id]!.app)) {
+        throw ObtainiumError(tr('appNotCheckedYet'))..url = apps[id]!.app.url;
+      }
       if (apps[id]!.app.apkUrls.isNotEmpty ||
           apps[id]!.app.otherAssetUrls.isNotEmpty) {
         final MapEntry<String, String>? tempFileUrl = await confirmAppFileUrl(
@@ -2270,14 +2433,22 @@ extension AppsProviderInstall on AppsProvider {
           appEntry.installedInfo == null && allowUserInteraction
           ? notificationsProvider
           : null;
-      final String installerModeKey = getInstaller().modeKey;
+      final String installerModeKey = getInstaller(appEntry.app).modeKey;
       // Only the stock session-based installer needs the background-completion
       // workaround (its install await never returns in the background).
       final bool needBGWorkaround =
           willBeSilent && !allowUserInteraction && installerModeKey == 'system';
-      final bool shizukuPretendToBeGooglePlay =
-          settingsProvider.shizukuPretendToBeGooglePlay ||
-          appEntry.app.settings.getBool('shizukuPretendToBeGooglePlay');
+      // One option set for every install path, background ones included
+      // (INST-29): the installer of record (D14; Shizuku and Root read it,
+      // Dhizuku ignores it) and update ownership for a first install
+      // (upstream #3445; Shizuku and Dhizuku).
+      final Map<String, dynamic> installOptions = {
+        'installerPackageName': installerPackageNameForApp(
+          appEntry.app,
+          googlePlayDefault: settingsProvider.shizukuPretendToBeGooglePlay,
+        ),
+        'requestUpdateOwnership': appEntry.installedInfo == null,
+      };
       if (downloadedFile != null) {
         if (needBGWorkaround) {
           final bool proceedAfterVerification =
@@ -2301,9 +2472,7 @@ extension AppsProviderInstall on AppsProvider {
               downloadedFile,
               null,
               needsBGWorkaround: true,
-              installOptions: {
-                'shizukuPretendToBeGooglePlay': shizukuPretendToBeGooglePlay,
-              },
+              installOptions: installOptions,
               skipMalwareScan: true,
             ),
           );
@@ -2311,9 +2480,7 @@ extension AppsProviderInstall on AppsProvider {
           sayInstalled = await installApk(
             downloadedFile,
             firstInstallNotificationsProvider,
-            installOptions: {
-              'shizukuPretendToBeGooglePlay': shizukuPretendToBeGooglePlay,
-            },
+            installOptions: installOptions,
             showMalwareScanDialog: allowUserInteraction,
             toastTheme: toastTheme,
           );
@@ -2350,6 +2517,7 @@ extension AppsProviderInstall on AppsProvider {
               downloadedDir,
               null,
               needsBGWorkaround: true,
+              installOptions: installOptions,
               skipPreInstallVerification: true,
             ),
           );
@@ -2357,9 +2525,7 @@ extension AppsProviderInstall on AppsProvider {
           sayInstalled = await installApkDir(
             downloadedDir!,
             firstInstallNotificationsProvider,
-            installOptions: {
-              'shizukuPretendToBeGooglePlay': shizukuPretendToBeGooglePlay,
-            },
+            installOptions: installOptions,
             showMalwareScanDialog: allowUserInteraction,
             toastTheme: toastTheme,
           );
@@ -2433,7 +2599,7 @@ extension AppsProviderInstall on AppsProvider {
       apps[id]?.downloadProgress = _downloadCompleteProgress.toDouble();
       notify();
       willBeSilent = await canInstallSilently(apps[id]!.app);
-      final installer = getInstaller();
+      final installer = getInstaller(apps[id]!.app);
       // Only the stock installer surfaces a system install prompt that pulls the
       // user away; wait for them to return before proceeding.
       if (!willBeSilent &&
@@ -2516,6 +2682,8 @@ extension AppsProviderInstall on AppsProvider {
           allowInsecureRedirects: source.allowInsecureRedirects,
           certificatePinning: settingsProvider.enableCertificatePinning,
           logs: logs,
+          // No native download service covers asset downloads (#2894).
+          holdRetry: !isBg,
         );
         unawaited(
           notificationsProvider.notify(

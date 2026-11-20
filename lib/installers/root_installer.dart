@@ -81,8 +81,13 @@ class RootInstaller extends Installer {
       final stagedApks = [
         for (var i = 0; i < apkFilePaths.length; i++) '"\$d/obt$i.apk"',
       ].join(' ');
-      final installLine = installOptions['shizukuPretendToBeGooglePlay'] == true
-          ? "pm install -r -i 'com.android.vending' --user \"\$uid\" $stagedApks"
+      // The installer of record from [installerPackageNameForApp] (Google
+      // Play, or the Galaxy Store for a Samsung app; D14), the same option
+      // Shizuku reads.
+      final installerPackageName =
+          installOptions['installerPackageName'] as String? ?? '';
+      final installLine = installerPackageName.isNotEmpty
+          ? 'pm install -r -i ${_quoteShell(installerPackageName)} --user "\$uid" $stagedApks'
           : 'pm install -r --user "\$uid" $stagedApks';
       // The user ObtainX runs as, not the foreground user: in a work profile
       // or secondary user, `am get-current-user` names a different user.

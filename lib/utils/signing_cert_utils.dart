@@ -1,12 +1,28 @@
-import 'dart:typed_data';
-
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:crypto/crypto.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/services.dart';
 
 final AndroidPackageManager _packageManager = AndroidPackageManager();
 final PackageInfoFlags _signingInfoFlags = PackageInfoFlags({
   PMFlag.getSigningCertificates,
+  PMFlag.getSignatures,
 });
+
+/// ObtainX's own device-apps channel (MainActivity), for the Android 8/8.1
+/// signer read below.
+const MethodChannel _deviceAppsChannel = MethodChannel(
+  'dev.imranr.obtainium/device_apps',
+);
+
+/// Android 9, the first version with `PackageInfo.signingInfo`.
+const int _androidApiLevelP = 28;
+
+Future<int>? _androidSdkInt;
+
+Future<int> _deviceSdkInt() => _androidSdkInt ??= DeviceInfoPlugin().androidInfo
+    .then((AndroidDeviceInfo info) => info.version.sdkInt)
+    .catchError((Object _) => _androidApiLevelP);
 
 /// Formats a signing certificate (DER bytes) as an uppercase, colon-separated
 /// SHA-256 digest, the format shown in the app UI and accepted in settings.
@@ -29,13 +45,35 @@ Set<String> certHashesFromSigningInfo(SigningInfo? signingInfo) {
 }
 
 /// Signer certificate hashes of the APK at [apkPath], or an empty set when the
-/// signing info is unavailable (pre-API 28 or unreadable archive).
+/// signing info is unavailable (unreadable archive).
+///
+/// ObtainX addition (v1.7.4 sync D16 b; keep it when taking upstream's file):
+/// below Android 9 the plugin has no `signingInfo` to return, so a pinned
+/// expected certificate would block every install there. MainActivity reads
+/// the archive's signers with `GET_SIGNATURES` instead.
 Future<Set<String>> apkSigningCertHashes(String apkPath) async {
+  if (await _deviceSdkInt() < _androidApiLevelP) {
+    return _legacyApkSigningCertHashes(apkPath);
+  }
   final info = await _packageManager.getPackageArchiveInfo(
     archiveFilePath: apkPath,
     flags: _signingInfoFlags,
   );
   return certHashesFromSigningInfo(info?.signingInfo);
+}
+
+Future<Set<String>> _legacyApkSigningCertHashes(String apkPath) async {
+  try {
+    final List<Uint8List>? signatures = await _deviceAppsChannel
+        .invokeListMethod<Uint8List>('getApkArchiveSignatures', {
+          'archiveFilePath': apkPath,
+        });
+    return signatures?.map(formatCertHash).toSet() ?? {};
+  } on PlatformException {
+    return {};
+  } on MissingPluginException {
+    return {};
+  }
 }
 
 /// Union of the signer certificate hashes across [apkPaths] (base APK plus

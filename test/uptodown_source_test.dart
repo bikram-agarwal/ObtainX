@@ -2,7 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 import 'package:obtainium/app_sources/uptodown.dart';
+import 'package:obtainium/custom_errors.dart';
 
 /// A JWT whose `exp` claim is [exp] (unix seconds).
 String _jwt(int exp) {
@@ -52,6 +55,42 @@ class _ApiFixtureUptodown extends Uptodown {
       );
     }
     return Response('', 404);
+  }
+}
+
+/// Serves [page] as every app page and [searchResults] from the search API
+/// (from upstream's uptodown_test.dart).
+class _UptodownWithPage extends Uptodown {
+  final String page;
+  final List<Map<String, dynamic>> searchResults;
+  final requests = <String>[];
+
+  _UptodownWithPage(this.page, {this.searchResults = const []});
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    requests.add(url);
+    if (url == 'https://en.uptodown.com/android/en/s') {
+      return Response(
+        jsonEncode({
+          'success': 1,
+          'data': {'apps': searchResults},
+        }),
+        200,
+      );
+    }
+    return Response(
+      Uri.parse(url).path == '/android/download'
+          ? page
+          : '<div class="version">1.17.3</div>',
+      200,
+      headers: {'content-type': 'text/html; charset=utf-8'},
+    );
   }
 }
 
@@ -298,5 +337,294 @@ void main() {
       expect(uptodownDownloadUrlFromAjaxBody('not json'), isNull);
       expect(uptodownDownloadUrlFromAjaxBody('[]'), isNull);
     });
+  });
+
+  // Ported from upstream's uptodown_test.dart (v1.7.4: 1a78315b, d1a17a30,
+  // bf33619c). Three expectations differ on purpose; each says why.
+  group('Uptodown pages', () {
+    const url = 'https://character-ai.en.uptodown.com/android/download';
+
+    test('standardizes app URLs to English', () {
+      final source = Uptodown();
+      for (final input in [
+        'https://character-ai.uptodown.com/android/download',
+        'https://character-ai.ru.uptodown.com/android',
+        'https://character-ai.en.uptodown.com/android/download/1213975188-x',
+        'https://character-ai.uptodown.com/android?lang=ru',
+      ]) {
+        expect(source.standardizeUrl(input), url, reason: input);
+      }
+      expect(
+        source.standardizeUrl('https://ai.uptodown.com/android'),
+        'https://ai.en.uptodown.com/android/download',
+      );
+    });
+
+    // Keep the size fourth from the end, as in the reported page layout.
+    String page(String fileType) =>
+        '''
+<div class="version">1.17.3</div>
+<h1 id="detail-app-name" data-file-id="1213975188">Character AI</h1>
+<a id="author-link">Character.AI</a>
+<section id="technical-information"><table>
+  <tr><th>File type</th><td> $fileType </td></tr>
+  <tr><th>Date</th><td>Sep 11, 2026</td></tr>
+  <tr><th>Size</th><td>174.92 MB</td></tr>
+  <tr><th>SHA256</th><td>checksum</td></tr>
+  <tr><th>Google Play</th><td>Matches the published version</td></tr>
+  <tr><th>Package Name</th><td>ai.character.app</td></tr>
+</table></section>
+''';
+
+    test(
+      'search returns canonical Android download pages and skips invalid rows',
+      () async {
+        final source = _UptodownWithPage(
+          page('APK'),
+          searchResults: [
+            {
+              'url': 'https://google-play.en.uptodown.com/android',
+              'name': '<b>Google</b> Play',
+              'author': 'Google LLC',
+              'platformURL': '/android',
+            },
+            {
+              'url': 'https://character-ai.ru.uptodown.com/android',
+              'name': 'Character AI',
+              'author': 'Character.AI',
+              'platformURL': '/android',
+            },
+            {
+              'url': 'https://google-play.en.uptodown.com/android/download',
+              'name': 'Google Play',
+              'author': 'Google LLC',
+              'platformURL': '/android',
+            },
+            {
+              'url': 'https://unrelated.example/android',
+              'name': 'Invalid',
+              'platformURL': '/android',
+            },
+            {
+              'url': 'https://desktop.en.uptodown.com/windows',
+              'name': 'Desktop',
+              'platformURL': '/windows',
+            },
+          ],
+        );
+        final results = await source.search('Google Play');
+        expect(results.keys, [
+          'https://google-play.en.uptodown.com/android/download',
+          url,
+        ]);
+        expect(results.values.first, ['Google Play', 'Google LLC']);
+        expect(source.requests, ['https://en.uptodown.com/android/en/s']);
+      },
+    );
+
+    test(
+      'a selected search result works with the source override used by the add flow',
+      () async {
+        final source = _UptodownWithPage(
+          page('APK'),
+          searchResults: [
+            {
+              'url': 'https://character-ai.en.uptodown.com/android',
+              'name': 'Character AI',
+              'platformURL': '/android',
+            },
+          ],
+        );
+        final selected = (await source.search('Character AI')).keys.single;
+        source.hostChanged = true;
+        source.hostIdenticalDespiteAnyChange = true;
+        final result = await source.getLatestAPKDetails(
+          source.standardizeUrl(selected),
+          {},
+        );
+        expect(source.requests.last, url);
+        expect(result.version, '1.17.3');
+        expect(result.apkUrls.single.value, '$url/1213975188-x');
+        expect(result.releaseDate, DateTime(2026, 9, 11));
+      },
+    );
+
+    test('English page dates do not depend on the app locale', () async {
+      await initializeDateFormatting('zh');
+      await Intl.withLocale('zh', () async {
+        for (final date in ['Oct 21, 2026', 'October 21, 2026']) {
+          final source = _UptodownWithPage(
+            page('APK').replaceFirst('Sep 11, 2026', date),
+          );
+          expect(
+            (await source.getLatestAPKDetails(url, {})).releaseDate,
+            DateTime(2026, 10, 21),
+          );
+        }
+      });
+    });
+
+    test('invalid calendar dates remain unset', () async {
+      final source = _UptodownWithPage(
+        page('APK').replaceFirst('Sep 11, 2026', 'Feb 30, 2026'),
+      );
+      expect((await source.getLatestAPKDetails(url, {})).releaseDate, isNull);
+    });
+
+    test('parses all app details from the download page', () async {
+      final source = _UptodownWithPage(page('XAPK'));
+
+      expect(await source.getAppDetailsFromPage(url, {}), {
+        'version': '1.17.3',
+        'appId': 'ai.character.app',
+        'name': 'Character AI',
+        'author': 'Character.AI',
+        'dateStr': 'Sep 11, 2026',
+        'fileId': '1213975188',
+        'extension': 'xapk',
+        // Fork-only: the page's own file-type label, which alone decides
+        // whether an unsupported type means "no APK".
+        'labelledFileType': 'xapk',
+      });
+    });
+
+    test('builds release details with the labeled XAPK extension', () async {
+      final source = _UptodownWithPage(page('XAPK'));
+      final details = await source.getLatestAPKDetails(url, {});
+
+      expect(details.version, '1.17.3');
+      expect(details.names.name, 'Character AI');
+      expect(details.names.author, 'Character.AI');
+      expect(details.apkUrls.single.key, 'ai.character.app.xapk');
+      expect(details.apkUrls.single.value, '$url/1213975188-x');
+      expect(details.releaseDate, DateTime(2026, 9, 11));
+    });
+
+    test('uses icons for localized technical information labels', () async {
+      final source = _UptodownWithPage('''
+<section id="technical-information"><table>
+  <tr>
+    <td><img src="https://stc.utdstc.com/img/icons-info.svg#icon-40-downloads"></td>
+    <th>Descargas</th><td>3.031.714</td>
+  </tr>
+  <tr>
+    <td><img src="https://stc.utdstc.com/img/icons-info.svg#icon-40-date"></td>
+    <th>Fecha</th><td>14 sep. 2026</td>
+  </tr>
+  <tr>
+    <td><img src="https://stc.utdstc.com/img/icons-info.svg#icon-40-type"></td>
+    <th>Tipo de archivo</th><td>XAPK</td>
+  </tr>
+  <tr>
+    <td><img src="https://stc.utdstc.com/img/icons-info.svg#icon-40-package"></td>
+    <th>Nombre de paquete</th><td>ai.character.app</td>
+  </tr>
+</table></section>
+''');
+      final details = await source.getAppDetailsFromPage(url, {});
+
+      expect(details['appId'], 'ai.character.app');
+      // Upstream keeps '14 sep. 2026'. The fork keeps only a date it can
+      // parse (an unparseable one only logged an error per check).
+      expect(details['dateStr'], isNull);
+      expect(details['extension'], 'xapk');
+    });
+
+    test('uses icon fragments when labels are missing or empty', () async {
+      for (final heading in ['', '<th> </th>']) {
+        final source = _UptodownWithPage('''
+<section id="technical-information"><table>
+  <tr>
+    <td><img src="/img/icons-info.svg#icon-40-package"></td>
+    $heading<td>ai.character.app</td>
+  </tr>
+</table></section>
+''');
+        final details = await source.getAppDetailsFromPage(url, {});
+
+        expect(details['appId'], 'ai.character.app', reason: heading);
+      }
+    });
+
+    test('prefers recognized labels and ignores unknown icons', () async {
+      final source = _UptodownWithPage('''
+<section id="technical-information"><table>
+  <tr>
+    <td><img src="/img/icons-info.svg#icon-40-date"></td>
+    <th> Package Name </th><td>ai.character.app</td>
+  </tr>
+  <tr>
+    <td><img src="/img/icons-info.svg#icon-40-downloads"></td>
+    <th>Descargas</th><td>3.031.714</td>
+  </tr>
+</table></section>
+''');
+      final details = await source.getAppDetailsFromPage(url, {});
+
+      expect(details['appId'], 'ai.character.app');
+      expect(details['dateStr'], isNull);
+      expect(details['extension'], isNull);
+    });
+
+    test('prefers the download button file ID over the heading', () async {
+      final source = _UptodownWithPage(
+        '${page('XAPK')}'
+        '<button id="detail-download-button" data-file-id="1213975189">'
+        'Download</button>',
+      );
+      final details = await source.getLatestAPKDetails(url, {});
+
+      expect(details.apkUrls.single.value, '$url/1213975189-x');
+    });
+
+    test('normalizes the APK extension', () async {
+      final source = _UptodownWithPage(page('ApK'));
+      final details = await source.getLatestAPKDetails(url, {});
+
+      expect(details.apkUrls.single.key, 'ai.character.app.apk');
+    });
+
+    test('rejects an unrecognized file type', () async {
+      final source = _UptodownWithPage(page('duck'));
+
+      await expectLater(
+        source.getLatestAPKDetails(url, {}),
+        throwsA(isA<NoAPKError>()),
+      );
+    });
+
+    // Fork-only (SRCS-16): upstream accepts only apk/xapk and needs the label.
+    test(
+      'keeps split-set types and falls back to .apk without a type',
+      () async {
+        final apks = await _UptodownWithPage(
+          page('APKS'),
+        ).getLatestAPKDetails(url, {});
+        expect(apks.apkUrls.single.key, 'ai.character.app.apks');
+
+        // No file-type row: the positional fallback lands on the size cell,
+        // which must not end up as the extension.
+        final unlabelled = await _UptodownWithPage(
+          page(
+            'APK',
+          ).replaceFirst('<tr><th>File type</th><td> APK </td></tr>', ''),
+        ).getLatestAPKDetails(url, {});
+        expect(unlabelled.apkUrls.single.key, 'ai.character.app.apk');
+      },
+    );
+
+    test(
+      'finds the release date by content when its label is missing',
+      () async {
+        final source = _UptodownWithPage(
+          page('XAPK').replaceFirst('<th>Date</th>', '<th>Other</th>'),
+        );
+        final details = await source.getLatestAPKDetails(url, {});
+
+        // Upstream leaves it unset. The fork matches cells by content too, so
+        // a renamed or localized label still yields the date.
+        expect(details.releaseDate, DateTime(2026, 9, 11));
+      },
+    );
   });
 }

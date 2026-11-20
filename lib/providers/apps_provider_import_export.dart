@@ -779,7 +779,8 @@ SplitExportSettings splitSettingsForExport(Map<String, dynamic> fullSettings) {
 }
 
 /// Merges the shared settings block with the ObtainX overlay on import. The
-/// overlay wins on conflicts (e.g. the real `sortColumn` over the sanitized one).
+/// overlay wins on conflicts (e.g. the real `sortColumn` over the sanitized
+/// one), then [normalizeImportedSettings] maps upstream-only values.
 Map<String, dynamic>? mergeImportedSettingsMaps(
   Map<String, dynamic>? sharedSettings,
   Map<String, dynamic>? settingsObtainX,
@@ -787,10 +788,10 @@ Map<String, dynamic>? mergeImportedSettingsMaps(
   if (sharedSettings == null) {
     return null;
   }
-  if (settingsObtainX == null || settingsObtainX.isEmpty) {
-    return Map<String, dynamic>.from(sharedSettings);
-  }
-  return <String, dynamic>{...sharedSettings, ...settingsObtainX};
+  return normalizeImportedSettings(<String, dynamic>{
+    ...sharedSettings,
+    ...?settingsObtainX,
+  });
 }
 
 /// Obtainium reads `sortColumn` as an unchecked index into its 4-value
@@ -805,9 +806,34 @@ void sanitizeExportedSettingsForObtainium(Map<String, dynamic> settings) {
       (sortColumn < 0 || sortColumn >= obtainiumSortColumnCount)) {
     settings['sortColumn'] = SortColumnSettings.releaseDate.index;
   }
-  if (settings['installMethod'] == 'dhizuku') {
-    settings['installMethod'] = 'shizuku';
+  // Obtainium has no Dhizuku installer mode: since v1.7 it is a backend of its
+  // Shizuku mode (#2844). Writing both keys makes Obtainium really install
+  // through Dhizuku; ObtainX's own overlay keeps `installMethod: dhizuku`.
+  if (settings['installMethod'] == InstallerMode.dhizuku.name) {
+    settings['installMethod'] = InstallerMode.shizuku.name;
+    settings['shizukuInstallerMode'] = InstallerMode.dhizuku.name;
   }
+}
+
+/// Maps an imported backup's settings onto ObtainX's, before
+/// `droppedUpstreamSettingKeys` are skipped:
+/// - Obtainium's Shizuku sub-backend (`shizukuInstallerMode`, #2844) picks
+///   ObtainX's installer mode: `shizuku` + `dhizuku` → `dhizuku`; `auto` and
+///   `shizuku` stay `shizuku`. The key itself is then dropped.
+/// - `exportDir` is kept only as a `content://` folder: Obtainium's TV
+///   Downloads sentinel `tv-downloads:` (or anything else) has no folder
+///   behind it here, so every auto-export would fail with a toast (SET-H8).
+Map<String, dynamic> normalizeImportedSettings(Map<String, dynamic> settings) {
+  if (settings['installMethod'] == InstallerMode.shizuku.name &&
+      settings['shizukuInstallerMode'] == InstallerMode.dhizuku.name) {
+    settings['installMethod'] = InstallerMode.dhizuku.name;
+  }
+  final dynamic exportDir = settings['exportDir'];
+  if (exportDir != null &&
+      !(exportDir is String && exportDir.startsWith('content://'))) {
+    settings.remove('exportDir');
+  }
+  return settings;
 }
 
 const int currentExportSchemaVersion = 2;
