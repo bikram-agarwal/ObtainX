@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -6,7 +7,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/app_check_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class _DueTestProvider implements AppsProvider {
   @override
@@ -74,6 +75,33 @@ class _FailingFactory implements DatabaseFactory {
   }
 }
 
+/// Opens real (FFI) databases, keeping each one and the options it was opened
+/// with, so a test can close a connection behind the store's back the way
+/// another engine sharing it would.
+class _RecordingFactory implements DatabaseFactory {
+  final List<Database> opened = [];
+  final List<OpenDatabaseOptions?> options = [];
+
+  @override
+  Future<Database> openDatabase(
+    String path, {
+    OpenDatabaseOptions? options,
+  }) async {
+    this.options.add(options);
+    final Database database = await databaseFactoryFfi.openDatabase(
+      path,
+      options: options,
+    );
+    opened.add(database);
+    return database;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
+  }
+}
+
 /// [SettingsProvider.initializeSettings] reaches for path_provider, which has
 /// no implementation in a unit test; the prefs handle is all these cases need.
 Future<_DueTestProvider> _provider({
@@ -93,6 +121,37 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('earliestNextUpdateCheckDue', () {
+    // D30 #3: checks skip an app with a pending repo rename, so its old check
+    // time must not keep every wake-up "due".
+    test(
+      'a pending repo rename neither counts as due nor is checked',
+      () async {
+        final provider = await _provider();
+        final checkedNow = DateTime.now();
+        provider.apps['renamed'] = AppInMemory(
+          _app(
+            id: 'renamed',
+            lastUpdateCheck: DateTime(2020),
+          ).copyWith(pendingRepoRenameUrl: 'https://github.com/example/new'),
+          null,
+          null,
+          null,
+        );
+        provider.apps['b'] = AppInMemory(
+          _app(id: 'b', lastUpdateCheck: checkedNow),
+          null,
+          null,
+          null,
+        );
+
+        expect(
+          provider.earliestNextUpdateCheckDue(),
+          checkedNow.add(const Duration(minutes: 1440)),
+        );
+        expect(provider.getAppsSortedByUpdateCheckTime(), isEmpty);
+      },
+    );
+
     test('returns the soonest due time across tracked apps', () async {
       final provider = await _provider();
       final soonest = DateTime.now().subtract(const Duration(hours: 2));
@@ -173,6 +232,51 @@ void main() {
       );
 
       expect(provider.earliestNextUpdateCheckDue(), isNull);
+    });
+  });
+
+  group('AppCheckStore connection', () {
+    late Directory directory;
+
+    setUp(() {
+      sqfliteFfiInit();
+      directory = Directory.systemTemp.createTempSync('app_checks_test');
+    });
+
+    tearDown(() {
+      directory.deleteSync(recursive: true);
+    });
+
+    test('opens a connection of its own, not the shared instance', () async {
+      final factory = _RecordingFactory();
+      final store = AppCheckStore(
+        '${directory.path}/app_checks.db',
+        factory: factory,
+      );
+
+      await store.read();
+      await store.close();
+
+      expect(factory.options.single?.singleInstance, isFalse);
+    });
+
+    test('reopens a connection that was closed under it', () async {
+      final factory = _RecordingFactory();
+      final store = AppCheckStore(
+        '${directory.path}/app_checks.db',
+        factory: factory,
+      );
+      await store.save([
+        {'id': 'a', 'revision': 'r1', 'checked': 1},
+      ]);
+
+      // What a background engine did to the UI isolate's shared connection.
+      await factory.opened.single.close();
+
+      expect((await store.read()).keys, ['a']);
+      expect(factory.opened, hasLength(2));
+      expect(store.isAvailable, isTrue);
+      await store.close();
     });
   });
 

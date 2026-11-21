@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Flutter's default M3 [TextButton] reserves a 48dp-tall touch target
 /// ([MaterialTapTargetSize.padded]) even though the visible label is only

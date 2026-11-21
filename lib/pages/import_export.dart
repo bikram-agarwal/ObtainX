@@ -3,8 +3,7 @@ import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/backup_import_sheet.dart';
@@ -12,18 +11,20 @@ import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
-import 'package:obtainium/components/ui_widgets.dart' show AppSwitchListTile;
+import 'package:obtainium/components/ui_widgets.dart'
+    show AppSwitchListTile, ExplainedWhenOff;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart' show regExValidator;
+import 'package:obtainium/services/pick_file.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
+import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/utils/color_utils.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:url_launcher/url_launcher_string.dart';
 
 /// Human-readable label for a SAF tree [Uri] (Android document tree).
@@ -60,6 +61,29 @@ class ImportExportPage extends StatefulWidget {
 
 class _ImportExportPageState extends State<ImportExportPage> {
   bool importInProgress = false;
+  bool exportInProgress = false;
+  TextEditingController? _autoExportFileNameController;
+  String? _storedAutoExportFileName;
+
+  // A settings import or restore can rewrite the name while this page stays
+  // mounted (see the settings page's token fields).
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String? stored = context.read<SettingsProvider>().autoExportFileName;
+    if (stored == _storedAutoExportFileName) return;
+    _storedAutoExportFileName = stored;
+    final TextEditingController? controller = _autoExportFileNameController;
+    if (controller != null && controller.text.trim() != (stored ?? '')) {
+      controller.text = stored ?? '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoExportFileNameController?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,6 +101,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
         s.exportSettings,
         s.autoExportOnChanges,
         s.alwaysUsePhoneLayout,
+        s.autoExportFileName,
       ),
     );
     final settingsProvider = context.read<SettingsProvider>();
@@ -84,36 +109,106 @@ class _ImportExportPageState extends State<ImportExportPage> {
         MediaQuery.sizeOf(context).width >= kLargeScreenWidthBreakpoint &&
         !settingsProvider.alwaysUsePhoneLayout;
 
+    // A button that can't do anything (no folder picked, or an import
+    // running) is muted as Material mutes a disabled one, like Restore's.
+    final ColorScheme buttonScheme = Theme.of(context).colorScheme;
+    final Color disabledForeground = buttonScheme.onSurface.withValues(
+      alpha: 0.38,
+    );
     final outlineButtonStyle = ButtonStyle(
-      foregroundColor: WidgetStateProperty.all(
-        Theme.of(context).colorScheme.onSurface,
+      foregroundColor: WidgetStateProperty.resolveWith(
+        (Set<WidgetState> states) => states.contains(WidgetState.disabled)
+            ? disabledForeground
+            : buttonScheme.onSurface,
       ),
-      shape: WidgetStateProperty.all(
-        StadiumBorder(
-          side: BorderSide(
-            width: 1,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+      iconColor: WidgetStateProperty.resolveWith(
+        (Set<WidgetState> states) => states.contains(WidgetState.disabled)
+            ? disabledForeground
+            : buttonScheme.primary,
+      ),
+      side: WidgetStateProperty.resolveWith(
+        (Set<WidgetState> states) => BorderSide(
+          width: 1,
+          color: states.contains(WidgetState.disabled)
+              ? buttonScheme.onSurface.withValues(alpha: 0.12)
+              : buttonScheme.primary,
         ),
       ),
+      shape: WidgetStateProperty.all(const StadiumBorder()),
     );
 
+    // A manual export that includes secrets warns first: the file holds them
+    // in cleartext (upstream f2d6e38b).
+    Future<bool> confirmExportIncludesSecrets() async {
+      final bool? proceed = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(tr('warning')),
+            contentPadding: appDialogContentPadding,
+            content: Text(tr('exportIncludesSecretsWarning')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(tr('cancel')),
+              ),
+              TextButton(
+                onPressed: () {
+                  hapticSelection();
+                  Navigator.of(dialogContext).pop(true);
+                },
+                child: Text(tr('continue')),
+              ),
+            ],
+          );
+        },
+      );
+      return proceed == true;
+    }
+
+    // With no folder yet (or one it can no longer reach), Export asks for one
+    // and then exports to it. Upstream only picked the folder, so a first
+    // Export saved nothing. The folder button only picks. One export runs at
+    // a time; a double tap used to write two files (upstream 1fa18d27).
     Future<void> runObtainiumExport({bool pickOnly = false}) async {
+      if (exportInProgress) return;
       hapticSelection();
+      if (!pickOnly &&
+          settingsProvider.exportSettings >= 2 &&
+          !await confirmExportIncludesSecrets()) {
+        return;
+      }
+      if (!mounted) return;
+      setState(() => exportInProgress = true);
       try {
         final String? result = await appsProvider.export(
-          pickOnly: pickOnly || (await settingsProvider.getExportDir()) == null,
+          pickOnly: pickOnly,
           sp: settingsProvider,
         );
         if (result != null) {
           showMessage(tr('exportedTo', args: [result]));
         }
-        if (mounted) {
-          setState(() {});
-        }
       } catch (e) {
         showError(e);
+      } finally {
+        if (mounted) {
+          setState(() => exportInProgress = false);
+        }
       }
+    }
+
+    // Why a control is off, told when it's tapped ([ExplainedWhenOff]), or
+    // null when it's on: an import running, its folder not picked yet
+    // ([folderMissing], said by [noFolder]), or out of reach.
+    String? offBecause({
+      bool folderMissing = false,
+      String? noFolder,
+      bool folderUnreachable = false,
+    }) {
+      if (importInProgress) return tr('waitForImportToFinish');
+      if (folderMissing) return noFolder;
+      if (folderUnreachable) return tr('folderAccessLostPickAgain');
+      return null;
     }
 
     Future<void> importObtainiumBackupData(
@@ -195,54 +290,11 @@ class _ImportExportPageState extends State<ImportExportPage> {
       showMessage(resultMessage);
     }
 
-    Future<String?> pickBackupDataFromSystemPicker() async {
-      final Uri? exportDir = Platform.isAndroid
-          ? await settingsProvider.getExportDir(requireAccess: false)
-          : null;
-      if (Platform.isAndroid) {
-        final List<Uri>? selectedUris;
-        try {
-          selectedUris = await saf.openDocument(
-            initialUri: exportDir,
-            grantWritePermission: false,
-            persistablePermission: false,
-            mimeType: '*/*',
-          );
-        } catch (e) {
-          throw ObtainiumError(tr('noFilePickerAvailable'));
-        }
-        if (selectedUris == null || selectedUris.isEmpty) {
-          return null;
-        }
-        final String? selectedBackupData = await saf.getDocumentContentAsString(
-          selectedUris.single,
-        );
-        if (selectedBackupData == null) {
-          throw ObtainiumError(tr('unexpectedError'));
-        }
-        return selectedBackupData;
-      }
-
-      final PlatformFile? picked;
-      try {
-        picked = await FilePicker.pickFile(
-          type: FileType.custom,
-          allowedExtensions: ['json'],
-        );
-      } catch (e) {
-        throw ObtainiumError(tr('noFilePickerAvailable'));
-      }
-      if (picked == null || picked.path == null) {
-        return null;
-      }
-      return File(picked.path!).readAsString();
-    }
-
     Future<void> runObtainiumImport() async {
       hapticSelection();
       var importStarted = false;
       try {
-        final String? backupData = await pickBackupDataFromSystemPicker();
+        final String? backupData = await pickTextFile(settingsProvider);
         if (backupData != null) {
           if (!context.mounted) return;
           setState(() {
@@ -266,7 +318,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
       hapticSelection();
       var importStarted = false;
       try {
-        final String? backupData = await pickBackupDataFromSystemPicker();
+        final String? backupData = await pickTextFile(settingsProvider);
         if (backupData != null) {
           if (!context.mounted) return;
           setState(() {
@@ -370,16 +422,24 @@ class _ImportExportPageState extends State<ImportExportPage> {
       ),
     );
 
+    // Off while an import runs, or while [busy] (the export folder during an
+    // export).
     Widget folderOutlineIconButton({
       required String tooltipMessage,
-      required VoidCallback? onPressed,
+      required VoidCallback onPressed,
+      bool busy = false,
     }) {
+      final String? off = offBecause();
       return Tooltip(
         message: tooltipMessage,
-        child: TextButton(
-          style: folderPickOutlineStyle,
-          onPressed: onPressed,
-          child: Icon(Icons.folder_open_rounded, color: impScheme.primary),
+        child: ExplainedWhenOff(
+          reason: off,
+          child: TextButton(
+            style: folderPickOutlineStyle,
+            onPressed: off == null && !busy ? onPressed : null,
+            // Coloured by the style, so it mutes with the button.
+            child: const Icon(Icons.folder_open_rounded),
+          ),
         ),
       );
     }
@@ -509,32 +569,55 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                       ),
                                       folderOutlineIconButton(
                                         tooltipMessage: tr('pickApkSaveDir'),
-                                        onPressed: importInProgress
-                                            ? null
-                                            : () async {
-                                                await settingsProvider
-                                                    .pickApkSaveDir();
-                                                if (context.mounted) {
-                                                  setState(() {});
-                                                }
-                                              },
+                                        onPressed: () async {
+                                          await settingsProvider
+                                              .pickApkSaveDir();
+                                          if (context.mounted) {
+                                            setState(() {});
+                                          }
+                                        },
                                       ),
                                     ],
                                   ),
                                 ),
                               ),
-                              AppSwitchListTile(
-                                visualDensity: VisualDensity.compact,
-                                contentPadding: importPageCardSwitchTilePadding,
-                                title: Text(tr('saveDownloadedApkCopies')),
-                                value: settingsProvider.saveDownloadedApkCopies,
-                                onChanged: importInProgress
-                                    ? null
-                                    : (bool enabled) {
-                                        settingsProvider
-                                                .saveDownloadedApkCopies =
-                                            enabled;
-                                      },
+                              // Off, and shown off, while there's no folder to
+                              // save to, as installs then treat it. The
+                              // setting is kept for when a folder is picked.
+                              // One that can't be reached still lets it be
+                              // turned off.
+                              Builder(
+                                builder: (context) {
+                                  final String? off = offBecause(
+                                    folderMissing:
+                                        apkSaveSnapshot.hasData &&
+                                        savedApkSaveUri == null,
+                                    noFolder: tr('pickApkSaveDirFirst'),
+                                  );
+                                  return ExplainedWhenOff(
+                                    reason: off,
+                                    child: AppSwitchListTile(
+                                      visualDensity: VisualDensity.compact,
+                                      contentPadding:
+                                          importPageCardSwitchTilePadding,
+                                      title: Text(
+                                        tr('saveDownloadedApkCopies'),
+                                      ),
+                                      value:
+                                          settingsProvider
+                                              .saveDownloadedApkCopies &&
+                                          (savedApkSaveUri != null ||
+                                              !apkSaveSnapshot.hasData),
+                                      onChanged: off != null
+                                          ? null
+                                          : (bool enabled) {
+                                              settingsProvider
+                                                      .saveDownloadedApkCopies =
+                                                  enabled;
+                                            },
+                                    ),
+                                  );
+                                },
                               ),
                             ]);
                           },
@@ -560,6 +643,12 @@ class _ImportExportPageState extends State<ImportExportPage> {
                               iconsDirInaccessible
                               ? impScheme.error
                               : impScheme.onSurfaceVariant;
+                          // Import and Export read and write the folder.
+                          final String? iconsOff = offBecause(
+                            folderMissing: savedIconsUri == null,
+                            noFolder: tr('pickIconsDirFirst'),
+                            folderUnreachable: iconsDirInaccessible,
+                          );
                           return importPageCard([
                             resettableImportPageRow(
                               onReset: importInProgress || savedIconsUri == null
@@ -620,29 +709,24 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                     ),
                                     folderOutlineIconButton(
                                       tooltipMessage: tr('pickIconsDir'),
-                                      onPressed: importInProgress
-                                          ? null
-                                          : () async {
-                                              await settingsProvider
-                                                  .pickIconsDir();
-                                              if (!context.mounted) return;
-                                              final IconImportSweepResult
-                                              sweep = await appsProvider
-                                                  .importIconsFromIconsDir();
-                                              if (context.mounted) {
-                                                setState(() {});
-                                              }
-                                              if (sweep.restoredTotal > 0) {
-                                                showMessage(
-                                                  tr(
-                                                    'iconsRestoredFromFolder',
-                                                    args: [
-                                                      '${sweep.restoredTotal}',
-                                                    ],
-                                                  ),
-                                                );
-                                              }
-                                            },
+                                      onPressed: () async {
+                                        await settingsProvider.pickIconsDir();
+                                        if (!context.mounted) return;
+                                        final IconImportSweepResult sweep =
+                                            await appsProvider
+                                                .importIconsFromIconsDir();
+                                        if (context.mounted) {
+                                          setState(() {});
+                                        }
+                                        if (sweep.restoredTotal > 0) {
+                                          showMessage(
+                                            tr(
+                                              'iconsRestoredFromFolder',
+                                              args: ['${sweep.restoredTotal}'],
+                                            ),
+                                          );
+                                        }
+                                      },
                                     ),
                                   ],
                                 ),
@@ -653,58 +737,60 @@ class _ImportExportPageState extends State<ImportExportPage> {
                               child: Row(
                                 children: [
                                   Expanded(
-                                    child: TextButton(
-                                      style: outlineButtonStyle,
-                                      onPressed:
-                                          importInProgress ||
-                                              savedIconsUri == null ||
-                                              iconsDirInaccessible
-                                          ? null
-                                          : () async {
-                                              final IconImportSweepResult
-                                              sweep = await appsProvider
-                                                  .importIconsFromIconsDir();
-                                              if (!context.mounted) return;
-                                              showMessage(
-                                                sweep.restoredTotal > 0
-                                                    ? tr(
-                                                        'iconsRestoredFromFolder',
-                                                        args: [
-                                                          '${sweep.restoredTotal}',
-                                                        ],
-                                                      )
-                                                    : tr('iconsNoneToRestore'),
-                                              );
-                                            },
-                                      child: Text(tr('obtainiumImport')),
+                                    child: ExplainedWhenOff(
+                                      reason: iconsOff,
+                                      child: TextButton(
+                                        style: outlineButtonStyle,
+                                        onPressed: iconsOff != null
+                                            ? null
+                                            : () async {
+                                                final IconImportSweepResult
+                                                sweep = await appsProvider
+                                                    .importIconsFromIconsDir();
+                                                if (!context.mounted) return;
+                                                showMessage(
+                                                  sweep.restoredTotal > 0
+                                                      ? tr(
+                                                          'iconsRestoredFromFolder',
+                                                          args: [
+                                                            '${sweep.restoredTotal}',
+                                                          ],
+                                                        )
+                                                      : tr(
+                                                          'iconsNoneToRestore',
+                                                        ),
+                                                );
+                                              },
+                                        child: Text(tr('obtainiumImport')),
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(
                                     width: importPageCardRowItemGap,
                                   ),
                                   Expanded(
-                                    child: TextButton(
-                                      style: outlineButtonStyle,
-                                      onPressed:
-                                          importInProgress ||
-                                              savedIconsUri == null ||
-                                              iconsDirInaccessible
-                                          ? null
-                                          : () async {
-                                              final int
-                                              exported = await appsProvider
-                                                  .exportAllIconsToIconsDir();
-                                              if (!context.mounted) return;
-                                              showMessage(
-                                                exported > 0
-                                                    ? tr(
-                                                        'iconsExportedToFolder',
-                                                        args: ['$exported'],
-                                                      )
-                                                    : tr('iconsNoneToExport'),
-                                              );
-                                            },
-                                      child: Text(tr('obtainiumExport')),
+                                    child: ExplainedWhenOff(
+                                      reason: iconsOff,
+                                      child: TextButton(
+                                        style: outlineButtonStyle,
+                                        onPressed: iconsOff != null
+                                            ? null
+                                            : () async {
+                                                final int
+                                                exported = await appsProvider
+                                                    .exportAllIconsToIconsDir();
+                                                if (!context.mounted) return;
+                                                showMessage(
+                                                  exported > 0
+                                                      ? tr(
+                                                          'iconsExportedToFolder',
+                                                          args: ['$exported'],
+                                                        )
+                                                      : tr('iconsNoneToExport'),
+                                                );
+                                              },
+                                        child: Text(tr('obtainiumExport')),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -798,13 +884,10 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                     ),
                                     folderOutlineIconButton(
                                       tooltipMessage: tr('pickExportDir'),
-                                      onPressed: importInProgress
-                                          ? null
-                                          : () {
-                                              runObtainiumExport(
-                                                pickOnly: true,
-                                              );
-                                            },
+                                      busy: exportInProgress,
+                                      onPressed: () {
+                                        runObtainiumExport(pickOnly: true);
+                                      },
                                     ),
                                   ],
                                 ),
@@ -832,9 +915,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                   menuWidth: appDropdownMenuWidth(
                                     context,
                                     labels,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge,
                                     horizontalPadding: 96,
                                     minWidth: 150,
                                     maxWidthInset: 120,
@@ -872,43 +955,107 @@ class _ImportExportPageState extends State<ImportExportPage> {
                                 );
                               })(),
                             ),
-                            AppSwitchListTile(
-                              visualDensity: VisualDensity.compact,
-                              contentPadding: importPageCardSwitchTilePadding,
-                              title: Text(tr('autoExportOnChanges')),
-                              value: settingsProvider.autoExportOnChanges,
-                              onChanged: importInProgress
-                                  ? null
-                                  : (bool value) {
-                                      settingsProvider.autoExportOnChanges =
-                                          value;
-                                    },
+                            // Off, and shown off, while there's no folder to
+                            // export to. The setting itself is kept, so it's
+                            // back on once a folder is picked. A saved folder
+                            // that can't be reached still lets it be turned
+                            // off; its row says what's wrong.
+                            Builder(
+                              builder: (context) {
+                                final String? off = offBecause(
+                                  folderMissing:
+                                      exportSnapshot.hasData &&
+                                      savedExportUri == null,
+                                  noFolder: tr('pickExportDirFirst'),
+                                );
+                                return ExplainedWhenOff(
+                                  reason: off,
+                                  child: AppSwitchListTile(
+                                    visualDensity: VisualDensity.compact,
+                                    contentPadding:
+                                        importPageCardSwitchTilePadding,
+                                    title: Text(tr('autoExportOnChanges')),
+                                    value:
+                                        settingsProvider.autoExportOnChanges &&
+                                        (savedExportUri != null ||
+                                            !exportSnapshot.hasData),
+                                    onChanged: off != null
+                                        ? null
+                                        : (bool value) {
+                                            settingsProvider
+                                                    .autoExportOnChanges =
+                                                value;
+                                          },
+                                  ),
+                                );
+                              },
                             ),
+                            // A fixed name makes each auto-export overwrite
+                            // one file, so a synced folder doesn't fill up
+                            // with timestamped copies (upstream #2343).
+                            if (settingsProvider.autoExportOnChanges &&
+                                (savedExportUri != null ||
+                                    !exportSnapshot.hasData))
+                              Padding(
+                                padding: importPageCardRowPadding,
+                                child: TextField(
+                                  controller: _autoExportFileNameController ??=
+                                      TextEditingController(
+                                        text:
+                                            settingsProvider
+                                                .autoExportFileName ??
+                                            '',
+                                      ),
+                                  decoration: appPageOutlinedInputDecoration(
+                                    context,
+                                    labelText: tr('autoExportFileName'),
+                                    hintText: tr(
+                                      'obtainiumExportHyphenatedLowercase',
+                                    ),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (String value) {
+                                    settingsProvider.autoExportFileName = value;
+                                    _storedAutoExportFileName =
+                                        settingsProvider.autoExportFileName;
+                                  },
+                                ),
+                              ),
+                            // Import picks a file, and Export a folder when
+                            // there's none, so only an import running stops
+                            // them.
                             Padding(
                               padding: importPageCardRowPadding,
                               child: Row(
                                 children: [
                                   Expanded(
-                                    child: TextButton(
-                                      style: outlineButtonStyle,
-                                      onPressed: importInProgress
-                                          ? null
-                                          : runObtainiumImport,
-                                      child: Text(tr('obtainiumImport')),
+                                    child: ExplainedWhenOff(
+                                      reason: offBecause(),
+                                      child: TextButton(
+                                        style: outlineButtonStyle,
+                                        onPressed: importInProgress
+                                            ? null
+                                            : runObtainiumImport,
+                                        child: Text(tr('obtainiumImport')),
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(
                                     width: importPageCardRowItemGap,
                                   ),
                                   Expanded(
-                                    child: TextButton(
-                                      style: outlineButtonStyle,
-                                      onPressed:
-                                          importInProgress ||
-                                              exportSnapshot.data == null
-                                          ? null
-                                          : runObtainiumExport,
-                                      child: Text(tr('obtainiumExport')),
+                                    child: ExplainedWhenOff(
+                                      reason: offBecause(),
+                                      child: TextButton(
+                                        style: outlineButtonStyle,
+                                        onPressed:
+                                            importInProgress ||
+                                                exportInProgress ||
+                                                exportSnapshot.data == null
+                                            ? null
+                                            : runObtainiumExport,
+                                        child: Text(tr('obtainiumExport')),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -916,94 +1063,101 @@ class _ImportExportPageState extends State<ImportExportPage> {
                             ),
                             Padding(
                               padding: importPageCardRowPadding,
-                              child: (() {
-                                final bool restoreEnabled = !importInProgress;
-                                final Color restoreForeground = restoreEnabled
-                                    ? impScheme.error
-                                    : impScheme.onSurface.withValues(
-                                        alpha: 0.38,
-                                      );
-                                final Color restoreBorderColor = restoreEnabled
-                                    ? impScheme.error.withValues(alpha: 0.45)
-                                    : impScheme.onSurface.withValues(
-                                        alpha: 0.12,
-                                      );
-                                return Material(
-                                  color: Colors.transparent,
-                                  shape: StadiumBorder(
-                                    side: BorderSide(
-                                      width: 1,
-                                      color: restoreBorderColor,
+                              child: ExplainedWhenOff(
+                                reason: offBecause(),
+                                child: (() {
+                                  final bool restoreEnabled = !importInProgress;
+                                  final Color restoreForeground = restoreEnabled
+                                      ? impScheme.error
+                                      : impScheme.onSurface.withValues(
+                                          alpha: 0.38,
+                                        );
+                                  final Color restoreBorderColor =
+                                      restoreEnabled
+                                      ? impScheme.error.withValues(alpha: 0.45)
+                                      : impScheme.onSurface.withValues(
+                                          alpha: 0.12,
+                                        );
+                                  return Material(
+                                    color: Colors.transparent,
+                                    shape: StadiumBorder(
+                                      side: BorderSide(
+                                        width: 1,
+                                        color: restoreBorderColor,
+                                      ),
                                     ),
-                                  ),
-                                  clipBehavior: Clip.antiAlias,
-                                  child: ConstrainedBox(
-                                    // Matches appTextButtonTheme()'s minimumSize.height (36)
-                                    // so this composite button lines up with the plain
-                                    // Import/Export TextButtons above.
-                                    constraints: const BoxConstraints(
-                                      minHeight: 36,
-                                    ),
-                                    child: Stack(
-                                      alignment: Alignment.center,
-                                      children: [
-                                        InkWell(
-                                          onTap: restoreEnabled
-                                              ? runObtainiumRestore
-                                              : null,
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              vertical: 6,
-                                            ),
-                                            child: Center(
-                                              child: Padding(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 40,
+                                    clipBehavior: Clip.antiAlias,
+                                    child: ConstrainedBox(
+                                      // Matches appTextButtonTheme()'s minimumSize.height (36)
+                                      // so this composite button lines up with the plain
+                                      // Import/Export TextButtons above.
+                                      constraints: const BoxConstraints(
+                                        minHeight: 36,
+                                      ),
+                                      child: Stack(
+                                        alignment: Alignment.center,
+                                        children: [
+                                          InkWell(
+                                            onTap: restoreEnabled
+                                                ? runObtainiumRestore
+                                                : null,
+                                            child: Padding(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    vertical: 6,
+                                                  ),
+                                              child: Center(
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 40,
+                                                      ),
+                                                  child: Text(
+                                                    tr('obtainiumRestore'),
+                                                    textAlign: TextAlign.center,
+                                                    style: TextStyle(
+                                                      color: restoreForeground,
+                                                      fontWeight:
+                                                          FontWeight.w600,
                                                     ),
-                                                child: Text(
-                                                  tr('obtainiumRestore'),
-                                                  textAlign: TextAlign.center,
-                                                  style: TextStyle(
-                                                    color: restoreForeground,
-                                                    fontWeight: FontWeight.w600,
                                                   ),
                                                 ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                        Positioned(
-                                          right: 4,
-                                          child: HelpHintIcon(
-                                            richMessage: TextSpan(
-                                              children: [
-                                                TextSpan(
-                                                  text:
-                                                      '${tr('restoreBackupHelpTitle')}\n',
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.bold,
+                                          Positioned(
+                                            right: 4,
+                                            child: HelpHintIcon(
+                                              richMessage: TextSpan(
+                                                children: [
+                                                  TextSpan(
+                                                    text:
+                                                        '${tr('restoreBackupHelpTitle')}\n',
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
                                                   ),
-                                                ),
-                                                TextSpan(
-                                                  text: tr(
-                                                    'restoreBackupHelpBody',
+                                                  TextSpan(
+                                                    text: tr(
+                                                      'restoreBackupHelpBody',
+                                                    ),
                                                   ),
-                                                ),
-                                              ],
+                                                ],
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                );
-                              })(),
+                                  );
+                                })(),
+                              ),
                             ),
                           ]);
                         },
                       ),
-                      if (importInProgress) ...[
+                      if (importInProgress || exportInProgress) ...[
                         const SizedBox(height: 14),
                         const LinearRipplingWavyProgressIndicator(),
                         const SizedBox(height: 14),
@@ -1157,8 +1311,13 @@ class _SelectionModalState extends State<SelectionModal> {
     }
   }
 
-  void selectAll({bool deselect = false}) {
-    for (var e in entrySelections.keys) {
+  /// Selects (or deselects) [visible], the entries the filter shows, so a
+  /// filtered Select all doesn't pick hidden ones too (upstream 1fa18d27).
+  void selectAll({
+    bool deselect = false,
+    required Iterable<MapEntry<String, List<String>>> visible,
+  }) {
+    for (var e in visible) {
       entrySelections[e] = !deselect;
     }
   }
@@ -1191,15 +1350,15 @@ class _SelectionModalState extends State<SelectionModal> {
       if (widget.onlyOneSelectionAllowed) {
         return const SizedBox.shrink();
       }
-      final noneSelected = entrySelections.values
-          .where((v) => v == true)
-          .isEmpty;
-      return noneSelected
+      final int visibleSelected = filteredEntryKeys
+          .where((e) => entrySelections[e] == true)
+          .length;
+      return visibleSelected == 0
           ? TextButton(
               style: const ButtonStyle(visualDensity: VisualDensity.compact),
               onPressed: () {
                 setState(() {
-                  selectAll();
+                  selectAll(visible: filteredEntryKeys);
                 });
               },
               child: Text(tr('selectAll')),
@@ -1208,10 +1367,10 @@ class _SelectionModalState extends State<SelectionModal> {
               style: const ButtonStyle(visualDensity: VisualDensity.compact),
               onPressed: () {
                 setState(() {
-                  selectAll(deselect: true);
+                  selectAll(deselect: true, visible: filteredEntryKeys);
                 });
               },
-              child: Text(tr('deselectX', args: [''])),
+              child: Text(tr('deselectX', args: ['$visibleSelected'])),
             );
     }
 
@@ -1543,7 +1702,7 @@ class _SelectionModalState extends State<SelectionModal> {
                   ? null
                   : () {
                       setState(() {
-                        selectAll();
+                        selectAll(visible: filteredEntryKeys);
                       });
                     },
             ),
@@ -1554,7 +1713,7 @@ class _SelectionModalState extends State<SelectionModal> {
                   ? null
                   : () {
                       setState(() {
-                        selectAll(deselect: true);
+                        selectAll(deselect: true, visible: filteredEntryKeys);
                       });
                     },
             ),
@@ -1600,9 +1759,8 @@ class _SelectionModalState extends State<SelectionModal> {
           children: [
             Text(
               widget.title ?? tr('pick'),
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             if (filterFormWidget != null) ...[
               const SizedBox(height: 12),

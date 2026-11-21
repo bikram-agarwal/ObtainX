@@ -1,7 +1,11 @@
 import 'dart:convert';
 
+import 'package:android_package_installer/android_package_installer.dart';
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:crypto/crypto.dart';
+import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 
 const observedVersionNameKey = 'observedVersionName';
@@ -13,6 +17,228 @@ const sourceVersionCodesKey = 'sourceVersionCodes';
 const sourceBuildComparisonKey = 'sourceBuildComparison';
 const acknowledgedSourceReleaseKey = 'acknowledgedSourceRelease';
 const trackedDeviceStateVersionKey = 'trackedDeviceStateVersion';
+
+/// Set while the source's last answer had no release or APK matching the app's
+/// settings - its filters, most often. See [appWithNoMatchingRelease]; the next
+/// check that finds one drops it.
+const noMatchingReleaseKey = 'noMatchingRelease';
+
+/// Last blocking problem that should keep the app in Needs attention.
+/// Cleared when a later check or install resolves it, or when the setting
+/// that caused a filter miss is edited.
+const needsAttentionCodeKey = 'needsAttentionCode';
+const needsAttentionDetailKey = 'needsAttentionDetail';
+
+const needsAttentionVersionFilter = 'versionFilter';
+const needsAttentionIdChanged = 'idChanged';
+const needsAttentionInstallIncompatible = 'installIncompatible';
+const needsAttentionInstallConflict = 'installConflict';
+const needsAttentionMalwareFlagged = 'malwareFlagged';
+const needsAttentionNotReproducible = 'notReproducible';
+const needsAttentionNoAttestation = 'noAttestation';
+
+const List<String> _releaseFilterSettingKeys = [
+  'apkFilterRegEx',
+  'filterReleaseTitlesByRegEx',
+  'filterReleaseNotesByRegEx',
+  'filterVersionsByRegEx',
+  'customLinkFilterRegex',
+  'zippedApkFilterRegEx',
+  'tarballedApkFilterRegEx',
+  'versionExtractionRegEx',
+];
+
+bool appHasNoMatchingRelease(App app) =>
+    app.additionalSettings[noMatchingReleaseKey] == true;
+
+/// Filter inversion switches. They change what a filter matches, so flipping
+/// one alone must count as a filter change (the Needs-attention entry clears).
+const List<String> _invertFilterSettingKeys = [
+  'invertAPKFilter',
+  'invertReleaseTitlesFilter',
+  'invertReleaseNotesFilter',
+];
+
+String releaseFilterFingerprint(App app) => [
+  ..._releaseFilterSettingKeys.map(
+    (String key) => app.additionalSettings[key]?.toString() ?? '',
+  ),
+  // Only when it applies, so fingerprints saved before the global filter
+  // existed still match.
+  ?_globalApkFilterApplyingTo(app),
+  // Only when on, for the same reason.
+  for (final String key in _invertFilterSettingKeys)
+    if (app.additionalSettings[key] == true) '$key=true',
+].join('\n');
+
+/// The global APK filter when it stands in for [app]'s unset own filter (see
+/// SourceProvider.getApp), else null.
+String? _globalApkFilterApplyingTo(App app) =>
+    appApkFilterRegExIsSet(app.additionalSettings)
+    ? null
+    : activeGlobalApkFilterRegEx;
+
+/// A check error caused by the user's version or file filter, not by the
+/// source simply having nothing yet.
+bool checkErrorNeedsAttention(App app, Object error) {
+  if (error is NoVersionError) {
+    final String extraction =
+        app.additionalSettings['versionExtractionRegEx']?.toString().trim() ??
+        '';
+    final String versionFilter =
+        app.additionalSettings['filterVersionsByRegEx']?.toString().trim() ??
+        '';
+    return extraction.isNotEmpty || versionFilter.isNotEmpty;
+  }
+  if (error is NoAPKError || error is NoReleasesError) {
+    for (final String key in _releaseFilterSettingKeys) {
+      if (key == 'versionExtractionRegEx') continue;
+      final String value = app.additionalSettings[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return true;
+    }
+    // The global APK filter runs in getApp after the source answered, so it
+    // can only leave no APK, never no release.
+    if (error is NoAPKError && _globalApkFilterApplyingTo(app) != null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void setNeedsAttention(
+  Map<String, dynamic> settings,
+  String code, {
+  String? detail,
+}) {
+  settings[needsAttentionCodeKey] = code;
+  if (detail == null || detail.isEmpty) {
+    settings.remove(needsAttentionDetailKey);
+  } else {
+    settings[needsAttentionDetailKey] = detail;
+  }
+}
+
+void clearNeedsAttentionCode(Map<String, dynamic> settings, String code) {
+  if (settings[needsAttentionCodeKey] != code) return;
+  settings.remove(needsAttentionCodeKey);
+  settings.remove(needsAttentionDetailKey);
+}
+
+void clearNeedsAttention(Map<String, dynamic> settings) {
+  settings.remove(needsAttentionCodeKey);
+  settings.remove(needsAttentionDetailKey);
+}
+
+bool appHasBlockingAttention(App app) {
+  final String? code = app.additionalSettings[needsAttentionCodeKey]
+      ?.toString();
+  switch (code) {
+    case needsAttentionVersionFilter:
+      return app.additionalSettings[needsAttentionDetailKey]?.toString() ==
+          releaseFilterFingerprint(app);
+    case needsAttentionIdChanged:
+      return app.allowIdChange != true;
+    case needsAttentionInstallIncompatible:
+    case needsAttentionInstallConflict:
+      return true;
+    case needsAttentionMalwareFlagged:
+      // A clean rescan or excluding the app from scanning drops the scan
+      // status. A later scan that couldn't finish says nothing new, so it
+      // doesn't.
+      final String? scanStatus = app.latestMalwareScanStatus;
+      return _blockedReleaseIsCurrent(app) &&
+          scanStatus != null &&
+          scanStatus != malwareScanStatusClean;
+    case needsAttentionNotReproducible:
+      // Every check asks the verification server again, so a later verdict
+      // counts.
+      return _blockedReleaseIsCurrent(app) &&
+          app.additionalSettings['enforceReproducibleBuilds'] == true &&
+          reproducibleBuildStatusForEnforcement(app) ==
+              reproducibleBuildStatusNotReproducible;
+    case needsAttentionNoAttestation:
+      return _blockedReleaseIsCurrent(app) &&
+          GitHub.configuredBuildVerificationMode(app.additionalSettings) ==
+              GitHub.buildVerificationEnforce &&
+          app.latestAttestationStatus == githubAttestationStatusUnsupported;
+    default:
+      return false;
+  }
+}
+
+/// Whether the stored Needs-attention detail names the app's current release
+/// (and that release isn't skipped).
+bool needsAttentionIsForCurrentRelease(App app) =>
+    _blockedReleaseIsCurrent(app);
+
+/// Whether the release a pre-install check blocked (stored as the detail) is
+/// still the latest one, and not skipped. A newer release is checked afresh.
+bool _blockedReleaseIsCurrent(App app) {
+  final String latest = app.latestVersion;
+  return app.additionalSettings[needsAttentionDetailKey]?.toString() ==
+          latest &&
+      app.additionalSettings['skippedLatestVersion'] != latest;
+}
+
+/// The Needs attention code for an install that failed with the Android
+/// installer status [installerStatus], or null when trying again can work.
+///
+/// Both codes fail the same way on every attempt until the user acts: an
+/// incompatible build needs a different APK picked, and a conflict (usually a
+/// different signing key) needs the installed app removed or another source.
+String? installFailureNeedsAttentionCode(int installerStatus) =>
+    switch (PackageInstallerStatus.byCode(installerStatus)) {
+      PackageInstallerStatus.failureIncompatible =>
+        needsAttentionInstallIncompatible,
+      PackageInstallerStatus.failureConflict => needsAttentionInstallConflict,
+      _ => null,
+    };
+
+/// The Needs attention code a failed install recorded before throwing
+/// [error], or null when that failure isn't recorded.
+String? needsAttentionCodeOfInstallError(Object error) {
+  if (error is IDChangedError) return needsAttentionIdChanged;
+  final Object? installerStatus = error is InstallError
+      ? error.data['errorCode']
+      : null;
+  return installerStatus is int
+      ? installFailureNeedsAttentionCode(installerStatus)
+      : null;
+}
+
+bool appNeedsAttention(App app) =>
+    app.hasPendingRepoRename || appHasBlockingAttention(app);
+
+/// [app] as its source last answered, at [checkedAt]: with nothing matching.
+///
+/// Clears what an earlier check found. Kept, it went on showing - and offering
+/// to install - a release the current filters exclude, and a new listing kept
+/// its "Unknown" placeholder even though the source had been asked.
+App appWithNoMatchingRelease(App app, DateTime checkedAt) {
+  return app.copyWith(
+    latestVersion: '',
+    apkUrls: const [],
+    otherAssetUrls: const [],
+    lastUpdateCheck: checkedAt,
+    releaseDate: null,
+    changeLog: null,
+    apkSizeBytes: null,
+    rawLatestVersionFromSource: null,
+    rawApkNamesFromSource: null,
+    rawReleaseTitlesFromSource: null,
+    latestIsReproducible: null,
+    latestReproducibleStatus: null,
+    latestReproducibleVersionCode: null,
+    latestAttestationStatus: null,
+    latestMalwareScanStatus: null,
+    latestMalwareScanDetail: null,
+    latestMalwareScanReportUrl: null,
+    additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+      ..remove(sourceVersionCodesKey)
+      ..remove(sourceBuildComparisonKey)
+      ..[noMatchingReleaseKey] = true,
+  );
+}
 
 String _versionSettingsIdentity(App app) {
   return jsonEncode([
@@ -330,6 +556,11 @@ App normalizeSelectedSourceVersion(App app) {
 /// Publication timestamps are intentionally absent: uploading is not installing.
 VersionDecision versionDecisionForApp(App app) {
   final installed = app.installedVersion;
+  if (installed != null && appHasNoMatchingRelease(app)) {
+    // Nothing on the source matches, so there is nothing to update to: the
+    // installed build is the newest this listing can offer.
+    return const VersionDecision(VersionRelation.newer, 'noMatchingRelease');
+  }
   if (installed == null || app.latestVersion.isEmpty) {
     return VersionDecision(
       VersionRelation.unknown,
@@ -520,6 +751,7 @@ App recordConfirmedInstall(
     ..[observedVersionCodeKey] = info.versionCode
     ..remove(confirmedInstallReleaseKey)
     ..remove('unreconciledVersionComparison');
+  clearNeedsAttention(settings);
   final pending = InstallReleaseSnapshot.fromJson(
     settings[pendingInstallReleaseKey],
   );

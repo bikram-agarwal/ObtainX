@@ -3,7 +3,8 @@ import 'dart:convert';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:html/dom.dart' show Document;
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:html/dom.dart' show Document, Element;
 import 'package:html/parser.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -42,28 +43,53 @@ String? _fdroidDisplayString(Object? rawValue) {
   return null;
 }
 
+/// The versionCode of an F-Droid package page's `li.package-version` block:
+/// each `.package-version-header` renders two `<a name>` anchors in a fixed
+/// order, versionName then versionCode.
+int? _fdroidVersionCodeOfBlock(Element element) {
+  final nameAnchors = element.querySelectorAll(
+    '.package-version-header a[name]',
+  );
+  if (nameAnchors.length < 2) return null;
+  return int.tryParse(nameAnchors[1].attributes['name'] ?? '');
+}
+
 /// Extracts each release's supported CPU architectures from an F-Droid
 /// package page, keyed by versionCode. F-Droid only renders a
 /// `.package-version-nativecode` block for versions that ship one APK per
-/// ABI — a versionCode absent from a mapped entry, or mapped to an empty
-/// list, is architecture-universal. Each `.package-version-header` renders
-/// two `<a name>` anchors in a fixed order: versionName, then versionCode.
-Map<int, List<String>> _fdroidNativecodeByVersionCode(Document doc) {
+/// ABI — a versionCode mapped to an empty list is architecture-universal.
+/// It renders one `<code class="package-nativecode">` per ABI, so every one
+/// is read (upstream reads only the first, which drops a multi-ABI APK's
+/// other architectures; checked on the live site, OpenVPN lists 4).
+Map<int, List<String>> fdroidNativecodeByVersionCode(Document doc) {
   final Map<int, List<String>> result = {};
   for (final element in doc.querySelectorAll('li.package-version')) {
-    final nameAnchors = element.querySelectorAll(
-      '.package-version-header a[name]',
-    );
-    if (nameAnchors.length < 2) continue;
-    final int? versionCode = int.tryParse(
-      nameAnchors[1].attributes['name'] ?? '',
-    );
+    final int? versionCode = _fdroidVersionCodeOfBlock(element);
     if (versionCode == null) continue;
     result[versionCode] = element
         .querySelectorAll('.package-nativecode')
         .map((e) => e.text.trim())
         .where((e) => e.isNotEmpty)
         .toList();
+  }
+  return result;
+}
+
+/// Each release's "Added on" date from an F-Droid package page, keyed by
+/// versionCode (upstream 1cce81fa): the packages API has no dates.
+Map<int, DateTime> fdroidAddedOnByVersionCode(Document doc) {
+  final Map<int, DateTime> result = {};
+  final RegExp addedOnRegEx = RegExp(r'Added on\s+(.+)');
+  for (final element in doc.querySelectorAll('li.package-version')) {
+    final int? versionCode = _fdroidVersionCodeOfBlock(element);
+    if (versionCode == null) continue;
+    final String? header = element
+        .querySelector('.package-version-header')
+        ?.text;
+    final DateTime? date = FDroid.parseAddedOnDate(
+      addedOnRegEx.firstMatch(header ?? '')?.group(1),
+    );
+    if (date != null) result[versionCode] = date;
   }
   return result;
 }
@@ -97,6 +123,15 @@ String? _fdroidDisplayNameFromHtml(String html) {
 
 class FDroid extends AppSource {
   static const _maxChangeLogCodeUnits = 2048;
+
+  /// `url|version` of every unchanged version whose package page this process
+  /// has read for a missing release date. A page that gives no date (not
+  /// built yet, non-200, unparseable) is then not fetched again on every
+  /// check of that version.
+  static final Set<String> _missingDatePageReads = <String>{};
+
+  @visibleForTesting
+  static void resetMissingDatePageReads() => _missingDatePageReads.clear();
   static const String _verificationReportBaseUrl =
       'https://verification.f-droid.org/unsigned';
   @override
@@ -108,6 +143,28 @@ class FDroid extends AppSource {
     canSearch = true;
     inferAppIdFromUrlPath = true;
   }
+
+  /// Parses a package page's "Added on" text, e.g. `Oct 29, 2026`.
+  static DateTime? parseAddedOnDate(String? raw) {
+    if (raw == null) return null;
+    final cleaned = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (cleaned.isEmpty) return null;
+    for (final pattern in [
+      'MMM d, yyyy',
+      'MMM dd, yyyy',
+      'd MMM yyyy',
+      'yyyy-MM-dd',
+    ]) {
+      final parsed = DateFormat(pattern, 'en_US').tryParse(cleaned);
+      if (parsed != null) return parsed;
+    }
+    return DateTime.tryParse(cleaned);
+  }
+
+  /// This device's supported ABIs, in preference order. Overridable so tests
+  /// run without a device (upstream edd3e51a).
+  Future<List<String>> getSupportedAbis() async =>
+      (await DeviceInfoPlugin().androidInfo).supportedAbis;
 
   @override
   List<List<GeneratedFormItem>>
@@ -245,7 +302,7 @@ class FDroid extends AppSource {
           details.changeLog = prevApp.changeLog;
         }
         if (prevApp.author.trim().isNotEmpty) {
-          details.names.author = prevApp.author;
+          details.names = details.names.copyWith(author: prevApp.author);
         }
       }
       if (usesOfficialFDroidHost && !canReuseCachedVerification) {
@@ -260,10 +317,9 @@ class FDroid extends AppSource {
               (l) => l.startsWith('AuthorName: '),
             );
             if (authorLines.isNotEmpty) {
-              details.names.author = authorLines.first
-                  .split(': ')
-                  .sublist(1)
-                  .join(': ');
+              details.names = details.names.copyWith(
+                author: authorLines.first.split(': ').sublist(1).join(': '),
+              );
             }
             final changelogUrls = lines
                 .where((l) => l.startsWith('Changelog: '))
@@ -273,17 +329,15 @@ class FDroid extends AppSource {
               bool isGitHub = false;
               bool isGitLab = false;
               try {
-                GitHub(
-                  hostChanged: true,
-                ).sourceSpecificStandardizeURL(details.changeLog!);
+                GitHub(hostChanged: true)
+                    .sourceSpecificStandardizeURL(details.changeLog!);
                 isGitHub = true;
               } on InvalidURLError {
                 // URL does not match GitHub format, silently skipped
               }
               try {
-                GitLab(
-                  hostChanged: true,
-                ).sourceSpecificStandardizeURL(details.changeLog!);
+                GitLab(hostChanged: true)
+                    .sourceSpecificStandardizeURL(details.changeLog!);
                 isGitLab = true;
               } on InvalidURLError {
                 // URL does not match GitLab format, silently skipped
@@ -329,7 +383,7 @@ class FDroid extends AppSource {
           details.apkSizeBytes = prevApp.apkSizeBytes;
         }
         if (prevApp.name.trim().isNotEmpty) {
-          details.names.name = prevApp.name;
+          details.names = details.names.copyWith(name: prevApp.name);
         }
       }
       return details;
@@ -469,7 +523,9 @@ class FDroid extends AppSource {
         String? url = e.attributes['href'];
         if (url != null) {
           try {
-            standardizeUrl(url);
+            // Keep the canonical form so search results match stored app URLs
+            // and duplicate detection works (upstream 006a2262).
+            url = standardizeUrl(url);
           } catch (e) {
             url = null;
           }
@@ -510,7 +566,9 @@ class FDroid extends AppSource {
         : null;
     if (res.statusCode == 200) {
       final response = jsonDecode(res.body);
-      List<dynamic> releases = response['packages'] ?? [];
+      List<dynamic> releases = response is Map
+          ? (response['packages'] ?? [])
+          : [];
       if (apkFilterRegEx != null) {
         releases = releases.where((rel) {
           final String apk = '${apkUrlPrefix}_${rel['versionCode']}.apk';
@@ -589,16 +647,25 @@ class FDroid extends AppSource {
       if (releaseChoices.isEmpty) {
         throw NoReleasesError();
       }
+      final List<dynamic> sameVersionReleases = releaseChoices.toList();
       final App? prevApp = previouslyCheckedApp;
-      // Skip the per-check APK-size HEAD and the package-page fetch (icon/
-      // name/nativecode) when the upstream version is unchanged since the
-      // last check. getApp() reuses the previous apkSizeBytes / iconUrl /
-      // name / release selection in that case, so these network round-trips
-      // would just be wasted work on a no-op refresh.
+      // Skip the icon/name page work and the APK-size HEAD when the upstream
+      // version is unchanged. Several version codes can still share that
+      // version name (one per ABI), so the package page is fetched anyway in
+      // that case: its nativecode list is what stops F-Droid's suggested
+      // versionCode, often an x86_64 build, from replacing a compatible APK.
       final bool versionUnchanged =
           prevApp != null &&
           prevApp.rawLatestVersionFromSource != null &&
           prevApp.rawLatestVersionFromSource == version;
+      // The page's "Added on" date is the release date. An unchanged version
+      // carries the previous date, so skipping the page doesn't clear it; a
+      // version first checked before ObtainX read dates has none to carry,
+      // so its page is read once for it (once per process, even when that
+      // read finds no date: [_missingDatePageReads]).
+      final DateTime? carriedReleaseDate = versionUnchanged
+          ? prevApp.releaseDate
+          : null;
       // Display name resolution (readable-app-name): prefer the localized name
       // from the packages API, then the official package page's parsed/title
       // name; fall back to the package id last. Icon and per-versionCode
@@ -610,9 +677,9 @@ class FDroid extends AppSource {
       if (rawPackageName is String && rawPackageName.trim().isNotEmpty) {
         packageLabel = rawPackageName.trim();
       } else {
-        final String? queryAppId = Uri.parse(
-          standardUrl,
-        ).queryParameters['appId']?.trim();
+        final String? queryAppId = Uri.parse(standardUrl)
+            .queryParameters['appId']
+            ?.trim();
         if (queryAppId != null && queryAppId.isNotEmpty) {
           packageLabel = queryAppId;
         } else {
@@ -627,7 +694,12 @@ class FDroid extends AppSource {
           pageHost == 'f-droid.org' ||
           pageHost == 'www.f-droid.org';
       Map<int, List<String>>? nativecodeByVersionCode;
-      if (canUseOfficialPackagePage && !versionUnchanged) {
+      Map<int, DateTime>? addedOnByVersionCode;
+      if (canUseOfficialPackagePage &&
+          (!versionUnchanged ||
+              releaseChoices.length > 1 ||
+              (carriedReleaseDate == null &&
+                  _missingDatePageReads.add('$standardUrl|$version')))) {
         try {
           final pkgName = packageLabel;
           if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {
@@ -671,54 +743,112 @@ class FDroid extends AppSource {
                   }
                 }
               }
-              nativecodeByVersionCode = _fdroidNativecodeByVersionCode(doc);
+              nativecodeByVersionCode = fdroidNativecodeByVersionCode(doc);
+              addedOnByVersionCode = fdroidAddedOnByVersionCode(doc);
             }
           }
-        } catch (e) {
-          // Icon/nativecode are optional
+        } catch (error) {
+          unawaited(
+            LogsProvider().add(
+              'Failed to read F-Droid package page for ABI selection: $error',
+              level: LogLevel.warning,
+            ),
+          );
         }
       }
-      // Narrow to releases whose nativecode (if any) is compatible with this
-      // device before letting the auto-select toggles pick among what's
-      // left, so they can't silently land on an incompatible arch's build.
-      // If nativecode data isn't available (page fetch skipped/failed, or it
-      // covers none of these versionCodes) this is a no-op — the toggles
-      // below fall back to their original, arch-blind behavior rather than
-      // risk filtering everything out on a parsing miss.
+      // Prefer the device's first ABI that has its own build. A versionCode
+      // missing from the page is unknown, not universal: only an explicit
+      // empty nativecode list means the APK runs on every ABI. F-Droid's
+      // suggested versionCode is not ABI-aware (for Rethink it is the x86_64
+      // build), so it is applied only after a real ABI match.
+      // Intentionally not gated on the per-app autoApkFilterByArch (upstream
+      // gates its own narrowing on it): picking an APK this device can't run
+      // is never what the user wants (v2.21.0). Don't "fix" this to match.
+      List<dynamic>? abiMatchedReleases;
       if (releaseChoices.length > 1 &&
           nativecodeByVersionCode != null &&
           nativecodeByVersionCode.isNotEmpty) {
         List<String> supportedAbis = [];
         try {
-          supportedAbis = (await DeviceInfoPlugin().androidInfo).supportedAbis;
-        } catch (e) {
+          supportedAbis = await getSupportedAbis();
+        } catch (error) {
           unawaited(
             LogsProvider().add(
-              'Failed to get supported ABIs: $e',
+              'Failed to get supported ABIs: $error',
               level: LogLevel.error,
             ),
           );
         }
         if (supportedAbis.isNotEmpty) {
-          final List<dynamic> compatible = releaseChoices.where((element) {
-            final int? versionCode = int.tryParse(
-              element['versionCode']?.toString() ?? '',
-            );
-            final List<String>? archs = versionCode == null
-                ? null
-                : nativecodeByVersionCode![versionCode];
-            return archs == null ||
-                archs.isEmpty ||
-                archs.any(supportedAbis.contains);
-          }).toList();
-          if (compatible.isNotEmpty) {
-            releaseChoices = compatible;
+          for (final String abi in supportedAbis) {
+            final List<dynamic> explicitMatches = releaseChoices.where((
+              release,
+            ) {
+              final int? versionCode = int.tryParse(
+                release['versionCode']?.toString() ?? '',
+              );
+              final List<String>? architectures = versionCode == null
+                  ? null
+                  : nativecodeByVersionCode![versionCode];
+              return architectures != null && architectures.contains(abi);
+            }).toList();
+            if (explicitMatches.isNotEmpty) {
+              abiMatchedReleases = explicitMatches;
+              break;
+            }
+          }
+          if (abiMatchedReleases == null) {
+            final List<dynamic> universalReleases = releaseChoices.where((
+              release,
+            ) {
+              final int? versionCode = int.tryParse(
+                release['versionCode']?.toString() ?? '',
+              );
+              final List<String>? architectures = versionCode == null
+                  ? null
+                  : nativecodeByVersionCode![versionCode];
+              return architectures != null && architectures.isEmpty;
+            }).toList();
+            if (universalReleases.isNotEmpty) {
+              abiMatchedReleases = universalReleases;
+            }
           }
         }
       }
-      // For the remaining (now arch-safe) releases, use the toggles to
-      // auto-select one if possible
-      if (releaseChoices.length > 1) {
+      if (abiMatchedReleases != null) {
+        releaseChoices = abiMatchedReleases;
+      }
+      if (releaseChoices.length > 1 && abiMatchedReleases == null) {
+        int? previouslySelectedVersionCode;
+        if (prevApp != null && prevApp.apkUrls.isNotEmpty) {
+          final int previousIndex = prevApp.preferredApkIndex.clamp(
+            0,
+            prevApp.apkUrls.length - 1,
+          );
+          final RegExpMatch? versionCodeMatch = RegExp(r'_(\d+)\.apk$')
+              .firstMatch(prevApp.apkUrls[previousIndex].key);
+          previouslySelectedVersionCode = int.tryParse(
+            versionCodeMatch?.group(1) ?? '',
+          );
+        }
+        if (previouslySelectedVersionCode != null) {
+          final List<dynamic> previousRelease = releaseChoices.where((release) {
+            return release['versionCode']?.toString() ==
+                previouslySelectedVersionCode.toString();
+          }).toList();
+          if (previousRelease.isNotEmpty) {
+            releaseChoices = previousRelease;
+          }
+        }
+        if (releaseChoices.length > 1) {
+          unawaited(
+            LogsProvider().add(
+              'F-Droid ABI data unavailable for $packageLabel version $version; leaving architecture choices instead of suggested versionCode ${response['suggestedVersionCode']}',
+              level: LogLevel.warning,
+            ),
+          );
+        }
+      } else if (releaseChoices.length > 1) {
         if (autoSelectHighestVersionCode) {
           releaseChoices = [releaseChoices.first];
         } else if (trySelectingSuggestedVersionCode &&
@@ -726,8 +856,8 @@ class FDroid extends AppSource {
           final String suggestedVersionCodeText =
               response['suggestedVersionCode'].toString();
           final suggestedReleases = releaseChoices.where(
-            (element) =>
-                element['versionCode'].toString() == suggestedVersionCodeText,
+            (release) =>
+                release['versionCode'].toString() == suggestedVersionCodeText,
           );
           if (suggestedReleases.isNotEmpty) {
             releaseChoices = suggestedReleases;
@@ -752,6 +882,19 @@ class FDroid extends AppSource {
         selectedReleases[preferredReleaseIndex]['versionCode']?.toString() ??
             '',
       );
+      // Builds of one version are normally added together; another build's
+      // date stands in when the selected one has none.
+      DateTime? releaseDate = addedOnByVersionCode?[selectedVersionCode];
+      if (releaseDate == null && addedOnByVersionCode != null) {
+        for (final release in sameVersionReleases) {
+          releaseDate =
+              addedOnByVersionCode[int.tryParse(
+                release['versionCode']?.toString() ?? '',
+              )];
+          if (releaseDate != null) break;
+        }
+      }
+      releaseDate ??= carriedReleaseDate;
       int? apkSizeBytes;
       if (uniqueApkUrls.isNotEmpty && !versionUnchanged) {
         try {
@@ -792,6 +935,7 @@ class FDroid extends AppSource {
                 release['versionCode'].toString(),
               ),
         },
+        releaseDate: releaseDate,
         iconUrl: iconUrl,
         rawReleaseTitleCandidates: rawVersionNameCandidates,
         apkSizeBytes: apkSizeBytes,

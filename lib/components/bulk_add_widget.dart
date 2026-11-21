@@ -4,10 +4,8 @@ import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
-import 'package:obtainium/components/generated_form_renderer.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
@@ -1011,18 +1009,18 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.secondaryContainer,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .secondaryContainer,
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
                                 tr('alreadyTracked'),
                                 style: TextStyle(
                                   fontSize: 10,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSecondaryContainer,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSecondaryContainer,
                                 ),
                               ),
                             )
@@ -1994,16 +1992,14 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   ? Text(
                       tr('githubRateLimitWithTokenText'),
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSecondaryContainer,
-                      ),
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(color: colorScheme.onSecondaryContainer),
                     )
                   : RichText(
                       textAlign: TextAlign.center,
                       text: TextSpan(
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: colorScheme.onSecondaryContainer,
-                        ),
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colorScheme.onSecondaryContainer),
                         children: [
                           TextSpan(text: tr('githubRateLimitWarningText')),
                           TextSpan(
@@ -2034,10 +2030,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: color,
-          fontWeight: FontWeight.bold,
-        ),
+        style: Theme.of(context).textTheme.labelMedium
+            ?.copyWith(color: color, fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -2067,19 +2061,16 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             Text(
               value,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: accentColor,
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(color: accentColor, fontWeight: FontWeight.bold),
             ),
             Text(
               label,
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: resolvedLabelColor),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: resolvedLabelColor),
             ),
           ],
         ),
@@ -2336,6 +2327,9 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
     });
 
     final logsProvider = context.read<LogsProvider>();
+    final bool includePrereleases = context
+        .read<SettingsProvider>()
+        .includePrereleasesByDefault;
     final sourceProvider = SourceProvider();
     final apkMirrorSource = APKMirror();
     final apkPureSource = APKPure();
@@ -2367,11 +2361,12 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       final String storeName =
           _selectedSources[app.info.packageName] ?? app.bestStore;
       final source = sourceFor(storeName);
-      final settings = getDefaultValuesFromFormItems(
-        source.combinedAppSpecificSettingFormItems,
+      final settings = newAppDefaultSettings(
+        source,
+        includePrereleases: includePrereleases,
       );
-      // Force the known package name so store inference can't substitute a
-      // wrong ID (e.g. APKMirror scraping the wrong package from page HTML).
+      // Force the known package name: it's the one the stores were scanned
+      // for, so a store's own lookup can only cost a request or disagree.
       settings['appId'] = app.info.packageName;
 
       try {

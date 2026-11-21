@@ -18,9 +18,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
-import 'package:http/io_client.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/http/response_bytes.dart';
@@ -33,16 +32,13 @@ import 'package:flutter_fgbg/flutter_fgbg.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:workmanager/workmanager.dart';
-import 'package:obtainium/main.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/easy_localization_controller.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/localization.dart';
 
 import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/utils/bg_update_guards.dart';
+import 'package:obtainium/utils/translation_loader.dart';
 import 'package:obtainium/version/app_version.dart';
 export 'package:obtainium/version/app_version.dart';
 
@@ -55,6 +51,7 @@ export 'apps_provider_updates.dart';
 // Named constants for magic numbers and hardcoded values
 const int _defaultRetries = 3;
 const int _retryDelaySeconds = 5;
+const Duration _backgroundRetryWait = Duration(minutes: 5);
 const int _partialHashCheckStartingSize = 1024;
 const int _partialHashCheckLowerLimit = 128;
 const int _partialHashCheckDecrement = 256;
@@ -186,7 +183,7 @@ class AppInMemory {
   String get sourceIdentifier => sourceType ?? sourceIdentifierForApp(app);
 
   String get name => app.finalName;
-  String get author => app.overrideAuthor ?? app.finalAuthor;
+  String get author => app.finalAuthor;
 
   bool get needsRefreshBeforeDownload =>
       app.settings.getBool('refreshBeforeDownload') ||
@@ -282,7 +279,10 @@ class DownloadedApk {
   DownloadedApk(this.appId, this.file, {this.release});
 }
 
-enum DownloadedDirType { xapk, zip, tarball }
+/// [splitApks]: a base APK plus split APKs downloaded from separate URLs into
+/// one directory (upstream #3298; only RuStore produces them). Its [DownloadedDir.file]
+/// is the base APK inside [DownloadedDir.extracted], not a container.
+enum DownloadedDirType { xapk, zip, tarball, splitApks }
 
 class DownloadedDir {
   String appId;
@@ -319,13 +319,6 @@ List<T> _moveToEnd<T extends Object>(List<T> arr, bool Function(T) match) {
 List<String> moveStrToEnd(List<String> arr, String str, {String? strB}) =>
     _moveToEnd(arr, (e) => e == str || e == strB);
 
-/// See [_moveToEnd] for semantic details.
-List<MapEntry<String, int>> moveStrToEndMapEntryWithCount(
-  List<MapEntry<String, int>> arr,
-  MapEntry<String, int> str, {
-  MapEntry<String, int>? strB,
-}) => _moveToEnd(arr, (e) => e.key == str.key || e.key == strB?.key);
-
 Future<File> downloadFileWithRetry(
   String url,
   String fileName,
@@ -336,8 +329,16 @@ Future<File> downloadFileWithRetry(
   Map<String, String>? headers,
   int retries = _defaultRetries,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
+  // Upstream #2894's retry hold, kept only as a fallback: a download normally
+  // runs under the native download foreground service, which keeps network
+  // access while ObtainX is in the background, so holding its retries would
+  // turn a 5-second retry into a stall of up to 5 minutes. Pass true only for
+  // a download running without that service.
+  bool holdRetry = false,
 }) async {
   try {
     return await downloadFile(
@@ -349,16 +350,30 @@ Future<File> downloadFileWithRetry(
       useExisting: useExisting,
       headers: headers,
       allowInsecure: allowInsecure,
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
       logs: logs,
       cancellationToken: cancellationToken,
     );
   } catch (e) {
     // A cancellation is not one of the retryable error types, so it naturally
-    // falls through to rethrow below.
+    // falls through to rethrow below. 429/5xx responses are transient, and a
+    // short read keeps its .part file so the retry resumes it with a Range
+    // request (upstream 6df95aac, d028ab9a).
     if (retries > 0 &&
         (e is ClientException ||
             e is SocketException ||
-            e is TimeoutException)) {
+            e is TimeoutException ||
+            e is HttpException ||
+            _isRetryableDownloadError(e))) {
+      // The original error is reported when the app doesn't come back.
+      if (holdRetry &&
+          !await waitForForegroundBeforeRetry(
+            cancellationToken: cancellationToken,
+            logs: logs,
+          )) {
+        rethrow;
+      }
       await Future.delayed(const Duration(seconds: _retryDelaySeconds));
       return await downloadFileWithRetry(
         url,
@@ -370,13 +385,76 @@ Future<File> downloadFileWithRetry(
         headers: headers,
         retries: (retries - 1),
         allowInsecure: allowInsecure,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
         logs: logs,
         cancellationToken: cancellationToken,
+        holdRetry: holdRetry,
       );
     } else {
       rethrow;
     }
   }
+}
+
+/// Before a held download retry, waits up to [timeout] for ObtainX to return
+/// to the foreground: Android cuts a backgrounded app's network access, so a
+/// retry made while the user is away fails again (upstream #2894). Returns
+/// whether to retry; false means the app stayed away and the error stands.
+///
+/// [isForeground] and [events] default to flutter_fgbg's current state and
+/// event stream. A cancellation while waiting throws [CancellationException]
+/// at once rather than when the wait ends.
+Future<bool> waitForForegroundBeforeRetry({
+  CancellationToken? cancellationToken,
+  LogsProvider? logs,
+  bool Function()? isForeground,
+  Stream<FGBGType>? events,
+  Duration timeout = _backgroundRetryWait,
+}) async {
+  final bool Function() inForeground =
+      isForeground ?? () => FGBGEvents.last == FGBGType.foreground;
+  if (inForeground()) return true;
+  unawaited(
+    logs?.add(
+      'Download interrupted in the background, waiting for the app to return '
+      'before retrying',
+    ),
+  );
+  final Future<FGBGType> returned = (events ?? FGBGEvents.instance.stream)
+      .firstWhere((FGBGType event) => event == FGBGType.foreground)
+      .timeout(timeout, onTimeout: () => FGBGType.background)
+      // No usable event stream: decided below by the state as it is now.
+      .catchError((Object _) => FGBGType.background);
+  final FGBGType outcome = await Future.any(<Future<FGBGType>>[
+    returned,
+    if (cancellationToken != null)
+      cancellationToken.whenCancelled.then((_) => FGBGType.background),
+  ]);
+  // A cancellation is the user's choice, not a failure: surface it as one so
+  // no error is shown for a download stopped on purpose.
+  cancellationToken?.throwIfCancelled();
+  if (outcome == FGBGType.foreground) return true;
+  // The process can be frozen while away, so the timeout may fire before a
+  // queued foreground event is delivered: retry if the app is back now.
+  if (inForeground()) return true;
+  unawaited(
+    logs?.add(
+      'App did not return within ${timeout.inMinutes} minutes, reporting the '
+      'download error',
+    ),
+  );
+  return false;
+}
+
+/// A download failure worth retrying: HTTP 429/5xx (statusCode kept in
+/// `data`, which the GitHub 401 retry also reads) or a short read.
+bool _isRetryableDownloadError(Object e) {
+  if (e is! ObtainiumError) return false;
+  if (e.code == 'INCOMPLETE_DOWNLOAD') return true;
+  if (e.code != 'HTTP_ERROR') return false;
+  final Object? statusCode = e.data['statusCode'];
+  return statusCode is int && (statusCode == 429 || statusCode >= 500);
 }
 
 class DownloadResponseMetadata {
@@ -392,13 +470,6 @@ class DownloadResponseMetadata {
       extractDownloadFileNameFromContentDisposition(
         headers['content-disposition'],
       );
-}
-
-Uri _finalResponseUri(StreamedResponse response, Uri originalUri) {
-  if (response case BaseResponseWithUrl(:final Uri url)) {
-    return url;
-  }
-  return response.request?.url ?? originalUri;
 }
 
 String? sanitizeDownloadFileName(String? rawFileName) {
@@ -457,11 +528,46 @@ String? extractDownloadFileNameFromContentDisposition(
 }
 
 DownloadResponseMetadata _downloadResponseMetadata(
-  StreamedResponse response,
-  Uri originalUri,
-) => DownloadResponseMetadata(
-  finalUri: _finalResponseUri(response, originalUri),
-  headers: response.headers,
+  Uri finalUri,
+  HttpClientResponse response,
+) {
+  final Map<String, String> headers = <String, String>{};
+  response.headers.forEach((String name, List<String> values) {
+    headers[name] = values.join(', ');
+  });
+  return DownloadResponseMetadata(finalUri: finalUri, headers: headers);
+}
+
+/// [headers] (or none) plus `Range: [range]`, as a copy.
+Map<String, String> _withRangeHeader(
+  Map<String, String>? headers,
+  String range,
+) {
+  final Map<String, String> result = <String, String>{...?headers};
+  result.removeWhere(
+    (String key, String _) => key.toLowerCase() == HttpHeaders.rangeHeader,
+  );
+  result[HttpHeaders.rangeHeader] = range;
+  return result;
+}
+
+/// A probe GET through [HttpService]'s redirect handler, so a cross-origin
+/// redirect drops the source's credentials and cookies (upstream ec334d22),
+/// and pinned or RuStore hosts get their own trust store. The caller closes
+/// the returned client.
+Future<MapEntry<Uri, MapEntry<HttpClient, HttpClientResponse>>> _probeRequest(
+  String url,
+  Map<String, String>? headers, {
+  required bool allowInsecure,
+  required bool allowInsecureRedirects,
+  required bool certificatePinning,
+}) => HttpService().sourceRequestStreamResponse(
+  'GET',
+  url,
+  headers == null ? null : Map<String, String>.of(headers),
+  {'allowInsecure': allowInsecure},
+  allowInsecureRedirects: allowInsecureRedirects,
+  certificatePinning: certificatePinning,
 );
 
 /// Fetches only enough of a download response to inspect headers and redirects.
@@ -469,22 +575,25 @@ Future<DownloadResponseMetadata?> probeDownloadResponseMetadata(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
 }) async {
-  final Uri originalUri = Uri.parse(url);
-  final Request request = Request('GET', originalUri);
-  request.headers.addAll(withDefaultObtainXUserAgent(headers));
-  request.headers[HttpHeaders.rangeHeader] = 'bytes=0-0';
-  final IOClient client = IOClient(createHttpClient(allowInsecure));
+  final streamed = await _probeRequest(
+    url,
+    _withRangeHeader(headers, 'bytes=0-0'),
+    allowInsecure: allowInsecure,
+    allowInsecureRedirects: allowInsecureRedirects,
+    certificatePinning: certificatePinning,
+  );
+  final HttpClient client = streamed.value.key;
+  final HttpClientResponse response = streamed.value.value;
   try {
-    final StreamedResponse response = await client
-        .send(request)
-        .timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
-    return _downloadResponseMetadata(response, originalUri);
+    return _downloadResponseMetadata(streamed.key, response);
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 
@@ -494,6 +603,8 @@ Future<String> checkPartialDownloadHashDynamic(
   int lowerLimit = _partialHashCheckLowerLimit,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
   bool metadataReported = false;
@@ -514,6 +625,8 @@ Future<String> checkPartialDownloadHashDynamic(
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
         onResponseMetadata: reportMetadata,
       ),
       checkPartialDownloadHash(
@@ -521,6 +634,8 @@ Future<String> checkPartialDownloadHashDynamic(
         i,
         headers: headers,
         allowInsecure: allowInsecure,
+        allowInsecureRedirects: allowInsecureRedirects,
+        certificatePinning: certificatePinning,
         onResponseMetadata: reportMetadata,
       ),
     ]);
@@ -536,26 +651,34 @@ Future<String> checkPartialDownloadHash(
   int bytesToGrab, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final Uri originalUri = Uri.parse(url);
-  final req = Request('GET', originalUri);
-  req.headers.addAll(withDefaultObtainXUserAgent(headers));
   if (bytesToGrab <= 0) throw ArgumentError.value(bytesToGrab, 'bytesToGrab');
-  req.headers[HttpHeaders.rangeHeader] = 'bytes=0-${bytesToGrab - 1}';
-  final client = IOClient(createHttpClient(allowInsecure));
+  final streamed = await _probeRequest(
+    url,
+    _withRangeHeader(headers, 'bytes=0-${bytesToGrab - 1}'),
+    allowInsecure: allowInsecure,
+    allowInsecureRedirects: allowInsecureRedirects,
+    certificatePinning: certificatePinning,
+  );
+  final HttpClient client = streamed.value.key;
+  final HttpClientResponse response = streamed.value.value;
   try {
-    final response = await client.send(req).timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode > 299) {
-      throw ObtainiumError(response.reasonPhrase ?? tr('unexpectedError'))
-        ..url = url;
+      throw ObtainiumError(
+        response.reasonPhrase.isNotEmpty
+            ? response.reasonPhrase
+            : tr('unexpectedError'),
+      )..url = url;
     }
-    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
-    final bytes = await readBytePrefix(response.stream, bytesToGrab);
+    onResponseMetadata?.call(_downloadResponseMetadata(streamed.key, response));
+    final bytes = await readBytePrefix(response, bytesToGrab);
     if (bytes.isEmpty) throw NoVersionError();
     return 'sha256:$bytesToGrab:${sha256.convert(bytes)}';
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 
@@ -563,27 +686,32 @@ Future<String?> checkETagHeader(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   void Function(DownloadResponseMetadata metadata)? onResponseMetadata,
 }) async {
-  final reqHeaders = withDefaultObtainXUserAgent(headers);
-  final Uri originalUri = Uri.parse(url);
-  final req = Request('GET', originalUri);
-  req.headers.addAll(reqHeaders);
-  final client = IOClient(createHttpClient(allowInsecure));
+  final streamed = await _probeRequest(
+    url,
+    headers,
+    allowInsecure: allowInsecure,
+    allowInsecureRedirects: allowInsecureRedirects,
+    certificatePinning: certificatePinning,
+  );
+  final HttpClient client = streamed.value.key;
+  final HttpClientResponse response = streamed.value.value;
   try {
-    final StreamedResponse response = await client
-        .send(req)
-        .timeout(sourceResponseTimeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
-    onResponseMetadata?.call(_downloadResponseMetadata(response, originalUri));
-    final etag = response.headers[HttpHeaders.etagHeader]?.replaceAll('"', '');
+    onResponseMetadata?.call(_downloadResponseMetadata(streamed.key, response));
+    final etag = response.headers
+        .value(HttpHeaders.etagHeader)
+        ?.replaceAll('"', '');
     return etag != null
         ? sha256.convert(utf8.encode(etag)).toString().substring(0, 12)
         : null;
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }
 
@@ -674,6 +802,8 @@ Future<File> downloadFile(
   bool useExisting = true,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
@@ -689,6 +819,8 @@ Future<File> downloadFile(
       useExisting: useExisting,
       headers: headers,
       allowInsecure: allowInsecure,
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
       logs: logs,
       cancellationToken: cancellationToken,
     );
@@ -708,26 +840,43 @@ Future<File> _downloadFile(
   bool useExisting = true,
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
   LogsProvider? logs,
   CancellationToken? cancellationToken,
 }) async {
   final reqHeaders = withDefaultObtainXUserAgent(headers);
   final responseClient = createHttpClient(allowInsecure);
+  // The client of the request in flight when its final hop needed its own trust
+  // store (RuStore, or a pinned host): not [responseClient], so cancelling and
+  // cleanup must close it too.
+  HttpClient? hopClient;
   IOSink? sink;
   void abortDownload() {
     responseClient.close(force: true);
+    hopClient?.close(force: true);
   }
 
-  cancellationToken?.addListener(abortDownload);
-  try {
-    cancellationToken?.throwIfCancelled();
-    var response = (await HttpService().sourceRequestStreamResponse(
+  Future<HttpClientResponse> sendRequest() async {
+    final streamed = await HttpService().sourceRequestStreamResponse(
       'GET',
       url,
       reqHeaders,
       {'allowInsecure': allowInsecure},
       sharedClient: responseClient,
-    )).value.value;
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
+    );
+    hopClient = identical(streamed.value.key, responseClient)
+        ? null
+        : streamed.value.key;
+    return streamed.value.value;
+  }
+
+  cancellationToken?.addListener(abortDownload);
+  try {
+    cancellationToken?.throwIfCancelled();
+    var response = await sendRequest();
     final resHeaders = <String, String>{};
     response.headers.forEach((name, values) {
       resHeaders[name] = values.join(', ');
@@ -760,17 +909,26 @@ Future<File> _downloadFile(
       ext = ext.substring(0, ext.length - 1);
     }
     final urlPath = Uri.tryParse(url)?.path ?? url;
-    if (AppSource.isApkOrContainerFile(urlPath)) {
-      // Preserve the real extension (.apk/.xapk/.apkm/.apks) so XAPK/APKS
-      // bundles are still detected and extracted downstream rather than forced
-      // to .apk and handed to the APK parser.
+    if (AppSource.isApkOrContainerFile(
+      urlPath,
+      includeArchives: true,
+      includeTarballs: true,
+    )) {
+      // Preserve the real extension (.apk/.xapk/.apkm/.apks, and .zip/.tar.*
+      // containers, upstream #3208) so bundles are still detected and
+      // extracted downstream rather than forced to .apk and handed to the APK
+      // parser.
       ext = urlPath.split('.').last.toLowerCase();
     } else if (ext == 'attachment') {
       ext = 'apk';
     }
-    fileName = fileNameHasExt
-        ? fileName
-        : fileName.split('/').last; // Ensure the fileName is a file name
+    // Never trust a source-provided fileName: always reduce it to a plain
+    // basename so it cannot escape destDir, whatever the caller passed
+    // (upstream 96ae51b5).
+    fileName = fileName.replaceAll(r'\', '/').split('/').last;
+    if (fileName.isEmpty || fileName == '.' || fileName == '..') {
+      throw ObtainiumError(tr('unexpectedError'))..url = url;
+    }
     File downloadedFile = File('$destDir/$fileName.$ext');
     if (fileNameHasExt) {
       // If the user says the filename already has an ext, ignore whatever you inferred from above
@@ -835,13 +993,8 @@ Future<File> _downloadFile(
       // Only a resume needs a second request. Cancel the initial body without
       // downloading it, then reopen at the partial file's byte offset.
       await response.listen((_) {}).cancel();
-      response = (await HttpService().sourceRequestStreamResponse(
-        'GET',
-        url,
-        reqHeaders,
-        {'allowInsecure': allowInsecure},
-        sharedClient: responseClient,
-      )).value.value;
+      hopClient?.close(force: true);
+      response = await sendRequest();
       sentRangeRequest = true;
     }
     // If we requested a byte range to resume a partial download but the server
@@ -1007,6 +1160,7 @@ Future<File> _downloadFile(
   } finally {
     cancellationToken?.removeListener(abortDownload);
     responseClient.close(force: true);
+    hopClient?.close(force: true);
     unawaited(
       sink?.close().catchError((_) {
         logs?.add('Failed to close download sink', level: LogLevel.warning);
@@ -1022,18 +1176,30 @@ Future<int?> getDownloadSize(
   String url, {
   Map<String, String>? headers,
   bool allowInsecure = false,
+  bool allowInsecureRedirects = false,
+  bool certificatePinning = false,
 }) async {
-  final reqHeaders = withDefaultObtainXUserAgent(headers);
-  final client = IOClient(createHttpClient(allowInsecure));
+  HttpClient? client;
   try {
-    final getReq = Request('GET', Uri.parse(url));
-    getReq.headers.addAll(reqHeaders);
-    final response = await client.send(getReq).timeout(sourceResponseTimeout);
+    final streamed = await _probeRequest(
+      url,
+      headers,
+      allowInsecure: allowInsecure,
+      allowInsecureRedirects: allowInsecureRedirects,
+      certificatePinning: certificatePinning,
+    );
+    client = streamed.value.key;
+    final HttpClientResponse response = streamed.value.value;
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
-    final length = response.contentLength;
-    return (length != null && length > 0) ? length : null;
+    // -1 when unknown; a transparently decompressed body has no usable length.
+    final int length = response.contentLength;
+    return length > 0 &&
+            response.compressionState !=
+                HttpClientResponseCompressionState.decompressed
+        ? length
+        : null;
   } on SocketException {
     return null;
   } on TimeoutException {
@@ -1041,6 +1207,11 @@ Future<int?> getDownloadSize(
   } on ClientException {
     return null;
   } on HandshakeException {
+    return null;
+  } on HttpException {
+    return null;
+  } on ObtainiumError {
+    // A refused redirect (e.g. HTTPS to HTTP) or too many redirects.
     return null;
   } catch (e) {
     unawaited(
@@ -1051,47 +1222,8 @@ Future<int?> getDownloadSize(
     );
     return null;
   } finally {
-    client.close();
+    client?.close(force: true);
   }
-}
-
-/// Formats a byte count with coarse, fixed per-unit precision (e.g. "5.0 GB",
-/// "512 MB", "128 KB"). Used for download-size labels in the UI.
-String formatBytesForDisplay(int bytes) {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-  } else if (bytes >= 1024 * 1024) {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
-  } else if (bytes >= 1024) {
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
-  } else {
-    return '$bytes B';
-  }
-}
-
-/// Formats a byte count as a short human-readable string (e.g. "5.0 MB").
-String formatBytes(int bytes) {
-  if (bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  var size = bytes.toDouble();
-  var unit = 0;
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024;
-    unit++;
-  }
-  final value = unit == 0 ? size.toStringAsFixed(0) : size.toStringAsFixed(1);
-  return '$value ${units[unit]}';
-}
-
-/// Formats download progress as "received / total" (e.g. "5.0 MB / 20.0 MB"),
-/// or just the received amount when the total is unknown. Returns null when no
-/// bytes have been received yet.
-String? formatDownloadSize(int? receivedBytes, int? totalBytes) {
-  if (receivedBytes == null) return null;
-  if (totalBytes != null && totalBytes > 0) {
-    return '${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)}';
-  }
-  return formatBytes(receivedBytes);
 }
 
 Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
@@ -1111,6 +1243,58 @@ Future<List<PackageInfo>> getAllInstalledInfo({bool light = false}) async {
         ) ??
         [];
   }
+}
+
+/// How an app about to be added will be named and drawn once saved; see
+/// [AppsProviderLifecycle.newAppLook].
+class NewAppLook {
+  const NewAppLook({required this.name, this.icon, this.downloadedIcon});
+
+  final String name;
+  final Uint8List? icon;
+
+  /// [icon], when it was downloaded for this and isn't stored yet. Adding the
+  /// app stores it ([AppsProviderLifecycle.storeDeducedAppIcon]) rather than
+  /// downloading it again.
+  final Uint8List? downloadedIcon;
+}
+
+/// [app], just fetched, with how its installed version is read recorded, as
+/// Add app has always saved it (see [AppsProvider.addNewListing]).
+///
+/// A track-only app takes its installed version from the device, or is marked
+/// as not knowing its package yet. Otherwise, an app whose version can't be
+/// compared with the installed one starts as up to date.
+Future<App> appPreparedForAdding(App app) async {
+  app.additionalSettings['useVersionCodeAsOSVersion'] =
+      app.versionDetectionMode == VersionDetectionMode.versionCode;
+  if (app.additionalSettings['trackOnly'] == true) {
+    app = app.copyWith(installedVersion: null);
+    if (isTempId(app)) {
+      app.additionalSettings['trackOnlyTemporaryPackageId'] = true;
+      app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = true;
+    } else {
+      app.additionalSettings['trackOnlyTemporaryPackageId'] = false;
+      final installedInfo = await getInstalledInfo(app.id, printErr: false);
+      if (installedInfo != null) {
+        app = app.copyWith(
+          installedVersion: app.usesVersionCodeAsOsVersion
+              ? installedInfo.versionCode.toString()
+              : installedInfo.versionName,
+        );
+        app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = false;
+      } else {
+        app.additionalSettings['trackOnlyUndeterminedInstalledVersion'] = true;
+      }
+    }
+  } else if (!app.usesStandardVersionDetection &&
+      // An app added without a check (D10) has no real latest version yet;
+      // pinning "installed = Unknown" would show a false update after its
+      // first real check.
+      !hasOnlyPlaceholderApks(app)) {
+    app = app.copyWith(installedVersion: app.latestVersion);
+  }
+  return app;
 }
 
 Future<PackageInfo?> getInstalledInfo(
@@ -1163,47 +1347,6 @@ Future<PackageInfo?> getInstalledInfo(
   return null;
 }
 
-/// Snapshot of a package's install state, taken before an install so that
-/// [waitForPackageInstall] can later tell whether the install landed.
-class InstallBaseline {
-  final bool wasInstalled;
-  final int? updateTime;
-  const InstallBaseline(this.wasInstalled, this.updateTime);
-}
-
-/// Captures the current install state of [appId] to compare against later.
-Future<InstallBaseline> captureInstallBaseline(String appId) async {
-  final info = await getInstalledInfo(appId);
-  return InstallBaseline(info != null, info?.lastUpdateTime);
-}
-
-/// Polls for an install that can't report completion synchronously (a silent
-/// background install, or a hand-off to an external installer). Returns true as
-/// soon as the package appears (when it wasn't installed before) or its update
-/// timestamp changes relative to [baseline] — a version-agnostic signal that
-/// also works with pseudo-versions — or false if neither happens within
-/// [attempts] × [interval].
-Future<bool> waitForPackageInstall(
-  String appId,
-  InstallBaseline baseline, {
-  required int attempts,
-  Duration interval = const Duration(milliseconds: 500),
-}) async {
-  for (var attempt = 0; attempt < attempts; attempt++) {
-    final info = await getInstalledInfo(appId);
-    if (info != null) {
-      if (!baseline.wasInstalled) return true;
-      final updateTimeAfter = info.lastUpdateTime;
-      if (baseline.updateTime == null ||
-          (updateTimeAfter != null && updateTimeAfter != baseline.updateTime)) {
-        return true;
-      }
-    }
-    await Future.delayed(interval);
-  }
-  return false;
-}
-
 Future<Directory> getAppStorageDir() async {
   try {
     final extDir = await getExternalStorageDirectory();
@@ -1215,6 +1358,29 @@ Future<Directory> getAppStorageDir() async {
     }
   } catch (_) {}
   return await getApplicationDocumentsDirectory();
+}
+
+/// The external cache directory on the same volume as [primaryExternal] (the
+/// app's primary external files directory), or null when none is.
+///
+/// `getExternalCacheDirectories()` lists every volume's cache, and the first
+/// one isn't always on the primary volume. An APK cached on an SD card can't
+/// be shared with an installer, because the FileProvider's external paths
+/// only cover primary storage (upstream #3356).
+Directory? selectPrimaryExternalCache(
+  List<Directory>? cacheDirs,
+  Directory? primaryExternal,
+) {
+  if (cacheDirs == null || cacheDirs.isEmpty || primaryExternal == null) {
+    return null;
+  }
+  final String primaryDataDir = primaryExternal.absolute.parent.parent.path;
+  for (final Directory dir in cacheDirs) {
+    if (dir.absolute.parent.parent.path == primaryDataDir) {
+      return dir;
+    }
+  }
+  return null;
 }
 
 /// The listing in [listings] that already tracks [app]'s package from the same
@@ -1242,6 +1408,31 @@ AppInMemory? sameStoreListingIn(
     if (storeIdentityForApp(listing.app) == storeIdentity) return listing;
   }
   return null;
+}
+
+/// The duplicate error for a listing that collides with [existing], naming it
+/// (upstream #3038).
+ObtainiumError appAlreadyAddedError(AppInMemory existing) => ObtainiumError(
+  '${tr('appAlreadyAdded')}: ${existing.name} (${existing.app.id})',
+);
+
+/// Returns [app] carrying the listing ID it should be stored under in
+/// [listings].
+///
+/// The first listing of a package keeps a null listing ID (key = package ID).
+/// Any further store for that package gets a stable `package@Source` ID,
+/// suffixed if that is somehow taken, so the two records never collide.
+App allocateListingIdIn(AppListings listings, App app) {
+  if (app.listingId != null) return app;
+  if (!listings.containsListingKey(app.id)) return app;
+  final String base = appListingKey(app.id, sourceIdentifierForApp(app));
+  if (!listings.containsListingKey(base)) return app.copyWith(listingId: base);
+  for (int suffix = 2; ; suffix++) {
+    final String candidate = '$base$appListingKeySeparator$suffix';
+    if (!listings.containsListingKey(candidate)) {
+      return app.copyWith(listingId: candidate);
+    }
+  }
 }
 
 /// Null requests a full reconciliation; an empty list means no reload work.
@@ -1283,9 +1474,8 @@ class AppsProvider with ChangeNotifier {
   /// before assuming the provider is in a usable state.
   String? initError;
 
-  /// Non-null while a [checkUpdates] batch is in flight. Serves as both an
-  /// atomic guard (preventing concurrent batches) and a deduplication
-  /// mechanism: subsequent callers receive the existing completer's future.
+  /// Non-null while a [checkUpdates] batch is in flight. Batches never overlap:
+  /// a later call waits for this one to finish, then checks its own IDs.
   Completer<List<App>>? updateCheckCompleter;
   final ValueNotifier<double?> refreshProgressNotifier = ValueNotifier(null);
   double? get refreshProgress => refreshProgressNotifier.value;
@@ -1298,6 +1488,10 @@ class AppsProvider with ChangeNotifier {
 
   // Serializes concurrent loadApps() calls without busy-waiting.
   Completer<void>? appsLoadingCompleter;
+
+  // Completes once the launch-time loadApps() has run, or init has finished or
+  // failed without one. See [waitForInitialLoad].
+  final Completer<void> _initialLoadDone = Completer<void>();
 
   // Coalesces bursts of saveApps()/removeApps() into a single auto-export.
   Timer? _autoExportDebounce;
@@ -1369,6 +1563,9 @@ class AppsProvider with ChangeNotifier {
     }
     return _apkDir!;
   }
+
+  /// Whether [iconsCacheDir] is usable yet (set by the async init).
+  bool get iconsCacheDirReady => _iconsCacheDir != null;
 
   Directory get iconsCacheDir {
     if (_iconsCacheDir == null) {
@@ -1515,6 +1712,7 @@ class AppsProvider with ChangeNotifier {
 
   /// Requests cancellation of an ongoing download for [appId], if any.
   void cancelDownload(String appId) {
+    if (_disposed) return;
     _downloadCancellations[appId]?.cancel();
     final entry = apps[appId];
     if (entry != null && entry.downloadProgress != null) {
@@ -1531,6 +1729,17 @@ class AppsProvider with ChangeNotifier {
       await completer.future;
       await waitForAppsToLoad();
     }
+  }
+
+  /// Waits for the launch-time [loadApps], including the stretch of init
+  /// before it starts, when [waitForAppsToLoad] has nothing to wait on yet.
+  ///
+  /// For UI entry points that can run on a cold start - a deep link above
+  /// all - which would otherwise read the still-empty library as the real one.
+  /// Not for anything that init itself awaits, which would deadlock.
+  Future<void> waitForInitialLoad() async {
+    await _initialLoadDone.future;
+    await waitForAppsToLoad();
   }
 
   /// Schedules a debounced automatic export. Coalesces the many per-app
@@ -1622,27 +1831,28 @@ class AppsProvider with ChangeNotifier {
     }
     () async {
       await this.settingsProvider.initializeSettings();
-      var useExternalCache = false;
+      Directory? cacheRoot;
       try {
-        final cacheDirs = await getExternalCacheDirectories();
-        if (cacheDirs?.isNotEmpty ?? false) {
-          _apkDir = cacheDirs!.first;
-          _iconsCacheDir = Directory('${cacheDirs.first.path}/icons');
-          if (!_iconsCacheDir!.existsSync()) {
-            _iconsCacheDir!.createSync();
-          }
-          useExternalCache = true;
-        }
+        cacheRoot = selectPrimaryExternalCache(
+          await getExternalCacheDirectories(),
+          await getExternalStorageDirectory(),
+        );
       } catch (_) {}
-      if (!useExternalCache) {
-        _apkDir = Directory('${(await getAppStorageDir()).path}/apks');
-        if (!_apkDir!.existsSync()) {
-          _apkDir!.createSync();
-        }
-        _iconsCacheDir = Directory('${(await getAppStorageDir()).path}/icons');
-        if (!_iconsCacheDir!.existsSync()) {
-          _iconsCacheDir!.createSync();
-        }
+      if (cacheRoot == null) {
+        // Internal cache, which the FileProvider shares too
+        // (`internal_cache` in file_paths.xml).
+        final Directory internalCache = await getApplicationCacheDirectory();
+        _apkDir = Directory('${internalCache.path}/apks');
+        _iconsCacheDir = Directory('${internalCache.path}/icons');
+      } else {
+        _apkDir = cacheRoot;
+        _iconsCacheDir = Directory('${cacheRoot.path}/icons');
+      }
+      if (!_apkDir!.existsSync()) {
+        _apkDir!.createSync(recursive: true);
+      }
+      if (!_iconsCacheDir!.existsSync()) {
+        _iconsCacheDir!.createSync(recursive: true);
       }
       _userAppIconsDir = Directory(
         '${(await getAppStorageDir()).path}/user_icons',
@@ -1658,6 +1868,7 @@ class AppsProvider with ChangeNotifier {
       }
       if (!isBg) {
         await loadApps();
+        _completeInitialLoad();
         // One-shot legacy user-icon migration: kept OFF the cold-start critical
         // path so it never delays the first app-list render. It also self-skips
         // on later launches via a prefs flag (see the method).
@@ -1675,16 +1886,35 @@ class AppsProvider with ChangeNotifier {
       } else {
         await migrateUserIconsFromLegacyCacheDir();
       }
+      _completeInitialLoad();
     }().catchError((e) {
       initError = e.toString();
+      _completeInitialLoad();
       unawaited(
         logs.add('AppsProvider async init error: $e', level: LogLevel.error),
       );
     });
   }
 
+  void _completeInitialLoad() {
+    if (!_initialLoadDone.isCompleted) _initialLoadDone.complete();
+  }
+
   @override
   void dispose() {
+    // Unhook the static notification callbacks only while they still point at
+    // this instance, and stop its in-flight downloads (upstream 8c33f251).
+    if (NotificationsProvider.onDownloadCancelRequested == cancelDownload) {
+      NotificationsProvider.onDownloadCancelRequested = null;
+    }
+    if (NotificationsProvider.onInstallDownloadedFileRequested ==
+        installDownloadedAssetFile) {
+      NotificationsProvider.onInstallDownloadedFileRequested = null;
+    }
+    for (final CancellationToken token in _downloadCancellations.values) {
+      token.cancel();
+    }
+    _downloadCancellations.clear();
     _disposed = true;
     foregroundSubscription?.cancel();
     _autoExportDebounce?.cancel();
@@ -1706,23 +1936,9 @@ class AppsProvider with ChangeNotifier {
     super.dispose();
   }
 
-  /// Returns [app] carrying the listing ID it should be stored under.
-  ///
-  /// The first listing of a package keeps a null listing ID (key = package ID).
-  /// Any further store for that package gets a stable `package@Source` ID,
-  /// suffixed if that is somehow taken, so the two records never collide.
-  App withAllocatedListingId(App app) {
-    if (app.listingId != null) return app;
-    if (!apps.containsListingKey(app.id)) return app;
-    final String base = appListingKey(app.id, sourceIdentifierForApp(app));
-    if (!apps.containsListingKey(base)) return app.copyWith(listingId: base);
-    for (int suffix = 2; ; suffix++) {
-      final String candidate = '$base$appListingKeySeparator$suffix';
-      if (!apps.containsListingKey(candidate)) {
-        return app.copyWith(listingId: candidate);
-      }
-    }
-  }
+  /// Returns [app] carrying the listing ID it should be stored under in the
+  /// library; see [allocateListingIdIn].
+  App withAllocatedListingId(App app) => allocateListingIdIn(apps, app);
 
   Future<List<List<String>>> addAppsByURL(
     List<String> urls, {
@@ -1732,12 +1948,18 @@ class AppsProvider with ChangeNotifier {
       urls,
       alreadyAddedUrls: apps.values.map((e) => e.app.url).toSet(),
       sourceOverride: sourceOverride,
+      includePrereleases: settingsProvider.includePrereleasesByDefault,
     );
     final List<App> pps = results[0];
     final Map<String, dynamic> errorsMap = results[1];
     for (var app in pps) {
-      if (sameStoreListingIn(apps, app) != null) {
-        errorsMap.addAll({app.id: tr('appAlreadyAdded')});
+      final AppInMemory? existingListing = sameStoreListingIn(apps, app);
+      if (existingListing != null) {
+        // Name the listing it collides with (upstream #3038); the error is
+        // already keyed by the package id.
+        errorsMap.addAll({
+          app.id: '${tr('appAlreadyAdded')}: ${existingListing.name}',
+        });
       } else {
         await saveApps([withAllocatedListingId(app)], onlyIfExists: false);
       }
@@ -1747,9 +1969,87 @@ class AppsProvider with ChangeNotifier {
         .toList();
     return errors;
   }
+
+  /// Saves [app], just fetched by [SourceProvider.getApp], as a new listing,
+  /// and returns it as saved. Add app's own steps, shared so that every way of
+  /// adding an app ends the same: [appPreparedForAdding], then saved under its
+  /// own listing ID and put in any matching smart folders.
+  Future<App> addNewListing(App app) async {
+    // Tracking this package from a second store needs its own listing ID
+    // so the two records never overwrite each other.
+    app = withAllocatedListingId(await appPreparedForAdding(app));
+    await saveApps([app], onlyIfExists: false);
+    final App? liveApp = apps[app.listingKey]?.app;
+    if (liveApp != null) {
+      await assignMatchingFoldersToAppIfNeeded(liveApp);
+    }
+    return app;
+  }
+
+  /// Saves apps already fetched for an add ([SourceProvider.getAppByURLNaive])
+  /// through [addNewListing], skipping any whose store listing is tracked by
+  /// now. Returns those saved.
+  ///
+  /// [downloadedIcons], by package ID, are the icons already downloaded to
+  /// show them ([NewAppLook.downloadedIcon]); they're kept as the apps' icons
+  /// instead of being downloaded again.
+  Future<List<App>> addFetchedApps(
+    List<App> fetched, {
+    Map<String, Uint8List> downloadedIcons = const {},
+  }) async {
+    final List<App> added = [];
+    for (final App app in fetched) {
+      if (sameStoreListingIn(apps, app) != null) continue;
+      final App listing = await addNewListing(app);
+      final Uint8List? icon = downloadedIcons[listing.id];
+      if (icon != null) await storeDeducedAppIcon(listing.id, icon);
+      added.add(listing);
+    }
+    return added;
+  }
 }
 
-Future<void> _runBGInstallMode(
+/// The WorkManager constraints every background task runs under, from the
+/// user's background guards (#3370, D5). Only "do nothing" becomes an Android
+/// constraint, as the old Wi-Fi-only/charging-only switches did, so the task
+/// doesn't even start; "check only" has to run to check, and is enforced in
+/// the task by [evaluateBgGuards]. Keep in step with main.dart's periodic
+/// task constraints.
+Constraints _bgTaskConstraints(SettingsProvider settings) => Constraints(
+  networkType: settings.bgGuardOnWiFi == BgGuardMode.nothing
+      ? NetworkType.unmetered
+      : NetworkType.connected,
+  requiresCharging: settings.bgGuardWhileCharging == BgGuardMode.nothing,
+  requiresBatteryNotLow: false,
+  requiresDeviceIdle: false,
+  requiresStorageNotLow: false,
+);
+
+/// Whether a run that may only check held back an install a later run could
+/// do: a pending update a background run would install silently. Updates that
+/// need the user (several APKs to choose from, an app exempt from background
+/// updates, an installer that can't go silent) never install in the
+/// background, so they must not keep every 15-minute wake-up loading in full
+/// (#317).
+Future<bool> _anySilentlyInstallableUpdatePending(
+  AppsProvider appsProvider,
+) async {
+  for (final String id in appsProvider.findExistingUpdates(
+    installedOnly: true,
+    excludeOnDemandOnly: true,
+  )) {
+    final App? app = appsProvider.apps[id]?.app;
+    if (app != null && await appsProvider.canInstallSilentlyInBackground(app)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Installs [appIds] silently, and returns whether any of them is still
+/// waiting afterwards (postponed because the screen is on, or failed), so the
+/// next wake-up tries again.
+Future<bool> _runBGInstallMode(
   List<String> appIds,
   AppsProvider appsProvider,
   NotificationsProvider notificationsProvider,
@@ -1758,7 +2058,7 @@ Future<void> _runBGInstallMode(
   unawaited(logs.add('BG install task: Started.'));
   if (appIds.isEmpty) {
     unawaited(logs.add('BG install task: No pending installs.'));
-    return;
+    return false;
   }
   if (await NativeFeatures.isDeviceInteractive()) {
     unawaited(
@@ -1766,40 +2066,12 @@ Future<void> _runBGInstallMode(
         'BG install task: Device is active (screen on). Postponing background installations.',
       ),
     );
-    final retryName =
-        'interactive_retry_${DateTime.now().millisecondsSinceEpoch}';
-    try {
-      await Workmanager().registerOneOffTask(
-        retryName,
-        retryName,
-        initialDelay: const Duration(minutes: 15),
-        constraints: Constraints(
-          networkType: appsProvider.settingsProvider.bgUpdatesOnWiFiOnly
-              ? NetworkType.unmetered
-              : NetworkType.connected,
-          requiresCharging:
-              appsProvider.settingsProvider.bgUpdatesWhileChargingOnly,
-          requiresBatteryNotLow: false,
-          requiresDeviceIdle: false,
-          requiresStorageNotLow: false,
-        ),
-      );
-      unawaited(
-        logs.add('BG install task: Scheduled $retryName in 15 minutes.'),
-      );
-    } catch (e) {
-      unawaited(
-        logs.add(
-          'BG install task: Could not schedule interactive retry: $e',
-          level: LogLevel.warning,
-        ),
-      );
-    }
-    return;
+    return true;
   }
   unawaited(
     logs.add('BG install task: Installing ${appIds.length} apps silently.'),
   );
+  bool failed = false;
   try {
     await appsProvider.downloadAndInstallLatestApps(
       appIds,
@@ -1809,19 +2081,35 @@ Future<void> _runBGInstallMode(
     );
   } catch (e) {
     if (e is MultiAppMultiError) {
+      // The apps that did install are no longer pending, so the next wake-up
+      // attempts only the ones that failed.
+      failed = true;
       e.idsByErrorString.forEach((key, value) {
+        // Logged as well as notified: otherwise a failed download reads as a
+        // clean "Done installing updates" in the log (#317).
         unawaited(
-          notificationsProvider.notify(
-            ErrorInstallingUpdatesNotification(e.errorsAppsString(key, value)),
+          logs.add(
+            'BG install task: Failed: ${e.errorsAppsString(key, value)}',
+            level: LogLevel.warning,
           ),
         );
       });
+      // One notification for the whole run, listing every error group
+      // (upstream #3362), instead of one per group stacking in the tray.
+      // Install failures keep their own type: upstream posts them as check
+      // errors.
+      unawaited(
+        notificationsProvider.notify(
+          ErrorInstallingUpdatesNotification(e.notificationErrorString()),
+        ),
+      );
     } else {
       unawaited(logs.add('Fatal error in BG install task: ${e.toString()}'));
       rethrow;
     }
   }
   unawaited(logs.add('BG install task: Done installing updates.'));
+  return failed;
 }
 
 /// Background update check and installation orchestrator.
@@ -1841,38 +2129,35 @@ Future<void> bgUpdateCheck(
 }) async {
   final bgLogs = logs ?? LogsProvider();
   WidgetsFlutterBinding.ensureInitialized();
-  await EasyLocalization.ensureInitialized();
-  await TranslationLoader.load();
   params ??= {};
-  unawaited(bgLogs.add('BG task started $taskId: $params'));
+  final SettingsProvider settingsProvider = settings ?? SettingsProvider();
+  await settingsProvider.initializeSettings();
 
-  final NotificationsProvider notificationsProvider =
-      notifs ?? NotificationsProvider();
-  final AppsProvider appsProvider = AppsProvider(
-    isBg: true,
-    settingsProvider: settings,
-    logsProvider: bgLogs,
-  );
-  await appsProvider.settingsProvider.initializeSettings();
-
-  // Android wakes this task on its own cadence, not the user's check interval,
-  // so most wake-ups have nothing due. Returning here keeps those from reading
-  // every app record and opening the check timestamp database - the contention
-  // that made a concurrent foreground load wait on a database lock. An explicit
-  // request (manual check, or a retry carrying its own list) always proceeds.
-  final DateTime? nextDue = appsProvider.settingsProvider.bgNextCheckDue;
+  // This task wakes every 15 minutes, not once per update interval, so most
+  // wake-ups have nothing to do: no check is due and no background install is
+  // waiting (see [bgNextCheckDue], cleared while one is). Deciding that first,
+  // before loading translations or any app record, keeps those wake-ups to a
+  // settings read and one log line. Skipping the app records also avoids the
+  // check timestamp database, whose contention made a concurrent foreground
+  // load wait on a lock. An explicit request (manual check, or a retry carrying
+  // its own list) always proceeds.
+  final DateTime? nextDue = settingsProvider.bgNextCheckDue;
   if (!forceAll &&
       params['toCheck'] == null &&
       nextDue != null &&
       DateTime.now().isBefore(nextDue)) {
     unawaited(
-      bgLogs.add('BG update task: Nothing due before $nextDue; skipped load.'),
+      bgLogs.add('BG task $taskId: Nothing due before $nextDue; skipped.'),
     );
     return;
   }
 
-  await appsProvider.loadApps();
+  await EasyLocalization.ensureInitialized();
+  await TranslationLoader.load();
+  unawaited(bgLogs.add('BG task started $taskId: $params'));
 
+  // The network and the background guards need no app record, so a wake-up
+  // that may not check skips loading them.
   final netResult = await (Connectivity().checkConnectivity());
   if (netResult.contains(ConnectivityResult.none) ||
       netResult.isEmpty ||
@@ -1880,6 +2165,68 @@ Future<void> bgUpdateCheck(
     unawaited(bgLogs.add('BG update task: No network.'));
     return;
   }
+
+  // "While charging" means plugged in. A phone plugged in at 100% reports
+  // full, and one held at a charge limit (Samsung's "Protect battery", say)
+  // reports connectedNotCharging; neither is actively charging, and treating
+  // them as unplugged meant installs never ran overnight. Upstream counts only
+  // `charging`; keep this set.
+  final bool pluggedIn = const {
+    BatteryState.charging,
+    BatteryState.full,
+    BatteryState.connectedNotCharging,
+  }.contains(await Battery().batteryState);
+  // Evaluated here in both WorkManager and foreground-service mode. Only
+  // WorkManager gets "do nothing" as a constraint (see [_bgTaskConstraints]);
+  // the foreground service wakes regardless, and used to check anyway.
+  final BgGuardDecision guards = evaluateBgGuards(
+    wifiMode: settingsProvider.bgGuardOnWiFi,
+    chargingMode: settingsProvider.bgGuardWhileCharging,
+    onUnmeteredNetwork:
+        netResult.contains(ConnectivityResult.wifi) ||
+        netResult.contains(ConnectivityResult.ethernet),
+    charging: pluggedIn,
+  );
+  if (guards.skipChecks) {
+    if (!forceAll) {
+      unawaited(
+        bgLogs.add(
+          'BG update task: Skipped (background guards do nothing while off '
+          'Wi-Fi or unplugged).',
+        ),
+      );
+      return;
+    }
+    unawaited(
+      bgLogs.add('BG update task: Manual run overriding a "do nothing" guard.'),
+    );
+  } else if (!guards.allowInstalls) {
+    unawaited(
+      bgLogs.add(
+        'BG update task: Background guards allow checks only, no installs.',
+      ),
+    );
+  }
+  // A manual run only checks (upstream 1b0b45e9).
+  final bool canInstall = canInstallInBackground(
+    forceAll: forceAll,
+    decision: guards,
+  );
+  if (forceAll) {
+    unawaited(
+      bgLogs.add('BG update task: Manual run: checks only, no installs.'),
+    );
+  }
+
+  final NotificationsProvider notificationsProvider =
+      notifs ?? NotificationsProvider();
+  final AppsProvider appsProvider = AppsProvider(
+    isBg: true,
+    settingsProvider: settingsProvider,
+    logsProvider: bgLogs,
+  );
+
+  await appsProvider.loadApps();
 
   if (appsProvider.settingsProvider.updateInterval == 0) {
     if (!forceAll) {
@@ -1912,24 +2259,6 @@ Future<void> bgUpdateCheck(
             .map((e) => MapEntry(e, 0))),
   ];
 
-  final networkRestricted =
-      appsProvider.settingsProvider.bgUpdatesOnWiFiOnly &&
-      !netResult.contains(ConnectivityResult.wifi) &&
-      !netResult.contains(ConnectivityResult.ethernet);
-
-  final chargingRestricted =
-      appsProvider.settingsProvider.bgUpdatesWhileChargingOnly &&
-      (await Battery().batteryState) != BatteryState.charging;
-
-  if (networkRestricted) {
-    unawaited(bgLogs.add('BG update task: Network restriction in effect.'));
-  }
-
-  if (chargingRestricted) {
-    unawaited(bgLogs.add('BG update task: Charging restriction in effect.'));
-  }
-
-  final canInstall = !networkRestricted && !chargingRestricted;
   final silentlyInstallable = <String>[];
 
   if (toCheck.isNotEmpty) {
@@ -1949,9 +2278,12 @@ Future<void> bgUpdateCheck(
       // device is behind". Re-read the post-save app so the verdict is computed
       // from the same state the app list renders, then apply the shared update
       // predicate: without it a version reformat notifies (and silently
-      // installs) an update the UI itself does not show.
+      // installs) an update the UI itself does not show. By listing key: an
+      // app tracked from two stores shares its package id with its other
+      // listing.
       final App update =
-          appsProvider.apps[result.updates[i].id]?.app ?? result.updates[i];
+          appsProvider.apps[result.updates[i].listingKey]?.app ??
+          result.updates[i];
       final bool installable = appUpdateIsUserVisible(update);
       final bool notifiable = appUpdateIsUserVisible(
         update,
@@ -1989,7 +2321,8 @@ Future<void> bgUpdateCheck(
           }
         }
       } else {
-        silentlyInstallable.add(update.id);
+        // Listing keys, as [AppsProvider.findExistingUpdates] gives below.
+        silentlyInstallable.add(update.listingKey);
       }
     }
 
@@ -2019,24 +2352,25 @@ Future<void> bgUpdateCheck(
     );
 
     if (result.toThrow.rawErrors.isNotEmpty && result.errors != null) {
-      for (var element in result.toThrow.idsByErrorString.entries) {
-        unawaited(
-          notificationsProvider.notify(
-            ErrorCheckingUpdatesNotification(
-              result.errors!.errorsAppsString(element.key, element.value),
-              id:
-                  errorCheckingUpdatesNotificationId +
-                  100 +
-                  Random().nextInt(9900),
-            ),
+      // One notification for the run, every error group in it (upstream
+      // #3362), at the fixed ID so the next run's replaces it. toThrow carries
+      // the app names, taken from the check's errors.
+      unawaited(
+        notificationsProvider.notify(
+          ErrorCheckingUpdatesNotification(
+            result.toThrow.notificationErrorString(),
           ),
-        );
-      }
+        ),
+      );
     }
   } else {
     unawaited(bgLogs.add('BG update task: No apps due for checking.'));
   }
-  if (canInstall && params['toCheck'] == null) {
+  // Pending updates are only worth gathering when background installs are on
+  // (#3070); checks themselves run whenever the interval is set.
+  final bool backgroundInstallsEnabled =
+      appsProvider.settingsProvider.enableBackgroundUpdates;
+  if (canInstall && backgroundInstallsEnabled && params['toCheck'] == null) {
     final discovered = appsProvider.findExistingUpdates(
       installedOnly: true,
       excludeOnDemandOnly: true,
@@ -2056,20 +2390,37 @@ Future<void> bgUpdateCheck(
       ),
     );
   }
-  if (canInstall) {
-    await _runBGInstallMode(
-      silentlyInstallable,
-      appsProvider,
-      notificationsProvider,
-      bgLogs,
-    );
+  // Whether a background install is still waiting after this run: one that
+  // failed or was postponed for the screen, or one held back because this run
+  // may only check (a "check only" guard, or a manual run).
+  final bool installWaiting = canInstall
+      ? await _runBGInstallMode(
+          silentlyInstallable,
+          appsProvider,
+          notificationsProvider,
+          bgLogs,
+        )
+      : backgroundInstallsEnabled &&
+            await _anySilentlyInstallableUpdatePending(appsProvider);
+  // A retry carrying its own list never looked at the other pending installs,
+  // so it leaves the due time as its saves left it (cleared) and the next
+  // wake-up works it out in full.
+  if (params['toCheck'] == null) {
+    // Recorded after every save this run has made, so the next wake-up can
+    // skip its load. Cleared by [AppsProvider.markAppsChanged] on any later
+    // change, and left clear while an install is waiting, so the next wake-up
+    // tries it again rather than the next due check (#317). A run Android
+    // stops midway never gets here, so the due time stays clear or already past
+    // and the next wake-up runs too, resuming the partial downloads where the
+    // server allows it.
+    appsProvider.settingsProvider.bgNextCheckDue = installWaiting
+        ? null
+        : appsProvider.earliestNextUpdateCheckDue();
   }
-  // Recorded after every save this run has made, so the next wake-up can skip
-  // its load. Cleared by [AppsProvider.markAppsChanged] on any later change.
-  appsProvider.settingsProvider.bgNextCheckDue = appsProvider
-      .earliestNextUpdateCheckDue();
-  // This engine is about to go away. Leaving the handle open left a connection
-  // holding the file against the next engine and the UI isolate.
+  // This engine is about to go away, so close its own connection rather than
+  // leave it open for the life of the process. Closing is only safe because
+  // each engine has a connection of its own (see [AppCheckStore]): a shared
+  // one closed the UI isolate's too (#317).
   await appsProvider.appCheckStore?.close();
   unawaited(bgLogs.add('BG task completed $taskId.'));
   AppsProvider._eventsController.add(null);
@@ -2101,6 +2452,12 @@ _bgRunUpdateCheck(
     updates = await appsProvider.checkUpdates(
       specificIds: toCheck.map((e) => e.key).toList(),
       sp: appsProvider.settingsProvider,
+      // A retry re-asks, within seconds, a source whose failure this run
+      // already counted: four retries mustn't read as five failed checks.
+      retriedIds: {
+        for (final MapEntry<String, int> entry in toCheck)
+          if (entry.value > 0) entry.key,
+      },
     );
   } catch (e) {
     if (e is CheckUpdatesException) {
@@ -2124,7 +2481,10 @@ _bgRunUpdateCheck(
               : err is ClientException
               ? (_bgClientExceptionRetryWaitSeconds)
               : (toCheckApp.value + 1);
-          if (minRetryIntervalForThisApp > _bgUpdateMaxRetryWaitSeconds) {
+          // A rate limit is waited out in full: capped, every retry landed
+          // inside the window and was wasted (upstream #3113).
+          if (minRetryIntervalForThisApp > _bgUpdateMaxRetryWaitSeconds &&
+              err is! RateLimitError) {
             minRetryIntervalForThisApp = _bgUpdateMaxRetryWaitSeconds;
           }
           if (minRetryIntervalForThisApp > retryAfterXSeconds) {
@@ -2136,6 +2496,23 @@ _bgRunUpdateCheck(
           }
         }
       });
+      // The retry budget is spent for these, so move their check time even
+      // after a transient failure: a source unreachable for the whole retry
+      // window then waits a full interval, as a persistent failure does
+      // (v1.6.17 sync D10).
+      final DateTime checkedAt = DateTime.now();
+      final List<App> exhausted = [
+        for (final String key in toThrow.rawErrors.keys)
+          if (appsProvider.apps[key]?.app case final App liveApp)
+            liveApp.copyWith(lastUpdateCheck: checkedAt),
+      ];
+      if (exhausted.isNotEmpty) {
+        await appsProvider.saveApps(
+          exhausted,
+          attemptToCorrectInstallStatus: false,
+          updateInstalledInfo: false,
+        );
+      }
     } else {
       unawaited(logs.add('Fatal error in BG update task: ${e.toString()}'));
       rethrow;
@@ -2157,16 +2534,7 @@ _bgRunUpdateCheck(
       retryName,
       retryName,
       initialDelay: Duration(seconds: retryAfterXSeconds),
-      constraints: Constraints(
-        networkType: appsProvider.settingsProvider.bgUpdatesOnWiFiOnly
-            ? NetworkType.unmetered
-            : NetworkType.connected,
-        requiresCharging:
-            appsProvider.settingsProvider.bgUpdatesWhileChargingOnly,
-        requiresBatteryNotLow: false,
-        requiresDeviceIdle: false,
-        requiresStorageNotLow: false,
-      ),
+      constraints: _bgTaskConstraints(appsProvider.settingsProvider),
       inputData: {
         'toCheck': toRetry
             .map((entry) => {'key': entry.key, 'value': entry.value})
@@ -2214,35 +2582,6 @@ class CancellationToken {
   }
 }
 
-/// Isolates the implementation-level `easy_localization/src/` imports to a
-/// single file so the rest of the codebase only depends on the public API.
-class TranslationLoader {
-  static Future<void> load() async {
-    await EasyLocalizationController.initEasyLocation();
-    final s = SettingsProvider();
-    await s.initializeSettings();
-    final forceLocale = s.forcedLocale;
-    final controller = EasyLocalizationController(
-      saveLocale: true,
-      forceLocale: forceLocale,
-      fallbackLocale: fallbackLocale,
-      supportedLocales: supportedLocales.map((e) => e.key).toList(),
-      assetLoader: const RootBundleAssetLoader(),
-      useOnlyLangCode: false,
-      useFallbackTranslations: true,
-      path: localeDir,
-      onLoadError: (FlutterError e) {
-        throw e;
-      },
-    );
-    await controller.loadTranslations();
-    Localization.load(
-      controller.locale,
-      translations: controller.translations,
-      fallbackTranslations: controller.fallbackTranslations,
-    );
-  }
-}
 // Platform channel helpers for native OS features (e.g. system font loading).
 
 class NativeFeatures {
@@ -2439,7 +2778,12 @@ class NativeFeatures {
         return null;
       }
       return Uri.parse(uriString);
-    } on PlatformException {
+    } on PlatformException catch (e) {
+      // Nothing handles ACTION_OPEN_DOCUMENT_TREE on this device (some TV
+      // boxes): say so rather than silently doing nothing (upstream #3227).
+      if (e.code == 'OPEN_TREE_FAILED') {
+        throw ObtainiumError(tr('noFilePickerAvailable'));
+      }
       return null;
     } on MissingPluginException {
       return null;
@@ -2473,18 +2817,20 @@ class NativeFeatures {
   }) async {
     if (!Platform.isAndroid) return;
     try {
-      await _notificationsChannel
-          .invokeMethod('showDownloadProgressNotification', <String, Object?>{
-            'id': id,
-            'appId': appId,
-            'title': title,
-            'message': message,
-            'channelCode': channelCode,
-            'progressPercent': progressPercent,
-            'indeterminate': indeterminate,
-            'cancelLabel': cancelLabel,
-            'shortCriticalText': shortCriticalText,
-          });
+      await _notificationsChannel.invokeMethod(
+        'showDownloadProgressNotification',
+        <String, Object?>{
+          'id': id,
+          'appId': appId,
+          'title': title,
+          'message': message,
+          'channelCode': channelCode,
+          'progressPercent': progressPercent,
+          'indeterminate': indeterminate,
+          'cancelLabel': cancelLabel,
+          'shortCriticalText': shortCriticalText,
+        },
+      );
     } on PlatformException {
       // The regular Flutter notification remains the fallback.
     } on MissingPluginException {

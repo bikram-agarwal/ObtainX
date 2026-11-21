@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
 
 // Re-export the size enum so callers can pick a thickness (s = 4px track,
@@ -145,14 +145,19 @@ class _LinearRipplingWavyProgressState
         final displayedValue = widget.value == null
             ? null
             : _valueController.value;
+        // progress_indicator_m3e is still on flutter/material, so it can't see
+        // the app's material_ui theme. Resolve its default colours here, as
+        // M3ETheme.defaults(colorScheme) would (primary on
+        // surfaceContainerHighest).
+        final ColorScheme cs = Theme.of(context).colorScheme;
         return LinearProgressIndicatorM3E(
           value: displayedValue,
           shape: _shouldShowWavyShape
               ? ProgressM3EShape.wavy
               : ProgressM3EShape.flat,
           size: widget.size,
-          activeColor: widget.activeColor,
-          trackColor: widget.trackColor,
+          activeColor: widget.activeColor ?? cs.primary,
+          trackColor: widget.trackColor ?? cs.surfaceContainerHighest,
           phase: _phaseController.value,
           inset: widget.inset,
         );

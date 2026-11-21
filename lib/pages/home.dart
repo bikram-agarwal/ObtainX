@@ -1,22 +1,108 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:app_links/app_links.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
-import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/pages/add_app.dart';
+import 'package:obtainium/pages/app.dart' show loadIconsAndScanStoresFor;
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/pages/import_export.dart';
+import 'package:obtainium/pages/import_from_url_list.dart'
+    show importUrlListEntries, urlImportEntriesFromLink;
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/shared_url_receiver.dart';
 import 'package:provider/provider.dart';
+
+/// The link import that pasted [text] holds, as one `obtainium://` link, or
+/// null when it holds anything else (a list of app URLs, say).
+///
+/// Takes `obtainium://app/` and `apps/` links, one or several, each on its own
+/// line. "Share app configuration as HTML link" sends them that way, each
+/// wrapped in a web page that redirects to it. Also takes the JSON a link
+/// carries (one app, or a list of apps), or an export's JSON. From an export,
+/// only its apps are read, each with its own settings; its ObtainX-wide
+/// settings block is left out, as a link import never changes those. Several
+/// links become one `apps/` link, so they open as one import.
+Uri? linkImportIn(String text) {
+  final String trimmed = text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      final Object? json = jsonDecode(trimmed);
+      final Object? apps = json is Map && json['apps'] is List
+          ? json['apps']
+          : json;
+      final String action = apps is List ? 'apps' : 'app';
+      return Uri.parse(
+        'obtainium://$action/${Uri.encodeComponent(jsonEncode(apps))}',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+  final List<String> pasted = trimmed
+      .split(RegExp(r'\s+'))
+      .where((String part) => part.isNotEmpty)
+      .toList();
+  final List<Uri> links = [];
+  final List<Object?> apps = [];
+  for (final String part in pasted) {
+    final Uri? link = _importLinkIn(part);
+    if (link == null) return null;
+    final Object? payload = jsonDecode(
+      Uri.decodeComponent(link.path.substring(1)),
+    );
+    if (link.host == 'apps' && payload is List) {
+      apps.addAll(payload);
+    } else if (link.host == 'app' && payload is Map) {
+      apps.add(payload);
+    } else {
+      return null;
+    }
+    links.add(link);
+  }
+  if (links.isEmpty) return null;
+  if (links.length == 1) return links.single;
+  return Uri.parse('obtainium://apps/${Uri.encodeComponent(jsonEncode(apps))}');
+}
+
+/// The JSON an `obtainium://app/` or `apps/` [link] carries: one app, or a
+/// list of them.
+String linkJson(Uri link) =>
+    Uri.decodeComponent(link.path.length > 1 ? link.path.substring(1) : '');
+
+/// The apps an `obtainium://app/` or `apps/` [link] carries, laid out as a
+/// backup's are, for `parseBackupContent`.
+String linkPayload(Uri link) {
+  final String data = linkJson(link);
+  return link.host == 'app' ? '{ "apps": [$data] }' : '{ "apps": $data }';
+}
+
+/// The `obtainium://app/` or `apps/` link that [text] is, unwrapped from its
+/// redirect page, or null when it isn't one or its JSON is incomplete.
+Uri? _importLinkIn(String text) {
+  const String redirectPrefix = 'https://apps.obtainium.imranr.dev/redirect?r=';
+  final String link = text.startsWith(redirectPrefix)
+      ? text.substring(redirectPrefix.length)
+      : text;
+  if (!link.startsWith('obtainium://')) return null;
+  final Uri? uri = Uri.tryParse(link);
+  if (uri == null || !const {'app', 'apps'}.contains(uri.host)) return null;
+  try {
+    jsonDecode(Uri.decodeComponent(uri.path.substring(1)));
+  } catch (_) {
+    return null;
+  }
+  return uri;
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -273,6 +359,16 @@ class HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     initDeepLinks();
+    // Tapping a single-app update notification opens that listing (upstream
+    // #3190). One that launched the app is handed over once this registers.
+    NotificationsProvider.onOpenAppRequested = _openAppFromNotification;
+  }
+
+  Future<void> _openAppFromNotification(String listingKey) async {
+    final AppsProvider appsProvider = context.read<AppsProvider>();
+    await appsProvider.waitForInitialLoad();
+    if (!mounted || appsProvider.apps[listingKey] == null) return;
+    await switchToAppsTabAndOpenApp(listingKey);
   }
 
   /// Waits for [key.currentState] to become non-null by checking once per
@@ -303,6 +399,8 @@ class HomePageState extends State<HomePage> {
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
     final AppsProvider appsProvider = context.read<AppsProvider>();
+    final NotificationsProvider notificationsProvider = context
+        .read<NotificationsProvider>();
     final NavigatorState navigator = Navigator.of(context);
 
     Future<void> goToAddApp(String data) async {
@@ -324,10 +422,8 @@ class HomePageState extends State<HomePage> {
     }
 
     Future<void> handleAddUrl(String data) async {
-      // Ensure apps are loaded
-      while (appsProvider.loadingApps) {
-        await Future.delayed(const Duration(milliseconds: 10));
-      }
+      // A link can arrive on a cold start, before the library has loaded.
+      await appsProvider.waitForInitialLoad();
 
       // See if we already have this app
       final String standardizedUrl = SourceProvider()
@@ -339,7 +435,9 @@ class HomePageState extends State<HomePage> {
           .firstOrNull;
 
       if (existingApp != null) {
-        await goToExistingApp(existingApp.app.id);
+        // The listing key, not the package ID, which picks the wrong listing
+        // when the package is tracked from more than one store.
+        await goToExistingApp(existingApp.listingKey);
       } else {
         await goToAddApp(data);
       }
@@ -360,51 +458,63 @@ class HomePageState extends State<HomePage> {
     }
 
     Future<void> interpretLink(Uri uri) async {
-      isLinkActivity = true;
       final action = uri.host;
-      final data = uri.path.length > 1 ? uri.path.substring(1) : '';
+      final data =
+          uri.queryParameters['url'] ??
+          (uri.path.length > 1
+              ? Uri.decodeComponent(uri.path.substring(1))
+              : '');
       try {
         if (action == 'add') {
           await handleAddUrl(data);
         } else if (action == 'app' || action == 'apps') {
-          final dataStr = Uri.decodeComponent(data);
-          if (!navigator.mounted) return;
-          if (await showDialog(
-                context: navigator.context,
-                builder: (BuildContext ctx) {
-                  return GeneratedFormModal(
-                    title: tr(
-                      'importX',
-                      args: [
-                        (action == 'app' ? tr('app') : tr('appsString'))
-                            .toLowerCase(),
-                      ],
-                    ),
-                    items: const [],
-                    additionalWidgets: [
-                      ExpansionTile(
-                        title: Text(tr('rawJson')),
-                        children: [
-                          Text(
-                            dataStr,
-                            style: const TextStyle(fontFamily: 'monospace'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  );
-                },
-              ) !=
-              null) {
-            final result = await appsProvider.import(
-              action == 'app'
-                  ? '{ "apps": [$dataStr] }'
-                  : '{ "apps": $dataStr }',
-            );
+          // Added as Import from URL list adds whatever is typed into it
+          // (importUrlListEntries): each app fetched while the sheet is open,
+          // and saved as Add app saves. A link can't slip anything else in,
+          // such as a "settings" block: only the apps it describes are read.
+          await appsProvider.waitForInitialLoad();
+          final List<UrlImportEntry> entries = urlImportEntriesFromLink(
+            uri,
+            appsProvider,
+          );
+          if (entries.isEmpty) {
+            // The link carried no apps at all.
             showMessage(
-              tr(
-                'importedX',
-                args: [plural('apps', result.key.length).toLowerCase()],
+              tr('importedX', args: [plural('apps', 0).toLowerCase()]),
+            );
+            return;
+          }
+          // A link for one app that is already tracked opens it instead. A
+          // link for several shows the sheet even when all are tracked:
+          // opening one of them would read as the rest having vanished.
+          if (entries.length == 1) {
+            final UrlImportPlan plan = planUrlImport(
+              appsProvider.apps,
+              entries,
+              SourceProvider(),
+            );
+            if (plan.alreadyTracked.isNotEmpty) {
+              showMessage(tr('appAlreadyAdded'));
+              await goToExistingApp(plan.alreadyTracked.single.listingKey);
+              return;
+            }
+          }
+          if (!navigator.mounted) return;
+          final List<App>? added = await importUrlListEntries(
+            navigator.context,
+            entries,
+            rawJson: readableLinkPayload(linkJson(uri)),
+          );
+          if (added == null || added.isEmpty) return;
+          // A single app's page loads its icon and scans the stores when it
+          // opens. A batch has that done here.
+          if (added.length == 1) {
+            await goToExistingApp(added.single.listingKey);
+          } else {
+            unawaited(
+              loadIconsAndScanStoresFor(
+                appsProvider,
+                added.map((App app) => app.listingKey).toList(),
               ),
             );
           }
@@ -416,13 +526,66 @@ class HomePageState extends State<HomePage> {
       }
     }
 
+    // obtainium://refresh[?id=…] (upstream #3050) checks every app, or every
+    // listing whose package ID or listing key is the id. It can't change
+    // anything else.
+    Future<void> refreshFromLink(Uri uri) async {
+      try {
+        await appsProvider.waitForInitialLoad();
+        final String? targetId = uri.queryParameters['id']?.trim();
+        if (targetId == null || targetId.isEmpty) {
+          await appsProvider.checkUpdates(forceAll: true);
+        } else {
+          final List<String> listingKeys = appsProvider.apps.values
+              .where(
+                (AppInMemory listing) =>
+                    listing.listingKey == targetId ||
+                    listing.app.id == targetId,
+              )
+              .map((AppInMemory listing) => listing.listingKey)
+              .toList();
+          if (listingKeys.isEmpty) {
+            throw ObtainiumError(tr('appNotFound'));
+          }
+          await appsProvider.checkUpdates(specificIds: listingKeys);
+        }
+        // As after a pull-to-refresh: a successful check clears the update
+        // notifications nothing pending needs any more (upstream #3415).
+        unawaited(
+          appsProvider.clearStaleUpdateNotifications(notificationsProvider),
+        );
+      } catch (e) {
+        showError(e is CheckUpdatesException ? e.errors : e);
+      }
+    }
+
+    // Another app or a browser opened the link, so back returns there. A link
+    // pasted into Import from URL list never comes here: that page adds it as
+    // it adds a URL. A refresh link only starts a check and leaves the user
+    // where they are, so it doesn't make this a link activity.
+    Future<void> interpretIncomingLink(Uri uri) {
+      if (uri.host == 'refresh') {
+        // Not awaited: a check can take minutes, and the link and share
+        // listeners below must not wait for it (links arriving unheard are
+        // dropped). refreshFromLink shows its own errors.
+        unawaited(refreshFromLink(uri));
+        return Future<void>.value();
+      }
+      isLinkActivity = true;
+      // interpretLink reads an add link's URL before its own try, as upstream
+      // does, and escapes that aren't UTF-8 throw there. Uncaught, that would
+      // stop a cold start here, before the listeners below are set up.
+      return interpretLink(uri).catchError((Object e) => showError(e));
+    }
+
     // Check initial link if app was in cold state (terminated)
     final appLink = await _appLinks.getInitialLink();
     var initLinked = false;
     if (appLink != null) {
-      await interpretLink(appLink);
+      await interpretIncomingLink(appLink);
       initLinked = true;
     }
+    if (!mounted) return;
     _sharedUrlReceiver.listen(handleSharedText);
     final String? initialSharedText = await _sharedUrlReceiver
         .getInitialSharedText();
@@ -430,9 +593,10 @@ class HomePageState extends State<HomePage> {
       await handleSharedText(initialSharedText);
     }
     // Handle link when app is in warm state (front or background)
+    if (!mounted) return;
     _linkSubscription = _appLinks.uriLinkStream.listen((uri) async {
       if (!initLinked) {
-        await interpretLink(uri);
+        await interpretIncomingLink(uri);
       } else {
         initLinked = false;
       }
@@ -518,7 +682,11 @@ class HomePageState extends State<HomePage> {
                 state.runMassObtain();
               },
               tooltip: null,
-              child: const Icon(Icons.file_download_outlined, size: 20),
+              child: Icon(
+                Icons.file_download_outlined,
+                size: 20,
+                semanticLabel: tr('installUpdateApps'),
+              ),
             );
 
             leadingFab = Stack(
@@ -550,7 +718,11 @@ class HomePageState extends State<HomePage> {
                 state.openSelectionActionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.checklist, size: 20),
+              child: Icon(
+                Icons.checklist,
+                size: 20,
+                semanticLabel: plural('action', 2),
+              ),
             );
           } else {
             trailingFab = FloatingActionButton.small(
@@ -562,7 +734,11 @@ class HomePageState extends State<HomePage> {
                 state.openViewOptionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.tune, size: 20),
+              child: Icon(
+                Icons.tune,
+                size: 20,
+                semanticLabel: tr('appsViewOptions'),
+              ),
             );
           }
         } else if (!_homeFabNullStateRetryScheduled) {
@@ -1004,6 +1180,9 @@ class HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    if (NotificationsProvider.onOpenAppRequested == _openAppFromNotification) {
+      NotificationsProvider.onOpenAppRequested = null;
+    }
     appsTabFabChromeTick.dispose();
     _linkSubscription?.cancel();
     _sharedUrlReceiver.dispose();

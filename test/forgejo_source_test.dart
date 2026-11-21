@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/html.dart';
+import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/pages/add_app.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/providers/source_provider.dart';
@@ -172,5 +173,80 @@ void main() {
       identifiers.indexOf('FDroidRepo') + 1,
     );
     expect(identifiers.indexOf('GitHub'), identifiers.indexOf('Forgejo') + 1);
+  });
+
+  // Ported from upstream's codeberg_search_test (deleted here: the fork
+  // dropped Codeberg.searchUriFor in the v1.6.17 sync).
+  group('Codeberg.standardizeUrl', () {
+    test('normalizes an overridden Gitea host to the repo root', () {
+      final source = Codeberg()
+        ..hosts = ['gitea.com']
+        ..hostChanged = true;
+      expect(
+        source.standardizeUrl('https://gitea.com/gitea/runner/releases'),
+        'https://gitea.com/gitea/runner',
+      );
+      expect(
+        source.standardizeUrl('https://gitea.com/gitea/runner/'),
+        'https://gitea.com/gitea/runner',
+      );
+    });
+
+    test('normalizes an overridden Forgejo host', () {
+      final source = Codeberg()
+        ..hosts = ['git.ptr.moe']
+        ..hostChanged = true;
+      expect(
+        source.standardizeUrl(
+          'https://git.ptr.moe/baalajimaestro/NewPipe/releases/',
+        ),
+        'https://git.ptr.moe/baalajimaestro/NewPipe',
+      );
+    });
+
+    final customHostUrls = {
+      'http://192.0.2.10:3000/user/repo': 'http://192.0.2.10:3000/user/repo',
+      'http://192.0.2.10:3000/user/repo/releases':
+          'http://192.0.2.10:3000/user/repo',
+      'https://git.example.com:8443/user/repo':
+          'https://git.example.com:8443/user/repo',
+      'https://git.example.com/user/repo/releases':
+          'https://git.example.com/user/repo',
+    };
+    for (final entry in customHostUrls.entries) {
+      test('normalizes custom host URL ${entry.key}', () {
+        final source = Codeberg()
+          ..hosts = [Uri.parse(entry.key).host]
+          ..hostChanged = true;
+        expect(source.standardizeUrl(entry.key), entry.value);
+      });
+    }
+
+    test('keeps the default codeberg.org behavior', () {
+      expect(
+        Codeberg().standardizeUrl(
+          'https://codeberg.org/forgejo/forgejo/releases',
+        ),
+        'https://codeberg.org/forgejo/forgejo',
+      );
+    });
+  });
+
+  // Upstream's switch is the fork's versionStringSource dropdown option.
+  test('Codeberg and Forgejo offer the release date as the version', () {
+    for (final AppSource source in <AppSource>[Codeberg(), Forgejo()]) {
+      expect(
+        source.versionStringSourceOptions.map((option) => option.key),
+        contains(versionStringSourceReleaseDate),
+      );
+      final dropdown = source.combinedAppSpecificSettingFormItems
+          .expand((row) => row)
+          .whereType<GeneratedFormDropdown>()
+          .firstWhere((item) => item.key == 'versionStringSource');
+      expect(
+        dropdown.opts!.map((option) => option.key),
+        contains(versionStringSourceReleaseDate),
+      );
+    }
   });
 }

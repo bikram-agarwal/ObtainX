@@ -15,20 +15,21 @@ publish_to: 'none'
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # ObtainX uses its own version line, independent of upstream Obtainium's.
-version: 2.20.0+22000
+version: 2.23.0+22300
 
 environment:
-  sdk: ^3.12.0
-  flutter: ">=3.47.5"
+  sdk: ^3.14.0
+  # 3.50 deprecates the framework's flutter/material (the app is on
+  # material_ui) and re-exports ScrollCacheExtent from the widgets library.
+  flutter: ">=3.50.0"
 
 dependencies:
   flutter:
     sdk: flutter
 
-  cupertino_icons: ^1.0.9
   path_provider: ^2.1.6
   flutter_fgbg: ^0.8.0
-  flutter_local_notifications: ^22.0.1
+  flutter_local_notifications: ^23.0.3
   flutter_svg: ^2.3.0
   provider: ^6.1.5+1
   http: ^1.6.0
@@ -36,58 +37,72 @@ dependencies:
   # Direct dependency only for AndroidWebViewController's platform-specific
   # inset opt-out, which the cross-platform package does not expose.
   webview_flutter_android: ^4.14.1
-  # Upstream Material `dynamic_color` package. We use only `DynamicColorBuilder`
-  # and the `.harmonized()` ColorScheme extension - both available in the
-  # upstream package - so the previous `dynamic_system_colors` fork (which
-  # added APIs we don't use) was swapped out for the upstream to unblock the
-  # bruckcode M3E packages, which transitively depend on `dynamic_color` and
-  # would otherwise collide with the fork's identical Android plugin class.
-  # NOTE: upstream Obtainium uses `dynamic_system_colors` here — intentional divergence, do not "fix".
+  # The app's Material library (the framework's flutter/material is deprecated
+  # from Flutter 3.50). Same widgets and the same MaterialIcons font as the
+  # framework copy. Packages still on flutter/material (the M3E indicators,
+  # expressive_refresh, flutter_markdown_plus) get the app theme through
+  # components/legacy_material_bridge.dart. Upstream migrated in #3258.
+  material_ui: ^1.11.1
+  # Upstream Material `dynamic_color` package. ObtainX calls only its platform
+  # API (`DynamicColorPlugin.getCorePalette` / `getAccentColor`, see
+  # utils/dynamic_color_utils.dart), which returns a palette and a Color, no
+  # Material types, so 1.x works unchanged in the material_ui app.
+  # Stays on 1.x on purpose: m3e_design (pulled in by progress_indicator_m3e)
+  # requires dynamic_color ^1.8.1. Upstream Obtainium is on 2.x (#3258);
+  # intentional divergence, do not "fix" until the M3E packages allow 2.x.
   dynamic_color: ^1.8.1
-  html: ^0.15.6
-  shared_preferences: ^2.5.5
-  url_launcher: ^6.3.2
-  permission_handler: ^13.0.0
-  fluttertoast: ^10.0.0
-  device_info_plus: ^13.2.0
-  file_picker: ^13.0.0
+  # Direct only for utils/dynamic_color_utils.dart (#3322), which builds the
+  # Material You scheme from the OS tonal palettes. Already locked through
+  # the Flutter SDK, so no new transitive packages.
+  material_color_utilities: ^0.13.0
+  html: ^0.15.7
+  shared_preferences: ^2.5.6
+  url_launcher: ^6.3.3
+  permission_handler: ^13.0.2
+  # Pinned: 10.0.1+ applies the org.jetbrains.kotlin.android plugin, which
+  # AGP 9's built-in Kotlin rejects, so the Android build fails. Unpin once
+  # a fluttertoast release drops that plugin.
+  fluttertoast: ^10.0.3
+  device_info_plus: ^13.3.0
   animations: ^3.0.0
   android_package_installer: # TODO: Upstream PR pending; if not accepted, keep fork maintained
     git:
       url: https://github.com/ImranR98/android_package_installer
-      ref: c0a7e4759b20a0c2cd1b4d40a41ff395e5f3d0e4
+      ref: 94525707bd1fba8cba4d19b4cb2b928580913510
   android_package_manager: # TODO: Submit PR to upstream and switch back when merged
     git:
       url: https://github.com/ImranR98/android_package_manager
-      ref: 98661a5824c94ae990ae0f7bf0bdb1478300c4f7
-  share_plus: ^13.2.0
-  sqflite: ^2.4.3
+      ref: 997065dccfaae71c4b34699ade7eedf5eeb66cac
+  share_plus: ^13.3.1
+  sqflite: ^2.4.5
   easy_localization: ^3.0.8
-  intl: ^0.20.2
-  android_intent_plus: ^6.0.0
+  intl: ^0.20.3
+  android_intent_plus: ^6.1.0
   flutter_archive: ^6.3.1
-  archive: ^4.0.9
+  archive: ^4.6.0
   hsluv: ^1.1.3
-  connectivity_plus: ^7.2.0
+  connectivity_plus: ^7.3.1
   shared_storage: # TODO: Upstream maintenance uncertain; consider alternatives or fork to org
     git:
       url: https://github.com/AlexBacich/shared-storage
       ref: 6dbcdf2c2045e326f59c062f542724aedf73cb6e
-  crypto: ^3.0.7
+  crypto: ^3.0.8
   collection: ^1.19.1
+  # Direct for the Samsung Galaxy Store source (app_sources/samsunggalaxystore.dart).
+  # Upstream uses ^7.1.0; flutter_svg (store icons) caps xml at 7.0.1.
+  xml: ^7.0.1
   bcrypt: ^1.2.0
-  app_links: ^7.2.1
-  equations: ^6.0.0
+  app_links: ^7.2.2
   shizuku_apk_installer: # TODO: Forked dependency; watch upstream for releases
     git:
-      url: https://github.com/re7gog/shizuku_apk_installer
-      ref: d9fb008fa4735a517986369b8aa7a025db9a43de
+      url: https://github.com/ImranR98/shizuku_apk_installer
+      ref: 447d88a0d134ec80d986064fdf458b55644d2ab3
   markdown: ^7.3.1
-  flutter_typeahead: ^6.0.0
-  battery_plus: ^7.1.0
+  flutter_typeahead: ^7.0.0
+  battery_plus: ^7.1.2
   flutter_charset_detector: ^6.0.0
   flutter_markdown_plus: ^1.0.12
-  workmanager: ^0.10.0+1
+  workmanager: ^0.10.10
   flutter_foreground_task: ^11.0.0
   # Material 3 Expressive pull-to-refresh: drop-in replacement for the legacy
   # circular spinner inside RefreshIndicator with the M3E morphing-polygon
@@ -131,6 +146,9 @@ flutter:
   assets:
     - assets/translations/
     - assets/graphics/
+    # CA roots for opt-in certificate pinning and RuStore's Mintsifry root
+    # (services/http_service.dart).
+    - assets/ca-certs/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

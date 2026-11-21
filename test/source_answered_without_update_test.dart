@@ -1,0 +1,321 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:android_package_installer/android_package_installer.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/pages/app.dart';
+import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/bulk_scan_cache.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const String _filter = r'-offline\.apk$';
+
+/// What the listing looked like after a check with the filter removed: two
+/// APKs of v1.8.0 on record.
+App _previouslyFetched({String? installedVersion = '1.9.0'}) {
+  return App(
+    id: 'dev.bikram.remember.offline',
+    url: 'https://github.com/bikram-agarwal/Remember',
+    author: 'bikram-agarwal',
+    name: 'Remember',
+    installedVersion: installedVersion,
+    latestVersion: 'v1.8.0',
+    apkUrls: const [
+      MapEntry('remember-github.apk', 'https://example.com/github.apk'),
+      MapEntry('remember-fdroid.apk', 'https://example.com/fdroid.apk'),
+    ],
+    preferredApkIndex: 0,
+    releaseDate: DateTime(2026, 9),
+    changeLog: 'https://github.com/bikram-agarwal/Remember/releases',
+    apkSizeBytes: 1024,
+    additionalSettings: {'apkFilterRegEx': _filter},
+  );
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'a source that answered with nothing usable still counts as checked',
+    () {
+      // What an APK filter matching no release asset produces, among others.
+      expect(sourceAnsweredWithoutUpdate(NoReleasesError()), isTrue);
+      expect(sourceAnsweredWithoutUpdate(NoAPKError()), isTrue);
+      expect(sourceAnsweredWithoutUpdate(NoVersionError()), isTrue);
+    },
+  );
+
+  test('a source that was never heard from does not', () {
+    // These keep the app first in line for the next (background) retry.
+    expect(
+      sourceAnsweredWithoutUpdate(const SocketException('offline')),
+      isFalse,
+    );
+    expect(
+      sourceAnsweredWithoutUpdate(const HandshakeException('tls')),
+      isFalse,
+    );
+    expect(sourceAnsweredWithoutUpdate(TimeoutException('slow')), isFalse);
+    expect(sourceAnsweredWithoutUpdate(RateLimitError(5)), isFalse);
+    expect(sourceAnsweredWithoutUpdate(ObtainiumError('unknown')), isFalse);
+  });
+
+  group('no release matching the filter', () {
+    final DateTime checkedAt = DateTime(2026, 9, 24, 17, 15);
+
+    test('replaces the release an earlier check found', () {
+      final App app = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(),
+        NoReleasesError(),
+        checkedAt,
+      );
+
+      expect(appHasNoMatchingRelease(app), isTrue);
+      expect(app.latestVersion, isEmpty);
+      expect(app.apkUrls, isEmpty);
+      expect(app.releaseDate, isNull);
+      expect(app.changeLog, isNull);
+      expect(app.apkSizeBytes, isNull);
+      expect(app.lastUpdateCheck, checkedAt);
+      // The user's own settings survive.
+      expect(app.additionalSettings['apkFilterRegEx'], _filter);
+      expect(appNeedsAttention(app), isTrue);
+      expect(
+        app.additionalSettings[needsAttentionCodeKey],
+        needsAttentionVersionFilter,
+      );
+    });
+
+    test('reads as newer on device, with nothing to install', () {
+      final App installed = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(),
+        NoReleasesError(),
+        checkedAt,
+      );
+      expect(
+        appVersionVerdictForDisplay(installed),
+        AppVersionDisplayVerdict.newerOnDevice,
+      );
+      expect(appHasActionableUpdate(installed), isFalse);
+      expect(versionOrderUncertainUpdate(installed), isFalse);
+
+      final App notInstalled = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(installedVersion: null),
+        NoReleasesError(),
+        checkedAt,
+      );
+      expect(appUpdateIsUserVisible(notInstalled), isFalse);
+    });
+
+    test('ends at the next check that finds a release', () {
+      final App none = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(),
+        NoReleasesError(),
+        checkedAt,
+      );
+
+      final App? found = mergeFetchedUpdateWithLiveState(
+        requestedApp: none,
+        liveApp: none,
+        fetchedApp: _previouslyFetched().copyWith(latestVersion: 'v1.9.1'),
+      );
+
+      expect(appHasNoMatchingRelease(found!), isFalse);
+      expect(found.latestVersion, 'v1.9.1');
+      expect(found.apkUrls, hasLength(2));
+      expect(appNeedsAttention(found), isFalse);
+    });
+
+    test('an unreadable version only moves the check time', () {
+      // The source has a release; only its version couldn't be extracted.
+      final App app = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(),
+        NoVersionError(),
+        checkedAt,
+      );
+
+      expect(appHasNoMatchingRelease(app), isFalse);
+      expect(app.latestVersion, 'v1.8.0');
+      expect(app.lastUpdateCheck, checkedAt);
+      expect(appNeedsAttention(app), isFalse);
+    });
+
+    test('a version extraction regex miss stays flagged', () {
+      final App source = _previouslyFetched().copyWith(
+        additionalSettings: {
+          'apkFilterRegEx': _filter,
+          'versionExtractionRegEx': r'v(\d+)',
+        },
+      );
+      final App app = appAfterAnswerWithoutUpdate(
+        source,
+        NoVersionError(),
+        checkedAt,
+      );
+
+      expect(appNeedsAttention(app), isTrue);
+      expect(app.latestVersion, 'v1.8.0');
+    });
+
+    test('editing the filter drops the app before the next check', () {
+      final App flagged = appAfterAnswerWithoutUpdate(
+        _previouslyFetched(),
+        NoReleasesError(),
+        checkedAt,
+      );
+      final App edited = flagged.copyWith(
+        additionalSettings: {
+          ...flagged.additionalSettings,
+          'apkFilterRegEx': r'-other\.apk$',
+        },
+      );
+
+      expect(appNeedsAttention(edited), isFalse);
+    });
+
+    test('allowing a package id change drops a stored mismatch', () {
+      final App mismatched = _previouslyFetched().copyWith(
+        additionalSettings: {
+          needsAttentionCodeKey: needsAttentionIdChanged,
+          needsAttentionDetailKey: 'dev.bikram.remember',
+        },
+      );
+
+      expect(appNeedsAttention(mismatched), isTrue);
+      expect(
+        appNeedsAttention(mismatched.copyWith(allowIdChange: true)),
+        isFalse,
+      );
+    });
+
+    test('installs that fail the same way every time are kept', () {
+      expect(
+        installFailureNeedsAttentionCode(
+          PackageInstallerStatus.failureIncompatible.code,
+        ),
+        needsAttentionInstallIncompatible,
+      );
+      expect(
+        installFailureNeedsAttentionCode(
+          PackageInstallerStatus.failureConflict.code,
+        ),
+        needsAttentionInstallConflict,
+      );
+      // Anything a later try can get past isn't.
+      for (final PackageInstallerStatus status in [
+        PackageInstallerStatus.failure,
+        PackageInstallerStatus.failureBlocked,
+        PackageInstallerStatus.failureAborted,
+        PackageInstallerStatus.failureInvalid,
+        PackageInstallerStatus.failureStorage,
+        PackageInstallerStatus.unknown,
+      ]) {
+        expect(installFailureNeedsAttentionCode(status.code), isNull);
+      }
+      expect(
+        appNeedsAttention(
+          _previouslyFetched().copyWith(
+            additionalSettings: {
+              needsAttentionCodeKey: needsAttentionInstallConflict,
+            },
+          ),
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  test('an F-Droid source link on GitHub becomes a GitHub listing', () {
+    expect(
+      gitHubRepoUrlFromSourceCodeLink(
+        'https://github.com/bikram-agarwal/Remember',
+      ),
+      'https://github.com/bikram-agarwal/Remember',
+    );
+    // F-Droid's own client, which lives on GitLab.
+    expect(
+      gitHubRepoUrlFromSourceCodeLink('https://gitlab.com/fdroid/fdroidclient'),
+      isNull,
+    );
+    expect(gitHubRepoUrlFromSourceCodeLink('https://github.com/owner'), isNull);
+    expect(gitHubRepoUrlFromSourceCodeLink(null), isNull);
+  });
+
+  test("an F-Droid page that named no GitHub repo isn't read again", () {
+    const String tracked = 'https://apt.izzysoft.de/fdroid/index/apk/a.b';
+    const String page = 'https://f-droid.org/packages/a.b/';
+    const String read = BulkScanCache.fdroidSourceCodeReadFromKey;
+
+    // On F-Droid, and its page never read.
+    expect(needsGitHubFromFDroid(tracked, {'F-Droid': page}), isTrue);
+    // Read, and it named no GitHub repo.
+    expect(
+      needsGitHubFromFDroid(tracked, {
+        'F-Droid': page,
+        'GitHub': '',
+        read: page,
+      }),
+      isFalse,
+    );
+    // Bulk add's code search found nothing, but the page may still name one.
+    expect(
+      needsGitHubFromFDroid(tracked, {'F-Droid': page, 'GitHub': ''}),
+      isTrue,
+    );
+    // Another F-Droid page is read afresh.
+    expect(
+      needsGitHubFromFDroid(tracked, {
+        'F-Droid': page,
+        read: 'https://f-droid.org/packages/a.b.old/',
+      }),
+      isTrue,
+    );
+    // Nothing to look for.
+    expect(
+      needsGitHubFromFDroid(tracked, {
+        'F-Droid': page,
+        'GitHub': 'https://github.com/a/b',
+      }),
+      isFalse,
+    );
+    expect(needsGitHubFromFDroid(tracked, {'F-Droid': ''}), isFalse);
+    expect(
+      needsGitHubFromFDroid('https://github.com/a/b', {'F-Droid': page}),
+      isFalse,
+    );
+    // Tracked from F-Droid itself: its own page.
+    expect(needsGitHubFromFDroid(page, {}), isTrue);
+    expect(needsGitHubFromFDroid(page, {read: page}), isFalse);
+  });
+
+  test('a typed filter marks the latest version as filtered', () {
+    expect(appHasActiveReleaseFilter(_previouslyFetched()), isTrue);
+    expect(
+      appHasActiveReleaseFilter(
+        _previouslyFetched().copyWith(
+          additionalSettings: {
+            'apkFilterRegEx': '  ',
+            'autoApkFilterByArch': true,
+          },
+        ),
+      ),
+      isFalse,
+    );
+  });
+
+  test('the global APK filter leaves no APK, never no release (D8)', () async {
+    SharedPreferences.setMockInitialValues({});
+    final SettingsProvider settings = SettingsProvider()
+      ..prefs = await SharedPreferences.getInstance();
+    settings.globalApkFilterRegEx = _filter;
+    addTearDown(() => settings.globalApkFilterRegEx = null);
+    final App app = _previouslyFetched().copyWith(additionalSettings: {});
+
+    expect(checkErrorNeedsAttention(app, NoAPKError()), isTrue);
+    // It runs after the source answered, so it can't hide every release.
+    expect(checkErrorNeedsAttention(app, NoReleasesError()), isFalse);
+  });
+}

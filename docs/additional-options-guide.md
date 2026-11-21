@@ -23,6 +23,22 @@ These settings affect **whether** the app is checked, **how often**, and **wheth
 
 These control **what counts as “the version”** and **how it compares** to what Android reports as installed.
 
+### Use as version string
+
+**What it does:** Picks **where the version string comes from**. The list only appears for sources that offer something besides **Default**, and each source shows only the choices it supports.
+
+| Choice | The version string becomes | Offered by |
+|--------|----------------------------|------------|
+| **Default** | What the source normally reports (for GitHub, the release tag). | Every source |
+| **Release title** | The release’s **title**. | GitHub, Farsroid |
+| **Asset name** | The **file name** of the APK ObtainX picked. Pair it with **Trim version string with RegEx** (below) to cut out the number. | GitHub |
+| **Release date** | The release’s **date**, as a stand-in version, for sources that don’t give a usable one. | GitHub, GitLab, SourceHut, APKMirror, APKPure and several other stores |
+| **Release commit SHA** | The **commit** the release’s tag points to. | GitHub |
+
+**Example:** The tag is `build-4902` but the release title is `2.4.0 – hotfix`. Pick **Release title**, then trim with `(\d+\.\d+\.\d+)` so the stored version is `2.4.0`. On a site that only shows **“Posted 2025-03-01”** and no version number, **Release date** still lets update checks tell which release is newer.
+
+---
+
 ### Trim version string with RegEx
 
 **What it does:** A **regular expression** is run on the version text ObtainX gets from the source (tag, title, page text, and so on). The regex must **match** somewhere in that text. ObtainX then builds the final version string using the match and your **match group** setting (next row).
@@ -65,7 +81,6 @@ If the regex has **no** parentheses, usually **`$0`** is enough (the whole match
 | Option | What it does | Example |
 |--------|----------------|---------|
 | **Reconcile version string with version detected from OS** | When **on**, ObtainX compares the source’s version string with the **version Android reports** for the installed app and tries to keep them consistent. Turn **off** when the source’s version format does not match what Android shows. | Source says **`2024.12.1`** but Android shows **`1.2.3`** (different scheme); reconciliation may confuse things – you turn **off** and rely on one side. |
-| **Use release date as version string (pseudo-version)** | *(Some sources only.)* Uses the **release date** as a stand-in “version” when normal version detection is unreliable but a date is available. | A site only shows **“Posted 2025-03-01”** and no semver; pseudo-version lets update checks compare “newer” by date. |
 | **Use app versionCode as OS-detected version** | Treats the APK’s **versionCode** (integer inside the APK) as what the OS “sees” for installed vs latest. | Source labels are messy, but **`versionCode` always increases**; you want comparisons based on that number. |
 
 ---
@@ -98,19 +113,20 @@ These narrow **which APK file** ObtainX picks when several builds exist (split A
 
 The following appear **only** (or mainly) for apps using that kind of source. Wording in the app may match these titles.
 
-### GitHub and Codeberg
+### GitHub, Codeberg and Forgejo
+
+Codeberg and other Forgejo servers offer the same release API as GitHub, so they have the same options below. The one exception is **GitHub Build Verification**, which only GitHub offers.
 
 | Option | What it does | Example |
 |--------|----------------|---------|
-| **Include prereleases** | Treats **pre-releases** (beta, RC, etc.) like normal releases when picking the newest. | You want **nightly** or **beta** tags, not only stable. |
+| **Include prereleases** | Treats **pre-releases** (beta, RC, etc.) like normal releases when picking the newest. Can't be combined with **Verify the ‘latest’ tag**: turning one on turns the other off. | You want **nightly** or **beta** tags, not only stable. |
 | **Fallback to older releases** | If the newest matching release has **no usable APK**, ObtainX tries **older** releases. | Latest release is **source-only**; the previous one has the APK – fallback finds it. |
 | **Filter release titles by regular expression** | Only releases whose **title** matches are considered. Tap the helper button — it lists actual release titles from this repo and generates the regex from whichever you pick. | Titles include `v2.0 (stable)` and `v2.1-beta`; tap helper → select the stable title → Apply. |
 | **Filter release notes by regular expression** | Same, but scans **release notes / body**. | Notes must contain **`[playstore]`** to count as a consumer build. |
-| **Verify the ‘latest’ tag** | Uses GitHub’s **`/latest`** API so the “latest” release is not missed when list order is odd. | Repo maintains **`latest`** correctly but API list order is not chronological. |
-| **GitHub Build Verification** | Checks GitHub release asset attestations for the selected APK. **Off** makes no checks, **Audit Only** shows version result, and **Enforce** blocks installs of unverified apps. See [Build verification in ObtainX](build-verification-guide.md). | You want GitHub APK updates to show whether the exact file has GitHub build proof before you install it. |
+| **Verify the ‘latest’ tag** | Also asks the source which release it marks as **latest** (its **`/releases/latest`** API), so that release isn't missed when the list order is odd. The repo needs at least one full (not pre-release) release. If it has none, the update check fails. | Repo maintains **`latest`** correctly but API list order is not chronological. |
+| **GitHub Build Verification** | *(GitHub only; hidden for Codeberg and Forgejo.)* Checks GitHub release asset attestations for the selected APK. **Off** makes no checks, **Audit Only** shows version result, and **Enforce** blocks installs of unverified apps. See [Build verification in ObtainX](build-verification-guide.md). | You want GitHub APK updates to show whether the exact file has GitHub build proof before you install it. |
 | **Sort method** | How releases are **ordered** before ObtainX walks them (date, smart name parsing, raw name, API order, or hybrid). | Many assets share similar names; **Release date** picks strictly by publish time. |
 | **Use latest asset upload as release date** | Uses **newest file upload time** on the release as the date (not only publish time). | Maintainer **re-uploads** a fixed asset; upload time reflects the real change. |
-| **Use release title as version string** | The **release title** becomes the version string ObtainX shows and compares. | Tag is `build-4902` but title is **`2.4.0 – hotfix`**; you want `2.4.0` visible. |
 
 ### GitLab
 
@@ -188,7 +204,6 @@ The following appear **only** (or mainly) for apps using that kind of source. Wo
 | Option | What it does | Example |
 |--------|----------------|---------|
 | **Auto-select first of multiple APKs** | When several files exist for one version, pick the **first**. | Same as APKPure-style “first row wins.” |
-| **Use release title as version string** | **Release title** is shown and compared as the version. | Title shows **`5.0.1`** clearly; tag is an internal code. |
 
 ---
 

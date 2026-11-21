@@ -51,7 +51,11 @@ class SourceRequestSession {
     final pending = _repositoryResponses.putIfAbsent(key, load);
     try {
       final response = await pending;
+      // A missing index stays missing for this operation, so the next app from
+      // the same repo skips that URL shape; other failures are retried.
       if (response.statusCode != HttpStatus.ok &&
+          response.statusCode != HttpStatus.notFound &&
+          response.statusCode != HttpStatus.gone &&
           identical(_repositoryResponses[key], pending)) {
         unawaited(_repositoryResponses.remove(key));
       }

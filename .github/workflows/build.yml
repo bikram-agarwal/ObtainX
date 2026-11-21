@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -29,9 +29,10 @@ jobs:
           # Pinned for F-Droid reproducibility: F-Droid rebuilds the fdroid-flavor
           # APK and diffs it byte-for-byte against the signed release asset, so the
           # toolchain must be fixed (a floating `channel: stable` would break it).
-          # Keep this EQUAL to the .flutter submodule commit referenced by the
-          # fdroiddata recipe; bump both together when upgrading Flutter.
-          flutter-version: 3.47.5
+          # The fdroiddata recipe (metadata/dev.bikram.obtainx.yml) reads this
+          # line with sed and checks out the same Flutter version, so this is
+          # the only place to bump. Keep the `flutter-version: X.Y.Z` form.
+          flutter-version: 3.50.1
           cache: true
 
       - name: Cache Gradle packages
@@ -130,7 +131,7 @@ jobs:
           subject-path: 'build/app/outputs/flutter-apk/ObtainX-*.apk'
 
       - name: Upload APKs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: obtainx-apks-v${{ steps.extract_version.outputs.version }}
           path: |

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/models/app.dart';
 import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 
@@ -11,11 +12,12 @@ void main() {
   test(
     'sortColumn 4 is sanitized in settings and preserved in settingsObtainX',
     () {
-      final SplitExportSettings split =
-          splitSettingsForExport(<String, dynamic>{
-            'sortColumn': SortColumnSettings.lastUpdateCheck.index,
-            'theme': ThemeSettings.dark.index,
-          });
+      final SplitExportSettings split = splitSettingsForExport(
+        <String, dynamic>{
+          'sortColumn': SortColumnSettings.lastUpdateCheck.index,
+          'theme': ThemeSettings.dark.index,
+        },
+      );
 
       expect(
         split.settings['sortColumn'],
@@ -60,20 +62,17 @@ void main() {
     expect(split.settingsObtainX?.containsKey('installMethod'), isNot(true));
   });
 
-  test(
-    'groupBy appType stays verbatim in shared settings (Obtainium tolerates it)',
-    () {
-      // ObtainX's extra grouping value has no Obtainium equivalent, but Obtainium's
-      // groupBy getter falls back to none for unknown values, so it need not be
-      // stripped — and keeping it lets an ObtainX self-import restore it exactly.
-      final SplitExportSettings split = splitSettingsForExport(
-        <String, dynamic>{'groupBy': AppsListGroupBy.appType.name},
-      );
+  test('groupBy appType stays verbatim in shared settings (Obtainium tolerates it)', () {
+    // ObtainX's extra grouping value has no Obtainium equivalent, but Obtainium's
+    // groupBy getter falls back to none for unknown values, so it need not be
+    // stripped — and keeping it lets an ObtainX self-import restore it exactly.
+    final SplitExportSettings split = splitSettingsForExport(<String, dynamic>{
+      'groupBy': AppsListGroupBy.appType.name,
+    });
 
-      expect(split.settings['groupBy'], AppsListGroupBy.appType.name);
-      expect(split.settingsObtainX?.containsKey('groupBy'), isNot(true));
-    },
-  );
+    expect(split.settings['groupBy'], AppsListGroupBy.appType.name);
+    expect(split.settingsObtainX?.containsKey('groupBy'), isNot(true));
+  });
 
   test('ObtainX-only keys stay out of shared settings', () {
     final SplitExportSettings split = splitSettingsForExport(<String, dynamic>{
@@ -166,11 +165,13 @@ void main() {
   test('imported groupBy / installMethod survive the merge unchanged', () {
     // No translation on import: an Obtainium backup's shared keys are read
     // directly by ObtainX, so the merge is a plain pass-through.
-    final Map<String, dynamic>? merged =
-        mergeImportedSettingsMaps(<String, dynamic>{
-          'groupBy': AppsListGroupBy.source.name,
-          'installMethod': InstallerMode.shizuku.name,
-        }, null);
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'groupBy': AppsListGroupBy.source.name,
+        'installMethod': InstallerMode.shizuku.name,
+      },
+      null,
+    );
 
     expect(merged?['groupBy'], AppsListGroupBy.source.name);
     expect(merged?['installMethod'], InstallerMode.shizuku.name);
@@ -185,29 +186,160 @@ void main() {
     expect(merged?['installMethod'], InstallerMode.dhizuku.name);
   });
 
-  test(
-    'dhizuku installMethod sanitizes to shizuku for Obtainium export and round-trips via overlay',
-    () {
+  test('dhizuku installMethod exports as Obtainium\'s Shizuku mode with the '
+      'Dhizuku backend and round-trips via overlay', () {
+    final SplitExportSettings split = splitSettingsForExport(<String, dynamic>{
+      'installMethod': InstallerMode.dhizuku.name,
+    });
+
+    // Shared block is Obtainium-compatible: Shizuku mode on its Dhizuku
+    // backend (Obtainium #2844), so Obtainium really installs via Dhizuku.
+    expect(split.settings['installMethod'], InstallerMode.shizuku.name);
+    expect(split.settings['shizukuInstallerMode'], 'dhizuku');
+    // ObtainX overlay retains 'dhizuku'
+    expect(split.settingsObtainX?['installMethod'], InstallerMode.dhizuku.name);
+    expect(
+      split.settingsObtainX?.containsKey('shizukuInstallerMode'),
+      isNot(true),
+    );
+
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      split.settings,
+      split.settingsObtainX,
+    );
+    // ObtainX import restores 'dhizuku'
+    expect(merged?['installMethod'], InstallerMode.dhizuku.name);
+  });
+
+  test('other installer modes export without a Shizuku backend', () {
+    for (final InstallerMode mode in [
+      InstallerMode.system,
+      InstallerMode.shizuku,
+      InstallerMode.external,
+      InstallerMode.root,
+    ]) {
       final SplitExportSettings split = splitSettingsForExport(
-        <String, dynamic>{'installMethod': InstallerMode.dhizuku.name},
+        <String, dynamic>{'installMethod': mode.name},
       );
+      expect(split.settings['installMethod'], mode.name);
+      expect(split.settings.containsKey('shizukuInstallerMode'), isFalse);
+    }
+  });
 
-      // Shared block is Obtainium-compatible ('shizuku')
-      expect(split.settings['installMethod'], InstallerMode.shizuku.name);
-      // ObtainX overlay retains 'dhizuku'
-      expect(
-        split.settingsObtainX?['installMethod'],
-        InstallerMode.dhizuku.name,
-      );
+  test('an Obtainium Dhizuku backend imports as ObtainX\'s Dhizuku mode', () {
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'installMethod': InstallerMode.shizuku.name,
+        'shizukuInstallerMode': 'dhizuku',
+      },
+      null,
+    );
 
+    expect(merged?['installMethod'], InstallerMode.dhizuku.name);
+    // The upstream key itself is skipped when the settings are applied.
+    expect(droppedUpstreamSettingKeys, contains('shizukuInstallerMode'));
+  });
+
+  test('an Obtainium auto or Shizuku backend imports as Shizuku mode', () {
+    for (final String backend in ['auto', 'shizuku']) {
       final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
-        split.settings,
-        split.settingsObtainX,
+        <String, dynamic>{
+          'installMethod': InstallerMode.shizuku.name,
+          'shizukuInstallerMode': backend,
+        },
+        null,
       );
-      // ObtainX import restores 'dhizuku'
-      expect(merged?['installMethod'], InstallerMode.dhizuku.name);
-    },
-  );
+      expect(merged?['installMethod'], InstallerMode.shizuku.name);
+    }
+    // The backend only qualifies Shizuku mode.
+    final Map<String, dynamic>? system = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'installMethod': InstallerMode.system.name,
+        'shizukuInstallerMode': 'dhizuku',
+      },
+      null,
+    );
+    expect(system?['installMethod'], InstallerMode.system.name);
+  });
+
+  test('an Obtainium Dhizuku backend also moves per-app Shizuku apps', () {
+    App app(String? mode) => App(
+      id: 'org.example.${mode ?? 'none'}',
+      url: 'https://example.org/${mode ?? 'none'}',
+      author: 'Example',
+      name: 'Example',
+      latestVersion: '1.0',
+      apkUrls: const [],
+      preferredApkIndex: 0,
+      additionalSettings: {'installerMode': ?mode},
+    );
+    final List<App> apps = [
+      app(InstallerMode.shizuku.name),
+      app(InstallerMode.system.name),
+      app(null),
+    ];
+
+    final List<App> dhizuku = appsWithImportedShizukuBackend(apps, {
+      'installMethod': InstallerMode.dhizuku.name,
+      'shizukuInstallerMode': 'dhizuku',
+    });
+    expect(dhizuku.map((a) => a.additionalSettings['installerMode']), [
+      InstallerMode.dhizuku.name,
+      InstallerMode.system.name,
+      null,
+    ]);
+    // Any other backend (or none) leaves per-app modes alone.
+    final List<App> shizuku = appsWithImportedShizukuBackend(apps, {
+      'shizukuInstallerMode': 'shizuku',
+    });
+    expect(
+      shizuku.first.additionalSettings['installerMode'],
+      InstallerMode.shizuku.name,
+    );
+    expect(appsWithImportedShizukuBackend(apps, null), same(apps));
+  });
+
+  test('an older backup\'s Wi-Fi / charging switches become guard modes', () {
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'bgUpdatesOnWiFiOnly': true,
+        'bgUpdatesWhileChargingOnly': false,
+      },
+      null,
+    );
+    // ON meant no background work at all (D5).
+    expect(merged?['bgGuardOnWiFi'], BgGuardMode.nothing.name);
+    expect(merged?['bgGuardWhileCharging'], BgGuardMode.checksAndUpdates.name);
+
+    // A backup that has the guard key keeps it.
+    final Map<String, dynamic>? newer = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'bgUpdatesOnWiFiOnly': true,
+        'bgGuardOnWiFi': BgGuardMode.checksOnly.name,
+      },
+      null,
+    );
+    expect(newer?['bgGuardOnWiFi'], BgGuardMode.checksOnly.name);
+  });
+
+  test('import keeps only a content:// export folder (SET-H8)', () {
+    // Obtainium on a TV stores its Downloads sentinel; there's no folder
+    // behind it in ObtainX, and every auto-export would fail.
+    final Map<String, dynamic>? tv = mergeImportedSettingsMaps(
+      <String, dynamic>{'exportDir': 'tv-downloads:', 'theme': 1},
+      null,
+    );
+    expect(tv?.containsKey('exportDir'), isFalse);
+    expect(tv?['theme'], 1);
+
+    const String tree =
+        'content://com.android.externalstorage.documents/tree/primary%3ABackups';
+    final Map<String, dynamic>? saf = mergeImportedSettingsMaps(
+      <String, dynamic>{'exportDir': tree},
+      null,
+    );
+    expect(saf?['exportDir'], tree);
+  });
 
   test(
     'ObtainX self-import round-trips groupBy=appType via the shared block',

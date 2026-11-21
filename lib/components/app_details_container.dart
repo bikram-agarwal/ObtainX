@@ -1,5 +1,5 @@
 import 'package:animations/animations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// The stock Material container transform used by app cards and their details.
 class AppDetailsContainer extends StatelessWidget {

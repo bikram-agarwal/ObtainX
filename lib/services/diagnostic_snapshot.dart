@@ -263,7 +263,8 @@ Future<String> buildObtainxDiagnosticLog({
     'Installer',
     installerMode == InstallerMode.external.name
         ? '$installerMode (${settings.externalInstallerPackage ?? 'no target set'})'
-        : installerMode == InstallerMode.shizuku.name
+        : installerMode == InstallerMode.shizuku.name ||
+              installerMode == InstallerMode.root.name
         ? '$installerMode (pretends to be Play: ${settings.shizukuPretendToBeGooglePlay})'
         : installerMode,
   );
@@ -274,14 +275,24 @@ Future<String> buildObtainxDiagnosticLog({
         'on start ${settings.checkOnStart}, installed/track-only only ${settings.onlyCheckInstalledOrTrackOnlyApps}, '
         'prereleases ${settings.includePrereleasesByDefault}',
   );
-  if (settings.enableBackgroundUpdates) {
+  // The Wi-Fi and charging guards apply to every background check. Each is
+  // what may still run off Wi-Fi / unplugged ([BgGuardMode] name).
+  if (settings.updateInterval > 0) {
     _writeLine(
       buffer,
       'Background conditions',
-      'Wi-Fi only ${settings.bgUpdatesOnWiFiOnly}, charging only ${settings.bgUpdatesWhileChargingOnly}, '
+      'off Wi-Fi ${settings.bgGuardOnWiFi.name}, not charging ${settings.bgGuardWhileCharging.name}, '
           'foreground service ${settings.useFGService}',
     );
   }
+  _writeLine(
+    buffer,
+    'Update safeguards',
+    'min age ${settings.minimumUpdateAgeDays} d, pinning ${settings.enableCertificatePinning}, '
+        'signer check ${settings.verifySigningCertHashes}, '
+        'global APK filter ${settings.globalApkFilterRegEx != null}, '
+        'global version regex ${settings.globalVersionExtractionRegEx != null}',
+  );
   _writeLine(
     buffer,
     'Downloads',

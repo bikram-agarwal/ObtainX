@@ -102,9 +102,8 @@ String? _resolveInterpolation(String rawValue, List<String> trimmedLines) {
   if (!rawValue.contains(r'$')) {
     return rawValue;
   }
-  final RegExpMatch? reference = RegExp(
-    r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$',
-  ).firstMatch(rawValue);
+  final RegExpMatch? reference = RegExp(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$')
+      .firstMatch(rawValue);
   if (reference == null) {
     // Something more complex than a bare variable (concatenation, a function
     // call, `${rootProject.foo}`): not worth guessing at.
@@ -112,6 +111,18 @@ String? _resolveInterpolation(String rawValue, List<String> trimmedLines) {
   }
   return _declaredVariableValue(reference.group(1)!, trimmedLines);
 }
+
+/// The quoted fallback of an elvis (`?:`) that ends a line.
+///
+/// Real example (InstallerX-Revived on GitHub, checked 2026-09-24):
+/// `applicationId = project.findProperty("APP_ID") as String? ?: "com.rosan.installer.x.revived"`.
+/// A build that doesn't set the property installs as the fallback, and the
+/// file's own comment says that is the official release's ID. Before this, the
+/// line was unreadable, so the namespace (com.rosan.installer) was taken
+/// instead.
+final RegExp _elvisFallback = RegExp(
+  r'''\?:\s*(?:"([^"]*)"|'([^']*)')\s*(?://.*)?$''',
+);
 
 /// The value [keyword] is assigned on [line], with variables and interpolation
 /// resolved against the rest of the file. Not filtered to package-shaped values
@@ -124,9 +135,16 @@ String? _valueOnLine(String keyword, String line, List<String> trimmedLines) {
   if (quoted != null) {
     return quoted.isEmpty ? null : _resolveInterpolation(quoted, trimmedLines);
   }
-  return variableName == null
+  if (variableName == null) return null;
+  final String? declared = _declaredVariableValue(variableName, trimmedLines);
+  if (declared != null) return declared;
+  final RegExpMatch? fallback = _elvisFallback.firstMatch(
+    line.substring(match.end),
+  );
+  final String? fallbackValue = fallback?.group(1) ?? fallback?.group(2);
+  return fallbackValue == null || fallbackValue.isEmpty
       ? null
-      : _declaredVariableValue(variableName, trimmedLines);
+      : _resolveInterpolation(fallbackValue, trimmedLines);
 }
 
 Set<String> _collectDeclaredValues(String keyword, List<String> trimmedLines) {

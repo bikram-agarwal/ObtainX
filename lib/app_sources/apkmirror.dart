@@ -5,11 +5,14 @@ import 'package:html/dom.dart' as html_dom;
 import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/services/host_request_gate.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/utils/min_update_age.dart';
 
 /// Single consolidated debug-logging flag for the APKMirror size code path.
 ///
@@ -22,30 +25,22 @@ import 'package:obtainium/services/html_parse_isolate.dart';
 const bool apkMirrorSizeDebug = false;
 const String _apkMirrorSizeDebugPrefix = 'OBTAINX-APK-SIZE-DEBUG';
 
-/// The user-agent token APKMirror's Cloudflare rule allowlists.
+/// The user-agent token APKMirror's Cloudflare rule lets through to its
+/// *HTML* pages (release page, `-apk-download/` page, app listing).
 ///
-/// Every APKMirror *HTML* page (app listing, release page, `-apk-download/`
-/// page) is served only to this allowlist. Anything else — including a
-/// convincingly spoofed mobile-browser UA, which is what this source used to
-/// send — gets a 403 carrying `Cf-Mitigated: challenge` and a "Just a moment…"
-/// interstitial body. The `/feed/` RSS endpoint is the sole exception, which is
-/// why version detection kept working while everything that scrapes HTML (icon
-/// resolution in [APKMirror.getLatestAPKDetails], the lazy size walk in
-/// [APKMirror.resolveLatestApkSizeBytes], the changelog fetch, and
-/// [APKMirror.tryInferringAppId]) silently returned nothing: each of those
-/// treats a failed request as "unavailable" rather than an error.
+/// Only page requests send it ([APKMirror.getRequestHeaders]). The `/feed/`
+/// RSS allowlists ObtainX by name since #339 (2026-10-13), so feed requests
+/// identify as `ObtainX/<version> (+repo)`, which APKMirror's admin asked for.
+/// Pages are different: on 2026-11-20 a first page request with the ObtainX
+/// UA got a 403 `cf-mitigated: challenge`, while the size walk and "What's
+/// new" still loaded with this token. So pages keep it, with ObtainX's name
+/// and version appended so APKMirror can attribute (and, if they want, block)
+/// the traffic, until the admin replies (v1.7.4 sync D2 final). Don't add new
+/// uses of it, and don't "fix" pages back to a browser UA: that gets a
+/// challenge every time.
 ///
-/// Measured 2026-08-18, holding every other header constant and varying only
-/// the UA: the rule is a plain substring test on `APKUpdater` — bare
-/// `APKUpdater`, `APKUpdater-v9.9.9` and `APKUpdater-v3.5.9 ObtainX/x.y.z` all
-/// return 200, while `ObtainX-v1.0.0`, `Obtainium`, `okhttp/4.12.0` and the old
-/// browser UA all return 403. Because the match tolerates extra text, ObtainX
-/// keeps its own name and version in the string instead of impersonating
-/// APKUpdater outright, so APKMirror can still attribute (and, if they want,
-/// block) this traffic.
-///
-/// Do NOT "fix" this back to a browser user-agent — that is precisely what
-/// disabled the features above.
+/// Measured 2026-08-18: the page rule is a substring test on `APKUpdater`;
+/// `APKUpdater-v3.5.9 ObtainX/x.y.z` returns 200, the old browser UA 403.
 const String apkMirrorAllowlistedUserAgentToken = 'APKUpdater-v3.5.9';
 
 /// [apkMirrorAllowlistedUserAgentToken], with ObtainX's own identification
@@ -56,6 +51,10 @@ String apkMirrorUserAgent([String? obtainXVersion]) {
       ? apkMirrorAllowlistedUserAgentToken
       : '$apkMirrorAllowlistedUserAgentToken ObtainX/$version';
 }
+
+/// Requests in flight to apkmirror.com at once, across every caller that
+/// goes through [HostRequestGate] (APKMirror asked for 1-2, #339).
+const int apkMirrorMaxConcurrentRequests = 2;
 
 class _ApkMirrorSizeCandidate {
   final String key;
@@ -85,38 +84,76 @@ Future<void> _logApkMirrorSizeDebug(String message) async {
   }
 }
 
-/// Image and static asset URL suffixes that appear in page HTML after a string
-/// that looks like `com.vendor.app`, e.g. `com.google.android.calendar.png`.
-const _apkMirrorTrailingNonPackageSegments = <String>{
-  'avif',
-  'bmp',
-  'gif',
-  'ico',
-  'jpeg',
-  'jpg',
-  'png',
-  'svg',
-  'webp',
-};
-
 const _apkMirrorCanonicalAppSlugByAlias = <String, String>{
   'youtube-music-android-automotive': 'youtube-music',
   'youtube-music-wear-os': 'youtube-music',
 };
 
-String _apkMirrorNormalizeInferredPackageCandidate(String rawCandidate) {
-  var normalized = rawCandidate;
-  while (true) {
-    final lastDotIndex = normalized.lastIndexOf('.');
-    if (lastDotIndex <= 0) break;
-    final tailSegment = normalized.substring(lastDotIndex + 1).toLowerCase();
-    if (_apkMirrorTrailingNonPackageSegments.contains(tailSegment)) {
-      normalized = normalized.substring(0, lastDotIndex);
-    } else {
-      break;
-    }
+final RegExp _apkMirrorPackagePattern = RegExp(
+  r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$',
+);
+
+/// The package an APKMirror listing page is for, or null if it doesn't say.
+///
+/// Read from the page's "View on Play Store" button (`details?id=<package>`).
+/// Checked on live pages 2026-09-24: it's there even for apps Google doesn't
+/// list on the store (Pixel Launcher). Every page also carries an ad linking
+/// to another app's store page (ML Manager), so only the button counts.
+///
+/// The fallback is the `og:image` filename, which ends in `_<package>` for
+/// newer icons. Older ones are just a hash (Play Store, WebView, Firefox).
+Future<String?> apkMirrorPackageFromListingPageHtml(String html) async {
+  final doc = await parseHtmlOffIsolate(html);
+  final String? storeHref = doc
+      .querySelector('a[title="View on Play Store"]')
+      ?.attributes['href'];
+  final Uri? storeUri = Uri.tryParse(storeHref?.trim() ?? '');
+  final String? storeId = storeUri?.host == 'play.google.com'
+      ? storeUri!.queryParameters['id']
+      : null;
+  if (storeId != null && _apkMirrorPackagePattern.hasMatch(storeId)) {
+    return storeId;
   }
-  return normalized;
+  return apkMirrorPackageFromIconUrl(
+    doc.querySelector('meta[property="og:image"]')?.attributes['content'],
+  );
+}
+
+/// The package an APKMirror icon URL names, or null for a hash-only icon.
+///
+/// Newer icons are named `<hash>_<package>.png`; the feed's copies add a size
+/// suffix (`…_<package>-384x384.png`), stripped first (upstream bb782a74).
+/// Everything after the *first* `_` is the package, not just the last
+/// `_`-segment as upstream reads it: package names may contain `_`
+/// (`…_org.mozilla.firefox_beta` is Firefox Beta, not Firefox).
+String? apkMirrorPackageFromIconUrl(String? iconUrl) {
+  final List<String> iconPath =
+      Uri.tryParse(iconUrl?.trim() ?? '')?.pathSegments ?? const [];
+  if (iconPath.isEmpty) return null;
+  final String fileName = iconPath.last;
+  final int extension = fileName.lastIndexOf('.');
+  final String stem =
+      (extension > 0 ? fileName.substring(0, extension) : fileName)
+          .replaceFirst(RegExp(r'-\d+x\d+$'), '');
+  final int underscore = stem.indexOf('_');
+  if (underscore < 0) return null;
+  final String iconId = stem.substring(underscore + 1);
+  return _apkMirrorPackagePattern.hasMatch(iconId) ? iconId : null;
+}
+
+/// The app icon in an APKMirror feed (or one feed item): the first
+/// `<img src>` of the `content:encoded` HTML. Every item carries it, so the
+/// listing page isn't needed for the icon (#339).
+String? apkMirrorIconUrlFromFeedXml(String feedXml) {
+  final String? src = RegExp(
+    r'''<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']''',
+    caseSensitive: false,
+  ).firstMatch(feedXml)?.group(1)?.trim();
+  if (src == null ||
+      !(src.startsWith('https://') || src.startsWith('http://'))) {
+    return null;
+  }
+  return src;
 }
 
 /// RSS puts the release URL in `<link>https://...</link>`. The HTML parser
@@ -186,23 +223,6 @@ String? titleFromApkMirrorRssItemInner(String itemInnerXml) {
     caseSensitive: false,
   ).firstMatch(itemInnerXml);
   return titleMatch?.group(1)?.trim();
-}
-
-/// Resolves Open Graph / Twitter image URL from an APKMirror app listing page.
-Future<String?> iconUrlFromApkMirrorAppPageHtml(
-  String html,
-  String pageUrl,
-) async {
-  final doc = await parseHtmlOffIsolate(html);
-  final String? raw =
-      doc.querySelector('meta[property="og:image"]')?.attributes['content'] ??
-      doc.querySelector('meta[name="twitter:image"]')?.attributes['content'] ??
-      doc
-          .querySelector('meta[name="twitter:image:src"]')
-          ?.attributes['content'];
-  if (raw == null || raw.trim().isEmpty) return null;
-  final baseUri = Uri.parse(pageUrl);
-  return baseUri.resolveUri(Uri.parse(raw.trim())).toString();
 }
 
 int? apkSizeBytesFromApkMirrorSizeText(String sizeText) {
@@ -475,7 +495,17 @@ Future<List<MapEntry<String, String>>> _filterApkMirrorDownloadPageEntries(
     additionalSettings['invertAPKFilter'],
   );
   if (additionalSettings['autoApkFilterByArch'] == true) {
+    // The arch filter now keeps universal variants as alternatives next to
+    // the ABI match (v1.7.4 sync D12). The size shown stays the ABI-specific
+    // variant's, so universal ones drop out while another variant remains,
+    // which also skips fetching their download pages.
     filteredEntries = await filterApksByArch(filteredEntries);
+    final abiSpecificEntries = filteredEntries
+        .where((entry) => !ApkFilterService.isUniversalApkName(entry.key))
+        .toList();
+    if (abiSpecificEntries.isNotEmpty) {
+      filteredEntries = abiSpecificEntries;
+    }
   }
   return filteredEntries;
 }
@@ -519,7 +549,12 @@ DateTime? releaseDateFromApkMirrorRssItemInner(String itemInnerXml) {
     r'<pubDate>([^<]+)</pubDate>',
     caseSensitive: false,
   ).firstMatch(itemInnerXml);
-  final raw = pubDateMatch?.group(1)?.trim();
+  return _apkMirrorPubDate(pubDateMatch?.group(1));
+}
+
+/// Parses an RSS `pubDate`, also when its zone isn't spelled `GMT`.
+DateTime? _apkMirrorPubDate(String? pubDate) {
+  final raw = pubDate?.trim();
   if (raw == null || raw.isEmpty) return null;
   try {
     return HttpDate.parse(raw);
@@ -550,6 +585,15 @@ String? apkMirrorVersionFromTitle(String? title) {
   return digit == null ? label : label.substring(digit.start).trim();
 }
 
+/// [url] with its path ending in `/`. APKMirror's canonical page URLs do, and
+/// a URL without the slash costs a 301 first (#339).
+String _apkMirrorWithTrailingSlash(String url) {
+  final Uri? uri = Uri.tryParse(url);
+  if (uri == null || uri.path.endsWith('/')) return url;
+  return uri.replace(path: '${uri.path}/').toString();
+}
+
+/// The APKMirror maintainers do not allow for directly downloading APKs (PR #44)
 class APKMirror extends AppSource {
   APKMirror() {
     name = 'APKMirror';
@@ -560,7 +604,20 @@ class APKMirror extends AppSource {
     naiveStandardVersionDetection = true;
     showReleaseDateAsVersionToggle = true;
     appIdInferIsOptional = true;
+    inferAppIdEvenWhenTrackOnly = true;
+    // #339: at most 2 requests in flight to apkmirror.com across all update
+    // workers, page requests at least 1 s apart, and a request class that got
+    // a challenge or a rate limit fails fast until the block ends.
+    enableHostRequestGate = true;
+    maxConcurrentRequestsPerHost = apkMirrorMaxConcurrentRequests;
   }
+
+  /// One lazy size walk per release, per isolate (#339), keyed
+  /// `listingKey|releasePageUrl`. Static because [SourceProvider.getSource]
+  /// hands out a fresh source per call. It holds the walk itself, so reopening
+  /// the app page (or a second page racing the first) reuses the result,
+  /// failures included, instead of walking the release pages again.
+  static final Map<String, Future<int?>> _sizeWalks = {};
 
   @override
   List<List<GeneratedFormItem>>
@@ -578,6 +635,13 @@ class APKMirror extends AppSource {
         ],
       ),
     ],
+    [
+      GeneratedFormSwitch(
+        'invertReleaseTitlesFilter',
+        label: '${tr('invertRegEx')} (${tr('filterReleaseTitlesByRegEx')})',
+        value: false,
+      ),
+    ],
   ];
 
   @override
@@ -586,13 +650,21 @@ class APKMirror extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
-    final packageInfo = await getInstalledInfo(
+    final String? version = (await getInstalledInfo(
       obtainiumId,
       includeOwnDebugBuild: true,
-    );
+    ))?.versionName;
+    final Uri? uri = Uri.tryParse(url);
+    final bool isFeed =
+        uri != null && HostRequestGate.requestClassFor(uri) == 'feed';
     return {
-      // See [apkMirrorAllowlistedUserAgentToken] — a browser UA is refused.
-      'user-agent': apkMirrorUserAgent(packageInfo?.versionName),
+      // Lowercase key: sourceRequest adds its default UA unless a
+      // 'user-agent' is present in any casing.
+      'user-agent': isFeed
+          // The feed allowlists ObtainX by name (#339).
+          ? obtainXIdentifyingUserAgent(version, obtainiumUrl)
+          // Pages still need the token; see [apkMirrorAllowlistedUserAgentToken].
+          : apkMirrorUserAgent(version),
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
@@ -623,53 +695,51 @@ class APKMirror extends AppSource {
   String? changeLogPageFromStandardUrl(String standardUrl) =>
       '$standardUrl/#whatsnew';
 
-  /// UNSOUND — do not rely on this without replacing the scrape first.
+  /// The fallback for apps whose feed icon is only a hash, so the feed doesn't
+  /// name the package ([APKDetails.appId] is null): reads the listing page,
+  /// see [apkMirrorPackageFromListingPageHtml]. [SourceProvider.getApp] asks
+  /// only when an app is added, since a known ID is kept. A failed read means
+  /// a temporary ID, not a failed add.
   ///
-  /// Unreachable today: [SourceProvider._resolveAppId] only infers when the app
-  /// is not track-only, and this source enforces track-only. Verified against a
-  /// live listing page 2026-08-18, it fails two ways if that ever changes:
-  /// the `com.` prefix cannot express ids like `org.thoughtcrime.securesms`,
-  /// and the first match on a page is usually a *different* app's icon filename
-  /// from a sidebar/related-apps widget — Signal's page yields
-  /// `com.google.android.youtube`.
-  ///
-  /// The fix is not a better regex, but it is not the `app_exists` API either:
-  /// that endpoint is a *reverse* lookup (you post `pnames` and it returns app
-  /// links), so it cannot answer "which package is this URL?". Two forward
-  /// routes were verified against live pages on 2026-08-18:
-  ///  * the listing page's `og:image` filename carries `_<pname>` for newer
-  ///    uploads — exact when present (chrome/whatsapp/spotify/signal all
-  ///    matched the API's `pname`), but absent on older icons, which are just
-  ///    `<hash>.png` (firefox, termux, vlc);
-  ///  * authoritative: walk to `download.php` and read the **302 `Location`**
-  ///    header without fetching a body. The R2 filename encodes package,
-  ///    version and version code, e.g.
-  ///    `com.android.chrome_151.0.7922.139-792213933_25lang_2feat_<md5>_apkmirror.com.apkm`.
+  /// The `app_exists` API can't do this: it's a *reverse* lookup (you post
+  /// `pnames` and get app links back). The authoritative route, measured
+  /// 2026-08-18, is the **302 `Location`** of `download.php`, whose filename
+  /// encodes the package, e.g.
+  /// `com.android.chrome_151.0.7922.139-792213933_25lang_2feat_<md5>_apkmirror.com.apkm`,
+  /// but reaching it takes a request per page on the way.
   @override
   Future<String?> tryInferringAppId(
     String standardUrl, {
     Map<String, dynamic> additionalSettings = const {},
   }) async {
-    final Response res = await sourceRequest(standardUrl, additionalSettings);
-    if (res.statusCode != 200) return null;
-    const packagePattern = r'com(?:\.[a-zA-Z0-9_]+){2,}';
-    final packageFullMatch = RegExp('^$packagePattern\$');
-    for (final match in RegExp(packagePattern).allMatches(res.body)) {
-      final candidate = _apkMirrorNormalizeInferredPackageCandidate(
-        match.group(0)!,
+    try {
+      final Response res = await sourceRequest(
+        _apkMirrorWithTrailingSlash(standardUrl),
+        additionalSettings,
       );
-      if (candidate.length >= 10 &&
-          !candidate.startsWith('com.apkmirror') &&
-          !candidate.contains('apkmirror') &&
-          packageFullMatch.hasMatch(candidate)) {
-        return candidate;
-      }
+      if (res.statusCode != 200) return null;
+      return await apkMirrorPackageFromListingPageHtml(res.body);
+    } catch (_) {
+      return null;
     }
-    return null;
   }
 
   @override
   Future<APKDetails> getLatestAPKDetails(
+    String standardUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    try {
+      return await _getLatestAPKDetails(standardUrl, additionalSettings);
+    } catch (e) {
+      // As before this wrapper: a network failure reaches the update worker
+      // as itself, which retries TLS handshakes to the same host.
+      if (isTransientNetworkError(e)) rethrow;
+      rethrowOrWrapError(e);
+    }
+  }
+
+  Future<APKDetails> _getLatestAPKDetails(
     String standardUrl,
     Map<String, dynamic> additionalSettings,
   ) async {
@@ -681,6 +751,8 @@ class APKMirror extends AppSource {
             true
         ? additionalSettings['filterReleaseTitlesByRegEx']
         : null;
+    final bool invertTitleFilter =
+        additionalSettings['invertReleaseTitlesFilter'] == true;
     final Response res = await sourceRequest(
       '$standardUrl/feed/',
       additionalSettings,
@@ -688,6 +760,7 @@ class APKMirror extends AppSource {
     if (res.statusCode != 200) {
       throw getObtainiumHttpError(res);
     }
+    final int minAgeDays = await effectiveMinUpdateAgeDays(additionalSettings);
     final itemInnerBlocks = RegExp(
       r'<item>([\s\S]*?)</item>',
       caseSensitive: false,
@@ -713,6 +786,7 @@ class APKMirror extends AppSource {
     String? titleString;
     String? releasePageUrl;
     DateTime? releaseDate;
+    String? iconUrl;
 
     if (itemInnerBlocks.isNotEmpty) {
       for (int scanIndex = 0; scanIndex < itemInnerBlocks.length; scanIndex++) {
@@ -724,67 +798,109 @@ class APKMirror extends AppSource {
           ? RegExp(regexFilter)
           : null;
       String? chosenBlock;
+      String? tooYoungBlock;
+      int releaseSkipped = 0;
       for (int itemIndex = 0; itemIndex < itemInnerBlocks.length; itemIndex++) {
-        if (!fallbackToOlderReleases && itemIndex > 0) break;
+        // Releases skipped as too young don't count as the latest one.
+        if (!fallbackToOlderReleases && itemIndex > releaseSkipped) break;
         final block = itemInnerBlocks[itemIndex];
         final nameToFilter = titleFromApkMirrorRssItemInner(block);
         if (titleFilterPattern != null &&
             nameToFilter != null &&
-            !titleFilterPattern.hasMatch(nameToFilter.trim())) {
+            !passesRegExFilter(
+              titleFilterPattern,
+              nameToFilter.trim(),
+              invert: invertTitleFilter,
+            )) {
+          continue;
+        }
+        if (isReleaseTooYoung(
+          releaseDateFromApkMirrorRssItemInner(block),
+          minAgeDays,
+        )) {
+          tooYoungBlock ??= block;
+          releaseSkipped++;
           continue;
         }
         chosenBlock = block;
-        titleString = nameToFilter;
         break;
       }
-      if (chosenBlock != null) {
-        releasePageUrl = releaseUrlFromApkMirrorRssItemInner(chosenBlock);
-        releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
+      // No release old enough: use the newest so the provider can suppress
+      // it until it ages.
+      chosenBlock ??= tooYoungBlock;
+      if (chosenBlock == null) {
+        throw NoReleasesError(
+          note: regexFilter != null ? tr('noMatchingReleaseFound') : null,
+        );
       }
+      titleString = titleFromApkMirrorRssItemInner(chosenBlock);
+      releasePageUrl = releaseUrlFromApkMirrorRssItemInner(chosenBlock);
+      releaseDate = releaseDateFromApkMirrorRssItemInner(chosenBlock);
+      iconUrl = apkMirrorIconUrlFromFeedXml(chosenBlock);
     } else {
-      final parsedItems = (await parseHtmlOffIsolate(
-        res.body,
-      )).querySelectorAll('item');
+      final parsedItems = (await parseHtmlOffIsolate(res.body))
+          .querySelectorAll('item');
       for (int scanIndex = 0; scanIndex < parsedItems.length; scanIndex++) {
         collectReleaseTitleCandidate(
           parsedItems[scanIndex].querySelector('title')?.innerHtml,
         );
       }
-      dynamic targetRelease;
       int chosenParsedItemIndex = -1;
+      int tooYoungParsedItemIndex = -1;
+      int releaseSkipped = 0;
       for (int itemIndex = 0; itemIndex < parsedItems.length; itemIndex++) {
-        if (!fallbackToOlderReleases && itemIndex > 0) break;
+        // Releases skipped as too young don't count as the latest one.
+        if (!fallbackToOlderReleases && itemIndex > releaseSkipped) break;
         final nameToFilter = parsedItems[itemIndex]
             .querySelector('title')
             ?.innerHtml;
         if (regexFilter != null &&
             nameToFilter != null &&
-            !RegExp(regexFilter).hasMatch(nameToFilter.trim())) {
+            !passesRegExFilter(
+              RegExp(regexFilter),
+              nameToFilter.trim(),
+              invert: invertTitleFilter,
+            )) {
           continue;
         }
-        targetRelease = parsedItems[itemIndex];
+        if (isReleaseTooYoung(
+          _apkMirrorPubDate(
+            parsedItems[itemIndex].querySelector('pubDate')?.innerHtml,
+          ),
+          minAgeDays,
+        )) {
+          if (tooYoungParsedItemIndex < 0) tooYoungParsedItemIndex = itemIndex;
+          releaseSkipped++;
+          continue;
+        }
         chosenParsedItemIndex = itemIndex;
         break;
       }
-      titleString = targetRelease?.querySelector('title')?.innerHtml;
-      final dateString = targetRelease
-          ?.querySelector('pubDate')
-          ?.innerHtml
-          .split(' ')
-          .sublist(0, 5)
-          .join(' ');
-      releaseDate = dateString != null
-          ? HttpDate.parse('$dateString GMT')
-          : null;
-      if (chosenParsedItemIndex >= 0) {
-        releasePageUrl = releaseUrlFromApkMirrorFeedBodyForItemIndex(
-          res.body,
-          chosenParsedItemIndex,
+      // No release old enough: use the newest so the provider can suppress
+      // it until it ages.
+      if (chosenParsedItemIndex < 0) {
+        chosenParsedItemIndex = tooYoungParsedItemIndex;
+      }
+      if (chosenParsedItemIndex < 0) {
+        throw NoReleasesError(
+          note: regexFilter != null ? tr('noMatchingReleaseFound') : null,
         );
       }
+      final targetRelease = parsedItems[chosenParsedItemIndex];
+      titleString = targetRelease.querySelector('title')?.innerHtml;
+      releaseDate = _apkMirrorPubDate(
+        targetRelease.querySelector('pubDate')?.innerHtml,
+      );
+      releasePageUrl = releaseUrlFromApkMirrorFeedBodyForItemIndex(
+        res.body,
+        chosenParsedItemIndex,
+      );
     }
     if (releasePageUrl != null && !releasePageUrl.startsWith('$standardUrl/')) {
       releasePageUrl = null;
+    }
+    if (releasePageUrl != null) {
+      releasePageUrl = _apkMirrorWithTrailingSlash(releasePageUrl);
     }
     String? version = apkMirrorVersionFromTitle(titleString);
     if (version == null || version.isEmpty) {
@@ -794,22 +910,12 @@ class APKMirror extends AppSource {
       throw NoVersionError();
     }
 
-    // Icon resolution is intentionally decoupled from size resolution. Size
-    // resolution requires walking the release page + N download pages and
-    // is now done lazily on the AppPage. The icon, by contrast, is one
-    // cheap GET against the listing page and is fine to do here.
-    String? iconUrl;
-    try {
-      final pageRes = await sourceRequest(standardUrl, additionalSettings);
-      if (pageRes.statusCode == 200) {
-        iconUrl = await iconUrlFromApkMirrorAppPageHtml(
-          pageRes.body,
-          standardUrl,
-        );
-      }
-    } catch (_) {
-      // Icon is optional - ignore errors.
-    }
+    // The icon and, for newer icons, the package come from the feed itself.
+    // The listing page used to be fetched on every check for the icon (feed
+    // + 301 + listing HTML per app), which APKMirror's admin flagged (#339);
+    // it's now read only when an app is added and its icon is hash-only
+    // ([tryInferringAppId]).
+    iconUrl ??= apkMirrorIconUrlFromFeedXml(res.body);
 
     // [apkSizeBytes] is intentionally not resolved here. The APKMirror size
     // walk is expensive (1 release page + 1 GET per download candidate, per
@@ -824,6 +930,7 @@ class APKMirror extends AppSource {
       releaseDate: releaseDate,
       changeLog: releasePageUrl,
       iconUrl: iconUrl,
+      appId: apkMirrorPackageFromIconUrl(iconUrl),
       rawReleaseTitleCandidates: rawReleaseTitleCandidates,
       releaseTitle: titleString,
     );
@@ -831,7 +938,12 @@ class APKMirror extends AppSource {
 
   AppNames getAppNames(String standardUrl) {
     final String temp = standardUrl.substring(standardUrl.indexOf('://') + 3);
-    final List<String> names = temp.substring(temp.indexOf('/') + 1).split('/');
+    final pathStart = temp.indexOf('/');
+    if (pathStart < 0 || pathStart + 1 >= temp.length) {
+      throw InvalidURLError(name);
+    }
+    final List<String> names = temp.substring(pathStart + 1).split('/');
+    if (names.length < 3) throw InvalidURLError(name);
     return AppNames(names[1], names[2]);
   }
 
@@ -852,18 +964,45 @@ class APKMirror extends AppSource {
   /// Honors the same per-app filtering as the install path
   /// (`apkFilterRegEx`, `invertAPKFilter`, `autoApkFilterByArch`) so the
   /// reported size matches what the user would actually download.
+  ///
+  /// Walks each release at most once per [listingKey] (see [_sizeWalks]);
+  /// later calls get the first walk's result. The exception is a walk the
+  /// request gate stopped before anything was sent (a page challenge is still
+  /// blocking): that one may run again once the block is over.
   Future<int?> resolveLatestApkSizeBytes({
     required String? releasePageUrl,
     required Map<String, dynamic> additionalSettings,
-  }) async {
+    String? listingKey,
+  }) {
     if (releasePageUrl == null || releasePageUrl.isEmpty) {
-      return null;
+      return Future.value(null);
     }
+    final String walkKey = '${listingKey ?? ''}|$releasePageUrl';
+    final Future<int?>? previousWalk = _sizeWalks[walkKey];
+    if (previousWalk != null) return previousWalk;
+    return _sizeWalks[walkKey] = _walkLatestApkSize(
+      _apkMirrorWithTrailingSlash(releasePageUrl),
+      additionalSettings,
+      onNothingSent: () => _sizeWalks.remove(walkKey),
+    );
+  }
+
+  Future<int?> _walkLatestApkSize(
+    String releasePageUrl,
+    Map<String, dynamic> additionalSettings, {
+    required void Function() onNothingSent,
+  }) async {
     try {
-      final releasePageResponse = await sourceRequest(
-        releasePageUrl,
-        additionalSettings,
-      );
+      final Response releasePageResponse;
+      try {
+        releasePageResponse = await sourceRequest(
+          releasePageUrl,
+          additionalSettings,
+        );
+      } on RateLimitError {
+        onNothingSent();
+        rethrow;
+      }
       await _logApkMirrorSizeDebug(
         'lazy release page status=${releasePageResponse.statusCode} bytes=${releasePageResponse.body.length} url=$releasePageUrl',
       );

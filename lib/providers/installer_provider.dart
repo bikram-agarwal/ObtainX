@@ -1,12 +1,14 @@
 // @author Bikram Agarwal
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('dev.imranr.obtainium/installer');
 
-typedef ThirdPartyInstallPackageChangedCallback =
-    FutureOr<void> Function(String packageName);
+typedef ThirdPartyInstallPackageChangedCallback = FutureOr<void> Function(
+  String packageName,
+);
 
 ThirdPartyInstallPackageChangedCallback? _thirdPartyInstallPackageChanged;
 
@@ -39,13 +41,15 @@ Future<bool> installApkViaThirdParty(
   required String expectedPackageName,
 }) async {
   if (!Platform.isAndroid) return false;
-  final result = await _channel
-      .invokeMethod<bool>('launchInstallIntent', <String, dynamic>{
-        'path': apkFilePathsCommaSeparated,
-        'package': targetPackage,
-        'activity': targetActivity,
-        'expectedPackageName': expectedPackageName,
-      });
+  final result = await _channel.invokeMethod<bool>(
+    'launchInstallIntent',
+    <String, dynamic>{
+      'path': apkFilePathsCommaSeparated,
+      'package': targetPackage,
+      'activity': targetActivity,
+      'expectedPackageName': expectedPackageName,
+    },
+  );
   return result ?? false;
 }
 

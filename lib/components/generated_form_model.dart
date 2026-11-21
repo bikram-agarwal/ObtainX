@@ -1,6 +1,6 @@
 import 'dart:math';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 enum GeneratedFormItemType { textField, dropdown, switch_, subForm }
 
@@ -193,12 +193,11 @@ abstract class GeneratedFormItem {
 /// Given the current form values, it may push text patches back into the form.
 typedef FormValuesTextPatch = void Function(Map<String, String> patches);
 
-typedef GeneratedFormTextFieldAssist =
-    Future<void> Function(
-      BuildContext context,
-      FormValuesTextPatch patch,
-      Map<String, dynamic> values,
-    );
+typedef GeneratedFormTextFieldAssist = Future<void> Function(
+  BuildContext context,
+  FormValuesTextPatch patch,
+  Map<String, dynamic> values,
+);
 
 class GeneratedFormTextField extends GeneratedFormItem {
   late bool required;
@@ -301,6 +300,42 @@ class GeneratedFormDropdown extends GeneratedFormItem {
       required: required,
       helpUrl: helpUrl,
       labelTooltip: labelTooltip,
+      additionalValidators: List.from(additionalValidators),
+    );
+  }
+}
+
+/// A discrete slider over [opts] (upstream #3251). Each option maps a stored
+/// value to its label; a label that is a plain number is shown as that many
+/// days, anything else is shown as given (already translated).
+class GeneratedFormSlider extends GeneratedFormItem {
+  final List<MapEntry<String, String>>? opts;
+  late bool required;
+
+  GeneratedFormSlider(
+    super.key,
+    this.opts, {
+    super.label,
+    super.belowWidgets,
+    String super.value = '',
+    this.required = true,
+    List<String? Function(String? value)> super.additionalValidators = const [],
+  });
+
+  @override
+  String ensureType(val) {
+    return val.toString();
+  }
+
+  @override
+  GeneratedFormSlider clone() {
+    return GeneratedFormSlider(
+      key,
+      opts?.map((e) => MapEntry(e.key, e.value)).toList(),
+      label: label,
+      belowWidgets: belowWidgets,
+      value: value,
+      required: required,
       additionalValidators: List.from(additionalValidators),
     );
   }

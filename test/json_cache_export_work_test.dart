@@ -236,6 +236,29 @@ void main() {
       },
     );
 
+    test('the F-Droid page read for GitHub goes with either store, and is '
+        'no store itself', () async {
+      const String read = BulkScanCache.fdroidSourceCodeReadFromKey;
+      const String page = 'https://f-droid.org/packages/app/';
+      Future<void> saveRead() => BulkScanCache.save({
+        'app': {'F-Droid': page, 'GitHub': '', read: page},
+      });
+
+      await saveRead();
+      expect(await BulkScanCache.cachedStores(), {'F-Droid', 'GitHub'});
+      await BulkScanCache.clearStores({'APKPure'});
+      expect((await BulkScanCache.loadForApp('app'))![read], page);
+      for (final String store in ['GitHub', 'F-Droid']) {
+        await saveRead();
+        await BulkScanCache.clearStores({store});
+        final Map<String, String> left = (await BulkScanCache.loadForApp(
+          'app',
+        ))!;
+        expect(left.containsKey(read), isFalse, reason: store);
+        expect(left.containsKey(store), isFalse);
+      }
+    });
+
     test('clearing the cache cannot delete the save queued after it', () async {
       await BulkScanCache.save({
         'old': {'F-Droid': 'old'},

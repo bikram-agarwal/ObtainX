@@ -12,6 +12,8 @@ import 'package:http/io_client.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/services/host_request_gate.dart';
+import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:obtainium/services/store_lookup_queue.dart';
 
 const _deviceAppsChannel = MethodChannel('dev.imranr.obtainium/device_apps');
@@ -319,24 +321,33 @@ class BulkImportService {
         min(i + batchSize, queryCandidates.length),
       );
       try {
-        final response = await http
-            .post(
-              Uri.parse(
-                'https://www.apkmirror.com/wp-json/apkm/v1/app_exists/',
-              ),
-              headers: {
-                'Authorization': auth,
-                'Content-Type': 'application/json',
-                // Same Cloudflare allowlist as the HTML pages — see
-                // [apkMirrorAllowlistedUserAgentToken].
-                'User-Agent': apkMirrorUserAgent(),
-              },
-              body: jsonEncode({
-                'pnames': batch,
-                'exclude': ['alpha', 'beta'],
-              }),
-            )
-            .timeout(const Duration(seconds: 30));
+        final Uri apiUri = Uri.parse(
+          'https://www.apkmirror.com/wp-json/apkm/v1/app_exists/',
+        );
+        // Through the APKMirror request gate (#339) for load only: shared
+        // per-host concurrency with the source, and a challenged or
+        // rate-limited API fails fast (caught below: not cached, retried on
+        // the next scan) instead of being asked again at once.
+        final response = await HostRequestGate.instance.runResponse(
+          apiUri,
+          apkMirrorMaxConcurrentRequests,
+          () => http
+              .post(
+                apiUri,
+                headers: {
+                  'Authorization': auth,
+                  'Content-Type': 'application/json',
+                  // Same Cloudflare allowlist as the HTML pages — see
+                  // [apkMirrorAllowlistedUserAgentToken].
+                  'User-Agent': apkMirrorUserAgent(),
+                },
+                body: jsonEncode({
+                  'pnames': batch,
+                  'exclude': ['alpha', 'beta'],
+                }),
+              )
+              .timeout(const Duration(seconds: 30)),
+        );
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -513,16 +524,6 @@ class BulkImportService {
     return result;
   }
 
-  /// Ensures [recordStoreCoverage] sees every package (null means not in store).
-  static void _putMissingPackageKeysAsNull(
-    Map<String, String?> result,
-    Iterable<String> packageNames,
-  ) {
-    for (final String packageName in packageNames) {
-      result.putIfAbsent(packageName, () => null);
-    }
-  }
-
   static Future<void> _runBulkPerPackageApiLookups({
     required List<String> toQuery,
     required List<String> allPackageNames,
@@ -576,15 +577,21 @@ class BulkImportService {
         }
       }
     } finally {
-      if (shouldAbort?.call() != true) {
-        _putMissingPackageKeysAsNull(result, toQuery);
-      }
+      // A lookup that failed leaves its package without an entry: unknown,
+      // never "absent".
       client.close();
     }
   }
 
   /// Checks F-Droid for a list of package names using their REST API.
   /// Returns a map of packageName -> fdroid URL (null if not found).
+  ///
+  /// A package F-Droid couldn't be asked about (network error, timeout, any
+  /// status but 200 or 404) gets no entry: "unknown", not "absent". Every
+  /// caller relies on that. The Sources row and the apps list's background scan
+  /// cache only the entries present, so an unknown package is asked again next
+  /// time. Bulk add files it as not fully scanned rather than "not found", and
+  /// the swap flow falls back to the package's F-Droid URL either way.
   static Future<Map<String, String?>> checkFDroid(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
@@ -605,7 +612,6 @@ class BulkImportService {
         .toList();
     if (toQuery.isEmpty) {
       onProgress?.call(result.length, packageNames.length);
-      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
@@ -616,6 +622,10 @@ class BulkImportService {
       onProgress: onProgress,
       shouldAbort: shouldAbort,
       runLookup: (http.Client client, String pkg) async {
+        // Absent only once every candidate got a definite 404. Anything else
+        // (a server error, a rate limit, a dropped connection) couldn't tell,
+        // and recording it as absent hid F-Droid until something re-asked.
+        bool everyCandidateAbsent = true;
         final candidates = getPackageIdCandidates(pkg);
         for (final candidate in candidates) {
           try {
@@ -629,19 +639,42 @@ class BulkImportService {
               result[pkg] = 'https://f-droid.org/packages/$candidate/';
               return;
             }
+            if (response.statusCode != 404) everyCandidateAbsent = false;
           } catch (_) {
             if (candidate == pkg) {
               rethrow;
             }
+            everyCandidateAbsent = false;
           }
         }
-        result[pkg] = null;
+        if (everyCandidateAbsent) result[pkg] = null;
       },
     );
-    if (shouldAbort?.call() != true) {
-      _putMissingPackageKeysAsNull(result, packageNames);
-    }
     return result;
+  }
+
+  /// The "Source Code" link on [packageId]'s F-Droid package page at
+  /// [fdroidPageUrl], keyed by [packageId]. It's null when the page lists no
+  /// source link. There's no entry when the page couldn't be fetched, meaning
+  /// unknown, as with the store checks above; a network failure throws.
+  ///
+  /// F-Droid metadata names each app's source repo, which is the one way to
+  /// find a package's GitHub listing: a repo can't be derived from a package
+  /// ID.
+  static Future<Map<String, String?>> checkFDroidSourceCodeLink(
+    String packageId,
+    String fdroidPageUrl,
+  ) async {
+    final http.Response response = await http
+        .get(Uri.parse(fdroidPageUrl), headers: {'User-Agent': 'ObtainX/1.4.0'})
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode != 200) return {};
+    final html_dom.Document doc = await parseHtmlOffIsolate(response.body);
+    final String? href = doc
+        .querySelector('#source_code a')
+        ?.attributes['href']
+        ?.trim();
+    return {packageId: href == null || href.isEmpty ? null : href};
   }
 
   static const String _izzyOnDroidRepoIndexUrl =
@@ -738,6 +771,12 @@ class BulkImportService {
   /// One [index.xml] fetch and in-memory lookups (fast). Parsing runs in an
   /// isolate via [compute]. Progress updates are throttled so the UI stays
   /// responsive. Falls back to the per-package API if the index path fails.
+  ///
+  /// As with [checkFDroid], a package that couldn't be checked (the fallback
+  /// lookup failed, or the scan was cancelled before reaching it) gets no
+  /// entry. Bulk add then files it as not fully scanned and leaves it
+  /// uncached, instead of recording "not on IzzyOnDroid" and never asking
+  /// again.
   static Future<Map<String, String?>> checkIzzyOnDroid(
     List<String> packageNames, {
     void Function(int done, int total)? onProgress,
@@ -758,14 +797,12 @@ class BulkImportService {
         .toList();
     if (toQuery.isEmpty) {
       onProgress?.call(result.length, packageNames.length);
-      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
     onProgress?.call(result.length, packageNames.length);
 
     if (shouldAbort?.call() == true) {
-      _putMissingPackageKeysAsNull(result, packageNames);
       return result;
     }
 
@@ -834,6 +871,10 @@ class BulkImportService {
         onProgress: onProgress,
         shouldAbort: shouldAbort,
         runLookup: (http.Client client, String pkg) async {
+          // Settled only once every candidate got a definite answer: a 404,
+          // or a 200 (a listing with no version code can't be linked to, and
+          // asking again won't change that). Anything else couldn't tell.
+          bool everyCandidateAnswered = true;
           final candidates = getPackageIdCandidates(pkg);
           for (final candidate in candidates) {
             try {
@@ -868,19 +909,21 @@ class BulkImportService {
                       'https://apt.izzysoft.de/fdroid/repo/${candidate}_$versionCodeStr.apk';
                   return;
                 }
+              } else if (response.statusCode != 404) {
+                everyCandidateAnswered = false;
               }
             } catch (_) {
               if (candidate == pkg) {
                 rethrow;
               }
+              everyCandidateAnswered = false;
             }
           }
-          result[pkg] = null;
+          if (everyCandidateAnswered) result[pkg] = null;
         },
       );
       return result;
     } finally {
-      _putMissingPackageKeysAsNull(result, packageNames);
       indexClient.close();
     }
   }

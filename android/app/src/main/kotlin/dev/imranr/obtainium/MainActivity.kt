@@ -218,6 +218,51 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+
+        private val releaseCacheSweepLock = Any()
+        private var orphanedReleaseCacheSweepStarted = false
+
+        /// Copies in cache/releases are removed when the install session ends.
+        /// A self-update kills the process before that delete runs, and so does
+        /// any other death during the handoff, so the copies stay until something
+        /// sweeps them. Run once per process, before a new install can create a
+        /// copy: drop anything already older than the installer's read window,
+        /// and schedule the rest for when that window has passed. A restart
+        /// while an installer still has not opened the content:// URI then
+        /// keeps the file until the same delay the handoff itself uses.
+        private fun sweepOrphanedReleaseCache(context: Context) {
+            synchronized(releaseCacheSweepLock) {
+                if (orphanedReleaseCacheSweepStarted) return
+                orphanedReleaseCacheSweepStarted = true
+            }
+            val releasesDir = File(context.cacheDir, RELEASE_DIR)
+            if (!releasesDir.isDirectory) return
+            val cachedFiles = releasesDir.listFiles() ?: return
+            val now = System.currentTimeMillis()
+            val handler = Handler(Looper.getMainLooper())
+            for (cachedFile in cachedFiles) {
+                if (!cachedFile.isFile) continue
+                val ageMs = now - cachedFile.lastModified()
+                if (ageMs >= UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS) {
+                    try {
+                        cachedFile.delete()
+                    } catch (_: Exception) {
+                    }
+                    continue
+                }
+                val remainingMs = if (ageMs < 0L) {
+                    UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS
+                } else {
+                    UNTRACKED_RELEASE_FILE_CLEANUP_DELAY_MS - ageMs
+                }
+                handler.postDelayed({
+                    try {
+                        cachedFile.delete()
+                    } catch (_: Exception) {
+                    }
+                }, remainingMs)
+            }
+        }
     }
 
     private class InstallWatcher(
@@ -263,6 +308,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installNativeCrashHandler(this)
         super.onCreate(savedInstanceState)
+        sweepOrphanedReleaseCache(applicationContext)
         // Keep observing while the activity is covered or recreated. A new
         // process performs a full Dart load before relying on this journal.
         if (packageChangeReceiver == null) {
@@ -328,6 +374,21 @@ class MainActivity : FlutterActivity() {
             is InstallSessionOutcome.Success -> watcher.methodResult.success(outcome.installSucceeded)
             is InstallSessionOutcome.Error -> watcher.methodResult.error(outcome.code, outcome.message, null)
         }
+    }
+
+    override fun onDestroy() {
+        // An activity torn down mid-handoff (reclaimed or recreated while the
+        // installer runs) must still answer its Dart call and release its receiver.
+        // An unconfirmed install comes back as handedOff, so its receipt survives
+        // and the process-lifetime package receiver can record it later (adapted
+        // from upstream 65126176).
+        installWatcher?.let { watcher ->
+            completeThirdPartyInstallSession(
+                watcher,
+                InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
+            )
+        }
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -535,6 +596,23 @@ class MainActivity : FlutterActivity() {
                     result.success(
                         packageName?.let { getSigningCertificates(it) },
                     )
+                }
+                "getApkArchiveSignatures" -> {
+                    val archiveFilePath = call.argument<String>("archiveFilePath")
+                    if (archiveFilePath == null) {
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    // Parsing an archive and verifying its signature block is
+                    // too slow for the platform thread.
+                    deviceAppsExecutor.execute {
+                        val signatures = try {
+                            getApkArchiveSignatures(archiveFilePath)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        mainHandler.post { result.success(signatures) }
+                    }
                 }
                 "uses24HourFormat" -> {
                     result.success(DateFormat.is24HourFormat(this))
@@ -1265,6 +1343,23 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    /// Signer certificates (DER bytes) of the APK at [archiveFilePath] on
+    /// Android 8/8.1, null elsewhere or when it can't be read (v1.7.4 sync
+    /// D16 b). PackageInfo.signingInfo only exists from Android 9, so the
+    /// android_package_manager plugin returns no signer there, and a pinned
+    /// expected certificate would block every install. GET_SIGNATURES makes
+    /// getPackageArchiveInfo collect the archive's certificates on these
+    /// versions. Android 9+ reads them through the plugin (upstream #3475).
+    @Suppress("DEPRECATION")
+    private fun getApkArchiveSignatures(archiveFilePath: String): List<ByteArray>? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return null
+        val packageInfo = packageManager.getPackageArchiveInfo(
+            archiveFilePath,
+            PackageManager.GET_SIGNATURES,
+        ) ?: return null
+        return packageInfo.signatures?.map { it.toByteArray() }
+    }
+
     /**
      * One entry per install-capable activity across all apps. Apps that expose
      * several install-capable activities return all of them so the user can
@@ -1347,6 +1442,13 @@ class MainActivity : FlutterActivity() {
         // Third-party installers commonly expose the same "open file" entry point used
         // by file managers. Use ACTION_VIEW for every format so installers such as Thor
         // parse APKs as well as XAPK/APKM/ZIP bundles.
+        //
+        // Intentional divergence — do not "fix": this launch never requests a result
+        // (no Intent.EXTRA_RETURN_RESULT / startActivityForResult). Upstream Obtainium
+        // adopted that result-request handoff (#3091); ObtainX removed it (b9228270)
+        // because installers then close their own Open/Done screen. Completion comes
+        // from the package broadcast plus focus/resume below. See localdocs
+        // UPSTREAM_SYNC_GUIDE §3.10/§5.
         val intent = Intent(Intent.ACTION_VIEW).apply {
             if (contentUris.size == 1) {
                 setDataAndType(contentUris[0], primaryMime)
@@ -1446,6 +1548,15 @@ class MainActivity : FlutterActivity() {
             receiver,
             releaseFiles,
         )
+        // Settle a session still open from an earlier handoff before replacing it:
+        // its timeout bails on the identity check, so it would never answer Dart
+        // and its receiver would stay registered (adapted from upstream 65126176).
+        installWatcher?.let { stale ->
+            completeThirdPartyInstallSession(
+                stale,
+                InstallSessionOutcome.Success(stale.packageInstallBroadcastReceived),
+            )
+        }
         installWatcher = sessionWatcher
         registerReceiver(receiver, filter)
 

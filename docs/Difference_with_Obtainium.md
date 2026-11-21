@@ -22,6 +22,7 @@
   - [Folders](#folders)
   - [On-Demand Only](#on-demand-only)
   - [Clearer app statuses](#clearer-app-statuses)
+  - [Needs attention](#needs-attention)
   - [Installer choice - why this fork exists](#installer-choice---why-this-fork-exists)
 - [More features worth knowing](#more-features-worth-knowing)
 
@@ -52,6 +53,11 @@
         <td>Ease of Update</td>
         <td>• Button at center of app row, can misalign per row.<br>• Update-all button at the top of apps list<br>• Updates scattered across individual groups<br>• Can't quickly say how many updates are available<br>• OOTB version comparison seems to be buggy.</td>
         <td>• Button at right end, in perfect alignment<br>• Update-all button at the bottom, within easy thumb reach<br>• Unified Updates group at the top<br>• Upate button shows count of available upates<br>• OOTB version comparison is smarter.</td>
+    </tr>
+    <tr>
+        <td>Apps that need your action</td>
+        <td>✗</td>
+        <td>✓ <a href="#needs-attention">Needs attention</a> group above everything else, listing every app stuck on a problem only you can fix</td>
     </tr>
     <tr>
         <td>Bulk Update</td>
@@ -304,7 +310,7 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
     </tr>
     <tr>
         <td>Update size shown in advance</td>
-        <td>Shown for most stores (added July 2026) — but not APKMirror</td>
+        <td>Shown for most stores (added July 2026), and for APKMirror since v1.6.16 (September 2026)</td>
         <td>Shown for those same stores (from May 2026) — and APKMirror too</td>
     </tr>
     <tr>
@@ -313,9 +319,14 @@ ObtainX's filters provide tri-state options (neutral/include/exclude) plus Any/A
         <td>✓</td>
     </tr>
     <tr>
+        <td>Downgrade</td>
+        <td>Only by showing the older release as an "update" (with <i>Hide downgrades as updates</i> off)</td>
+        <td>• Dedicated Downgrade button when the device is ahead of the source<br>• Warns first that the older version keeps the app's data<br>• Kept out of the update count and background updates<br>• Track-only apps can <i>Mark downgraded</i></td>
+    </tr>
+    <tr>
         <td>Changelog view</td>
-        <td>• Centered, narrow panel squishes text vertically<br>• Completely obscures the center of the screen<br>• Doesn't show screenshots present in release notes<br>• Can't fetch changelog from APKMirror apps</td>
-        <td>• Full-width bottom sheet (wider, better readable text layout)<br>• Keeps background app context visible<br>• Shows screenshots present in release notes<br>• Fetches changelog from APKMirror and GitLab apps too<br>• Relative changelog images resolve on Forgejo instances, not only codeberg.org</td>
+        <td>• Centered, narrow panel squishes text vertically<br>• Completely obscures the center of the screen<br>• Doesn't show screenshots present in release notes</td>
+        <td>• Full-width bottom sheet (wider, better readable text layout)<br>• Keeps background app context visible<br>• Shows screenshots present in release notes<br>• Fetches changelog from GitLab apps too<br>• Relative changelog images resolve on Forgejo instances, not only codeberg.org</td>
     </tr>
     <tr>
         <td>Update check configuration</td>
@@ -468,14 +479,14 @@ ObtainX groups a source's additional options into labeled section cards, so that
 
 ### Adding apps: search across stores
 
-ObtainX searches 9 stores (3 more than Obtainium), shows them all as chips upfront, shows the result on the same page with each result showing store badge. You can also change store selection afterwards and re-search without leaving the page; Obtainium searches 6 stores through a two-dialog flow with no store badges on results.
+ObtainX searches 12 stores (3 more than Obtainium), shows them all as chips upfront, shows the result on the same page with each result showing store badge. You can also change store selection afterwards and re-search without leaving the page; Obtainium searches 9 stores through a two-dialog flow with no store badges on results.
 
 <table>
     <tr><th width="26%">Feature</th><th width="37%">Obtainium</th><th width="37%">ObtainX</th></tr>
     <tr>
         <td>Searchable sources</td>
-        <td>6 — GitHub, GitLab, Codeberg, F-Droid, F-Droid repo, Vivo App Store</td>
-        <td>9 — those 6 <strong>plus</strong> IzzyOnDroid, CoolApk, Tencent</td>
+        <td>9 — GitHub, GitLab, Codeberg, F-Droid, F-Droid repo, Vivo App Store, RuStore, Huawei AppGallery, Uptodown</td>
+        <td>12 — those 9 <strong>plus</strong> IzzyOnDroid, CoolApk, Tencent</td>
     </tr>
     <tr>
         <td>All sources visible upfront</td>
@@ -842,6 +853,20 @@ ObtainX surfaces **finer-grained states** rather than forcing every situation in
         </td>
     </tr>
 </table>
+
+---
+
+### Needs attention
+
+Some problems can't fix themselves; they need you. ObtainX gathers those apps into a **Needs attention** group at the top of the apps list, above Updates. Each app's page explains the problem in plain words:
+
+- **Filter no longer matches**: a version or file filter you set rules out every release. ObtainX stops offering the old release until you edit the filter or a matching release appears.
+- **Package ID changed**: the downloaded APK's package ID isn't the one being tracked.
+- **Install rejected**: the build doesn't fit this device, or it's signed with a different key than the installed app.
+- **Flagged or unverified**: VirusTotal flagged the release, or it failed a reproducible-build or attestation check you enforce. Background updates skip it instead of downloading it again.
+- **Repository renamed**: the tracked repo moved. Tap *Update URL* to follow it.
+
+An app leaves the group by itself once the problem is resolved, for example by a newer release, an edited filter, or a successful install. Obtainium has no equivalent.
 
 ---
 

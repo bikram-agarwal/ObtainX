@@ -10,7 +10,8 @@ import 'package:device_info_plus_platform_interface/device_info_plus_platform_in
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:expressive_refresh/expressive_refresh.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/app_detail_widgets.dart';
@@ -86,6 +87,7 @@ class _Device extends DeviceInfoPlatform {
       'totalDiskSize': 1,
       'physicalRamSize': 4096,
       'availableRamSize': 2048,
+      'time': 0,
       'isLowRamDevice': false,
       'systemFeatures': <String>[],
     });
@@ -259,9 +261,8 @@ void main() {
       const Locale('en'),
       translations: Translations(translations),
     );
-    icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    icon = (await rootBundle.load('assets/graphics/logo_remember.png')).buffer
+        .asUint8List();
   });
 
   setUp(() async {
@@ -436,7 +437,9 @@ void main() {
     final update = find.widgetWithText(FilledButton, 'Update · 145 MB');
     expect(tester.widget<FilledButton>(update).onPressed, isNotNull);
     await tester
-        .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+        .widget<ExpressiveRefreshIndicator>(
+          find.byType(ExpressiveRefreshIndicator),
+        )
         .onRefresh();
     await tester.pumpAndSettle();
     expect(provider.clearedErrors, [displayed.listingKey]);
@@ -496,7 +499,9 @@ void main() {
     // actual failure path without reaching a live store.
     await tester.runAsync(() async {
       await tester
-          .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+          .widget<ExpressiveRefreshIndicator>(
+            find.byType(ExpressiveRefreshIndicator),
+          )
           .onRefresh();
     });
     await tester.pumpAndSettle();
@@ -530,7 +535,9 @@ void main() {
       ).copyWith(listingId: null);
       await openListing(tester, displayed, sibling);
       await tester
-          .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+          .widget<ExpressiveRefreshIndicator>(
+            find.byType(ExpressiveRefreshIndicator),
+          )
           .onRefresh();
       await tester.pumpAndSettle();
       expect(provider.clearedErrors, [displayed.listingKey]);

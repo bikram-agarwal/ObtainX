@@ -21,6 +21,15 @@ class AppCheckStore {
   DateTime? _failedAt;
   final revisions = <String, String>{};
 
+  /// What each listing's JSON record holds besides its check time, as last
+  /// read from or written to disk (see [recordFieldsBesidesCheckTime]).
+  ///
+  /// A timestamp-only save is safe only if the app still matches its record.
+  /// The in-memory app can't stand in for the record: callers update it before
+  /// saving, so comparing against it recorded only the timestamp and dropped
+  /// the change itself (#307).
+  final _records = <String, Map<String, Object?>>{};
+
   /// Reads run while the app list is still behind a spinner, so they get a
   /// tighter budget than writes - or the caller's own, when it asked for
   /// something shorter still.
@@ -75,13 +84,30 @@ class AppCheckStore {
     final Duration timeout = budget ?? operationTimeout;
     try {
       return await (() async {
-        final database = await _open();
-        // A timed-out open can still finish later. Do not start its queued
-        // query/write after the caller has switched to durable JSON records.
-        if (_failure != null) {
-          throw _failure!;
+        for (var reopened = false; ; reopened = true) {
+          final Future<Database> connection = _connection();
+          final Database database;
+          try {
+            database = await connection;
+          } catch (_) {
+            if (identical(_database, connection)) _database = null;
+            rethrow;
+          }
+          // A timed-out open can still finish later. Do not start its queued
+          // query/write after the caller has switched to durable JSON records.
+          if (_failure != null) {
+            throw _failure!;
+          }
+          try {
+            return await action(database);
+          } on DatabaseException catch (error) {
+            // Something closed this connection under us. Holding on to it made
+            // every later read fail the same way until the process restarted
+            // (#317), so open a fresh one and try once more.
+            if (reopened || !error.isDatabaseClosedError()) rethrow;
+            if (identical(_database, connection)) _database = null;
+          }
         }
-        return action(database);
       })().timeout(
         timeout,
         onTimeout: () {
@@ -118,11 +144,18 @@ class AppCheckStore {
     }
   }
 
-  Future<Database> _open() async {
-    final pending = _database ??= (factory ?? databaseFactory).openDatabase(
+  /// The cached connection, opened on first use.
+  Future<Database> _connection() {
+    return _database ??= (factory ?? databaseFactory).openDatabase(
       path,
       options: OpenDatabaseOptions(
         version: 1,
+        // The default single instance is one native connection per file for
+        // the whole process, which every Flutter engine shares, so a
+        // background engine closing its store closed the UI isolate's
+        // connection too (#317). A connection of its own lets each engine
+        // close it, and concurrent access is what WAL below is for.
+        singleInstance: false,
         onConfigure: (database) async {
           // The UI isolate and every background WorkManager engine open this
           // same file. On the default rollback journal a background write locks
@@ -140,12 +173,6 @@ class AppCheckStore {
         },
       ),
     );
-    try {
-      return await pending;
-    } catch (_) {
-      if (identical(_database, pending)) _database = null;
-      rethrow;
-    }
   }
 
   /// [singleId] reads one Android package: its own row plus a row for every
@@ -178,9 +205,10 @@ class AppCheckStore {
     final revision = json[appRecordRevisionKey];
     if (revision is! String) {
       revisions.remove(id);
+      _records.remove(id);
       return;
     }
-    revisions[id] = revision;
+    rememberRecord(id, revision, json);
     final checkpoint = checks[id];
     if (checkpoint?['revision'] == revision) {
       final checked = checkpoint!['checked'] as int;
@@ -189,6 +217,30 @@ class AppCheckStore {
         json['lastUpdateCheck'] = checked;
       }
     }
+  }
+
+  /// Notes that [id]'s JSON record, with [revision], holds [record] (the map
+  /// read from or written to its file).
+  void rememberRecord(String id, String revision, Map<String, dynamic> record) {
+    revisions[id] = revision;
+    final Map<String, Object?>? fields = recordFieldsBesidesCheckTime(record);
+    if (fields == null) {
+      _records.remove(id);
+    } else {
+      _records[id] = fields;
+    }
+  }
+
+  /// Whether saving [app] under [id] can record just its check time: its JSON
+  /// record already holds everything else.
+  bool onlyCheckTimeDiffersFromRecord(String id, App app) {
+    final Map<String, Object?>? record = _records[id];
+    if (record == null || app.lastUpdateCheck == null) return false;
+    final Map<String, Object?>? current = recordFieldsBesidesCheckTime(
+      app.toJson(),
+    );
+    return current != null &&
+        const DeepCollectionEquality().equals(record, current);
   }
 
   Future<void> save(List<Map<String, Object?>> checkpoints) async {
@@ -210,6 +262,7 @@ class AppCheckStore {
     if (ids.isEmpty) return;
     for (final id in ids) {
       revisions.remove(id);
+      _records.remove(id);
     }
     try {
       await _run('cleanup', (database) async {
@@ -243,11 +296,32 @@ class AppCheckStore {
   }
 }
 
-bool onlyAppCheckTimeChanged(App previous, App current) {
-  if (current.lastUpdateCheck == null) return false;
-  final previousFields = previous.toJson(encodeNested: false)
-    ..remove('lastUpdateCheck');
-  final currentFields = current.toJson(encodeNested: false)
-    ..remove('lastUpdateCheck');
-  return const DeepCollectionEquality().equals(previousFields, currentFields);
+/// [record]'s fields besides its check time and revision, detached from the
+/// map they came from.
+///
+/// Records keep their nested data JSON-encoded, so every field is a plain value
+/// except the category list, which is copied. A field holding anything else (a
+/// legacy record's unencoded settings, say) makes this null, which only means
+/// the next save writes the whole record.
+Map<String, Object?>? recordFieldsBesidesCheckTime(
+  Map<String, dynamic> record,
+) {
+  final fields = <String, Object?>{};
+  for (final MapEntry<String, dynamic> field in record.entries) {
+    if (field.key == 'lastUpdateCheck' || field.key == appRecordRevisionKey) {
+      continue;
+    }
+    final Object? value = field.value;
+    if (value is List) {
+      if (value.any((Object? element) => element is List || element is Map)) {
+        return null;
+      }
+      fields[field.key] = List<Object?>.unmodifiable(value);
+    } else if (value is Map) {
+      return null;
+    } else {
+      fields[field.key] = value;
+    }
+  }
+  return fields;
 }

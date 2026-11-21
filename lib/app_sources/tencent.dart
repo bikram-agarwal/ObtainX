@@ -60,7 +60,8 @@ class Tencent extends AppSource {
       throw NoReleasesError();
     }
 
-    final dynamic appDetail = _findAppDetail(json, appId);
+    final dynamic appDetail =
+        _mainCardAppDetail(json, appId) ?? _findAppDetail(json, appId);
     if (appDetail == null) throw NoReleasesError();
 
     final version = appDetail['version_name']?.toString();
@@ -82,15 +83,22 @@ class Tencent extends AppSource {
       }
     } catch (_) {}
 
+    // Seconds since the epoch. Only a plausible date counts: 0, a placeholder
+    // or a value already in milliseconds would otherwise show as 1970 or a
+    // far-future release (D30 #11). Android dates from 2008.
     DateTime? releaseDate;
-    try {
-      final rawTime = appDetail['update_time']?.toString();
-      if (rawTime != null) {
-        releaseDate = DateTime.fromMillisecondsSinceEpoch(
-          int.parse(rawTime) * 1000,
-        );
+    final int? updateSeconds = int.tryParse(
+      appDetail['update_time']?.toString() ?? '',
+    );
+    if (updateSeconds != null) {
+      final DateTime parsed = DateTime.fromMillisecondsSinceEpoch(
+        updateSeconds * 1000,
+      );
+      if (parsed.isAfter(DateTime(2008)) &&
+          parsed.isBefore(DateTime.now().add(const Duration(days: 1)))) {
+        releaseDate = parsed;
       }
-    } catch (_) {}
+    }
 
     return APKDetails(
       version,
@@ -100,6 +108,45 @@ class Tencent extends AppSource {
       iconUrl: iconUrl,
       apkSizeBytes: apkSizeBytes,
     );
+  }
+
+  /// The app's record in the page's main detail card (`yybn_game_basic_info`,
+  /// named `GameDetail`), where upstream reads it (1c169b19). Other cards
+  /// ("you may also like", client info) can carry a record for the same
+  /// package with other values, which the plain search below might reach
+  /// first. Null when the page has no such card, or not exactly one match.
+  Map? _mainCardAppDetail(dynamic page, String pkgName) {
+    dynamic components = page;
+    for (final key in const [
+      'props',
+      'pageProps',
+      'dynamicCardResponse',
+      'data',
+      'components',
+    ]) {
+      if (components is! Map) return null;
+      components = components[key];
+    }
+    if (components is! List) return null;
+    final records = <Map>[];
+    for (final component in components) {
+      if (component is! Map ||
+          component['cardId'] != 'yybn_game_basic_info' ||
+          component['data'] is! Map) {
+        continue;
+      }
+      final data = component['data'] as Map;
+      final items = data['itemData'];
+      if (data['name'] != 'GameDetail' || items is! List) continue;
+      records.addAll(
+        items.whereType<Map>().where(
+          (item) =>
+              item['pkg_name']?.toString() == pkgName &&
+              item['download_url']?.toString().isNotEmpty == true,
+        ),
+      );
+    }
+    return records.length == 1 ? records.single : null;
   }
 
   dynamic _findAppDetail(dynamic node, String pkgName) {
@@ -128,8 +175,7 @@ class Tencent extends AppSource {
     bool forAPKDownload = false,
   }) async {
     return {
-      'user-agent':
-          'Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.138 Safari/537.36',
+      'user-agent': 'Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.138 Safari/537.36',
     };
   }
 

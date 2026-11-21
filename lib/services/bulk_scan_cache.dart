@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:obtainium/services/json_file_work.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -27,6 +28,14 @@ import 'package:path_provider/path_provider.dart';
 class BulkScanCache {
   static const String _relativeDir = 'bulk_scan_data';
   static const String _fileName = 'store_url_map.json';
+
+  /// Not a store: the F-Droid page whose "Source Code" link was read for the
+  /// package's GitHub listing. Kept so a page that names no GitHub repo isn't
+  /// downloaded again on every scan. The "GitHub" slot alone can't say that:
+  /// bulk add's GitHub code search also records "not found" there, and can
+  /// miss a repo the F-Droid page names. Cleared with the GitHub or F-Droid
+  /// store ([clearStores]), so a rescan of either reads the page again.
+  static const String fdroidSourceCodeReadFromKey = 'fdroidSourceCodeReadFrom';
 
   static Map<String, Map<String, String>>? _cache;
   static Future<Map<String, Map<String, String>>>? _pendingLoad;
@@ -68,6 +77,14 @@ class BulkScanCache {
 
   static Future<File> _file() async {
     return File('${(await _rootDir()).path}/$_fileName');
+  }
+
+  /// Replaces the in-memory cache without touching disk, for widget tests,
+  /// where file and isolate work never settles under the fake clock.
+  @visibleForTesting
+  static void setCacheForTesting(Map<String, Map<String, String>> data) {
+    _cache = _deepCopy(data);
+    _pendingLoad = null;
   }
 
   /// Outer key: package name. Inner key: store name (e.g. APKMirror).
@@ -201,12 +218,17 @@ class BulkScanCache {
   /// stores intact.
   static Future<void> clearStores(Set<String> storeNames) async {
     if (storeNames.isEmpty) return;
+    final Set<String> keys = {
+      ...storeNames,
+      if (storeNames.contains('GitHub') || storeNames.contains('F-Droid'))
+        fdroidSourceCodeReadFromKey,
+    };
     try {
       await _enqueueWrite((Map<String, Map<String, String>> disk) {
         var changed = false;
         for (final Map<String, String> storeMap in disk.values) {
-          for (final String store in storeNames) {
-            if (storeMap.remove(store) != null) changed = true;
+          for (final String key in keys) {
+            if (storeMap.remove(key) != null) changed = true;
           }
         }
         return changed;
@@ -223,7 +245,7 @@ class BulkScanCache {
     for (final Map<String, String> storeMap in cache.values) {
       stores.addAll(storeMap.keys);
     }
-    return stores;
+    return stores..remove(fdroidSourceCodeReadFromKey);
   }
 
   /// Merges [storeResults] into [cache] (the caller's in-memory snapshot,
@@ -248,4 +270,37 @@ class BulkScanCache {
         entry.key: {storeName: entry.value ?? ''},
     });
   }
+}
+
+/// Waits for per-store lookups of [packageId] (store name -> a lookup
+/// returning package -> URL, null when the store says it isn't there) and
+/// returns only the stores that answered.
+///
+/// Each lookup settles on its own. One that throws, or whose result has no
+/// entry for [packageId], couldn't tell either way, so it is left out rather
+/// than reported as absent - caching that as the `''` sentinel would hide a
+/// store the package may well be on. [onError] hears about each throw.
+/// Waiting on the lookups with a bare `Future.wait` instead let one failure
+/// discard every other store's answer.
+Future<Map<String, String?>> settleStoreLookups(
+  String packageId,
+  Map<String, Future<Map<String, String?>>> lookups, {
+  void Function(String store, Object error)? onError,
+}) async {
+  final List<MapEntry<String, String?>?> answers = await Future.wait(
+    lookups.entries.map((
+      MapEntry<String, Future<Map<String, String?>>> lookup,
+    ) async {
+      try {
+        final Map<String, String?> result = await lookup.value;
+        return result.containsKey(packageId)
+            ? MapEntry<String, String?>(lookup.key, result[packageId])
+            : null;
+      } catch (error) {
+        onError?.call(lookup.key, error);
+        return null;
+      }
+    }),
+  );
+  return Map<String, String?>.fromEntries(answers.nonNulls);
 }
