@@ -35,6 +35,7 @@ class HelpHintIcon extends StatefulWidget {
     this.size = 20,
     this.padding = const EdgeInsets.only(left: 6),
     this.showDuration = const Duration(seconds: 8),
+    this.color,
   }) : assert((message == null) != (richMessage == null));
 
   final String? message;
@@ -43,6 +44,9 @@ class HelpHintIcon extends StatefulWidget {
   final double size;
   final EdgeInsetsGeometry padding;
   final Duration showDuration;
+
+  /// The icon colour; onSurfaceVariant by default.
+  final Color? color;
 
   @override
   State<HelpHintIcon> createState() => _HelpHintIconState();
@@ -70,7 +74,8 @@ class _HelpHintIconState extends State<HelpHintIcon> {
           // around.
           iconSize: widget.size,
           style: IconButton.styleFrom(
-            foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+            foregroundColor:
+                widget.color ?? Theme.of(context).colorScheme.onSurfaceVariant,
             padding: const EdgeInsets.all(4),
             minimumSize: Size(buttonSize, buttonSize),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,

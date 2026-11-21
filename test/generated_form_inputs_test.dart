@@ -143,6 +143,133 @@ void main() {
     expect(values()['days'], isNotEmpty);
   });
 
+  // A per-app override of a global value: '' is listed in the global value's
+  // place, as that value plus "(global)", and picking it stores '' again.
+  testWidgets('dropdown with a global default lists it in its place', (
+    tester,
+  ) async {
+    final values = await pumpForm(tester, [
+      [
+        GeneratedFormDropdown(
+          'choice',
+          [
+            const MapEntry('', 'Use global default'),
+            const MapEntry('a', 'Option A'),
+            const MapEntry('b', 'Option B'),
+          ],
+          label: 'Pick',
+          value: '',
+          globalValue: (_) => 'b',
+        ),
+      ],
+    ]);
+    List<String> listed() => tester
+        .widget<DropdownButton<dynamic>>(find.byType(DropdownButton<dynamic>))
+        .items!
+        .map((item) => ((item.child as Opacity).child as Text).data!)
+        .toList();
+
+    expect(values()['choice'], '');
+    expect(find.text('Option B (global)'), findsOneWidget);
+    expect(listed(), ['Option A', 'Option B (global)']);
+
+    await tester.tap(find.byType(DropdownButton<dynamic>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Option A').last);
+    await tester.pumpAndSettle();
+    expect(values()['choice'], 'a');
+
+    await tester.tap(find.byType(DropdownButton<dynamic>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Option B (global)').last);
+    await tester.pumpAndSettle();
+    expect(values()['choice'], '');
+  });
+
+  testWidgets('dropdown pinned to the global value lists the pin too', (
+    tester,
+  ) async {
+    await pumpForm(tester, [
+      [
+        GeneratedFormDropdown(
+          'choice',
+          [
+            const MapEntry('', 'Use global default'),
+            const MapEntry('a', 'Option A'),
+            const MapEntry('b', 'Option B'),
+          ],
+          label: 'Pick',
+          value: 'b',
+          globalValue: (_) => 'b',
+        ),
+      ],
+    ]);
+    final List<dynamic> keys = tester
+        .widget<DropdownButton<dynamic>>(find.byType(DropdownButton<dynamic>))
+        .items!
+        .map((item) => item.value)
+        .toList();
+    expect(keys, ['a', '', 'b']);
+    expect(find.text('Use global default'), findsNothing);
+  });
+
+  // A per-app override of a global value: '' sits on the global value's stop,
+  // labelled as the default, and returning there stores '' again.
+  testWidgets('slider with a global default shows and keeps it', (
+    tester,
+  ) async {
+    final values = await pumpForm(tester, [
+      [
+        GeneratedFormSlider(
+          'days',
+          [
+            const MapEntry('a', 'Option A'),
+            const MapEntry('b', 'Option B'),
+            const MapEntry('c', 'Option C'),
+          ],
+          label: 'Days',
+          value: '',
+          globalValue: (_) => 'b',
+        ),
+      ],
+    ]);
+    Slider slider() => tester.widget<Slider>(find.byType(Slider));
+    Future<void> moveTo(double stop) async {
+      slider().onChanged!(stop);
+      slider().onChangeEnd!(stop);
+      await tester.pump();
+    }
+
+    expect(values()['days'], '');
+    expect(slider().value, 1);
+    expect(slider().max, 2);
+    expect(find.text('Option B (global)'), findsOneWidget);
+
+    await moveTo(2);
+    expect(values()['days'], 'c');
+    expect(find.text('Option C'), findsOneWidget);
+
+    await moveTo(1);
+    expect(values()['days'], '');
+    expect(find.text('Option B (global)'), findsOneWidget);
+  });
+
+  testWidgets('slider pinned to the global value stays pinned', (tester) async {
+    await pumpForm(tester, [
+      [
+        GeneratedFormSlider(
+          'days',
+          [const MapEntry('a', 'Option A'), const MapEntry('b', 'Option B')],
+          label: 'Days',
+          value: 'b',
+          globalValue: (_) => 'b',
+        ),
+      ],
+    ]);
+    expect(find.text('Option B'), findsOneWidget);
+    expect(find.text('Option B (global)'), findsNothing);
+  });
+
   // The options page's sliders must look like the settings page's: the M3E
   // vertical-bar thumb on the gapped track, title left and value right.
   testWidgets('slider uses the settings page slider look', (tester) async {

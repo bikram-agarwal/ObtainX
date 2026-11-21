@@ -26,8 +26,8 @@ import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/utils/format_utils.dart';
-import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/widgets/app_toast.dart';
+import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
@@ -2679,17 +2679,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     }
   }
 
-  /// Opens this app's options, at the [scrollToSection] card if given, and
-  /// checks again when the version settings changed.
-  Future<void> _openAdditionalOptions({String? scrollToSection}) async {
+  /// Opens this app's options, and checks again when the version settings
+  /// changed.
+  Future<void> _openAdditionalOptions() async {
     final bool? versionDetectionJustEnabled = await Navigator.push<bool>(
       context,
-      slideUpPageRoute(
-        (_) => AdditionalOptionsPage(
-          appId: widget.appId,
-          scrollToSection: scrollToSection,
-        ),
-      ),
+      slideUpPageRoute((_) => AdditionalOptionsPage(appId: widget.appId)),
     );
     if (versionDetectionJustEnabled != null && mounted) {
       await _runCheckUpdate(
@@ -3448,6 +3443,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       bool pseudoVersion = false,
       bool versionCode = false,
       String? osInstalledVersion,
+      Widget? trailing,
     }) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
@@ -3496,6 +3492,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
+                  ?trailing,
                 ],
               ),
             ),
@@ -3509,6 +3506,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       String value, {
       required bool skipActive,
       bool filtered = false,
+      Widget? trailing,
     }) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
@@ -3545,6 +3543,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   ),
                   if (skipActive) versionChip(ctx, tr('latestVersionSkipped')),
                   if (filtered) versionChip(ctx, tr('filtered')),
+                  ?trailing,
                 ],
               ),
             ),
@@ -3595,72 +3594,23 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    // Update health (D8): advisory, so a line of its own under Changes, never
-    // part of Needs attention, which covers blocking states only. It opens the
-    // app's options at the Update-health card, where its thresholds are set.
-    Widget? updateHealthRow(BuildContext ctx, AppInMemory? listing) {
+    // Update health (D8): advisory, so a warning icon after the latest
+    // version, never part of Needs attention, which covers blocking states
+    // only. A tap shows the reasons as a tooltip, which TalkBack reads with
+    // the icon, and then where the thresholds are set.
+    Widget? updateHealthMarker(BuildContext ctx, AppInMemory? listing) {
       if (listing == null) return null;
       final List<String> reasons = updateHealthReasonLabelsFor(
         listing.app,
         settingsProvider,
       );
       if (reasons.isEmpty) return null;
-      final ThemeData theme = Theme.of(ctx);
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: _versionRowLabelWidth,
-              child: Text(
-                tr('updateHealth'),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Semantics(
-                button: true,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: updating
-                      ? null
-                      : () => _openAdditionalOptions(
-                          scrollToSection: updateHealthSectionKey,
-                        ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 1, right: 6),
-                        child: Icon(
-                          Icons.warning_amber_rounded,
-                          size: 16,
-                          color: theme.colorScheme.error,
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          reasons.join('\n'),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.primary,
-                            decoration: TextDecoration.underline,
-                            fontWeight: FontWeight.w500,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+      return HelpHintIcon(
+        message: [...reasons, tr('updateHealthChangeHint')].join('\n'),
+        icon: Icons.warning_amber_rounded,
+        size: 18,
+        padding: EdgeInsets.zero,
+        color: Theme.of(ctx).colorScheme.error,
       );
     }
 
@@ -4625,6 +4575,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             pageThemeContext,
             tr('latest'),
             app?.app.latestVersion ?? '-',
+            trailing: updateHealthMarker(pageThemeContext, app),
           ),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
@@ -4638,9 +4589,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               changeLogFn,
             ),
           );
-        }
-        if (updateHealthRow(pageThemeContext, app) case final Widget row) {
-          versionCardChildren.add(row);
         }
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(
@@ -4695,6 +4643,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 : latestVerStr,
             skipActive: app != null && isSkipActiveForCurrentLatest(app.app),
             filtered: app != null && appHasActiveReleaseFilter(app.app),
+            trailing: updateHealthMarker(pageThemeContext, app),
           ),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
@@ -4708,9 +4657,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               changeLogFn,
             ),
           );
-        }
-        if (updateHealthRow(pageThemeContext, app) case final Widget row) {
-          versionCardChildren.add(row);
         }
         if ((app?.app.apkUrls.length ?? 0) > 0) {
           versionCardChildren.add(

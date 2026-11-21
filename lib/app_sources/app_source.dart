@@ -348,17 +348,18 @@ abstract class AppSource {
       ),
     ],
     [
-      // Per-app override of the global minimum update age; '' = use global.
+      // Per-app override of the global minimum update age; '' = use global,
+      // shown on the global value's stop (globalValue).
       GeneratedFormSlider(
         'minimumUpdateAgeDays',
         [
-          MapEntry('', tr('useGlobalDefault')),
           for (final days in minimumUpdateAgeOptions)
             MapEntry(days.toString(), days == 0 ? tr('none') : '$days'),
         ],
         label: tr('minimumUpdateAgeDays'),
         value: '',
         required: false,
+        globalValue: (s) => s.minimumUpdateAgeDays.toString(),
       ),
     ],
     [
@@ -455,7 +456,8 @@ abstract class AppSource {
     [
       // Per-app install method (upstream #3457), fork-shaped (v1.7.4 sync,
       // D13): the fork's modes, Dhizuku and Root included, with the labels
-      // the Settings page uses. '' = the global setting. Values are
+      // the Settings page uses. '' = the global setting, listed in its
+      // place as "<method> (global)" (globalValue). Values are
       // InstallerMode names; the stock installer is 'system'.
       GeneratedFormDropdown(
         'installerMode',
@@ -470,6 +472,7 @@ abstract class AppSource {
         label: tr('installMethod'),
         value: '',
         required: false,
+        globalValue: (s) => s.installerMode,
       ),
     ],
     [

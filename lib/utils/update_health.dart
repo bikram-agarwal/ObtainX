@@ -236,16 +236,21 @@ String updateHealthFailedChecksLabel(int count) =>
 String updateHealthFilteredReleasesLabel(int count) =>
     count < 1 ? tr('disabled') : plural('releases', count);
 
+// No '' ("use global default") stop: the sliders' globalValue puts the
+// thumb on the global value's stop instead.
 List<MapEntry<String, String>> _thresholdSliderOptions(
   List<int> values,
   String Function(int) label,
 ) {
   return [
-    MapEntry('', tr('useGlobalDefault')),
     MapEntry('off', tr('disabled')),
     ...values.where((v) => v > 0).map((v) => MapEntry(v.toString(), label(v))),
   ];
 }
+
+/// The [_thresholdSliderOptions] key of a global threshold.
+String _thresholdOptionKey(int globalValue) =>
+    globalValue < 1 ? 'off' : globalValue.toString();
 
 /// The per-app update-health overrides, shown as their own card after the
 /// fork's four option cards (D24 + D8). Each falls back to the global value.
@@ -264,6 +269,7 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
         label: tr('updateHealthOverrideStaleRelease'),
         value: '',
         required: false,
+        globalValue: (s) => _thresholdOptionKey(s.updateHealthStaleReleaseDays),
       ),
     ],
     [
@@ -273,6 +279,7 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
         label: tr('updateHealthOverrideStaleVersion'),
         value: '',
         required: false,
+        globalValue: (s) => _thresholdOptionKey(s.updateHealthStaleVersionDays),
       ),
     ],
     [
@@ -285,6 +292,8 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
         label: tr('updateHealthOverrideFailedChecks'),
         value: '',
         required: false,
+        globalValue: (s) =>
+            _thresholdOptionKey(s.updateHealthFailedChecksCount),
       ),
     ],
     [
@@ -297,6 +306,8 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
         label: tr('updateHealthOverrideFilteredReleases'),
         value: '',
         required: false,
+        globalValue: (s) =>
+            _thresholdOptionKey(s.updateHealthFilteredReleasesCount),
       ),
     ],
     [
@@ -310,6 +321,7 @@ List<List<GeneratedFormItem>> updateHealthOverrideFormItems() {
         label: tr('updateHealthOverrideArchived'),
         value: '',
         required: false,
+        globalValue: (s) => s.updateHealthArchivedEnabled ? 'on' : 'off',
       ),
     ],
   ];

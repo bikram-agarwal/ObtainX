@@ -347,7 +347,11 @@ and `GeneratedForm` (in `generated_form_renderer.dart`) renders + validates them
 - `GeneratedFormTextField` (autocomplete, password, multi-line via `max`, validators, help
   URL, inline assist action)
 - `GeneratedFormSwitch` (supports `disabled`, and `turnsOffKeys` for exclusive switches)
-- `GeneratedFormDropdown` (`opts`, `disabledOptKeys`), `GeneratedFormSlider`,
+- `GeneratedFormDropdown` (`opts`, `disabledOptKeys`), `GeneratedFormSlider`
+  (`opts`). Both take `globalValue` for a per-app override of a global
+  setting: `''` follows the global value and is shown in that value's place
+  as "<value> (global)" (a dropdown's `opts` keep their `''` entry; a
+  slider's don't),
   `GeneratedFormTagInput` (chips, e.g. categories)
 - `GeneratedFormSubForm` (nested repeatable groups, e.g. HTML intermediate links)
 - `GeneratedFormSectionHeader` (section cards with `wrapFormSectionsInCards`)

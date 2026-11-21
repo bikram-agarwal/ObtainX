@@ -586,6 +586,27 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   final dynamic value;
   final void Function(dynamic newValue) onChanged;
 
+  /// [GeneratedFormDropdown.opts] as listed. With a
+  /// [GeneratedFormDropdown.globalValue], the '' entry moves to the global
+  /// value's place, labelled as that value plus "(global)"; the value's own
+  /// entry stays only while the app is pinned to it, so that pin still shows
+  /// (and the field's value is always one of the items).
+  List<MapEntry<String, String>> _shownOpts(BuildContext context) {
+    final List<MapEntry<String, String>> opts = formItem.opts ?? const [];
+    final String Function(SettingsProvider)? globalValue = formItem.globalValue;
+    if (globalValue == null || !opts.any((o) => o.key.isEmpty)) return opts;
+    final String globalKey = globalValue(context.read<SettingsProvider>());
+    if (!opts.any((o) => o.key == globalKey)) return opts;
+    return [
+      for (final MapEntry<String, String> option in opts)
+        if (option.key == globalKey) ...[
+          MapEntry('', tr('xGlobal', args: [option.value])),
+          if (value?.toString() == globalKey) option,
+        ] else if (option.key.isNotEmpty)
+          option,
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -603,15 +624,14 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
     final TextStyle? dropdownTextStyle = theme.textTheme.bodyLarge?.copyWith(
       color: scheme.onSurface,
     );
+    final List<MapEntry<String, String>> opts = _shownOpts(context);
     final Widget field = appDropdownField<dynamic>(
       context: context,
       value: value,
       labelText: formItem.label,
       menuWidth: appDropdownMenuWidth(
         context,
-        (formItem.opts ?? const []).map(
-          (MapEntry<String, String> option) => option.value,
-        ),
+        opts.map((MapEntry<String, String> option) => option.value),
         style: dropdownTextStyle,
       ),
       borderRadius: outlinedFieldBorderRadius,
@@ -622,7 +642,7 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         externalLabels: showExternalFieldLabels,
         borderRadius: outlinedFieldBorderRadius,
       ),
-      items: formItem.opts!.map((MapEntry<String, String> option) {
+      items: opts.map((MapEntry<String, String> option) {
         final bool enabled =
             formItem.disabledOptKeys?.contains(option.key) != true;
         return DropdownMenuItem<dynamic>(
@@ -804,6 +824,13 @@ class _SliderFormItemState extends State<_SliderFormItem> {
   // As on the settings page: on TV the wrapper is the one focus stop, so the
   // slider itself must not take focus.
   late final FocusNode _sliderFocusNode;
+  // GeneratedFormSlider.globalValue: the stop the global value is at (null
+  // without one, or when it isn't a stop), and whether the value is '', i.e.
+  // follows the global value. Only landing on that stop makes it follow
+  // again; an app pinned to the same value as the global stays pinned until
+  // the thumb is moved.
+  int? _globalIndex;
+  bool _followsGlobal = false;
 
   int get _index => sliderVal.round().clamp(0, opts.length - 1);
 
@@ -816,7 +843,19 @@ class _SliderFormItemState extends State<_SliderFormItem> {
   void initState() {
     super.initState();
     opts = widget.formItem.opts ?? const <MapEntry<String, String>>[];
-    final int index = opts.indexWhere((e) => e.key == widget.initialValue);
+    final String Function(SettingsProvider)? globalValue =
+        widget.formItem.globalValue;
+    if (globalValue != null) {
+      final String globalKey = globalValue(context.read<SettingsProvider>());
+      final int index = opts.indexWhere((e) => e.key == globalKey);
+      if (index >= 0) _globalIndex = index;
+    }
+    int index = opts.indexWhere((e) => e.key == widget.initialValue);
+    if (index < 0 && _globalIndex != null) {
+      // '' (or a value that isn't a stop, shown as before as the default).
+      index = _globalIndex!;
+      _followsGlobal = true;
+    }
     sliderVal = (index >= 0 ? index : 0).toDouble();
     _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
   }
@@ -828,18 +867,22 @@ class _SliderFormItemState extends State<_SliderFormItem> {
   }
 
   void _commit() {
-    widget.onCommit(opts[_index].key);
+    widget.onCommit(_followsGlobal ? '' : opts[_index].key);
   }
 
   @override
   Widget build(BuildContext context) {
     if (opts.isEmpty) return Text(tr('dropdownNoOptsError'));
     final double max = (opts.length - 1).toDouble();
-    final String label = _optLabel(opts[_index]);
+    final String optLabel = _optLabel(opts[_index]);
+    final String label = _followsGlobal
+        ? tr('xGlobal', args: [optLabel])
+        : optLabel;
     final int? divisions = opts.length > 1 ? opts.length - 1 : null;
     void onChanged(double value) {
       setState(() {
         sliderVal = value;
+        _followsGlobal = _globalIndex != null && _index == _globalIndex;
       });
     }
 

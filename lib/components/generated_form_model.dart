@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 
 enum GeneratedFormItemType { textField, dropdown, switch_, subForm }
 
@@ -268,6 +269,13 @@ class GeneratedFormDropdown extends GeneratedFormItem {
   // Fork-only: help icon rendered next to the dropdown label.
   String? labelTooltip;
 
+  /// As [GeneratedFormSlider.globalValue], for a per-app override whose
+  /// [opts] start with a `''` ("use global default") entry: the key of the
+  /// option the global value is. The `''` entry then takes that option's
+  /// place in the list, as its label plus "(global)", and the option itself
+  /// is only listed while the app is pinned to it.
+  final String Function(SettingsProvider settings)? globalValue;
+
   GeneratedFormDropdown(
     super.key,
     this.opts, {
@@ -278,6 +286,7 @@ class GeneratedFormDropdown extends GeneratedFormItem {
     this.required = true,
     this.helpUrl,
     this.labelTooltip,
+    this.globalValue,
     List<String? Function(String? value)> super.additionalValidators = const [],
   });
 
@@ -300,6 +309,7 @@ class GeneratedFormDropdown extends GeneratedFormItem {
       required: required,
       helpUrl: helpUrl,
       labelTooltip: labelTooltip,
+      globalValue: globalValue,
       additionalValidators: List.from(additionalValidators),
     );
   }
@@ -312,6 +322,13 @@ class GeneratedFormSlider extends GeneratedFormItem {
   final List<MapEntry<String, String>>? opts;
   late bool required;
 
+  /// For a per-app override of a global setting: the [opts] key the global
+  /// value is at. With it, `''` means "follow the global value", which has
+  /// no stop of its own: the thumb sits on the global value's stop, labelled
+  /// with that value plus "(global)", and leaving it there stores `''` again.
+  /// [opts] then holds only the real values.
+  final String Function(SettingsProvider settings)? globalValue;
+
   GeneratedFormSlider(
     super.key,
     this.opts, {
@@ -319,6 +336,7 @@ class GeneratedFormSlider extends GeneratedFormItem {
     super.belowWidgets,
     String super.value = '',
     this.required = true,
+    this.globalValue,
     List<String? Function(String? value)> super.additionalValidators = const [],
   });
 
@@ -336,6 +354,7 @@ class GeneratedFormSlider extends GeneratedFormItem {
       belowWidgets: belowWidgets,
       value: value,
       required: required,
+      globalValue: globalValue,
       additionalValidators: List.from(additionalValidators),
     );
   }
