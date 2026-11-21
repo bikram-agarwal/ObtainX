@@ -367,12 +367,12 @@ class Codeberg extends AppSource {
   }
 
   @override
-  Future<Map<String, List<String>>> search(
+  Future<Map<String, SearchResultDetails>> searchWithDetails(
     String query, {
     Map<String, dynamic> querySettings = const {},
   }) async {
     final String origin = 'https://${hosts[0]}';
-    return _gh.searchCommon(
+    return _gh.searchCommonWithDetails(
       query,
       '$origin/api/v1/repos/search?q=${Uri.encodeQueryComponent(query)}&limit=100',
       'data',
@@ -381,6 +381,16 @@ class Codeberg extends AppSource {
       // search prompt is dropped: it disables result caching for every source).
       additionalSettings: await _requestSettings(const {}),
     );
+  }
+
+  @override
+  Future<Map<String, List<String>>> search(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final Map<String, SearchResultDetails> detailedResults =
+        await searchWithDetails(query, querySettings: querySettings);
+    return AppSource.subtitleLinesByUrl(detailedResults);
   }
 }
 

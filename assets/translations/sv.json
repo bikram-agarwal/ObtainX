@@ -363,6 +363,7 @@
         "one": "För många förfrågningar (begränsat pris) - försök igen om {} minut",
         "other": "För många förfrågningar (begränsat pris) - försök igen om {} minuter"
     },
+    "tooManyRequestsNoRetryTime": "För många förfrågningar (begränsad frekvens) - servern angav inte när du kan försöka igen",
     "apps": {
         "one": "{} App",
         "other": "{} Appar"

@@ -363,6 +363,7 @@
         "one": "Muitas solicitações (limitado) - tente novamente em {} minuto",
         "other": "Muitas solicitações (limitado) - tente novamente em {} minutos"
     },
+    "tooManyRequestsNoRetryTime": "Muitas solicitações (limitado) - o servidor não informou quando tentar novamente",
     "apps": {
         "one": "{} app",
         "other": "{} apps"

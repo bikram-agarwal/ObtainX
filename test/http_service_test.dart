@@ -211,6 +211,54 @@ void main() {
       expect((error as RateLimitError).remainingMinutes, 2);
     });
 
+    // #344: itch.io answers 429 with no retry time, and that block doesn't
+    // lift after 30 minutes. The message must not name a wait the host never
+    // gave; background retries still pace themselves.
+    test('a 429 without a retry time does not invent one', () {
+      final error = HttpService().getHttpError(
+        http.Response('<title>429 Too Many Requests</title>', 429),
+      );
+      expect(error, isA<RateLimitError>());
+      final rateLimit = error as RateLimitError;
+      expect(rateLimit.remainingMinutes, isNull);
+      expect(
+        rateLimit.retryWaitMinutes,
+        RateLimitError.defaultRetryWaitMinutes,
+      );
+      expect(
+        rateLimit.message,
+        "Too many requests (rate limited) - the server didn't say when to try again",
+      );
+    });
+
+    test('a plain 403 is a refusal, not a rate limit', () {
+      final error = HttpService().getHttpError(http.Response('', 403));
+      expect(error, isNot(isA<RateLimitError>()));
+      expect(error.code, 'HTTP_ERROR');
+      expect(error.data['statusCode'], 403);
+    });
+
+    test('a 403 that signals throttling is still a rate limit', () {
+      final withRetryAfter = HttpService().getHttpError(
+        http.Response('', 403, headers: {'retry-after': '600'}),
+      );
+      expect((withRetryAfter as RateLimitError).remainingMinutes, 10);
+      for (final headers in [
+        {'x-ratelimit-remaining': '0'},
+        {'cf-mitigated': 'challenge'},
+      ]) {
+        final error = HttpService().getHttpError(
+          http.Response('', 403, headers: headers),
+        );
+        expect(error, isA<RateLimitError>(), reason: '$headers');
+        expect((error as RateLimitError).remainingMinutes, isNull);
+      }
+      final saysRateLimit = HttpService().getHttpError(
+        http.Response('API rate limit exceeded', 403),
+      );
+      expect(saysRateLimit, isA<RateLimitError>());
+    });
+
     test('maps other statuses to a generic HTTP error', () {
       final error = HttpService().getHttpError(http.Response('', 500));
       expect(error.code, 'HTTP_ERROR');

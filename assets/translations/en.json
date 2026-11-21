@@ -389,6 +389,7 @@
         "one": "Too many requests (rate limited) - try again in {} minute",
         "other": "Too many requests (rate limited) - try again in {} minutes"
     },
+    "tooManyRequestsNoRetryTime": "Too many requests (rate limited) - the server didn't say when to try again",
     "apps": {
         "one": "{} App",
         "other": "{} Apps"
@@ -1006,5 +1007,10 @@
     "codebergTokenValidated": "Codeberg access token validated",
     "codebergTokenInvalid": "Codeberg access token is invalid",
     "codebergTokenValidationFailed": "Could not validate Codeberg access token",
-    "codebergTokenValidationRateLimited": "Could not validate Codeberg access token because Codeberg rate-limited the request"
+    "codebergTokenValidationRateLimited": "Could not validate Codeberg access token because Codeberg rate-limited the request",
+    "sortByMostStars": "Most stars",
+    "starCountSemanticLabel": {
+        "one": "{} star",
+        "other": "{} stars"
+    }
 }

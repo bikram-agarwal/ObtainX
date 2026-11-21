@@ -363,6 +363,7 @@
         "one": "Quá nhiều yêu cầu (tốc độ giới hạn) - hãy thử lại sau {} phút",
         "other": "Quá nhiều yêu cầu (tốc độ giới hạn) - hãy thử lại sau {} phút"
     },
+    "tooManyRequestsNoRetryTime": "Quá nhiều yêu cầu (bị giới hạn) - máy chủ không cho biết khi nào có thể thử lại",
     "apps": {
         "one": "{} Ứng dụng",
         "other": "{} Ứng dụng"

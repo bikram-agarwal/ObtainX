@@ -130,13 +130,30 @@ class HTTPStatusError extends ObtainiumError {
     : super(message, code: 'HTTP_ERROR');
 }
 
+/// A host turned a request away for sending too many.
 class RateLimitError extends ObtainiumError {
-  final int remainingMinutes;
-  RateLimitError(this.remainingMinutes)
+  /// How long the host asked us to wait, or null when it gave no retry time.
+  final int? remainingMinutes;
+
+  /// How long background retries wait when the host gave no retry time. The
+  /// user isn't shown this number: it used to be printed as if the host had
+  /// said it, and itch.io's no-hint 429 doesn't lift after 30 minutes (#344).
+  static const int defaultRetryWaitMinutes = 30;
+
+  RateLimitError(int this.remainingMinutes)
     : super.withCode(
         'RATE_LIMIT',
         data: {'remainingMinutes': remainingMinutes},
       );
+
+  /// The host sent no Retry-After or reset time, so the message says so
+  /// instead of promising a wait.
+  RateLimitError.withoutRetryTime()
+    : remainingMinutes = null,
+      super.withCode('RATE_LIMIT');
+
+  /// Minutes to wait before retrying in the background.
+  int get retryWaitMinutes => remainingMinutes ?? defaultRetryWaitMinutes;
 }
 
 class InvalidURLError extends ObtainiumError {
@@ -366,10 +383,10 @@ String localizeErrorCode(String code, Map<String, dynamic>? data) {
       data?['note'] != null && (data!['note'] as String).isNotEmpty
           ? '${tr('noReleaseFound')}\n\n${data['note']}'
           : tr('noReleaseFound'),
-    'RATE_LIMIT' => plural(
-      'tooManyRequestsTryAgainInMinutes',
-      data?['remainingMinutes'] ?? 0,
-    ),
+    'RATE_LIMIT' => switch (data?['remainingMinutes']) {
+      final int minutes => plural('tooManyRequestsTryAgainInMinutes', minutes),
+      _ => tr('tooManyRequestsNoRetryTime'),
+    },
     'INVALID_URL' => tr(
       'invalidURLForSource',
       args: [data?['sourceName'] ?? ''],

@@ -50,6 +50,17 @@ class SourceSearchProfile {
   });
 }
 
+/// Search result metadata returned by [AppSource.searchWithDetails].
+class SearchResultDetails {
+  const SearchResultDetails({
+    required this.subtitleLines,
+    this.starCount,
+  });
+
+  final List<String> subtitleLines;
+  final int? starCount;
+}
+
 abstract class AppSource {
   List<String> hosts = [];
 
@@ -805,6 +816,41 @@ abstract class AppSource {
     Map<String, dynamic> querySettings = const {},
   }) {
     throw NotImplementedError();
+  }
+
+  /// Searches the source and returns rich result details (including optional
+  /// metadata like repository [SearchResultDetails.starCount]).
+  Future<Map<String, SearchResultDetails>> searchWithDetails(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final Map<String, List<String>> results = await search(
+      query,
+      querySettings: querySettings,
+    );
+    return {
+      for (final MapEntry<String, List<String>> entry in results.entries)
+        entry.key: SearchResultDetails(subtitleLines: entry.value),
+    };
+  }
+
+  /// Extracts legacy subtitle-line maps from [searchWithDetails] results.
+  static Map<String, List<String>> subtitleLinesByUrl(
+    Map<String, SearchResultDetails> detailedResults,
+  ) {
+    return {
+      for (final MapEntry<String, SearchResultDetails> entry
+          in detailedResults.entries)
+        entry.key: entry.value.subtitleLines,
+    };
+  }
+
+  /// Parses an integer star count from JSON payloads across code forges.
+  static int? parseSearchStarCount(dynamic rawStarCount) {
+    if (rawStarCount is num) {
+      return rawStarCount.toInt();
+    }
+    return int.tryParse(rawStarCount?.toString() ?? '');
   }
 
   static String stripLastPathSegment(String url) {

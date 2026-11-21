@@ -389,6 +389,7 @@
         "one": "Trop de requêtes (limite atteinte) - réessayez dans {} minute",
         "other": "Trop de requêtes (limite atteinte) - réessayez dans {} minutes"
     },
+    "tooManyRequestsNoRetryTime": "Trop de requêtes (limite atteinte) - le serveur n'a pas indiqué quand réessayer",
     "apps": {
         "one": "{} application",
         "other": "{} applications"

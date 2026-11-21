@@ -364,6 +364,7 @@
         "one": "Zu viele Anfragen (Rate begrenzt) – versuche es in {} Minute erneut",
         "other": "Zu viele Anfragen (Rate begrenzt) – versuche es in {} Minuten erneut"
     },
+    "tooManyRequestsNoRetryTime": "Zu viele Anfragen (Rate begrenzt) – der Server hat nicht angegeben, wann du es erneut versuchen kannst",
     "apps": {
         "one": "{} App",
         "other": "{} Apps"

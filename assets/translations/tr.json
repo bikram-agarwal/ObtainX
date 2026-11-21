@@ -364,6 +364,7 @@
         "one": "Çok fazla istek (sınırlandı) - {} dakika sonra tekrar deneyin",
         "other": "Çok fazla istek (sınırlandı) - {} dakika sonra tekrar deneyin"
     },
+    "tooManyRequestsNoRetryTime": "Çok fazla istek (sınırlandı) - sunucu ne zaman tekrar denenebileceğini belirtmedi",
     "apps": {
         "one": "{} Uygulama",
         "other": "{} Uygulama"

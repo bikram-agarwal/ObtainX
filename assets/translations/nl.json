@@ -363,6 +363,7 @@
         "one": "Te veel verzoeken (aantal beperkt) - opnieuw proberen over {} minuut",
         "other": "Te veel verzoeken (aantal beperkt) - opnieuw proberen over {} minuten"
     },
+    "tooManyRequestsNoRetryTime": "Te veel verzoeken (aantal beperkt) - de server gaf niet aan wanneer je het opnieuw kunt proberen",
     "apps": {
         "one": "{} app",
         "other": "{} apps"

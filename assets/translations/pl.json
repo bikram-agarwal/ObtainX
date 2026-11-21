@@ -367,6 +367,7 @@
         "many": "Zbyt wiele żądań (ograniczona częstotliwość) - spróbuj ponownie za {} minut",
         "other": "Zbyt wiele żądań (ograniczona częstotliwość) - spróbuj ponownie za {} minuty"
     },
+    "tooManyRequestsNoRetryTime": "Zbyt wiele żądań (ograniczona częstotliwość) - serwer nie podał, kiedy spróbować ponownie",
     "apps": {
         "one": "{} apkę",
         "few": "{} apki",

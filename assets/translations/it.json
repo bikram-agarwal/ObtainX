@@ -363,6 +363,7 @@
         "one": "Troppe richieste (traffico limitato) - riprova tra {} minuto",
         "other": "Troppe richieste (traffico limitato) - riprova tra {} minuti"
     },
+    "tooManyRequestsNoRetryTime": "Troppe richieste (traffico limitato) - il server non ha indicato quando riprovare",
     "apps": {
         "one": "{} app",
         "other": "{} app"

@@ -114,6 +114,67 @@ String _searchResultProfileId(String key) => key.substring(0, key.indexOf('|'));
 
 String _searchResultUrl(String key) => key.substring(key.indexOf('|') + 1);
 
+/// A single entry displayed in the inline source search results list.
+class SearchResultDisplayEntry {
+  const SearchResultDisplayEntry({
+    required this.sourceIdentifier,
+    required this.subtitleLines,
+    this.starCount,
+  });
+
+  final String sourceIdentifier;
+  final List<String> subtitleLines;
+  final int? starCount;
+}
+
+/// Filters search results by [filterQuery] and optionally sorts by star count
+/// descending, placing unstarred entries after starred ones while preserving
+/// relative order for ties and non-forge sources.
+List<MapEntry<String, SearchResultDisplayEntry>> filterAndSortSearchResults(
+  Map<String, SearchResultDisplayEntry> results, {
+  required String filterQuery,
+  required bool sortByStars,
+}) {
+  final String normalizedFilter = filterQuery.trim().toLowerCase();
+  final List<MapEntry<String, SearchResultDisplayEntry>> filteredEntries =
+      results.entries.where((
+        MapEntry<String, SearchResultDisplayEntry> entry,
+      ) {
+        if (normalizedFilter.isEmpty) return true;
+        final String resultUrl = _searchResultUrl(entry.key).toLowerCase();
+        final String subtitleText = entry.value.subtitleLines
+            .join(' ')
+            .toLowerCase();
+        return resultUrl.contains(normalizedFilter) ||
+            subtitleText.contains(normalizedFilter);
+      }).toList();
+
+  if (!sortByStars) {
+    return filteredEntries;
+  }
+
+  final List<({int index, MapEntry<String, SearchResultDisplayEntry> entry})>
+  indexedEntries = [
+    for (int index = 0; index < filteredEntries.length; index++)
+      (index: index, entry: filteredEntries[index]),
+  ];
+
+  indexedEntries.sort((leftItem, rightItem) {
+    final int? leftStars = leftItem.entry.value.starCount;
+    final int? rightStars = rightItem.entry.value.starCount;
+    if (leftStars != null && rightStars != null) {
+      final int starComparison = rightStars.compareTo(leftStars);
+      if (starComparison != 0) return starComparison;
+      return leftItem.index.compareTo(rightItem.index);
+    }
+    if (leftStars != null) return -1;
+    if (rightStars != null) return 1;
+    return leftItem.index.compareTo(rightItem.index);
+  });
+
+  return [for (final indexedItem in indexedEntries) indexedItem.entry];
+}
+
 enum _AddAppLauncherDestination {
   addByUrl,
   searchSources,
@@ -394,17 +455,23 @@ class AddAppPageState extends State<AddAppPage> {
   // so it cannot grow indefinitely. The key includes the selected sources, and
   // searches that prompt for per-source options are never cached because their
   // results depend on that dialog input (see runInlineSearch).
-  static final Map<String, Map<String, MapEntry<String, List<String>>>>
+  static final Map<String, Map<String, SearchResultDisplayEntry>>
   _searchCache = {};
   static const int _searchCacheMaxEntries = 50;
+
+  @visibleForTesting
+  static void clearSearchCacheForTesting() {
+    _searchCache.clear();
+  }
+
   // Search profile IDs the user has selected (null = not yet initialised). A
   // source with one profile has its name as the ID (D20).
   Set<String>? _searchSelectedStores;
-  // Interleaved search results: key=[_searchResultKey], value=(source
-  // identifier, subtitleLines)
-  Map<String, MapEntry<String, List<String>>> _searchResults = {};
+  // Interleaved search results: key=[_searchResultKey], value=[SearchResultDisplayEntry]
+  Map<String, SearchResultDisplayEntry> _searchResults = {};
   final Set<String> _searchSelectedResultUrls = {};
   bool _searchHasSearched = false;
+  bool _searchSortByStars = false;
   String _searchResultFilter = '';
   bool _byUrlOpenedFromSearchPick = false;
   late final TextEditingController _searchSomeSourcesController;
@@ -705,6 +772,7 @@ class AddAppPageState extends State<AddAppPage> {
       _searchResults = {};
       _searchSelectedResultUrls.clear();
       _searchHasSearched = false;
+      _searchSortByStars = false;
       _searchResultFilter = '';
       _byUrlOpenedFromSearchPick = false;
       _searchSomeSourcesController.clear();
@@ -1976,7 +2044,7 @@ class AddAppPageState extends State<AddAppPage> {
       });
       try {
         final String? sourceIdentifier =
-            _searchResults[selectedKeys.first]?.key;
+            _searchResults[selectedKeys.first]?.sourceIdentifier;
         final AppSource? sourceOverride = sourceIdentifier == null
             ? null
             : sourceProvider.getSource(
@@ -2328,20 +2396,25 @@ class AddAppPageState extends State<AddAppPage> {
         // changed page) must not lose the other stores' results, so its error
         // is kept and reported once they are shown.
         final Map<String, Object> failures = {};
-        final List<MapEntry<_SearchProfileOption, Map<String, List<String>>>?>
-        results = (await Future.wait(
+        final List<
+          MapEntry<_SearchProfileOption, Map<String, SearchResultDetails>>?
+        >
+        searchResultsByProfile = (await Future.wait(
           selectedOptions.map((_SearchProfileOption option) async {
-            final AppSource e = searchSources[option.source.sourceIdentifier]!;
+            final AppSource sourceInstance =
+                searchSources[option.source.sourceIdentifier]!;
             try {
               Map<String, dynamic>? querySettings = {};
-              if (e.includeAdditionalOptsInMainSearch) {
+              if (sourceInstance.includeAdditionalOptsInMainSearch) {
                 querySettings = await showDialog<Map<String, dynamic>?>(
                   context: context,
-                  builder: (BuildContext ctx) {
+                  builder: (BuildContext dialogContext) {
                     return GeneratedFormModal(
-                      title: tr('searchX', args: [e.name]),
+                      title: tr('searchX', args: [sourceInstance.name]),
                       items: [
-                        ...e.searchQuerySettingFormItems.map((e) => [e]),
+                        ...sourceInstance.searchQuerySettingFormItems.map(
+                          (GeneratedFormItem formItem) => [formItem],
+                        ),
                         [
                           GeneratedFormTextField(
                             'url',
@@ -2350,17 +2423,21 @@ class AddAppPageState extends State<AddAppPage> {
                                 searchPromptAutoCompleteOptions(
                                   trackedAppUrls: appsProvider.apps.values
                                       .where(
-                                        (a) =>
+                                        (AppInMemory trackedApp) =>
                                             sourceProvider
                                                 .getSource(
-                                                  a.app.url,
-                                                  overrideSource:
-                                                      a.app.overrideSource,
+                                                  trackedApp.app.url,
+                                                  overrideSource: trackedApp
+                                                      .app
+                                                      .overrideSource,
                                                 )
                                                 .runtimeType ==
-                                            e.runtimeType,
+                                            sourceInstance.runtimeType,
                                       )
-                                      .map((a) => a.app.url),
+                                      .map(
+                                        (AppInMemory trackedApp) =>
+                                            trackedApp.app.url,
+                                      ),
                                 ),
                             value: '',
                             required: true,
@@ -2376,7 +2453,7 @@ class AddAppPageState extends State<AddAppPage> {
               }
               return MapEntry(
                 option,
-                await e.search(
+                await sourceInstance.searchWithDetails(
                   searchQuery,
                   querySettings: {
                     ...option.profile.querySettings,
@@ -2391,31 +2468,39 @@ class AddAppPageState extends State<AddAppPage> {
               return null;
             }
           }),
-        )).where((a) => a != null).toList();
+        )).where((entry) => entry != null).toList();
 
         // Interleave results from multiple sources
-        final Map<String, MapEntry<String, List<String>>> res = {};
-        var si = 0;
-        var done = false;
-        while (!done) {
-          done = true;
-          for (var r in results) {
-            final _SearchProfileOption option = r!.key;
-            if (r.value.length > si) {
-              done = false;
-              final singleRes = r.value.entries.elementAt(si);
-              res[_searchResultKey(option.profile.id, singleRes.key)] =
-                  MapEntry(option.source.sourceIdentifier, singleRes.value);
+        final Map<String, SearchResultDisplayEntry> interleavedResults = {};
+        int sourceIndex = 0;
+        bool allExhausted = false;
+        while (!allExhausted) {
+          allExhausted = true;
+          for (final profileResult in searchResultsByProfile) {
+            final _SearchProfileOption option = profileResult!.key;
+            if (profileResult.value.length > sourceIndex) {
+              allExhausted = false;
+              final MapEntry<String, SearchResultDetails> singleResult =
+                  profileResult.value.entries.elementAt(sourceIndex);
+              interleavedResults[_searchResultKey(
+                option.profile.id,
+                singleResult.key,
+              )] = SearchResultDisplayEntry(
+                sourceIdentifier: option.source.sourceIdentifier,
+                subtitleLines: singleResult.value.subtitleLines,
+                starCount: singleResult.value.starCount,
+              );
             }
           }
-          si++;
+          sourceIndex++;
         }
 
         if (!context.mounted) return;
         setState(() {
-          _searchResults = res;
+          _searchResults = interleavedResults;
           // Not "no results" when no store could answer: the error says why.
-          _searchHasSearched = results.isNotEmpty || failures.isEmpty;
+          _searchHasSearched =
+              searchResultsByProfile.isNotEmpty || failures.isEmpty;
           // Not cached when a store failed, so searching again asks it again.
           if (cacheable && failures.isEmpty) {
             // Evict the oldest entry once the cache is full (insertion order).
@@ -2423,7 +2508,7 @@ class AddAppPageState extends State<AddAppPage> {
                 !_searchCache.containsKey(cacheKey)) {
               _searchCache.remove(_searchCache.keys.first);
             }
-            _searchCache[cacheKey] = res;
+            _searchCache[cacheKey] = interleavedResults;
           }
         });
         _scrollEmbeddedSearchResultsToFilter();
@@ -2638,27 +2723,72 @@ class AddAppPageState extends State<AddAppPage> {
           child: Center(child: Text(tr('noResults'))),
         );
       }
-      // Apply filter if the user typed one.
-      final String filterQ = _searchResultFilter.trim().toLowerCase();
-      final entries = _searchResults.entries.where((e) {
-        if (filterQ.isEmpty) return true;
-        final title = _searchResultUrl(e.key).toLowerCase();
-        final subtitle = e.value.value.join(' ').toLowerCase();
-        return title.contains(filterQ) || subtitle.contains(filterQ);
-      }).toList();
+      final bool hasStarredResults = _searchResults.values.any(
+        (SearchResultDisplayEntry item) => item.starCount != null,
+      );
+      final List<MapEntry<String, SearchResultDisplayEntry>> entries =
+          filterAndSortSearchResults(
+            _searchResults,
+            filterQuery: _searchResultFilter,
+            sortByStars: hasStarredResults && _searchSortByStars,
+          );
       final ColorScheme searchResultColorScheme = Theme.of(context).colorScheme;
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(top: 16, bottom: 8),
-            child: Text(
-              tr('addAppSearchResultsTitle'),
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
+            padding: EdgeInsets.only(
+              top: hasStarredResults ? 10 : 16,
+              bottom: hasStarredResults ? 4 : 8,
+            ),
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                Text(
+                  tr('addAppSearchResultsTitle'),
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: searchResultColorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (hasStarredResults)
+                  FilterChip(
+                    avatar: Icon(
+                      Icons.star_rounded,
+                      size: 16,
+                      color: _searchSortByStars
+                          ? searchResultColorScheme.onSecondaryContainer
+                          : searchResultColorScheme.onSurfaceVariant,
+                    ),
+                    showCheckmark: false,
+                    visualDensity: VisualDensity.compact,
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            tr('sortByMostStars'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (_searchSortByStars) ...[
+                          const SizedBox(width: 4),
+                          const Icon(Icons.check_rounded, size: 14),
+                        ],
+                      ],
+                    ),
+                    selected: _searchSortByStars,
+                    onSelected: (bool selected) {
+                      setState(() {
+                        _searchSortByStars = selected;
+                      });
+                    },
+                  ),
+              ],
             ),
           ),
           // TV (D23): the field doesn't trap the remote above the results.
@@ -2668,7 +2798,7 @@ class AddAppPageState extends State<AddAppPage> {
               key: _searchResultFilterKey,
               focusNode: _searchResultFilterFocusNode,
               controller: _searchResultFilterController,
-              onChanged: (v) => setState(() => _searchResultFilter = v),
+              onChanged: (value) => setState(() => _searchResultFilter = value),
               decoration:
                   appPageOutlinedInputDecoration(
                     context,
@@ -2698,9 +2828,11 @@ class AddAppPageState extends State<AddAppPage> {
           const SizedBox(height: 8),
           ...entries.map((entry) {
             final String resultKey = entry.key;
-            final displayTitle = _searchResultUrl(resultKey);
-            final sourceName = entry.value.key;
-            final subtitleLines = entry.value.value;
+            final String displayTitle = _searchResultUrl(resultKey);
+            final SearchResultDisplayEntry resultItem = entry.value;
+            final String sourceName = resultItem.sourceIdentifier;
+            final List<String> subtitleLines = resultItem.subtitleLines;
+            final int? starCount = resultItem.starCount;
             final _SearchProfileOption? profileOption =
                 searchProfileOptionsById[_searchResultProfileId(resultKey)];
             // Which of the store's profiles found it, beside its address.
@@ -2760,7 +2892,53 @@ class AddAppPageState extends State<AddAppPage> {
                     selected: widget._searchAddsMultipleApps && selected,
                     leading: SizedBox(
                       width: 32,
-                      child: Center(child: _searchSourceIcon(sourceName)),
+                      child: starCount != null
+                          ? Semantics(
+                              label: plural(
+                                'starCountSemanticLabel',
+                                starCount,
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  _searchSourceIcon(sourceName),
+                                  const SizedBox(height: 2),
+                                  FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: ExcludeSemantics(
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.star_rounded,
+                                            size: 11,
+                                            color: searchResultColorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                          const SizedBox(width: 1),
+                                          Text(
+                                            formatCompactStarCount(starCount),
+                                            maxLines: 1,
+                                            softWrap: false,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .labelSmall
+                                                ?.copyWith(
+                                                  fontSize: 10,
+                                                  height: 1.1,
+                                                  color: searchResultColorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : Center(child: _searchSourceIcon(sourceName)),
                     ),
                     title: subtitleLines.isNotEmpty
                         ? Text(

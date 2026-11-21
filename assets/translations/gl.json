@@ -363,6 +363,7 @@
         "one": "Demasiadas peticións (taxa limitada) - volver a intentar en {} minuto",
         "other": "Demasiadas peticións (taxa limitada) - volver a intentar en {} minutos"
     },
+    "tooManyRequestsNoRetryTime": "Demasiadas peticións (taxa limitada) - o servidor non indicou cando volver intentalo",
     "apps": {
         "one": "{} App",
         "other": "{} Apps"

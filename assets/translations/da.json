@@ -363,6 +363,7 @@
         "one": "For mange anmodninger (begrænset hastighed). Prøv igen om {} minut",
         "other": "For mange anmodninger (begrænset hastighed). Prøv igen om {} minutter"
     },
+    "tooManyRequestsNoRetryTime": "For mange anmodninger (begrænset hastighed). Serveren oplyste ikke, hvornår der kan prøves igen",
     "apps": {
         "one": "{} App",
         "other": "{} Apps"

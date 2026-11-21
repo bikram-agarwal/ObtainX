@@ -365,6 +365,12 @@ class HttpService {
     }
   }
 
+  /// Maps a failed response to the error shown and acted on.
+  ///
+  /// ObtainX divergence (#344): upstream maps every 403 and 429 to a rate
+  /// limit and assumes a wait when the host gives none. Here a 403 is a rate
+  /// limit only when something says so, and a rate limit with no retry time
+  /// says that instead of naming a number the host never sent.
   ObtainiumError getHttpError(http.Response res) {
     if (res.statusCode == 404) return NoReleasesError();
 
@@ -373,9 +379,16 @@ class HttpService {
     final bodySample = body.length > 1000
         ? body.substring(0, 1000).toLowerCase()
         : body.toLowerCase();
+    // A plain 403 is a refusal, and waiting won't lift it. It counts as a
+    // throttle only with a retry time, a spent quota or a Cloudflare challenge.
+    final bool throttled403 =
+        res.statusCode == 403 &&
+        (res.headers['retry-after'] != null ||
+            res.headers['x-ratelimit-remaining']?.trim() == '0' ||
+            res.headers['cf-mitigated']?.toLowerCase().trim() == 'challenge');
     final isRateLimit =
         res.statusCode == 429 ||
-        res.statusCode == 403 ||
+        throttled403 ||
         reasonLower.contains('rate limit') ||
         reasonLower.contains('too many requests') ||
         bodySample.contains('rate limit') ||
@@ -398,7 +411,7 @@ class HttpService {
           return RateLimitError(remainingMinutes);
         }
       }
-      return RateLimitError(30); // Default to a conservative 30 minutes
+      return RateLimitError.withoutRetryTime();
     }
     return ObtainiumError(
       (res.reasonPhrase != null && res.reasonPhrase!.isNotEmpty)

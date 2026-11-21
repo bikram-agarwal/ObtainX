@@ -363,6 +363,7 @@
         "one": "Túl sok kérés (lekérdezés-korlátozás); próbálja újra {} perc múlva,\nvagy adjon meg egy GitHub/GitLab API-kulcsot",
         "other": "Túl sok kérés (lekérdezés-korlátozás); próbálja újra {} perc múlva,\nvagy adjon meg egy GitHub/GitLab API-kulcsot"
     },
+    "tooManyRequestsNoRetryTime": "Túl sok kérés (lekérdezés-korlátozás); a szerver nem közölte, mikor lehet újra próbálkozni",
     "apps": {
         "one": "{} alkalmazás",
         "other": "{} alkalmazás"

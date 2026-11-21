@@ -363,6 +363,7 @@
         "one": "Massa peticions (límit excedit), torna-hi en {} minut",
         "other": "Massa peticions (límit excedit), torna-hi en {} minuts"
     },
+    "tooManyRequestsNoRetryTime": "Massa peticions (límit excedit), el servidor no ha indicat quan tornar-hi",
     "apps": {
         "one": "{} Aplicació",
         "other": "{} Aplicacions"

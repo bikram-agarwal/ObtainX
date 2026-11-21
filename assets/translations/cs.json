@@ -364,6 +364,7 @@
         "few": "Příliš mnoho požadavků (limit požadavků) - zkuste to znovu za {} minuty",
         "other": "Příliš mnoho požadavků (limit požadavků) - zkuste to znovu za {} minut"
     },
+    "tooManyRequestsNoRetryTime": "Příliš mnoho požadavků (limit požadavků) - server neuvedl, kdy to zkusit znovu",
     "apps": {
         "one": "{} aplikace",
         "few": "{} aplikace",

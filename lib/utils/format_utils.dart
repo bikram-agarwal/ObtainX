@@ -39,3 +39,24 @@ String formatBytesForDisplay(int bytes) {
     return '$bytes B';
   }
 }
+
+/// Formats a repository star count compactly (e.g. "910", "5.8K", "36K", "1.2M").
+String formatCompactStarCount(int starCount) {
+  if (starCount <= 0) return '0';
+  if (starCount < 1000) return '$starCount';
+
+  String formatScaledUnit(double scaledValue, String suffix) {
+    final String formatted = scaledValue < 9.95
+        ? scaledValue.toStringAsFixed(1)
+        : scaledValue.round().toString();
+    final String trimmed = formatted.endsWith('.0')
+        ? formatted.substring(0, formatted.length - 2)
+        : formatted;
+    return '$trimmed$suffix';
+  }
+
+  if (starCount < 999500) {
+    return formatScaledUnit(starCount / 1000, 'K');
+  }
+  return formatScaledUnit(starCount / 1000000, 'M');
+}

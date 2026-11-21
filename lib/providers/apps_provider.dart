@@ -2477,7 +2477,7 @@ _bgRunUpdateCheck(
         if (toCheckApp.value < _bgUpdateMaxAttempts) {
           toRetry.add(MapEntry(toCheckApp.key, toCheckApp.value + 1));
           int minRetryIntervalForThisApp = err is RateLimitError
-              ? (err.remainingMinutes * 60)
+              ? (err.retryWaitMinutes * 60)
               : err is ClientException
               ? (_bgClientExceptionRetryWaitSeconds)
               : (toCheckApp.value + 1);

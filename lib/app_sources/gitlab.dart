@@ -126,23 +126,41 @@ class GitLab extends AppSource {
   }
 
   @override
+  Future<Map<String, SearchResultDetails>> searchWithDetails(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final String requestUrl =
+        'https://${hosts[0]}/api/v4/projects?search=${Uri.encodeQueryComponent(query)}';
+    final Response response = await sourceRequest(requestUrl, {});
+    ensureHttpSuccess(response);
+    final List<dynamic> decodedProjects =
+        jsonDecode(response.body) as List<dynamic>;
+    final Map<String, SearchResultDetails> detailedResults = {};
+    for (final dynamic projectItem in decodedProjects) {
+      final String projectUrl =
+          'https://${hosts[0]}/${projectItem['path_with_namespace']}';
+      detailedResults[projectUrl] = SearchResultDetails(
+        subtitleLines: [
+          projectItem['name_with_namespace'] ??
+              projectItem['path_with_namespace'] ??
+              '',
+          projectItem['description'] ?? tr('noDescription'),
+        ],
+        starCount: AppSource.parseSearchStarCount(projectItem['star_count']),
+      );
+    }
+    return detailedResults;
+  }
+
+  @override
   Future<Map<String, List<String>>> search(
     String query, {
     Map<String, dynamic> querySettings = const {},
   }) async {
-    final url =
-        'https://${hosts[0]}/api/v4/projects?search=${Uri.encodeQueryComponent(query)}';
-    final res = await sourceRequest(url, {});
-    ensureHttpSuccess(res);
-    final json = jsonDecode(res.body) as List<dynamic>;
-    final Map<String, List<String>> results = {};
-    for (var element in json) {
-      results['https://${hosts[0]}/${element['path_with_namespace']}'] = [
-        element['name_with_namespace'] ?? element['path_with_namespace'] ?? '',
-        element['description'] ?? tr('noDescription'),
-      ];
-    }
-    return results;
+    final Map<String, SearchResultDetails> detailedResults =
+        await searchWithDetails(query, querySettings: querySettings);
+    return AppSource.subtitleLinesByUrl(detailedResults);
   }
 
   @override

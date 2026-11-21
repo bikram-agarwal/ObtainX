@@ -363,6 +363,7 @@
         "one": "Previše zahtjeva (ograničen broj zahteva) - pokušajte ponovo za {} minutu",
         "other": "Previše zahtjeva (ograničena cijena) - pokušajte ponovo za {} min."
     },
+    "tooManyRequestsNoRetryTime": "Previše zahtjeva (ograničen broj zahtjeva) - server nije naveo kada pokušati ponovo",
     "apps": {
         "one": "{} aplikacija",
         "other": "{} aplikacije"

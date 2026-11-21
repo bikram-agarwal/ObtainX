@@ -363,6 +363,7 @@
         "one": "Muitos pedidos (taxa de pedidos limitada) - tente novamente em {} minuto",
         "other": "Muitos pedidos (taxa limitada) - tente novamente em {} minutos"
     },
+    "tooManyRequestsNoRetryTime": "Muitos pedidos (taxa limitada) - o servidor não indicou quando tentar novamente",
     "apps": {
         "one": "{} Aplicação",
         "other": "{} Aplicações"

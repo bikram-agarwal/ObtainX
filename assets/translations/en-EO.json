@@ -363,6 +363,7 @@
         "one": "Tro da informmendoj (limigita kvanto) - reprovu en {} minuto",
         "other": "Tro da informmendoj (limigita kvanto) - reprovu en {} minutoj"
     },
+    "tooManyRequestsNoRetryTime": "Tro da informmendoj (limigita kvanto) - la servilo ne diris, kiam reprovi",
     "apps": {
         "one": "{} Apo",
         "other": "{} Apoj"

@@ -363,6 +363,7 @@
         "one": "Terlalu banyak permintaan (tarif dibatasi) - coba lagi dalam {} menit",
         "other": "Terlalu banyak permintaan (tarif dibatasi) - coba lagi dalam {} menit"
     },
+    "tooManyRequestsNoRetryTime": "Terlalu banyak permintaan (dibatasi) - server tidak menyebutkan kapan harus mencoba lagi",
     "apps": {
         "one": "{} aplikasi",
         "other": "{} aplikasi"

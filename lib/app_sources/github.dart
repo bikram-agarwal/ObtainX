@@ -1740,7 +1740,8 @@ class GitHub extends AppSource {
     return AppNames(names[0], names.sublist(1).join('/'));
   }
 
-  Future<Map<String, List<String>>> searchCommon(
+  /// Runs a repository search and preserves star counts in [SearchResultDetails].
+  Future<Map<String, SearchResultDetails>> searchCommonWithDetails(
     String query,
     String requestUrl,
     String rootProp, {
@@ -1752,27 +1753,52 @@ class GitHub extends AppSource {
     if (res.statusCode == 200) {
       final int minStarCount =
           int.tryParse(querySettings['minStarCount']?.toString() ?? '') ?? 0;
-      final Map<String, List<String>> urlsWithDescriptions = {};
-      for (var e in (jsonDecode(res.body)[rootProp] as List<dynamic>)) {
-        if ((e['stargazers_count'] ?? e['stars_count'] ?? 0) >= minStarCount) {
-          urlsWithDescriptions.addAll({
-            e['html_url'] as String: [
-              e['full_name'] as String,
-              ((e['archived'] == true ? '[ARCHIVED] ' : '') +
-                  (e['description'] != null
-                      ? e['description'] as String
+      final Map<String, SearchResultDetails> resultsByUrl = {};
+      for (final dynamic repoItem
+          in (jsonDecode(res.body)[rootProp] as List<dynamic>)) {
+        final int? starCount = AppSource.parseSearchStarCount(
+          repoItem['stargazers_count'] ?? repoItem['stars_count'],
+        );
+        if ((starCount ?? 0) >= minStarCount) {
+          resultsByUrl[repoItem['html_url'] as String] = SearchResultDetails(
+            subtitleLines: [
+              repoItem['full_name'] as String,
+              ((repoItem['archived'] == true ? '[ARCHIVED] ' : '') +
+                  (repoItem['description'] != null
+                      ? repoItem['description'] as String
                       : tr('noDescription'))),
             ],
-          });
+            starCount: starCount,
+          );
         }
       }
-      return urlsWithDescriptions;
+      return resultsByUrl;
     } else {
       if (onHttpErrorCode != null) {
         onHttpErrorCode(res);
       }
       throw getObtainiumHttpError(res);
     }
+  }
+
+  Future<Map<String, List<String>>> searchCommon(
+    String query,
+    String requestUrl,
+    String rootProp, {
+    Function(Response)? onHttpErrorCode,
+    Map<String, dynamic> querySettings = const {},
+    Map<String, dynamic> additionalSettings = const {},
+  }) async {
+    final Map<String, SearchResultDetails> detailedResults =
+        await searchCommonWithDetails(
+          query,
+          requestUrl,
+          rootProp,
+          onHttpErrorCode: onHttpErrorCode,
+          querySettings: querySettings,
+          additionalSettings: additionalSettings,
+        );
+    return AppSource.subtitleLinesByUrl(detailedResults);
   }
 
   String undoGHProxyMod(
@@ -1786,31 +1812,42 @@ class GitHub extends AppSource {
   }
 
   @override
+  Future<Map<String, SearchResultDetails>> searchWithDetails(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    final Map<String, String> sourceConfigSettingValues =
+        await getSourceConfigValues({}, settingsProvider);
+    final Map<String, SearchResultDetails> results =
+        await searchCommonWithDetails(
+          query,
+          '${await getAPIHost({})}/search/repositories?q=${Uri.encodeQueryComponent(query)}&per_page=100',
+          'items',
+          onHttpErrorCode: (Response res) {
+            githubErrorCheck(res);
+          },
+          querySettings: querySettings,
+        );
+    if ((sourceConfigSettingValues['GHReqPrefix'] ?? '').isNotEmpty) {
+      return {
+        for (final MapEntry<String, SearchResultDetails> entry
+            in results.entries)
+          undoGHProxyMod(entry.key, sourceConfigSettingValues): entry.value,
+      };
+    }
+    return results;
+  }
+
+  @override
   Future<Map<String, List<String>>> search(
     String query, {
     Map<String, dynamic> querySettings = const {},
   }) async {
-    final sp = SettingsProvider();
-    await sp.initializeSettings();
-    final sourceConfigSettingValues = await getSourceConfigValues({}, sp);
-    final results = await searchCommon(
-      query,
-      '${await getAPIHost({})}/search/repositories?q=${Uri.encodeQueryComponent(query)}&per_page=100',
-      'items',
-      onHttpErrorCode: (Response res) {
-        githubErrorCheck(res);
-      },
-      querySettings: querySettings,
-    );
-    if ((sourceConfigSettingValues['GHReqPrefix'] ?? '').isNotEmpty) {
-      final Map<String, List<String>> results2 = {};
-      results.forEach((k, v) {
-        results2[undoGHProxyMod(k, sourceConfigSettingValues)] = v;
-      });
-      return results2;
-    } else {
-      return results;
-    }
+    final Map<String, SearchResultDetails> detailedResults =
+        await searchWithDetails(query, querySettings: querySettings);
+    return AppSource.subtitleLinesByUrl(detailedResults);
   }
 
   void rateLimitErrorCheck(Response res) {
