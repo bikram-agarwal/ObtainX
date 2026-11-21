@@ -43,14 +43,21 @@ const String _apkMirrorSizeDebugPrefix = 'OBTAINX-APK-SIZE-DEBUG';
 /// `APKUpdater-v3.5.9 ObtainX/x.y.z` returns 200, the old browser UA 403.
 const String apkMirrorAllowlistedUserAgentToken = 'APKUpdater-v3.5.9';
 
-/// [apkMirrorAllowlistedUserAgentToken], with ObtainX's own identification
-/// appended when the running version is known.
+/// [apkMirrorAllowlistedUserAgentToken] with ObtainX's own name and version
+/// appended. Never bare (#339): an unreadable version becomes
+/// [obtainXUserAgentFallbackVersion], as in [obtainXIdentifyingUserAgent].
 String apkMirrorUserAgent([String? obtainXVersion]) {
   final String version = obtainXVersion?.trim() ?? '';
-  return version.isEmpty
-      ? apkMirrorAllowlistedUserAgentToken
-      : '$apkMirrorAllowlistedUserAgentToken ObtainX/$version';
+  return '$apkMirrorAllowlistedUserAgentToken ObtainX/'
+      '${version.isEmpty ? obtainXUserAgentFallbackVersion : version}';
 }
+
+/// The running ObtainX version for APKMirror's user-agents, or null when it
+/// can't be read.
+Future<String?> apkMirrorObtainXVersion() async => (await getInstalledInfo(
+  obtainiumId,
+  includeOwnDebugBuild: true,
+))?.versionName;
 
 /// Requests in flight to apkmirror.com at once, across every caller that
 /// goes through [HostRequestGate] (APKMirror asked for 1-2, #339).
@@ -650,10 +657,7 @@ class APKMirror extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
-    final String? version = (await getInstalledInfo(
-      obtainiumId,
-      includeOwnDebugBuild: true,
-    ))?.versionName;
+    final String? version = await apkMirrorObtainXVersion();
     final Uri? uri = Uri.tryParse(url);
     final bool isFeed =
         uri != null && HostRequestGate.requestClassFor(uri) == 'feed';

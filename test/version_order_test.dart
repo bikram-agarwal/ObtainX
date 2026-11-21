@@ -17,6 +17,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -1108,9 +1109,12 @@ void main() {
     expect(apkMirrorAllowlistedUserAgentToken.contains('APKUpdater'), true);
     expect(apkMirrorUserAgent('2.9.9'), contains('APKUpdater'));
     expect(apkMirrorUserAgent('2.9.9'), contains('ObtainX/2.9.9'));
-    // Unknown version: still allowlisted, just without attribution.
-    expect(apkMirrorUserAgent(), apkMirrorAllowlistedUserAgentToken);
-    expect(apkMirrorUserAgent('  '), apkMirrorAllowlistedUserAgentToken);
+    // Unknown version: never bare (#339), the fallback version stands in.
+    const String fallbackUa =
+        '$apkMirrorAllowlistedUserAgentToken '
+        'ObtainX/$obtainXUserAgentFallbackVersion';
+    expect(apkMirrorUserAgent(), fallbackUa);
+    expect(apkMirrorUserAgent('  '), fallbackUa);
     // Whatever the UA ends up being, it must not read as a browser.
     final String ua = apkMirrorUserAgent('2.9.9');
     expect(ua.contains('Mozilla'), false);

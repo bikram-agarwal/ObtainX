@@ -311,6 +311,9 @@ class BulkImportService {
     const batchSize = 100;
     // Authorization header uses APKUpdater credentials to access the API endpoint
     const auth = 'Basic YXBpLWFwa3VwZGF0ZXI6cm01cmNmcnVVakt5MDRzTXB5TVBKWFc4';
+    final String userAgent = apkMirrorUserAgent(
+      await apkMirrorObtainXVersion(),
+    );
 
     for (int i = 0; i < queryCandidates.length; i += batchSize) {
       if (shouldAbort?.call() == true) {
@@ -337,9 +340,10 @@ class BulkImportService {
                 headers: {
                   'Authorization': auth,
                   'Content-Type': 'application/json',
-                  // Same Cloudflare allowlist as the HTML pages — see
+                  // The page UA, ObtainX name and version included, so
+                  // APKMirror can tell these calls are ours (#339); see
                   // [apkMirrorAllowlistedUserAgentToken].
-                  'User-Agent': apkMirrorUserAgent(),
+                  'User-Agent': userAgent,
                 },
                 body: jsonEncode({
                   'pnames': batch,
