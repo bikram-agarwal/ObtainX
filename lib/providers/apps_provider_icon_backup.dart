@@ -66,7 +66,7 @@ extension AppsProviderIconBackup on AppsProvider {
   Future<void> _deleteMirroredDoc(Uri treeUri, String displayName) async {
     final saf.DocumentFile? existing = await saf.findFile(treeUri, displayName);
     if (existing != null) {
-      await saf.delete(existing.uri);
+      await NativeFeatures.deleteDocument(existing.uri);
     }
   }
 
@@ -175,7 +175,7 @@ extension AppsProviderIconBackup on AppsProvider {
               // Already up to date - not an export, so don't count it as one.
               continue;
             }
-            await saf.delete(existing.uri);
+            await NativeFeatures.deleteDocument(existing.uri);
           }
           await saf.createFile(
             treeUri,

@@ -312,6 +312,9 @@ class MainActivity : FlutterActivity() {
     // main thread stays responsive; results are posted back on the main looper
     // (a MethodChannel.Result must be answered on the platform thread).
     private val deviceAppsExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    // Off-main-thread executor for SAF operations (e.g. DocumentsContract.deleteDocument)
+    // so slow content providers cannot block the platform main thread and cause an ANR.
+    private val storageExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -740,6 +743,24 @@ class MainActivity : FlutterActivity() {
                     result.success(
                         hasPersistedDocumentTreePermission(call.argument<String>("uri")),
                     )
+                }
+                "deleteDocument" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString.isNullOrBlank()) {
+                        result.success(false)
+                    } else {
+                        storageExecutor.execute {
+                            val deleted = try {
+                                DocumentsContract.deleteDocument(
+                                    contentResolver,
+                                    Uri.parse(uriString),
+                                )
+                            } catch (_: Exception) {
+                                false
+                            }
+                            mainHandler.post { result.success(deleted) }
+                        }
+                    }
                 }
                 else -> result.notImplemented()
             }

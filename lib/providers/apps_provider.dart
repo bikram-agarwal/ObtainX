@@ -2822,6 +2822,21 @@ class NativeFeatures {
     }
   }
 
+  /// Deletes a SAF document off the Android main thread via [_storageChannel].
+  static Future<bool> deleteDocument(Uri uri) async {
+    try {
+      return await _storageChannel.invokeMethod<bool>(
+            'deleteDocument',
+            <String, String>{'uri': uri.toString()},
+          ) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   static Future<void> showDownloadProgressNotification({
     required int id,
     required String appId,

@@ -3003,7 +3003,7 @@ extension AppsProviderInstall on AppsProvider {
           ? Uri.parse(Map<String, dynamic>.from(existing)['uri'] as String)
           : (existing as dynamic).uri as Uri?;
       if (existingUri != null) {
-        await saf.delete(existingUri);
+        await NativeFeatures.deleteDocument(existingUri);
       }
     }
     Uri? documentUri;

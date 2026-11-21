@@ -327,7 +327,7 @@ extension AppsProviderImportExport on AppsProvider {
       for (final f in files) {
         // Awaited so the old file is gone before its replacement (same custom
         // name) is created (upstream b0356157).
-        await saf.delete(f.uri);
+        await NativeFeatures.deleteDocument(f.uri);
       }
     }
     if (exportDir == null || pickOnly) {
