@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Corresponder links fora das tags <a>",
     "intermediateLink": "Link intermediário",
     "exemptFromBackgroundUpdates": "Isento de atualizações em segundo plano (caso ativadas)",
-    "bgUpdatesOnWiFiOnly": "Desativar atualizações em segundo plano fora do Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Desativar atualizações em segundo plano fora do carregador",
     "autoSelectHighestVersionCode": "Selecionar automaticamente APK com o código de versão mais alto",
     "versionExtractionRegEx": "RegEx de extração do número da versão",
     "trimVersionString": "Cortar número da versão com RegEx",

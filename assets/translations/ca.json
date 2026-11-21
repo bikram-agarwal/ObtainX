@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Coincideix amb els enllaços fora de les etiquetes <a>",
     "intermediateLink": "Enllaç intermediari",
     "exemptFromBackgroundUpdates": "Exempta d'actualitzacions en segon pla (si han estat habilitades)",
-    "bgUpdatesOnWiFiOnly": "Inhabilita les actualitzacions en segon pla sense Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Inhabilita les actualitzacions en segon pla quan no s'estigui carregant el mòbil",
     "autoSelectHighestVersionCode": "Selecciona de forma automàtica la versió més recent de l'APK",
     "versionExtractionRegEx": "Extracció de la cadena de la versió amb una expressió regular",
     "trimVersionString": "Retalla la cadena de la versió amb una expressió regular",

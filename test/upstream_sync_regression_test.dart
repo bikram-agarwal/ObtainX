@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -533,6 +534,14 @@ void main() {
       isTrue,
     );
     expect(isSecretSettingKey(HuaweiAppGallery.sessionPrefsKey), isTrue);
+    // Codeberg/Forgejo token and its validation fingerprint (the fingerprint
+    // is ObtainX-only too: Obtainium has no Codeberg validation).
+    expect(isSecretSettingKey(Codeberg.tokenKey), isTrue);
+    expect(isSecretSettingKey(Codeberg.validatedTokenFingerprintKey), isTrue);
+    expect(
+      isObtainXOnlySettingKey(Codeberg.validatedTokenFingerprintKey),
+      isTrue,
+    );
     expect(isSecretSettingKey('updateInterval'), isFalse);
     expect(isSecretSettingKey(GitHub.githubReqPrefixKey), isFalse);
   });

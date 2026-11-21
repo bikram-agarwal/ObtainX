@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "لینک های خارج از تگ های <a>",
     "intermediateLink": "پیوند میانی",
     "exemptFromBackgroundUpdates": "معاف از به‌روزرسانی‌های پس‌زمینه (در صورت فعال بودن)",
-    "bgUpdatesOnWiFiOnly": "به‌روزرسانی‌های پس‌زمینه را در صورت عدم اتصال به Wi-Fi غیرفعال کنید",
-    "bgUpdatesWhileChargingOnly": "به‌روزرسانی‌های پس‌زمینه را هنگام شارژ نشدن غیرفعال کنید",
     "autoSelectHighestVersionCode": "انتخاب خودکار بالاترین نسخه کد APK",
     "versionExtractionRegEx": "نسخه استخراج RegEx",
     "trimVersionString": "برش رشته نسخه با RegEx",

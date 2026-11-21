@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Shoda odkazů mimo značky <a>",
     "intermediateLink": "Připojený odkaz",
     "exemptFromBackgroundUpdates": "Vyloučit z aktualizací na pozadí (je-li povoleno)",
-    "bgUpdatesOnWiFiOnly": "Zakázat aktualizace na pozadí, pokud není k dispozici Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Zakázat aktualizace na pozadí, pokud se zařízení nenabíjí",
     "autoSelectHighestVersionCode": "Automaticky vybrat APK s nejvyšším kódem verze",
     "versionExtractionRegEx": "Extrakce verze pomocí RegEx",
     "trimVersionString": "Oříznutí řetězce verze pomocí RegEx",

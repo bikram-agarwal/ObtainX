@@ -33,13 +33,20 @@ Future<InstallBaseline> captureInstallBaseline(String appId) async {
 /// [attempts] × [interval]. Without a baseline timestamp the version code is
 /// compared instead, so an unknown timestamp no longer reads as "installed" on
 /// the first poll (upstream 65126176).
+///
+/// [shouldStop] ends the poll early (returning false) once the caller no
+/// longer needs the answer, e.g. an install race that the installer's own
+/// result has already settled. Each poll can list every installed package (in
+/// the background engine), so a poll nobody waits for is pure cost.
 Future<bool> waitForPackageInstall(
   String appId,
   InstallBaseline baseline, {
   required int attempts,
   Duration interval = const Duration(milliseconds: 500),
+  bool Function()? shouldStop,
 }) async {
   for (var attempt = 0; attempt < attempts; attempt++) {
+    if (shouldStop?.call() ?? false) return false;
     final info = await getInstalledInfo(appId);
     if (info != null) {
       if (!baseline.wasInstalled) return true;

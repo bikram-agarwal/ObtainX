@@ -3910,14 +3910,13 @@ class AppsPageState extends State<AppsPage> {
       );
       return refreshFuture
           .then((List<App> updates) {
-            // A successful check can leave the update notification behind
-            // once nothing installed has an update any more (upstream #3415).
-            // Only after success: a failed check keeps it.
+            // A successful check can leave the update notifications behind
+            // once nothing they announce is pending any more (upstream #3415).
+            // Only after success: a failed check keeps them. The provider
+            // judges the installable and the track-only notification each by
+            // its own apps, as the background task posts them.
             unawaited(
-              clearStaleUpdateNotification(
-                notificationsProvider,
-                appsProvider.findExistingUpdates(installedOnly: true),
-              ),
+              appsProvider.clearStaleUpdateNotifications(notificationsProvider),
             );
             return updates;
           })

@@ -138,4 +138,24 @@ void main() {
     );
     expect(picked?.key, _universal.key);
   });
+
+  // Phase C C-9: a universal APK next to the ABI build must not stop silent
+  // (background) installs, as it didn't when the filter kept only the ABI
+  // build. A real choice still does.
+  test('universal-only alternatives need no manual APK choice', () {
+    expect(needsManualApkChoice(_app([_arm64])), isFalse);
+    expect(needsManualApkChoice(_app([_universal, _arm64])), isFalse);
+    expect(
+      needsManualApkChoice(_app([_universal, _arm64], archFilter: false)),
+      isTrue,
+    );
+    const MapEntry<String, String> arm64Debug = MapEntry(
+      'app-arm64-v8a-debug.apk',
+      '$_base/app-arm64-v8a-debug.apk',
+    );
+    expect(
+      needsManualApkChoice(_app([_universal, _arm64, arm64Debug])),
+      isTrue,
+    );
+  });
 }

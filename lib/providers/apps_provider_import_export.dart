@@ -410,7 +410,7 @@ extension AppsProviderImportExport on AppsProvider {
       settingsObtainXOverlay,
     );
     return BackupContent(
-      apps: importedApps,
+      apps: appsWithImportedShizukuBackend(importedApps, settingsMap),
       settingsMap: settingsMap,
       schema: schema,
     );
@@ -796,6 +796,29 @@ Map<String, dynamic>? mergeImportedSettingsMaps(
   });
 }
 
+/// Obtainium's Shizuku backend setting (`shizukuInstallerMode`, #2844) also
+/// applies to apps whose per-app install method is Shizuku, so in Obtainium
+/// those install through Dhizuku when the backend is Dhizuku. ObtainX has
+/// Dhizuku as a mode of its own, so such apps get `installerMode: dhizuku`;
+/// otherwise they'd use real Shizuku and fail on a Dhizuku-only device.
+List<App> appsWithImportedShizukuBackend(
+  List<App> apps,
+  Map<String, dynamic>? settings,
+) {
+  if (settings?['shizukuInstallerMode'] != InstallerMode.dhizuku.name) {
+    return apps;
+  }
+  return apps.map((App app) {
+    if (app.additionalSettings['installerMode'] != InstallerMode.shizuku.name) {
+      return app;
+    }
+    return app.copyWith(
+      additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+        ..['installerMode'] = InstallerMode.dhizuku.name,
+    );
+  }).toList();
+}
+
 /// Obtainium reads `sortColumn` as an unchecked index into its 4-value
 /// [SortColumnSettings]. ObtainX adds a 5th value
 /// ([SortColumnSettings.lastUpdateCheck], index 4), which would crash
@@ -829,6 +852,16 @@ Map<String, dynamic> normalizeImportedSettings(Map<String, dynamic> settings) {
   if (settings['installMethod'] == InstallerMode.shizuku.name &&
       settings['shizukuInstallerMode'] == InstallerMode.dhizuku.name) {
     settings['installMethod'] = InstallerMode.dhizuku.name;
+  }
+  // An older backup (ObtainX before the v1.7.4 sync, Obtainium before 1.7)
+  // has only the Wi-Fi-only / charging-only switches. Write the guard key it
+  // stands for too: a device that already stores the guard key reads that
+  // first, so an Import would otherwise keep the device's choice (D5).
+  for (final MapEntry<String, String> guard in bgGuardLegacyKeys.entries) {
+    final dynamic legacy = settings[guard.value];
+    if (legacy is bool && !settings.containsKey(guard.key)) {
+      settings[guard.key] = bgGuardModeFromLegacy(legacy).name;
+    }
   }
   final dynamic exportDir = settings['exportDir'];
   if (exportDir != null &&

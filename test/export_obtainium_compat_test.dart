@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/models/app.dart';
 import 'package:obtainium/providers/apps_provider_import_export.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 
@@ -259,6 +260,66 @@ void main() {
       null,
     );
     expect(system?['installMethod'], InstallerMode.system.name);
+  });
+
+  test('an Obtainium Dhizuku backend also moves per-app Shizuku apps', () {
+    App app(String? mode) => App(
+      id: 'org.example.${mode ?? 'none'}',
+      url: 'https://example.org/${mode ?? 'none'}',
+      author: 'Example',
+      name: 'Example',
+      latestVersion: '1.0',
+      apkUrls: const [],
+      preferredApkIndex: 0,
+      additionalSettings: {'installerMode': ?mode},
+    );
+    final List<App> apps = [
+      app(InstallerMode.shizuku.name),
+      app(InstallerMode.system.name),
+      app(null),
+    ];
+
+    final List<App> dhizuku = appsWithImportedShizukuBackend(apps, {
+      'installMethod': InstallerMode.dhizuku.name,
+      'shizukuInstallerMode': 'dhizuku',
+    });
+    expect(dhizuku.map((a) => a.additionalSettings['installerMode']), [
+      InstallerMode.dhizuku.name,
+      InstallerMode.system.name,
+      null,
+    ]);
+    // Any other backend (or none) leaves per-app modes alone.
+    final List<App> shizuku = appsWithImportedShizukuBackend(apps, {
+      'shizukuInstallerMode': 'shizuku',
+    });
+    expect(
+      shizuku.first.additionalSettings['installerMode'],
+      InstallerMode.shizuku.name,
+    );
+    expect(appsWithImportedShizukuBackend(apps, null), same(apps));
+  });
+
+  test('an older backup\'s Wi-Fi / charging switches become guard modes', () {
+    final Map<String, dynamic>? merged = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'bgUpdatesOnWiFiOnly': true,
+        'bgUpdatesWhileChargingOnly': false,
+      },
+      null,
+    );
+    // ON meant no background work at all (D5).
+    expect(merged?['bgGuardOnWiFi'], BgGuardMode.nothing.name);
+    expect(merged?['bgGuardWhileCharging'], BgGuardMode.checksAndUpdates.name);
+
+    // A backup that has the guard key keeps it.
+    final Map<String, dynamic>? newer = mergeImportedSettingsMaps(
+      <String, dynamic>{
+        'bgUpdatesOnWiFiOnly': true,
+        'bgGuardOnWiFi': BgGuardMode.checksOnly.name,
+      },
+      null,
+    );
+    expect(newer?['bgGuardOnWiFi'], BgGuardMode.checksOnly.name);
   });
 
   test('import keeps only a content:// export folder (SET-H8)', () {

@@ -76,8 +76,6 @@
     "bgGuardChecksOnly": "Μόνο έλεγχος",
     "bgGuardNothing": "Τίποτα",
     "bgUpdateCheckInterval": "Διάστημα ελέγχου ενημερώσεων στο παρασκήνιο",
-    "bgUpdatesOnWiFiOnly": "Απενεργοποίηση ενημερώσεων παρασκηνίου όταν δεν είναι σε Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Απενεργοποίηση ενημερώσεων παρασκηνίου όταν δεν φορτίζει",
     "byX": "Από {}",
     "cancel": "Ακύρωση",
     "cancelled": "Ακυρώθηκε",

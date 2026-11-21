@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "<> 태그 외부의 링크 일치",
     "intermediateLink": "중간 링크",
     "exemptFromBackgroundUpdates": "백그라운드 업데이트에서 제외 (활성화된 경우)",
-    "bgUpdatesOnWiFiOnly": "WiFi가 아닐 때 백그라운드 업데이트 비활성화",
-    "bgUpdatesWhileChargingOnly": "충전 중이 아닐 때 백그라운드 업데이트 비활성화",
     "autoSelectHighestVersionCode": "가장 높은 versionCode APK 자동 선택",
     "versionExtractionRegEx": "버전 문자열 추출 정규 표현식",
     "trimVersionString": "정규 표현식으로 버전 문자열 자르기",

@@ -285,8 +285,6 @@
     "matchLinksOutsideATags": "Faire correspondre les liens en dehors des balises <a>",
     "intermediateLink": "Lien intermédiaire",
     "exemptFromBackgroundUpdates": "Exclure des mises à jour en arrière-plan (si activé)",
-    "bgUpdatesOnWiFiOnly": "Désactiver les mises à jour en arrière-plan si l'appareil n'est pas connecté en Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Désactiver les mises à jour en arrière-plan si l'appareil n'est pas en charge",
     "autoSelectHighestVersionCode": "Sélectionner automatiquement l'APK avec le numéro de version le plus élevé",
     "versionExtractionRegEx": "Expression régulière d'extraction de la chaîne de version",
     "trimVersionString": "Rogner la chaîne de version par expression régulière",

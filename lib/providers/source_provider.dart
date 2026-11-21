@@ -550,10 +550,14 @@ class SourceProvider {
     } else if (currentApp == null) {
       preferredApkIndex = apk.apkUrls.length - 1;
     } else {
-      preferredApkIndex = currentApp.preferredApkIndex.clamp(
-        0,
-        apk.apkUrls.length - 1,
-      );
+      final int storedIndex = additionalSettings['autoApkFilterByArch'] == true
+          ? ApkFilterService.carryPreferredApkIndex(
+              currentApp.preferredApkIndex,
+              currentApp.apkUrls,
+              apk.apkUrls,
+            )
+          : currentApp.preferredApkIndex;
+      preferredApkIndex = storedIndex.clamp(0, apk.apkUrls.length - 1);
     }
     if (additionalSettings['autoApkFilterByArch'] == true &&
         apk.apkUrls.isNotEmpty) {

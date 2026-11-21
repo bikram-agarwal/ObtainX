@@ -142,4 +142,52 @@ void main() {
       0,
     );
   });
+
+  // Phase C C-17: universal APKs lead the filtered list, so a stored choice
+  // (a position) must follow them or a multi-flavour app switches flavour.
+  group('carryPreferredApkIndex', () {
+    MapEntry<String, String> apk(String name) =>
+        MapEntry(name, 'https://example.org/$name');
+    final fdroidArm = apk('vector-fdroid-arm64-v8a.apk');
+    final gplayArm = apk('vector-gplay-arm64-v8a.apk');
+    final fdroidUni = apk('vector-fdroid-universal.apk');
+    final gplayUni = apk('vector-gplay-universal.apk');
+
+    test('a pre-sync choice keeps its flavour after universals are added', () {
+      expect(
+        ApkFilterService.carryPreferredApkIndex(
+          1,
+          [fdroidArm, gplayArm],
+          [fdroidUni, gplayUni, fdroidArm, gplayArm],
+        ),
+        3,
+      );
+      expect(
+        ApkFilterService.carryPreferredApkIndex(
+          0,
+          [fdroidArm, gplayArm],
+          [fdroidUni, gplayUni, fdroidArm, gplayArm],
+        ),
+        2,
+      );
+    });
+
+    test('a release that drops its universal assets shifts back', () {
+      expect(
+        ApkFilterService.carryPreferredApkIndex(
+          3,
+          [fdroidUni, gplayUni, fdroidArm, gplayArm],
+          [fdroidArm, gplayArm],
+        ),
+        1,
+      );
+    });
+
+    test('an unchanged layout and a universal choice are left alone', () {
+      final layout = [fdroidUni, gplayUni, fdroidArm, gplayArm];
+      expect(ApkFilterService.carryPreferredApkIndex(3, layout, layout), 3);
+      // A universal choice is the #3473 resolver's job.
+      expect(ApkFilterService.carryPreferredApkIndex(1, layout, layout), 1);
+    });
+  });
 }

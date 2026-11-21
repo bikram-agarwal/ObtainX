@@ -34,6 +34,7 @@ import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/utils/format_utils.dart';
+import 'package:obtainium/utils/update_health.dart' show updateHealthSectionKey;
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -665,7 +666,11 @@ class AddAppPageState extends State<AddAppPage> {
             if (source != null) ...?appSettings,
           };
           additionalSettings.addAll(_formCarriedSettings);
-          if (appSettings != null) _additionalOptsFormGeneration++;
+          // Always a new form: the settings were just reset, and only a
+          // rebuilt form shows them and reports what it shows (DET-14). Same
+          // runtime type with a new override or host kept the old form, which
+          // then showed values an untouched add didn't save (#3346).
+          _additionalOptsFormGeneration++;
           additionalSettingsValid = source != null
               ? !sourceProvider.ifRequiredAppSpecificSettingsExist(source)
               : true;
@@ -1752,11 +1757,24 @@ class AddAppPageState extends State<AddAppPage> {
     }
 
     List<List<GeneratedFormItem>> buildAdditionalSettingsItems() {
+      final List<List<GeneratedFormItem>> combined =
+          pickedSource!.combinedAppSpecificSettingFormItems;
+      // Per-app source config (tokens, request prefix) belongs at the end of
+      // the Advanced card. Rows after a section header join that header's
+      // card, and the Update health card now comes last (D8), so they go in
+      // before its header rather than at the very end.
+      final int updateHealthCardStart = combined.indexWhere(
+        (row) => row.any((item) => item.key == updateHealthSectionKey),
+      );
+      final int sourceConfigAt = updateHealthCardStart >= 0
+          ? updateHealthCardStart
+          : combined.length;
       final List<List<GeneratedFormItem>> items = cloneFormItems([
-        ...pickedSource!.combinedAppSpecificSettingFormItems,
+        ...combined.sublist(0, sourceConfigAt),
         ...(pickedSourceOverride != null
             ? pickedSource!.sourceConfigSettingFormItems.map((e) => [e])
             : []),
+        ...combined.sublist(sourceConfigAt),
       ]);
       // Pre-check the per-app "Include prereleases" switch for newly-added apps
       // when the global default is on. Only affects defaults at add-time; saved

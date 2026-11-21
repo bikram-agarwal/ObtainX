@@ -279,8 +279,6 @@
     "matchLinksOutsideATags": "<a> etiketi dışındaki bağlantıları eşleştir",
     "intermediateLink": "Ara bağlantı",
     "exemptFromBackgroundUpdates": "Arka plan güncellemelerinden muaf (etkinleştirilmişse)",
-    "bgUpdatesOnWiFiOnly": "Wi-Fi'de değilken arka plan güncellemelerini devre dışı bırak",
-    "bgUpdatesWhileChargingOnly": "Şarjda değilken arka plan güncellemelerini devre dışı bırak",
     "autoSelectHighestVersionCode": "En yüksek versionCode olan APK'yı otomatik seç",
     "versionExtractionRegEx": "Sürüm dizesi çıkarmak için RegEx",
     "trimVersionString": "Sürüm dizesini RegEx ile kırp",

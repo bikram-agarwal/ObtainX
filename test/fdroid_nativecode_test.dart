@@ -338,6 +338,8 @@ ${_versionBlock('4.1.1', 9000353, null)}
       'x86_64',
     ], addedOn: 'Oct 12, 2026');
 
+    setUp(FDroid.resetMissingDatePageReads);
+
     App previousCheck({DateTime? releaseDate}) => App(
       id: _appId,
       url: _standardUrl,
@@ -413,6 +415,22 @@ ${_versionBlock('4.1.1', 9000352, ['arm64-v8a'], addedOn: 'Oct 12, 2026')}
       );
       expect(source.requestedUrls, contains(_pageUrl));
       expect(details.releaseDate, DateTime(2026, 10, 12));
+    });
+
+    // A page that gives no date must not be fetched again on every check.
+    test('a page without a date is read only once per version', () async {
+      final datelessPage = _versionBlock('4.1.1', 9000354, ['x86_64']);
+      Future<_TestFDroid> check() async {
+        final source = _TestFDroid(
+          {_apiUrl: _singleResponse, _pageUrl: datelessPage},
+          ['arm64-v8a'],
+        )..previouslyCheckedApp = previousCheck();
+        await source.getLatestAPKDetails(_standardUrl, _defaultSettings);
+        return source;
+      }
+
+      expect((await check()).requestedUrls, contains(_pageUrl));
+      expect((await check()).requestedUrls, isNot(contains(_pageUrl)));
     });
   });
 }

@@ -47,7 +47,8 @@ import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/services/pick_file.dart';
 import 'package:obtainium/pages/page_route_slide_up.dart';
-import 'package:obtainium/pages/update_health.dart' show UpdateHealthPage;
+import 'package:obtainium/pages/update_health.dart'
+    show UpdateHealthPage, updateHealthSettingsToken;
 import 'package:obtainium/utils/update_health.dart'
     show
         hasUpdateHealthIssues,
@@ -1094,9 +1095,10 @@ class _UpdatesSection extends StatelessWidget {
       children: <Widget>[
         _settingsGroupLabel(context, tr('backgroundChecks'), first: true),
         // Deliberately NOT inside the settings card: a manual trigger for the
-        // full background update worker (check → download → install-if-enabled
-        // → notify, across all eligible apps), as opposed to pull-to-refresh's
-        // foreground check of only the currently visible list.
+        // background update worker's check (all eligible apps, then notify),
+        // as opposed to pull-to-refresh's foreground check of only the
+        // currently visible list. A manual run only checks: it never installs
+        // (upstream 1b0b45e9, UPD-8).
         const _RunBgUpdateCheckNowButton(),
         FutureBuilder<AndroidDeviceInfo>(
           future: androidInfo,
@@ -1892,13 +1894,10 @@ class _GlobalVersionRegExFieldsState extends State<_GlobalVersionRegExFields> {
   }
 }
 
-/// The global update-health thresholds (upstream #1753), a labelled group at
-/// the end of the Updates section; apps can override each one on their
-/// options page. 0 ("Disabled") turns a heuristic off. Upstream shows these
-/// on its update-health page with its own slider tile; ObtainX keeps them in
 /// The Update health section (upstream #1753, v1.7.4 sync D8): its own
-/// section, as upstream has it. The global thresholds each app can override,
-/// the list marker toggle, and last a row opening the list of flagged apps.
+/// section, as upstream has it. The global thresholds (each app can override
+/// them on its options page; 0, "Disabled", turns a heuristic off), the list
+/// marker toggle, and last a row opening the list of flagged apps.
 class _UpdateHealthSection extends StatelessWidget {
   const _UpdateHealthSection({required this.cs});
 
@@ -1913,6 +1912,10 @@ class _UpdateHealthSection extends StatelessWidget {
     final bool showIndicator = context.select<SettingsProvider, bool>(
       (s) => s.showUpdateHealthIndicator,
     );
+    // The count below re-runs only when AppsProvider notifies; a threshold or
+    // switch change notifies SettingsProvider, so depend on those too (as the
+    // apps list does).
+    context.select<SettingsProvider, int>(updateHealthSettingsToken);
     final SettingsProvider sp = context.read<SettingsProvider>();
     // Rebuilds when an app's state or a threshold changes.
     final int flaggedCount = context.select<AppsProvider, int>(

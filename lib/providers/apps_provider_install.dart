@@ -77,8 +77,19 @@ const int _bgInstallConfirmAttempts = 20; // 20 × 500ms = 10 seconds
 const int _installConfirmPollAttempts = 300;
 const Duration _installConfirmTimeout = Duration(minutes: 10);
 
-/// How long a download retry waits for the user to bring the app back (#2894);
-/// the same wait an install that needs the user uses.
+/// Whether installing [app] needs the user to pick one of its APKs, which
+/// rules out a silent (background) install.
+///
+/// The arch filter keeps universal APKs next to the device's ABI build (D12 C,
+/// upstream #3349). With only universal alternatives there is no real choice:
+/// [AppsProviderInstall.confirmAppFileUrl] takes the ABI build without asking,
+/// so those apps stay silently installable, as they were when the filter kept
+/// only the ABI build.
+bool needsManualApkChoice(App app) {
+  if (app.apkUrls.length <= 1) return false;
+  return !(app.settings.getBool('autoApkFilterByArch') &&
+      ApkFilterService.onlyUniversalAlternatives(app.apkUrls));
+}
 
 @visibleForTesting
 bool isCleartextDownloadUrl(String url) {
@@ -613,13 +624,20 @@ extension AppsProviderInstall on AppsProvider {
             },
           ),
     );
+    // Settled either way (the installer answered, or the poll did): stop
+    // polling. Every mode but external races now (D15), and in the
+    // background engine each poll lists every installed package.
+    bool raceSettled() =>
+        intentCompleter.isCompleted || pollCompleter.isCompleted;
     unawaited(
       waitForPackageInstall(
         appId,
         baseline,
         attempts: _installConfirmPollAttempts,
         interval: const Duration(seconds: 1),
+        shouldStop: raceSettled,
       ).then((confirmed) {
+        if (raceSettled()) return;
         if (confirmed) {
           if (!pollCompleter.isCompleted) {
             pollCompleter.complete(InstallResult.success());
@@ -1364,7 +1382,7 @@ extension AppsProviderInstall on AppsProvider {
   /// device/app capability (single APK plus the active installer's own rules).
   /// Independent of the background-update setting.
   Future<bool> canInstallSilently(App app) async {
-    if (app.apkUrls.length > 1) {
+    if (needsManualApkChoice(app)) {
       unawaited(
         logs.add(
           'App will not be installed silently: multiple APK URLs require manual selection: ${app.id}',

@@ -279,8 +279,6 @@
     "matchLinksOutsideATags": "Сопоставлять ссылки вне тегов <a>",
     "intermediateLink": "Промежуточная ссылка",
     "exemptFromBackgroundUpdates": "Исключить из фоновых обновлений (если включено)",
-    "bgUpdatesOnWiFiOnly": "Отключить фоновые обновления, если нет подключения к Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Отключить фоновые обновления, если не идёт зарядка",
     "autoSelectHighestVersionCode": "Автовыбор APK с актуальной версией кода",
     "versionExtractionRegEx": "Извлечение версии (регулярное выражение)",
     "trimVersionString": "Обрезка строки версии\n(регулярное выражение)",

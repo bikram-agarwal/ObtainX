@@ -3,20 +3,15 @@
 //
 // ObtainX keeps only upstream's registry (v1.7.4 sync, D17 A). Upstream also
 // ships user pin sets, a certificate bridge and a management page, which the
-// fork doesn't adopt, so the user-pin types are trimmed from this file.
+// fork doesn't adopt, so the user-pin types and the PEM export/import helpers
+// are trimmed from this file.
 // HttpService builds its SecurityContexts from [builtInPinnedHosts].
 
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
-/// One certificate used by a pin set.
-///
-/// Built-in certificates reference an asset; user certificates carry their PEM.
+/// One bundled root certificate a pinned host may chain to.
 class PinnedCertificate {
-  final String? assetPath;
-  final String? pem;
+  final String assetPath;
   final String displayName;
   final String subject;
   final String issuer;
@@ -28,8 +23,7 @@ class PinnedCertificate {
   final String sha256;
 
   const PinnedCertificate({
-    this.assetPath,
-    this.pem,
+    required this.assetPath,
     required this.displayName,
     required this.subject,
     required this.issuer,
@@ -37,36 +31,6 @@ class PinnedCertificate {
     required this.notAfter,
     required this.sha256,
   });
-
-  bool get isBuiltIn => assetPath != null;
-
-  Future<String> loadPem() async {
-    if (pem != null) return pem!;
-    final data = await rootBundle.load(assetPath!);
-    return utf8.decode(
-      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-    );
-  }
-
-  String get exportFileName {
-    final String base;
-    if (assetPath != null) {
-      final name = assetPath!.split('/').last;
-      final dot = name.lastIndexOf('.');
-      base = dot > 0 ? name.substring(0, dot) : name;
-    } else {
-      final safeName = displayName
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9._-]+'), '-')
-          .replaceAll(RegExp(r'^-+|-+$'), '');
-      final shortHash = sha256
-          .replaceAll(':', '')
-          .substring(0, 12)
-          .toLowerCase();
-      base = '${safeName.isEmpty ? 'certificate' : safeName}-$shortHash';
-    }
-    return '$base.pem';
-  }
 }
 
 /// The certificates trusted for a built-in pinned host.
@@ -212,46 +176,10 @@ Future<List<Uint8List>> pinnedCertificateBytes(BuiltInPinnedHost entry) =>
     _pinnedCertificateBytes.putIfAbsent(entry.host, () async {
       final List<Uint8List> bytes = [];
       for (final certificate in entry.certificates) {
-        final data = await rootBundle.load(certificate.assetPath!);
+        final data = await rootBundle.load(certificate.assetPath);
         bytes.add(
           data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
         );
       }
       return bytes;
     });
-
-String certificateFingerprint(Uint8List der) => sha256
-    .convert(der)
-    .bytes
-    .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
-    .join(':');
-
-String fingerprintFromPem(String pem) {
-  final base64Body = pem
-      .replaceAll(RegExp(r'-----[^-]+-----'), '')
-      .replaceAll(RegExp(r'\s'), '');
-  return certificateFingerprint(Uint8List.fromList(base64Decode(base64Body)));
-}
-
-List<Uint8List> pemBlocksToDers(String text) {
-  final matches = RegExp(
-    r'-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----',
-  ).allMatches(text);
-  return [
-    for (final match in matches)
-      Uint8List.fromList(
-        base64Decode(match.group(1)!.replaceAll(RegExp(r'\s'), '')),
-      ),
-  ];
-}
-
-String derToPem(Uint8List der) {
-  final body = base64.encode(der);
-  final buffer = StringBuffer('-----BEGIN CERTIFICATE-----\n');
-  for (var i = 0; i < body.length; i += 64) {
-    final end = i + 64 < body.length ? i + 64 : body.length;
-    buffer.writeln(body.substring(i, end));
-  }
-  buffer.write('-----END CERTIFICATE-----\n');
-  return buffer.toString();
-}

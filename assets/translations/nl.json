@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Koppelingen buiten <a>-tags matchen",
     "intermediateLink": "Intermediaire link",
     "exemptFromBackgroundUpdates": "Vrijgesteld van achtergrondupdates (indien ingeschakeld)",
-    "bgUpdatesOnWiFiOnly": "Achtergrondupdates uitschakelen wanneer niet verbonden met Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Achtergrondupdates uitschakelen als er niet wordt opgeladen",
     "autoSelectHighestVersionCode": "De APK met de hoogste versiecode automatisch selecteren",
     "versionExtractionRegEx": "Reguliere expressie voor versie-extractie",
     "trimVersionString": "Versiestring trimmen met RegEx",

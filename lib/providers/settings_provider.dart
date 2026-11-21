@@ -127,6 +127,18 @@ enum InstallerMode { system, shizuku, external, dhizuku, root }
 /// Only [nothing] is enforced through Android's job constraints.
 enum BgGuardMode { nothing, checksOnly, checksAndUpdates }
 
+/// Each guard's pref key and the old switch it replaced. The old switch is
+/// still read when the guard key is absent, and mapped on import
+/// (`normalizeImportedSettings`).
+const Map<String, String> bgGuardLegacyKeys = {
+  'bgGuardOnWiFi': 'bgUpdatesOnWiFiOnly',
+  'bgGuardWhileCharging': 'bgUpdatesWhileChargingOnly',
+};
+
+/// The [BgGuardMode] an old Wi-Fi-only / charging-only switch stands for.
+BgGuardMode bgGuardModeFromLegacy(bool legacyOn) =>
+    legacyOn ? BgGuardMode.nothing : BgGuardMode.checksAndUpdates;
+
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
 
 /// Order for settings dropdowns: alphabetical by localized action label,
@@ -1604,17 +1616,17 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  BgGuardMode _bgGuardMode(String key, String legacyKey) {
+  BgGuardMode _bgGuardMode(String key) {
     final Object? stored = prefs?.get(key);
     if (stored is String) {
       for (final BgGuardMode mode in BgGuardMode.values) {
         if (mode.name == stored) return mode;
       }
     }
-    final Object? legacy = prefs?.get(legacyKey);
+    final Object? legacy = prefs?.get(bgGuardLegacyKeys[key]!);
     if (legacy is bool) {
       // See [BgGuardMode]: the old ON meant no checks at all.
-      return legacy ? BgGuardMode.nothing : BgGuardMode.checksAndUpdates;
+      return bgGuardModeFromLegacy(legacy);
     }
     return BgGuardMode.checksAndUpdates;
   }
@@ -1625,14 +1637,12 @@ class SettingsProvider with ChangeNotifier {
   }
 
   /// What background work may run while not on Wi-Fi (an unmetered network).
-  BgGuardMode get bgGuardOnWiFi =>
-      _bgGuardMode('bgGuardOnWiFi', 'bgUpdatesOnWiFiOnly');
+  BgGuardMode get bgGuardOnWiFi => _bgGuardMode('bgGuardOnWiFi');
 
   set bgGuardOnWiFi(BgGuardMode mode) => _setBgGuardMode('bgGuardOnWiFi', mode);
 
   /// What background work may run while not charging.
-  BgGuardMode get bgGuardWhileCharging =>
-      _bgGuardMode('bgGuardWhileCharging', 'bgUpdatesWhileChargingOnly');
+  BgGuardMode get bgGuardWhileCharging => _bgGuardMode('bgGuardWhileCharging');
 
   set bgGuardWhileCharging(BgGuardMode mode) =>
       _setBgGuardMode('bgGuardWhileCharging', mode);
@@ -2158,8 +2168,8 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Show the update-health marker in the app list (a show toggle, so it
-  /// lives in Settings > Warnings).
+  /// Show the update-health marker in the app list. Lives in Settings > Update
+  /// health with the rest of the feature, as upstream has it.
   bool get showUpdateHealthIndicator {
     return prefs?.getBool('showUpdateHealthIndicator') ?? true;
   }

@@ -164,6 +164,29 @@ class ApkFilterService {
         .toList();
     return nonUniversal.length == 1 && apkUrls.length > 1;
   }
+
+  static int _leadingUniversalCount(List<MapEntry<String, String>> apkUrls) =>
+      apkUrls.takeWhile((apk) => isUniversalApkName(apk.key)).length;
+
+  /// Carries a stored APK choice from [previousApkUrls] to the newly fetched,
+  /// arch-filtered [apkUrls].
+  ///
+  /// The choice is stored as a position, and [filterApksByArch] puts universal
+  /// APKs first (D12 C). So when the number of leading universal APKs changes
+  /// (the first check after the v1.7.4 sync, whose earlier lists held only the
+  /// ABI builds, or a release that adds or drops a universal asset), a choice
+  /// past them is shifted by the difference, keeping the same build or
+  /// flavour. A choice of a universal APK is left for
+  /// [preferredApkIndexForArchFilter], which resolves it to the ABI build.
+  static int carryPreferredApkIndex(
+    int storedIndex,
+    List<MapEntry<String, String>> previousApkUrls,
+    List<MapEntry<String, String>> apkUrls,
+  ) {
+    final int previousLead = _leadingUniversalCount(previousApkUrls);
+    if (storedIndex < previousLead) return storedIndex;
+    return storedIndex + _leadingUniversalCount(apkUrls) - previousLead;
+  }
 }
 
 /// Delegates to [ApkFilterService.getApkUrlsFromUrls].

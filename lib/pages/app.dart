@@ -997,12 +997,6 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   // mount and won't run again until the user navigates to a different app.
   // Re-resets in [didUpdateWidget] when [widget.appId] changes.
   bool _attemptedApkMirrorSizeResolution = false;
-
-  /// `listingKey|latestVersion` of every APKMirror release whose size this
-  /// process has already walked for, failed walks included (#339, D2): a
-  /// reopened page, a refresh that found the same release, or a 403 never
-  /// sends the walk again. A new release walks once.
-  static final Set<String> _apkMirrorSizeWalkedReleases = <String>{};
   Color? _lastWebViewSurfaceColorApplied;
   bool updating = false;
   bool _swappingTrackedSource = false;
@@ -1213,7 +1207,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        unawaited(_maybeLazyResolveApkMirrorSize(onPageOpen: true));
+        unawaited(_maybeLazyResolveApkMirrorSize());
       });
     } else if (oldWidget.openInEditMode != widget.openInEditMode) {
       _scheduledOpenInEditMode = false;
@@ -2298,7 +2292,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     // SourceProvider lookup. The actual HTTP walk inside is fully async.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(_maybeLazyResolveApkMirrorSize(onPageOpen: true));
+      unawaited(_maybeLazyResolveApkMirrorSize());
     });
     _notesEditFocusNode.addListener(() {
       if (!_notesEditFocusNode.hasFocus || !mounted) return;
@@ -2624,17 +2618,19 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   /// change [App.latestVersion] and clears it when the version changes,
   /// so the cache key is effectively `(appId, latestVersion)`.
   ///
-  /// [onPageOpen]: opening the page only walks when "check for updates on
-  /// opening an app detail page" is on (upstream ec2001b1, #2988); a manual
-  /// refresh or a store swap always may. Either way at most once per release
-  /// ([_apkMirrorSizeWalkedReleases]).
-  Future<void> _maybeLazyResolveApkMirrorSize({bool onPageOpen = false}) async {
+  /// At most once per release and listing for the whole process (#339, D2):
+  /// [APKMirror.resolveLatestApkSizeBytes] keeps each walk's result, failures
+  /// included, so a reopened page or a refresh that found the same release
+  /// sends nothing. The one exception is a walk the request gate refused
+  /// before sending anything (a page challenge still blocking), which may run
+  /// again once the block is over.
+  ///
+  /// Deliberately not gated on "check for updates on opening an app detail
+  /// page" (upstream #2988, v1.7.4 sync ledger): APKMirror apps have no other
+  /// size source, and no APKMirror feature is paused while #339 is open.
+  Future<void> _maybeLazyResolveApkMirrorSize() async {
     if (!mounted) return;
     if (_attemptedApkMirrorSizeResolution) return;
-    if (onPageOpen &&
-        !context.read<SettingsProvider>().checkUpdateOnDetailPage) {
-      return;
-    }
     final AppsProvider appsProvider = Provider.of<AppsProvider>(
       context,
       listen: false,
@@ -2652,16 +2648,11 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     );
     if (source is! APKMirror) return;
     _attemptedApkMirrorSizeResolution = true;
-    // Recorded before the walk, so a failure counts too.
-    if (!_apkMirrorSizeWalkedReleases.add(
-      '${currentApp.listingKey}|${currentApp.latestVersion}',
-    )) {
-      return;
-    }
     try {
       final int? resolvedSize = await source.resolveLatestApkSizeBytes(
         releasePageUrl: currentApp.changeLog,
         additionalSettings: currentApp.additionalSettings,
+        listingKey: currentApp.listingKey,
       );
       if (!mounted || resolvedSize == null) return;
       final App? freshApp = appsProvider.apps[widget.appId]?.app;
@@ -4303,7 +4294,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           : buildVerificationBlocked
           ? buildVerificationBlockedMessage!
           : placeholderOnly
-          ? tr('noAPKFound')
+          // Added without a check (D10): the same reason the install
+          // paths give for it, not "no APK found".
+          ? tr('appNotCheckedYet')
           : skipActive
           ? tr('updateDisabledWhileVersionSkipped')
           : offersDowngrade && !canDowngrade

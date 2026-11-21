@@ -549,13 +549,10 @@ class HomePageState extends State<HomePage> {
           }
           await appsProvider.checkUpdates(specificIds: listingKeys);
         }
-        // As after a pull-to-refresh: a successful check clears an update
-        // notification nothing installed needs any more (upstream #3415).
+        // As after a pull-to-refresh: a successful check clears the update
+        // notifications nothing pending needs any more (upstream #3415).
         unawaited(
-          clearStaleUpdateNotification(
-            notificationsProvider,
-            appsProvider.findExistingUpdates(installedOnly: true),
-          ),
+          appsProvider.clearStaleUpdateNotifications(notificationsProvider),
         );
       } catch (e) {
         showError(e is CheckUpdatesException ? e.errors : e);

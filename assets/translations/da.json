@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Match links uden for <a>-tags",
     "intermediateLink": "Mellemliggende link",
     "exemptFromBackgroundUpdates": "Undtag fra baggrundsopdateringer (hvis aktiveret)",
-    "bgUpdatesOnWiFiOnly": "Deaktiver baggrundsopdateringer, når du ikke er på Wi-Fi",
-    "bgUpdatesWhileChargingOnly": "Deaktiver baggrundsopdateringer, når du ikke oplader",
     "autoSelectHighestVersionCode": "Auto-vælg højeste versionKode af APK",
     "versionExtractionRegEx": "RegEx for versionsstrengsudtrækning",
     "trimVersionString": "Trim versionsstreng med RegEx",

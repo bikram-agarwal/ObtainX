@@ -2025,6 +2025,27 @@ Constraints _bgTaskConstraints(SettingsProvider settings) => Constraints(
   requiresStorageNotLow: false,
 );
 
+/// Whether a run that may only check held back an install a later run could
+/// do: a pending update a background run would install silently. Updates that
+/// need the user (several APKs to choose from, an app exempt from background
+/// updates, an installer that can't go silent) never install in the
+/// background, so they must not keep every 15-minute wake-up loading in full
+/// (#317).
+Future<bool> _anySilentlyInstallableUpdatePending(
+  AppsProvider appsProvider,
+) async {
+  for (final String id in appsProvider.findExistingUpdates(
+    installedOnly: true,
+    excludeOnDemandOnly: true,
+  )) {
+    final App? app = appsProvider.apps[id]?.app;
+    if (app != null && await appsProvider.canInstallSilentlyInBackground(app)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Installs [appIds] silently, and returns whether any of them is still
 /// waiting afterwards (postponed because the screen is on, or failed), so the
 /// next wake-up tries again.
@@ -2380,12 +2401,7 @@ Future<void> bgUpdateCheck(
           bgLogs,
         )
       : backgroundInstallsEnabled &&
-            appsProvider
-                .findExistingUpdates(
-                  installedOnly: true,
-                  excludeOnDemandOnly: true,
-                )
-                .isNotEmpty;
+            await _anySilentlyInstallableUpdatePending(appsProvider);
   // A retry carrying its own list never looked at the other pending installs,
   // so it leaves the due time as its saves left it (cleared) and the next
   // wake-up works it out in full.

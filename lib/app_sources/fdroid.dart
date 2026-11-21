@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:html/dom.dart' show Document, Element;
 import 'package:html/parser.dart';
 import 'package:http/http.dart';
@@ -122,6 +123,15 @@ String? _fdroidDisplayNameFromHtml(String html) {
 
 class FDroid extends AppSource {
   static const _maxChangeLogCodeUnits = 2048;
+
+  /// `url|version` of every unchanged version whose package page this process
+  /// has read for a missing release date. A page that gives no date (not
+  /// built yet, non-200, unparseable) is then not fetched again on every
+  /// check of that version.
+  static final Set<String> _missingDatePageReads = <String>{};
+
+  @visibleForTesting
+  static void resetMissingDatePageReads() => _missingDatePageReads.clear();
   static const String _verificationReportBaseUrl =
       'https://verification.f-droid.org/unsigned';
   @override
@@ -651,7 +661,8 @@ class FDroid extends AppSource {
       // The page's "Added on" date is the release date. An unchanged version
       // carries the previous date, so skipping the page doesn't clear it; a
       // version first checked before ObtainX read dates has none to carry,
-      // so its page is read once for it.
+      // so its page is read once for it (once per process, even when that
+      // read finds no date: [_missingDatePageReads]).
       final DateTime? carriedReleaseDate = versionUnchanged
           ? prevApp.releaseDate
           : null;
@@ -687,7 +698,8 @@ class FDroid extends AppSource {
       if (canUseOfficialPackagePage &&
           (!versionUnchanged ||
               releaseChoices.length > 1 ||
-              carriedReleaseDate == null)) {
+              (carriedReleaseDate == null &&
+                  _missingDatePageReads.add('$standardUrl|$version')))) {
         try {
           final pkgName = packageLabel;
           if (pageHost == 'f-droid.org' || pageHost == 'www.f-droid.org') {

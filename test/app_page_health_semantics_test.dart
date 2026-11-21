@@ -196,11 +196,11 @@ void main() {
     await settle(tester);
     final Finder install = find.widgetWithText(FilledButton, tr('install'));
     expect(tester.widget<FilledButton>(install).onPressed, isNull);
-    // A tap says why.
+    // A tap says why: the app needs a check first, as the install paths say.
     await tester.tap(install);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
-    expect(find.text(tr('noAPKFound')), findsOneWidget);
+    expect(find.text(tr('appNotCheckedYet')), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

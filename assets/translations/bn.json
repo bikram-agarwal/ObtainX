@@ -76,8 +76,6 @@
     "bgGuardChecksOnly": "শুধুমাত্র চেক করুন",
     "bgGuardNothing": "কিছুই নয়",
     "bgUpdateCheckInterval": "ব্যাকগ্রাউন্ড আপডেট চেক করার ব্যবধান",
-    "bgUpdatesOnWiFiOnly": "Wi-Fi সংযোগ না থাকলে ব্যাকগ্রাউন্ড আপডেট নিষ্ক্রিয় করুন",
-    "bgUpdatesWhileChargingOnly": "চার্জে না থাকলে ব্যাকগ্রাউন্ড আপডেট নিষ্ক্রিয় করুন",
     "byX": "ডেভেলপার: {}",
     "cancel": "বাতিল",
     "cancelled": "বাতিল করা হয়েছে",

@@ -279,8 +279,6 @@
     "matchLinksOutsideATags": "匹配 <a> 标签外的链接",
     "intermediateLink": "中转链接",
     "exemptFromBackgroundUpdates": "禁用后台更新（仅此应用生效，即使已启用全局后台更新）",
-    "bgUpdatesOnWiFiOnly": "仅在Wi-Fi下进行后台更新",
-    "bgUpdatesWhileChargingOnly": "未充电时禁用后台更新",
     "autoSelectHighestVersionCode": "自动选择内部版本号最高的 APK 文件",
     "versionExtractionRegEx": "提取版本号的正则表达式",
     "trimVersionString": "修剪版本字符串的正则表达式",

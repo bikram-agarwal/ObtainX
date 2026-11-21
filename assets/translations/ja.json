@@ -279,8 +279,6 @@
     "matchLinksOutsideATags": "<a>タグの外にあるリンクに一致させる",
     "intermediateLink": "中間リンク",
     "exemptFromBackgroundUpdates": "バックグラウンドアップデートの対象外にする（有効な場合）",
-    "bgUpdatesOnWiFiOnly": "Wi-Fi接続時のみバックグラウンドアップデートを行う",
-    "bgUpdatesWhileChargingOnly": "充電中のみバックグラウンドアップデートを行う",
     "autoSelectHighestVersionCode": "最も高いバージョンコードのAPKを自動で選択する",
     "versionExtractionRegEx": "バージョン抽出の正規表現",
     "trimVersionString": "正規表現でバージョン文字列をトリムする",

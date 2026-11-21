@@ -279,8 +279,6 @@
     "matchLinksOutsideATags": "Links außerhalb von <a>-Tags anpassen",
     "intermediateLink": "„Zwischen“-Link",
     "exemptFromBackgroundUpdates": "Von Hintergrundaktualisierungen (falls aktiviert) ausschließen",
-    "bgUpdatesOnWiFiOnly": "Hintergrundaktualisierungen nur im WLAN ausführen",
-    "bgUpdatesWhileChargingOnly": "Hintergrundaktualisierungen nur ausführen, während das Gerät geladen wird",
     "autoSelectHighestVersionCode": "Automatisch höchste APK-Version auswählen",
     "versionExtractionRegEx": "Versionsextraktion per RegEx",
     "trimVersionString": "Versionszeichenfolge mit RegEx kürzen",

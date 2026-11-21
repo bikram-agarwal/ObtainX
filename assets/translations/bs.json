@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Poklopiti linkove van <a> tag-a",
     "intermediateLink": "Intermediate veza",
     "exemptFromBackgroundUpdates": "Izuzmi iz ažuriranja u pozadini (ako su uključeni)",
-    "bgUpdatesOnWiFiOnly": "Isključite ažuriranje u pozadini kada niste na Wi-Fi-ju",
-    "bgUpdatesWhileChargingOnly": "Isključi pozadinska ažuriranja kada uređaj nije na punjaču",
     "autoSelectHighestVersionCode": "Automatski izaberite najveću (verziju) versionCode APK-a",
     "versionExtractionRegEx": "RegEx ekstrakcija verzije",
     "trimVersionString": "Skrati string verzije pomoću RegEx-a",

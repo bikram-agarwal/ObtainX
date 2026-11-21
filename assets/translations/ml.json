@@ -278,8 +278,6 @@
     "matchLinksOutsideATags": "Match links outside <a> tags",
     "intermediateLink": "ഇന്റർമീഡിയറ്റ് ലിങ്ക്",
     "exemptFromBackgroundUpdates": "ബാക്ക്ഗ്രൗണ്ട് അപ്‌ഡേറ്റുകളിൽ നിന്ന് ഒഴിവാക്കുക (പ്രവർത്തനക്ഷമമാക്കിയിട്ടുണ്ടെങ്കിൽ)",
-    "bgUpdatesOnWiFiOnly": "വൈഫൈയിൽ അല്ലാത്തപ്പോൾ ബാക്ക്ഗ്രൗണ്ട് അപ്‌ഡേറ്റുകൾ പ്രവർത്തനരഹിതമാക്കുക",
-    "bgUpdatesWhileChargingOnly": "ചാർജ് ചെയ്യാത്തപ്പോൾ ബാക്ക്ഗ്രൗണ്ട് അപ്‌ഡേറ്റുകൾ പ്രവർത്തനരഹിതമാക്കുക",
     "autoSelectHighestVersionCode": "ഏറ്റവും ഉയർന്ന versionCode APK സ്വയമേവ തിരഞ്ഞെടുക്കുക",
     "versionExtractionRegEx": "പതിപ്പ് സ്ട്രിംഗ് വേർതിരിച്ചെടുക്കുന്നതിനുള്ള റെഗുലർ എക്സ്പ്രഷൻ",
     "trimVersionString": "റെഗുലർ എക്സ്പ്രഷൻ ഉപയോഗിച്ച് പതിപ്പ് സ്ട്രിംഗ് ട്രിം ചെയ്യുക",

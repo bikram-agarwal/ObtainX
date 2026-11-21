@@ -24,7 +24,7 @@ void main() {
     final registered = <String>{};
     for (final host in builtInPinnedHosts) {
       final hostAssets = host.certificates
-          .map((cert) => cert.assetPath!)
+          .map((cert) => cert.assetPath)
           .toList();
       expect(
         hostAssets.toSet(),
@@ -47,7 +47,7 @@ void main() {
     final colonSeparated = RegExp(r'^([0-9A-F]{2}:){31}[0-9A-F]{2}$');
     for (final host in builtInPinnedHosts) {
       for (final certificate in host.certificates) {
-        final pem = File(certificate.assetPath!).readAsStringSync();
+        final pem = File(certificate.assetPath).readAsStringSync();
         final base64Body = pem
             .replaceAll(RegExp(r'-----[^-]+-----'), '')
             .replaceAll(RegExp(r'\s'), '');
@@ -59,17 +59,7 @@ void main() {
           certificate.sha256,
           reason: certificate.assetPath,
         );
-        expect(certificate.exportFileName, endsWith('.pem'));
       }
     }
-  });
-
-  test('PEM helpers round-trip and split certificate bundles', () {
-    final pem = File('assets/ca-certs/isrg-root-x1.crt').readAsStringSync();
-    final ders = pemBlocksToDers(pem);
-    expect(ders, hasLength(1));
-    expect(certificateFingerprint(ders.single), fingerprintFromPem(pem));
-    expect(fingerprintFromPem(derToPem(ders.single)), fingerprintFromPem(pem));
-    expect(pemBlocksToDers('$pem\n$pem'), hasLength(2));
   });
 }
