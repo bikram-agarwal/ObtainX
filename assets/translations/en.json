@@ -1014,5 +1014,9 @@
     "starCountSemanticLabel": {
         "one": "{} star",
         "other": "{} stars"
-    }
+    },
+    "shortcutCheckUpdatesShort": "Check updates",
+    "shortcutCheckUpdatesLong": "Check all for updates",
+    "shortcutAddAppLong": "Add a new app",
+    "shortcutUpdatesLong": "Updates available"
 }

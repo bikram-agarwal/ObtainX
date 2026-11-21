@@ -338,6 +338,10 @@ class HomePageState extends State<HomePage> {
   bool prevIsLoading = true;
   late AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
+  static const MethodChannel _shortcutsChannel = MethodChannel(
+    'dev.imranr.obtainium/shortcuts',
+  );
+  Locale? _lastShortcutLocale;
   final SharedUrlReceiver _sharedUrlReceiver = SharedUrlReceiver();
 
   /// True when a link or share started ObtainX from cold. Back on its Add app
@@ -406,6 +410,50 @@ class HomePageState extends State<HomePage> {
     // Tapping a single-app update notification opens that listing (upstream
     // #3190). One that launched the app is handed over once this registers.
     NotificationsProvider.onOpenAppRequested = _openAppFromNotification;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final Locale locale = context.locale;
+    if (_lastShortcutLocale != locale) {
+      _lastShortcutLocale = locale;
+      unawaited(_syncLauncherShortcuts());
+    }
+  }
+
+  Future<void> _syncLauncherShortcuts() async {
+    try {
+      await _shortcutsChannel.invokeMethod<void>(
+        'setLauncherShortcuts',
+        <String, dynamic>{
+          'shortcuts': <Map<String, String>>[
+            <String, String>{
+              'id': 'check_updates',
+              'shortLabel': tr('shortcutCheckUpdatesShort'),
+              'longLabel': tr('shortcutCheckUpdatesLong'),
+              'uri': 'obtainium://shortcut/check_updates',
+            },
+            <String, String>{
+              'id': 'add_app',
+              'shortLabel': tr('addApp'),
+              'longLabel': tr('shortcutAddAppLong'),
+              'uri': 'obtainium://shortcut/add_app',
+            },
+            <String, String>{
+              'id': 'updates_available',
+              'shortLabel': tr('updates'),
+              'longLabel': tr('shortcutUpdatesLong'),
+              'uri': 'obtainium://shortcut/updates',
+            },
+          ],
+        },
+      );
+    } on PlatformException {
+      // Ignore on unsupported platforms.
+    } on MissingPluginException {
+      // Ignore in widget tests / non-Android hosts.
+    }
   }
 
   Future<void> _openAppFromNotification(String listingKey) async {
@@ -621,11 +669,38 @@ class HomePageState extends State<HomePage> {
       }
     }
 
+    Future<void> handleShortcut(Uri uri) async {
+      switch (uri.path) {
+        case '/check_updates':
+          await switchToPage(0);
+          await appsProvider.waitForInitialLoad();
+          final state = await _waitForState(
+            pages[0].widget.key as GlobalKey<AppsPageState>,
+          );
+          state.triggerUpdateCheck();
+          break;
+        case '/add_app':
+          await switchToPage(1);
+          break;
+        case '/updates':
+          await switchToPage(0);
+          final state = await _waitForState(
+            pages[0].widget.key as GlobalKey<AppsPageState>,
+          );
+          state.showUpdatesOnly();
+          break;
+      }
+    }
+
     // Another app or a browser opened the link, so back returns there. A link
     // pasted into Import from URL list never comes here: that page adds it as
     // it adds a URL. A refresh link only starts a check and leaves the user
     // where they are, so it doesn't make this a link activity.
     Future<void> interpretIncomingLink(Uri uri, {bool startedApp = false}) {
+      if (uri.host == 'shortcut') {
+        unawaited(handleShortcut(uri));
+        return Future<void>.value();
+      }
       if (uri.host == 'refresh') {
         // Not awaited: a check can take minutes, and the link and share
         // listeners below must not wait for it (links arriving unheard are

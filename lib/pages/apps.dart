@@ -3087,6 +3087,30 @@ class AppsPageState extends State<AppsPage> {
     showAppsViewOptionsSheet(context, folderId: _viewSettingsId);
   }
 
+  void showUpdatesOnly() {
+    setState(() {
+      filter = AppsFilter(
+        upToDateFilterIntent: CategoryFilterIntent.exclude,
+        installedFilterIntent: CategoryFilterIntent.include,
+      );
+      _searchController.clear();
+      _searchExpanded = false;
+    });
+  }
+
+  void triggerUpdateCheck() {
+    if (!mounted || refreshingSince != null) return;
+    if (_refreshIndicatorKey.currentState != null) {
+      _refreshIndicatorKey.currentState!.show();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && refreshingSince == null) {
+          _refreshIndicatorKey.currentState?.show();
+        }
+      });
+    }
+  }
+
   void openSelectionActionsSheet() {
     openSelectionActionsSheetHandler?.call();
   }

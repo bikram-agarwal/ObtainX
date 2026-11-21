@@ -14,6 +14,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Bitmap
@@ -21,6 +23,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.Icon
 import android.graphics.fonts.SystemFonts
 import android.net.Uri
 import android.os.LocaleList
@@ -63,6 +66,7 @@ private const val STORAGE_CHANNEL = "dev.imranr.obtainium/storage"
 private const val SHARE_CHANNEL = "dev.imranr.obtainium/share"
 private const val NOTIFICATIONS_CHANNEL = "dev.imranr.obtainium/notifications"
 private const val DIAGNOSTICS_CHANNEL = "dev.imranr.obtainium/diagnostics"
+private const val SHORTCUTS_CHANNEL = "dev.imranr.obtainium/shortcuts"
 private const val DOWNLOAD_WAKE_LOCK_TAG = "ObtainX:DownloadWakeLock"
 private const val DOWNLOAD_WIFI_LOCK_TAG = "ObtainX:DownloadWifiLock"
 private const val NATIVE_CRASH_LOG_FILE = "obtainx-native-crashes.log"
@@ -848,6 +852,20 @@ class MainActivity : FlutterActivity() {
                 }
                 "getDisplayDiagnostics" -> {
                     result.success(displayDiagnostics())
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SHORTCUTS_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setLauncherShortcuts" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val shortcuts = call.argument<List<Map<String, String>>>("shortcuts") ?: emptyList()
+                    setLauncherShortcuts(shortcuts)
+                    result.success(null)
                 }
                 else -> result.notImplemented()
             }
@@ -1756,5 +1774,30 @@ class MainActivity : FlutterActivity() {
             } catch (_: Exception) { }
         }
         return releaseFile
+    }
+
+    private fun setLauncherShortcuts(shortcuts: List<Map<String, String>>) {
+        val shortcutManager = getSystemService(ShortcutManager::class.java) ?: return
+        val iconMap = mapOf(
+            "check_updates" to R.drawable.ic_shortcut_refresh,
+            "add_app" to R.drawable.ic_shortcut_add,
+            "updates_available" to R.drawable.ic_shortcut_updates,
+        )
+        val dynamicShortcuts = shortcuts.mapIndexedNotNull { index, item ->
+            val id = item["id"] ?: return@mapIndexedNotNull null
+            val shortLabel = item["shortLabel"] ?: return@mapIndexedNotNull null
+            val longLabel = item["longLabel"] ?: shortLabel
+            val uri = item["uri"] ?: return@mapIndexedNotNull null
+            val iconRes = iconMap[id] ?: return@mapIndexedNotNull null
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri), this, MainActivity::class.java)
+            ShortcutInfo.Builder(this, id)
+                .setShortLabel(shortLabel)
+                .setLongLabel(longLabel)
+                .setIcon(Icon.createWithResource(this, iconRes))
+                .setIntent(intent)
+                .setRank(index)
+                .build()
+        }
+        shortcutManager.dynamicShortcuts = dynamicShortcuts
     }
 }
