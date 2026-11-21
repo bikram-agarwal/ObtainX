@@ -28,9 +28,11 @@ const String _apkMirrorSizeDebugPrefix = 'OBTAINX-APK-SIZE-DEBUG';
 /// The user-agent token APKMirror's Cloudflare rule lets through to its
 /// *HTML* pages (release page, `-apk-download/` page, app listing).
 ///
-/// Only page requests send it ([APKMirror.getRequestHeaders]). The `/feed/`
-/// RSS allowlists ObtainX by name since #339 (2026-10-13), so feed requests
-/// identify as `ObtainX/<version> (+repo)`, which APKMirror's admin asked for.
+/// Page requests send it ([APKMirror.getRequestHeaders]), and so does bulk
+/// import's `app_exists` API call (`BulkImportService.checkApkMirror`), which
+/// also carries APKUpdater's API credential. The `/feed/` RSS allowlists
+/// ObtainX by name since #339 (2026-10-13), so feed requests identify as
+/// `ObtainX/<version> (+repo)`, which APKMirror's admin asked for.
 /// Pages are different: on 2026-11-20 a first page request with the ObtainX
 /// UA got a 403 `cf-mitigated: challenge`, while the size walk and "What's
 /// new" still loaded with this token. So pages keep it, with ObtainX's name
@@ -54,10 +56,16 @@ String apkMirrorUserAgent([String? obtainXVersion]) {
 
 /// The running ObtainX version for APKMirror's user-agents, or null when it
 /// can't be read.
-Future<String?> apkMirrorObtainXVersion() async => (await getInstalledInfo(
-  obtainiumId,
-  includeOwnDebugBuild: true,
-))?.versionName;
+///
+/// Read once per launch: it can't change while ObtainX runs, and every page
+/// request needs it, while a read is a package lookup over a platform channel.
+/// A failed read isn't kept, so the next request tries again.
+Future<String?> apkMirrorObtainXVersion() async =>
+    _apkMirrorObtainXVersion ??= (await getInstalledInfo(
+      obtainiumId,
+      includeOwnDebugBuild: true,
+    ))?.versionName;
+String? _apkMirrorObtainXVersion;
 
 /// Requests in flight to apkmirror.com at once, across every caller that
 /// goes through [HostRequestGate] (APKMirror asked for 1-2, #339).

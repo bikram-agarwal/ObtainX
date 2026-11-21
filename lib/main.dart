@@ -10,7 +10,9 @@ import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/components/ui_widgets.dart' show TvPopupFocusObserver;
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/custom_errors.dart' show setAppLocale;
-import 'package:obtainium/date_time_format.dart' show setSystemDateOrder;
+import 'package:obtainium/date_time_format.dart'
+    show DeviceDateOrderScope, setSystemDateOrder;
+import 'package:obtainium/services/app_language.dart';
 import 'package:obtainium/services/bulk_import_service.dart'
     show BulkImportService;
 import 'package:obtainium/theme/app_dialog_theme.dart';
@@ -32,6 +34,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+
+/// Esperanto, carried as en-EO (an easy_localization workaround:
+/// https://github.com/aissat/easy_localization/issues/220#issuecomment-846035493).
+/// Android's per-app language setting can't offer it (AppLanguage).
+const Locale esperantoLocale = Locale('en', 'EO');
 
 List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('en'), 'English'),
@@ -65,7 +72,7 @@ List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('tr'), 'Türkçe'),
   MapEntry(Locale('uk'), 'Українська'),
   MapEntry(Locale('da'), 'Dansk'),
-  MapEntry(Locale('en', 'EO'), 'Esperanto'), // https://github.com/aissat/easy_localization/issues/220#issuecomment-846035493
+  MapEntry(esperantoLocale, 'Esperanto'),
   MapEntry(Locale('in'), 'Bahasa Indonesia'),
   MapEntry(Locale('ko'), '한국어'),
   MapEntry(Locale('ca'), 'Català'),
@@ -228,7 +235,14 @@ void main() async {
     Workmanager().initialize(callbackDispatcher),
     // Before the first frame, so no date is drawn in the wrong order (#355).
     BulkImportService.dateFormatOrder().then(setSystemDateOrder),
+    AppLanguage.init(),
   ]);
+  // Before the first frame, so a language picked in the in-app list shows
+  // the same after Android's setting takes it over.
+  await AppLanguage.moveInAppChoiceToSystem(
+    settingsProvider,
+    WidgetsBinding.instance.platformDispatcher.locale,
+  );
   if ((await androidInfoFuture).version.sdkInt >= 29) {
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(systemNavigationBarColor: Colors.transparent),
@@ -347,13 +361,20 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     });
   }
 
-  /// The phone's language or region changed while ObtainX was alive (the
-  /// activity handles locale changes itself, so it isn't recreated): re-read
-  /// the date order. Dates already drawn update when they next rebuild.
+  /// The phone's language or region, or ObtainX's language in Android's
+  /// settings, changed while ObtainX was alive (the activity handles locale
+  /// changes itself, so it isn't recreated): re-read the date order, which
+  /// dates on screen redraw with through [DeviceDateOrderScope], and switch
+  /// to the new language unless one is picked in ObtainX.
   @override
   void didChangeLocales(List<Locale>? locales) {
     super.didChangeLocales(locales);
     unawaited(BulkImportService.dateFormatOrder().then(setSystemDateOrder));
+    final SettingsProvider settings = context.read<SettingsProvider>();
+    AppLanguage.onSystemLocaleChanged(settings);
+    if (settings.forcedLocale == null) {
+      unawaited(settings.resetLocaleSafe(context));
+    }
   }
 
   @override
@@ -1008,10 +1029,14 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // (no Overlay, no Localizations): the app-wide fallback that gives
             // any package still on flutter/material the app theme.
             builder: (BuildContext context, Widget? child) {
-              return LegacyMaterialBridge(
-                child: AppUiScaler(
-                  scale: settingsProvider.appUiScale,
-                  child: child ?? const SizedBox.shrink(),
+              // Above the navigator, so every route's dates can follow a
+              // language or region change.
+              return DeviceDateOrderScope(
+                child: LegacyMaterialBridge(
+                  child: AppUiScaler(
+                    scale: settingsProvider.appUiScale,
+                    child: child ?? const SizedBox.shrink(),
+                  ),
                 ),
               );
             },

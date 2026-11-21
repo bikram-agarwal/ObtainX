@@ -395,23 +395,10 @@ class HttpService {
         bodySample.contains('too many requests');
 
     if (isRateLimit) {
-      final retryAfter = res.headers['retry-after'];
-      final secs = retryAfter != null ? int.tryParse(retryAfter) : null;
-      if (secs != null) return RateLimitError((secs / 60).ceil());
-
-      final resetHeader = res.headers['x-ratelimit-reset'];
-      if (resetHeader != null) {
-        final parsed = int.tryParse(resetHeader);
-        if (parsed != null) {
-          final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-          final remainingMinutes = ((parsed - nowSeconds) / 60).ceil().clamp(
-            1,
-            9999,
-          );
-          return RateLimitError(remainingMinutes);
-        }
-      }
-      return RateLimitError.withoutRetryTime();
+      final int? minutes = rateLimitRetryMinutes(res.headers, DateTime.now());
+      return minutes != null
+          ? RateLimitError(minutes)
+          : RateLimitError.withoutRetryTime();
     }
     return ObtainiumError(
       (res.reasonPhrase != null && res.reasonPhrase!.isNotEmpty)
@@ -422,6 +409,37 @@ class HttpService {
       data: {'statusCode': res.statusCode},
     );
   }
+}
+
+/// Minutes until a throttled request may be retried, by [headers] at [now]:
+/// at least 1, or null when they give no time.
+///
+/// `Retry-After` is seconds or an HTTP date (RFC 9110). `X-RateLimit-Reset`
+/// is a Unix time on most hosts (GitHub, GitLab), but some send the seconds
+/// left instead; a value too small to be a Unix time since 2001 is read as
+/// that.
+int? rateLimitRetryMinutes(Map<String, String> headers, DateTime now) {
+  int minutesFor(int seconds) => (seconds / 60).ceil().clamp(1, 9999);
+
+  final String retryAfter = headers['retry-after']?.trim() ?? '';
+  if (retryAfter.isNotEmpty) {
+    final int? seconds = int.tryParse(retryAfter);
+    if (seconds != null) return minutesFor(seconds);
+    try {
+      return minutesFor(HttpDate.parse(retryAfter).difference(now).inSeconds);
+    } on HttpException {
+      // Neither form: fall through to the reset time.
+    }
+  }
+  final int? reset = int.tryParse(headers['x-ratelimit-reset']?.trim() ?? '');
+  if (reset != null) {
+    const int firstUnixTimeOf2001 = 978307200;
+    final int nowSeconds = now.millisecondsSinceEpoch ~/ 1000;
+    return minutesFor(
+      reset >= firstUnixTimeOf2001 ? reset - nowSeconds : reset,
+    );
+  }
+  return null;
 }
 
 /// Delegates to [HttpService.ensureAbsoluteUrl].

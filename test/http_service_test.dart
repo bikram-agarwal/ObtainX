@@ -265,6 +265,69 @@ void main() {
     });
   });
 
+  group('rateLimitRetryMinutes', () {
+    final DateTime now = DateTime.utc(2026, 11, 21, 12);
+    final int nowSeconds = now.millisecondsSinceEpoch ~/ 1000;
+
+    test('reads Retry-After in seconds, never under a minute', () {
+      expect(rateLimitRetryMinutes({'retry-after': '120'}, now), 2);
+      expect(rateLimitRetryMinutes({'retry-after': '61'}, now), 2);
+      expect(rateLimitRetryMinutes({'retry-after': '0'}, now), 1);
+    });
+
+    test('reads Retry-After as an HTTP date', () {
+      expect(
+        rateLimitRetryMinutes({
+          'retry-after': 'Sat, 21 Nov 2026 12:10:00 GMT',
+        }, now),
+        10,
+      );
+      // Already past: retry as soon as allowed.
+      expect(
+        rateLimitRetryMinutes({
+          'retry-after': 'Sat, 21 Nov 2026 11:00:00 GMT',
+        }, now),
+        1,
+      );
+    });
+
+    test('reads X-RateLimit-Reset as a Unix time or as seconds left', () {
+      expect(
+        rateLimitRetryMinutes({
+          'x-ratelimit-reset': '${nowSeconds + 300}',
+        }, now),
+        5,
+      );
+      expect(rateLimitRetryMinutes({'x-ratelimit-reset': '300'}, now), 5);
+    });
+
+    test('prefers Retry-After over the reset time', () {
+      expect(
+        rateLimitRetryMinutes({
+          'retry-after': '60',
+          'x-ratelimit-reset': '${nowSeconds + 3600}',
+        }, now),
+        1,
+      );
+    });
+
+    test('gives no time when the headers give none', () {
+      expect(rateLimitRetryMinutes({}, now), isNull);
+      expect(rateLimitRetryMinutes({'retry-after': 'soon'}, now), isNull);
+    });
+
+    test('getHttpError uses it', () {
+      final error = HttpService().getHttpError(
+        http.Response(
+          '',
+          429,
+          headers: {'retry-after': 'Sat, 21 Nov 2099 12:00:00 GMT'},
+        ),
+      );
+      expect((error as RateLimitError).remainingMinutes, 9999);
+    });
+  });
+
   test('pinning follows the setting when the caller passes nothing', () {
     final uri = Uri.parse('https://github.com/a/b');
     HttpService.setDefaultCertificatePinning(false);

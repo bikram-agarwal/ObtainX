@@ -657,7 +657,7 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
     packageInfo?.packageName,
     model.iconUrl,
     model.apkSizeBytes,
-    // The Update health line (D8).
+    // The update health marker beside the latest version (D8).
     model.latestVersionChangedAt,
     model.consecutiveFailedChecks,
     model.isArchived,
@@ -669,7 +669,7 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
 
 int appPageSettingsRebuildToken(SettingsProvider settings) {
   return Object.hash(
-    // The Update health line's thresholds (D8).
+    // The update health marker's thresholds (D8).
     updateHealthSettingsToken(settings),
     settings.matchAppPageToIconColors,
     settings.blackThemeActive,
@@ -3363,6 +3363,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     // Date in the phone's day/month/year order, time in its 12/24-hour
     // setting (#355).
     String formatDeviceDateTime(BuildContext ctx, DateTime dateTime) {
+      watchDeviceDateOrder(ctx);
       final local = dateTime.toLocal();
       final materialLocalizations = MaterialLocalizations.of(ctx);
       final date = formatDeviceOrderedNumericDate(local);
@@ -5036,14 +5037,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               child: Column(
                 spacing: 4,
                 children: certificateHashes.map((hash) {
+                  void copyHash() => unawaited(copyCertificateHash(hash));
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
-                          onLongPress: () =>
-                              unawaited(copyCertificateHash(hash)),
+                          onLongPress: copyHash,
                           child: LayoutBuilder(
                             builder: (context, constraints) {
                               return Text(
@@ -5066,14 +5067,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                         button: true,
                         enabled: true,
                         label: tr('copyToClipboard'),
+                        // Hides the button's own tap and the tooltip from
+                        // TalkBack, so the label is read once; this node
+                        // then needs its own tap.
                         excludeSemantics: true,
-                        onTap: () => unawaited(copyCertificateHash(hash)),
+                        onTap: copyHash,
                         child: Tooltip(
                           message: tr('copyToClipboard'),
                           child: SizedBox.square(
                             dimension: 18,
                             child: InkResponse(
-                              onTap: () => unawaited(copyCertificateHash(hash)),
+                              onTap: copyHash,
                               radius: 10,
                               child: const Icon(Icons.copy_rounded, size: 14),
                             ),

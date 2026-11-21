@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:http/http.dart' as http;
 import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -39,6 +40,16 @@ class Farsroid extends AppSource {
     );
   }
 
+  /// LiteSpeed's reCAPTCHA gate, served in place of the page or the API
+  /// answer. Checked before the status code, since the gate isn't known to
+  /// always answer 200.
+  void _throwIfBotVerification(http.Response res) {
+    if (res.body.contains('lsrecaptcha-form') ||
+        res.body.contains('/.lsrecap/recaptcha')) {
+      throw BotVerificationError(name);
+    }
+  }
+
   @override
   Future<APKDetails> getLatestAPKDetails(
     String standardUrl,
@@ -48,12 +59,9 @@ class Farsroid extends AppSource {
       final String appName = Uri.parse(standardUrl).pathSegments.last;
 
       final res = await sourceRequest(standardUrl, additionalSettings);
+      _throwIfBotVerification(res);
       if (res.statusCode != 200) {
         throw getObtainiumHttpError(res);
-      }
-      if (res.body.contains('lsrecaptcha-form') ||
-          res.body.contains('/.lsrecap/recaptcha')) {
-        throw BotVerificationError(name);
       }
       final html = await parseHtmlOffIsolate(res.body);
       final dlinks = html.querySelectorAll('.download-links');
@@ -71,12 +79,9 @@ class Farsroid extends AppSource {
         'https://${hosts[0]}/api/download-box/?post_id=$postId&post_version=$version',
         additionalSettings,
       );
+      _throwIfBotVerification(res2);
       if (res2.statusCode != 200) {
         throw getObtainiumHttpError(res2);
-      }
-      if (res2.body.contains('lsrecaptcha-form') ||
-          res2.body.contains('/.lsrecap/recaptcha')) {
-        throw BotVerificationError(name);
       }
       Map<String, dynamic>? farsroidJson;
       try {

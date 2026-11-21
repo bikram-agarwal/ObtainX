@@ -2,6 +2,7 @@ package dev.imranr.obtainium
 
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -34,6 +35,8 @@ class UpdateCheckForegroundService : Service() {
     private var wifiLock: WifiManager.WifiLock? = null
     private lateinit var title: String
     private lateinit var channelCode: String
+    // Built once per start: progress repaints the notification every second.
+    private lateinit var contentIntent: PendingIntent
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,18 +57,29 @@ class UpdateCheckForegroundService : Service() {
             requireNotNull(extras.getStringExtra(EXTRA_CHANNEL_NAME)),
             requireNotNull(extras.getStringExtra(EXTRA_CHANNEL_DESCRIPTION)),
         )
+        contentIntent = openAppPendingIntent(this, NOTIFICATION_ID)
         // Called even when the check has already finished: a service started
         // with startForegroundService that stops before startForeground crashes
         // the app.
         val notification = buildNotification(completed = null, total = null)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (_: Exception) {
+            // Android refused (e.g. ForegroundServiceStartNotAllowedException
+            // once Android 15's daily dataSync allowance is used up). Thrown
+            // here, it would crash the app; the check runs on unprotected,
+            // as it did before this service existed.
+            startPending = false
+            stopNow()
+            return START_NOT_STICKY
         }
         startPending = false
         if (holders == 0) {
@@ -106,7 +120,7 @@ class UpdateCheckForegroundService : Service() {
         val builder = Notification.Builder(this, channelCode)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
-            .setContentIntent(openAppPendingIntent(this, NOTIFICATION_ID))
+            .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)

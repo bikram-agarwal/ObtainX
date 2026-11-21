@@ -1022,6 +1022,7 @@ class _AppListItem extends StatelessWidget {
     }
 
     final String versionText = app.app.installedVersion ?? tr('none');
+    watchDeviceDateOrder(context);
     final String changesButtonString = app.app.releaseDate == null
         ? (showChangesFn != null ? tr('changes') : '')
         : formatDeviceOrderedNumericDate(app.app.releaseDate!);
@@ -1542,6 +1543,17 @@ Future<void> _openAdditionalOptionsModal(
   }
 }
 
+/// Whether [listing] has a page for the swipe action "Open App Source": a URL,
+/// from a source whose URL is a page and not the download itself (Direct APK
+/// Link, whose URL is the APK).
+bool listingHasSourcePage(AppInMemory listing) {
+  if (listing.app.url.trim().isEmpty) return false;
+  final String? sourceType = listing.sourceType;
+  if (sourceType == null) return true;
+  return SourceProvider().sourceTemplateForIdentifier(sourceType)?.urlIsPage ??
+      true;
+}
+
 /// Wraps a list row with horizontal-swipe action hints.
 /// The left/right actions are configurable via [SettingsProvider].
 class _SwipeableListItem extends StatefulWidget {
@@ -1551,7 +1563,7 @@ class _SwipeableListItem extends StatefulWidget {
     required this.hasUpdate,
     required this.isPinned,
     required this.isInstalled,
-    required this.hasSourceUrl,
+    required this.hasSourcePage,
     required this.areDownloadsRunning,
     required this.keepAlive,
     required this.rightAction,
@@ -1565,7 +1577,7 @@ class _SwipeableListItem extends StatefulWidget {
   final bool hasUpdate;
   final bool isPinned;
   final bool isInstalled;
-  final bool hasSourceUrl;
+  final bool hasSourcePage;
   final bool areDownloadsRunning;
   final bool keepAlive;
   final SwipeAction rightAction;
@@ -1645,7 +1657,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       case SwipeAction.open:
         return widget.isInstalled;
       case SwipeAction.openAppSource:
-        return widget.hasSourceUrl;
+        return widget.hasSourcePage;
       case SwipeAction.none:
         return false;
       default:
@@ -5230,7 +5242,7 @@ class AppsPageState extends State<AppsPage> {
         hasUpdate: hasUpdate || hasUncertainUpdate,
         isPinned: app.app.pinned,
         isInstalled: installed != null,
-        hasSourceUrl: app.app.url.trim().isNotEmpty,
+        hasSourcePage: listingHasSourcePage(app),
         areDownloadsRunning: downloadsRunning,
         keepAlive: false,
         rightAction: settingsProvider.rightSwipeAction,

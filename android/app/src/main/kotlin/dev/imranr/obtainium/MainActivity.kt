@@ -1,19 +1,21 @@
 package dev.imranr.obtainium
 
 import android.app.Activity
-import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ComponentName
+import android.app.LocaleManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -21,6 +23,8 @@ import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.fonts.SystemFonts
 import android.net.Uri
+import android.os.LocaleList
+import android.provider.Settings
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
@@ -42,6 +46,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.util.IllformedLocaleException
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -443,6 +449,41 @@ class MainActivity : FlutterActivity() {
         }, FOCUS_REGAIN_SETTLE_MS)
     }
 
+    /// Android's per-app language screen for ObtainX (Android 13+), or null on
+    /// a device without one to open (some TV builds). Where it exists, it
+    /// replaces ObtainX's own language list (lib/services/app_language.dart).
+    private fun appLanguageSettingsIntent(): Intent? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+        val intent = Intent(
+            Settings.ACTION_APP_LOCALE_SETTINGS,
+            Uri.fromParts("package", packageName, null),
+        )
+        return if (intent.resolveActivity(packageManager) != null) intent else null
+    }
+
+    /// The context whose locale decides the date order (#355).
+    ///
+    /// This activity's locale is ObtainX's language from Android's per-app
+    /// setting when one is set, else the phone's. A locale with a region
+    /// ("English (United Kingdom)", or the phone's own) is used as it is: a
+    /// region picked for ObtainX is a choice to honour. A language alone takes
+    /// the phone's region, since plain "English" would otherwise mean the US
+    /// order on, say, a UK phone.
+    private fun dateOrderContext(): Context {
+        val appLocale = resources.configuration.locales[0]
+        if (appLocale.country.isNotEmpty()) return this
+        val phoneRegion = Resources.getSystem().configuration.locales[0].country
+        if (phoneRegion.isEmpty()) return this
+        val locale = try {
+            Locale.Builder().setLocale(appLocale).setRegion(phoneRegion).build()
+        } catch (_: IllformedLocaleException) {
+            return this
+        }
+        return createConfigurationContext(
+            Configuration(resources.configuration).apply { setLocale(locale) },
+        )
+    }
+
     override fun onNewIntent(intent: Intent) {
         try {
             super.onNewIntent(intent)
@@ -625,15 +666,45 @@ class MainActivity : FlutterActivity() {
                     result.success(DateFormat.is24HourFormat(this))
                 }
                 "dateFormatOrder" -> {
-                    // The phone's day/month/year order for its language and
-                    // region, e.g. "dMy" (#355).
+                    // The day/month/year order ObtainX's dates use, e.g.
+                    // "dMy" (#355); dateOrderContext says whose.
                     result.success(
                         try {
-                            String(DateFormat.getDateFormatOrder(this))
+                            String(DateFormat.getDateFormatOrder(dateOrderContext()))
                         } catch (_: IllegalArgumentException) {
                             null
                         },
                     )
+                }
+                "appLanguageSettingsAvailable" -> {
+                    result.success(appLanguageSettingsIntent() != null)
+                }
+                "openAppLanguageSettings" -> {
+                    val settingsIntent = appLanguageSettingsIntent()
+                    result.success(
+                        settingsIntent != null &&
+                            try {
+                                startActivity(settingsIntent)
+                                true
+                            } catch (_: ActivityNotFoundException) {
+                                false
+                            },
+                    )
+                }
+                "setAppLanguage" -> {
+                    val languageTag = call.argument<String>("languageTag")
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                        languageTag.isNullOrBlank()
+                    ) {
+                        result.success(false)
+                    } else {
+                        // Android applies it as a locale change, which this
+                        // activity handles itself, so it isn't recreated;
+                        // Dart's didChangeLocales picks the language up.
+                        getSystemService(LocaleManager::class.java).applicationLocales =
+                            LocaleList.forLanguageTags(languageTag)
+                        result.success(true)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -837,6 +908,14 @@ class MainActivity : FlutterActivity() {
         ) {
             return null
         }
+        // A share that started ObtainX from cold is the root intent of
+        // ObtainX's own task (LinkRelayActivity starts it with NEW_TASK).
+        // Reopening that task from Recents relaunches with the same intent
+        // plus this flag, and must not open Add app on the old share again.
+        // app_links skips links relaunched this way, too.
+        if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
+            return null
+        }
         return intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
             ?.toString()
             ?.trim()
@@ -1017,17 +1096,6 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private var cachedLaunchIntent: Intent? = null
-    private fun getCachedLaunchIntent(): Intent {
-        val existing = cachedLaunchIntent
-        if (existing != null) return existing
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, MainActivity::class.java)
-        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        cachedLaunchIntent = intent
-        return intent
-    }
-
     private fun showDownloadProgressNotification(call: io.flutter.plugin.common.MethodCall): Boolean {
         val id = call.argument<Int>("id") ?: return false
         val title = call.argument<String>("title") ?: return false
@@ -1037,13 +1105,7 @@ class MainActivity : FlutterActivity() {
         val indeterminate = call.argument<Boolean>("indeterminate") ?: false
         val shortCriticalText = call.argument<String>("shortCriticalText")
 
-        val contentIntent = PendingIntent.getActivity(
-            this,
-            id,
-            getCachedLaunchIntent(),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            activityLaunchOptions(),
-        )
+        val contentIntent = openAppPendingIntent(this, id)
         val cancelAppId = call.argument<String>("appId")
         val cancelIntent = if (!indeterminate && !cancelAppId.isNullOrBlank()) {
             PendingIntent.getBroadcast(
@@ -1141,16 +1203,6 @@ class MainActivity : FlutterActivity() {
         stopService(Intent(this, DownloadForegroundService::class.java))
     }
 
-    private fun activityLaunchOptions(): android.os.Bundle? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
-            return null
-        }
-        return ActivityOptions.makeBasic()
-            .setPendingIntentCreatorBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE,
-            )
-            .toBundle()
-    }
 
     @Suppress("DEPRECATION")
     /// One-pass compact enumeration of installed apps. Returns only the fields

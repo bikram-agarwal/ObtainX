@@ -1820,16 +1820,16 @@ class GitHub extends AppSource {
     await settingsProvider.initializeSettings();
     final Map<String, String> sourceConfigSettingValues =
         await getSourceConfigValues({}, settingsProvider);
-    final Map<String, SearchResultDetails> results =
-        await searchCommonWithDetails(
-          query,
-          '${await getAPIHost({})}/search/repositories?q=${Uri.encodeQueryComponent(query)}&per_page=100',
-          'items',
-          onHttpErrorCode: (Response res) {
-            githubErrorCheck(res);
-          },
-          querySettings: querySettings,
-        );
+    final Map<String, SearchResultDetails>
+    results = await searchCommonWithDetails(
+      query,
+      '${await getAPIHost({})}/search/repositories?q=${Uri.encodeQueryComponent(query)}&per_page=100',
+      'items',
+      onHttpErrorCode: (Response res) {
+        githubErrorCheck(res);
+      },
+      querySettings: querySettings,
+    );
     if ((sourceConfigSettingValues['GHReqPrefix'] ?? '').isNotEmpty) {
       return {
         for (final MapEntry<String, SearchResultDetails> entry
@@ -1850,48 +1850,23 @@ class GitHub extends AppSource {
     return AppSource.subtitleLinesByUrl(detailedResults);
   }
 
+  /// Throws a [RateLimitError] when the failed response [res] says GitHub is
+  /// rate limiting, by the rule every source uses ([HttpService.getHttpError]):
+  /// a 429, a 403 with a spent quota or a retry time, or "rate limit" or "too
+  /// many requests" in the reply. A plain 403 is a refusal and is left to the
+  /// caller's error (#344). A rate limit without a retry time says so, rather
+  /// than naming a wait GitHub never gave; background checks still wait
+  /// [RateLimitError.defaultRetryWaitMinutes].
   void rateLimitErrorCheck(Response res) {
-    final reasonLower = res.reasonPhrase?.toLowerCase() ?? '';
-    final bodySample = res.body.length > 1000
-        ? res.body.substring(0, 1000).toLowerCase()
-        : res.body.toLowerCase();
-    final isRateLimit =
-        res.headers['x-ratelimit-remaining'] == '0' ||
-        res.statusCode == 429 ||
-        res.statusCode == 403 ||
-        reasonLower.contains('rate limit') ||
-        reasonLower.contains('too many requests') ||
-        bodySample.contains('rate limit') ||
-        bodySample.contains('too many requests');
-
-    if (isRateLimit) {
-      final now = DateTime.now();
-      final retryAfter = res.headers['retry-after'];
-      final retryAfterSecs = retryAfter != null
-          ? int.tryParse(retryAfter)
-          : null;
-
-      final resetEpochSeconds =
-          int.tryParse(res.headers['x-ratelimit-reset'] ?? '') ??
-          (retryAfterSecs != null
-              ? (now.millisecondsSinceEpoch ~/ 1000 + retryAfterSecs)
-              : (now.millisecondsSinceEpoch ~/ 1000 +
-                    1800)); // Default to 30 minutes (1800 seconds)
-
-      final nowSeconds = now.millisecondsSinceEpoch ~/ 1000;
-      final remainingMinutes = ((resetEpochSeconds - nowSeconds) / 60)
-          .ceil()
-          .clamp(1, 9999);
-      throw RateLimitError(remainingMinutes);
-    }
+    final ObtainiumError error = getObtainiumHttpError(res);
+    if (error is RateLimitError) throw error;
   }
 
   /// Throws GitHub's real error for a failed API response (#3211). A 401/403
   /// carrying a message (e.g. "Resource not accessible by personal access
   /// token") is that error, not a rate limit, unless the response says it is
   /// one (remaining quota 0, a retry-after, a 429, or "rate limit" in the
-  /// message). Everything else goes to [rateLimitErrorCheck], which keeps its
-  /// broad detection and timing.
+  /// message). Everything else goes to [rateLimitErrorCheck].
   void githubErrorCheck(Response res) {
     if (res.statusCode == 401 || res.statusCode == 403) {
       String? message;

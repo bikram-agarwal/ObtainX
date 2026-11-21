@@ -37,6 +37,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/app_language.dart';
 import 'package:obtainium/services/diagnostic_snapshot.dart';
 import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/theme.dart';
@@ -2835,15 +2836,18 @@ class _AppearanceSection extends StatelessWidget {
     return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            kM3eSettingsCardHorizontalInset,
-            12,
-            kM3eSettingsCardHorizontalInset,
-            4,
+        if (AppLanguage.usesSystemSetting)
+          const _SystemLanguageTile()
+        else
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              kM3eSettingsCardHorizontalInset,
+              12,
+              kM3eSettingsCardHorizontalInset,
+              4,
+            ),
+            child: _LocaleMenu(sp: sp),
           ),
-          child: _LocaleMenu(sp: sp),
-        ),
         _CustomFontTile(sp: sp),
         const _UiScaleSlider(),
         const _CardCornerScaleSlider(),
@@ -3131,6 +3135,30 @@ class _LocaleMenu extends StatelessWidget {
           unawaited(sp.resetLocaleSafe(context));
         }
       },
+    );
+  }
+}
+
+/// Where Android's per-app language screen replaces the in-app list
+/// ([AppLanguage]): the language ObtainX shows, opening that screen.
+class _SystemLanguageTile extends StatelessWidget {
+  const _SystemLanguageTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final Locale shown = context.locale;
+    final String name =
+        supportedLocales
+            .where((MapEntry<Locale, String> e) => e.key == shown)
+            .firstOrNull
+            ?.value ??
+        shown.toLanguageTag();
+    return ListTile(
+      leading: const Icon(Icons.language_rounded),
+      title: Text(tr('language')),
+      subtitle: Text(name),
+      trailing: const Icon(Icons.open_in_new_rounded),
+      onTap: () => unawaited(AppLanguage.openSystemSettings()),
     );
   }
 }

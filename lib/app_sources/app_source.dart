@@ -52,10 +52,7 @@ class SourceSearchProfile {
 
 /// Search result metadata returned by [AppSource.searchWithDetails].
 class SearchResultDetails {
-  const SearchResultDetails({
-    required this.subtitleLines,
-    this.starCount,
-  });
+  const SearchResultDetails({required this.subtitleLines, this.starCount});
 
   final List<String> subtitleLines;
   final int? starCount;
@@ -96,6 +93,10 @@ abstract class AppSource {
   /// repo and tag, so an inverted filter matched every asset and dropped them
   /// all. On for HTML and direct links, whose filters target hosts and paths.
   bool apkFilterMatchesLinkUrl = false;
+
+  /// Whether an app's URL is a web page to show the user (the swipe action
+  /// "Open App Source"). Off where the URL is the download itself.
+  bool urlIsPage = true;
   List<String> excludeCommonSettingKeys = [];
   bool urlsAlwaysHaveExtension = false;
 
@@ -360,7 +361,7 @@ abstract class AppSource {
     ],
     [
       // Per-app override of the global minimum update age; '' = use global,
-      // shown on the global value's stop (globalValue).
+      // the slider's first stop (globalValue).
       GeneratedFormSlider(
         'minimumUpdateAgeDays',
         [
@@ -467,9 +468,9 @@ abstract class AppSource {
     [
       // Per-app install method (upstream #3457), fork-shaped (v1.7.4 sync,
       // D13): the fork's modes, Dhizuku and Root included, with the labels
-      // the Settings page uses. '' = the global setting, listed in its
-      // place as "<method> (global)" (globalValue). Values are
-      // InstallerMode names; the stock installer is 'system'.
+      // the Settings page uses. '' = the global setting, listed first as
+      // "Global (<method>)" (globalValue), with every method also listed to
+      // pin. Values are InstallerMode names; the stock installer is 'system'.
       GeneratedFormDropdown(
         'installerMode',
         [

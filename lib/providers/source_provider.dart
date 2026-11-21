@@ -245,6 +245,17 @@ class SourceProvider {
     )];
   }
 
+  static Map<String, AppSource>? _templatesByIdentifierCache;
+
+  /// The source template whose [AppSource.sourceIdentifier] is [identifier],
+  /// as `AppInMemory.sourceType` caches it, or null for one no template has.
+  /// A map lookup, for per-row work in lists. Callers MUST NOT mutate it.
+  AppSource? sourceTemplateForIdentifier(String identifier) =>
+      (_templatesByIdentifierCache ??= {
+        for (final AppSource source in _sourceTemplates)
+          source.sourceIdentifier: source,
+      })[identifier];
+
   // `naiveStandardVersionDetection` depends only on the resolved source (a
   // function of host + overrideSource), so cache it per host to avoid a
   // getSource() per app on the install-status reconcile hot path.

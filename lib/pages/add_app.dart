@@ -137,9 +137,7 @@ List<MapEntry<String, SearchResultDisplayEntry>> filterAndSortSearchResults(
 }) {
   final String normalizedFilter = filterQuery.trim().toLowerCase();
   final List<MapEntry<String, SearchResultDisplayEntry>> filteredEntries =
-      results.entries.where((
-        MapEntry<String, SearchResultDisplayEntry> entry,
-      ) {
+      results.entries.where((MapEntry<String, SearchResultDisplayEntry> entry) {
         if (normalizedFilter.isEmpty) return true;
         final String resultUrl = _searchResultUrl(entry.key).toLowerCase();
         final String subtitleText = entry.value.subtitleLines
@@ -455,8 +453,8 @@ class AddAppPageState extends State<AddAppPage> {
   // so it cannot grow indefinitely. The key includes the selected sources, and
   // searches that prompt for per-source options are never cached because their
   // results depend on that dialog input (see runInlineSearch).
-  static final Map<String, Map<String, SearchResultDisplayEntry>>
-  _searchCache = {};
+  static final Map<String, Map<String, SearchResultDisplayEntry>> _searchCache =
+      {};
   static const int _searchCacheMaxEntries = 50;
 
   @visibleForTesting

@@ -21,9 +21,10 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _StubGitHub extends GitHub {
-  _StubGitHub(this.response);
+  _StubGitHub(this.response, {super.hostChanged});
 
   final Response response;
+  final List<String> requestedUrls = [];
 
   @override
   String get sourceIdentifier => 'GitHub';
@@ -35,28 +36,8 @@ class _StubGitHub extends GitHub {
     bool followRedirects = true,
     Object? postBody,
   }) async {
+    requestedUrls.add(url);
     return response;
-  }
-}
-
-class _StubCodeberg extends Codeberg {
-  _StubCodeberg(this.response);
-
-  final Response response;
-
-  @override
-  Future<Map<String, SearchResultDetails>> searchWithDetails(
-    String query, {
-    Map<String, dynamic> querySettings = const {},
-  }) async {
-    final _StubGitHub helper = _StubGitHub(response);
-    final String origin = 'https://${hosts[0]}';
-    return helper.searchCommonWithDetails(
-      query,
-      '$origin/api/v1/repos/search?q=${Uri.encodeQueryComponent(query)}&limit=100',
-      'data',
-      querySettings: querySettings,
-    );
   }
 }
 
@@ -309,68 +290,66 @@ void main() {
   });
 
   group('source searchWithDetails', () {
-    test(
-      'GitHub.searchWithDetails parses stargazers_count, filters minStarCount, and keeps search() compatible',
-      () async {
-        final _StubGitHub github = _StubGitHub(
-          Response(
-            jsonEncode({
-              'items': [
-                {
-                  'html_url': 'https://github.com/tasks/tasks',
-                  'full_name': 'tasks/tasks',
-                  'description': 'Tasks app',
-                  'archived': false,
-                  'stargazers_count': 5781,
-                },
-                {
-                  'html_url': 'https://github.com/example/zero-stars',
-                  'full_name': 'example/zero-stars',
-                  'description': null,
-                  'archived': true,
-                  'stargazers_count': 0,
-                },
-              ],
-            }),
-            200,
-          ),
-        );
+    test('GitHub.searchWithDetails parses stargazers_count, filters minStarCount, and keeps search() compatible', () async {
+      final _StubGitHub github = _StubGitHub(
+        Response(
+          jsonEncode({
+            'items': [
+              {
+                'html_url': 'https://github.com/tasks/tasks',
+                'full_name': 'tasks/tasks',
+                'description': 'Tasks app',
+                'archived': false,
+                'stargazers_count': 5781,
+              },
+              {
+                'html_url': 'https://github.com/example/zero-stars',
+                'full_name': 'example/zero-stars',
+                'description': null,
+                'archived': true,
+                'stargazers_count': 0,
+              },
+            ],
+          }),
+          200,
+        ),
+      );
 
-        final Map<String, SearchResultDetails> allResults = await github
-            .searchWithDetails('tasks');
-        expect(allResults['https://github.com/tasks/tasks']?.starCount, 5781);
-        expect(allResults['https://github.com/tasks/tasks']?.subtitleLines, [
-          'tasks/tasks',
-          'Tasks app',
-        ]);
-        expect(
-          allResults['https://github.com/example/zero-stars']?.starCount,
-          0,
-        );
-        expect(
-          allResults['https://github.com/example/zero-stars']?.subtitleLines,
-          ['example/zero-stars', '[ARCHIVED] ${tr('noDescription')}'],
-        );
+      final Map<String, SearchResultDetails> allResults = await github
+          .searchWithDetails('tasks');
+      expect(allResults['https://github.com/tasks/tasks']?.starCount, 5781);
+      expect(allResults['https://github.com/tasks/tasks']?.subtitleLines, [
+        'tasks/tasks',
+        'Tasks app',
+      ]);
+      expect(allResults['https://github.com/example/zero-stars']?.starCount, 0);
+      expect(
+        allResults['https://github.com/example/zero-stars']?.subtitleLines,
+        ['example/zero-stars', '[ARCHIVED] ${tr('noDescription')}'],
+      );
 
-        final Map<String, SearchResultDetails> filteredResults = await github
-            .searchWithDetails('tasks', querySettings: {'minStarCount': 100});
-        expect(filteredResults.keys, ['https://github.com/tasks/tasks']);
+      final Map<String, SearchResultDetails> filteredResults = await github
+          .searchWithDetails('tasks', querySettings: {'minStarCount': 100});
+      expect(filteredResults.keys, ['https://github.com/tasks/tasks']);
 
-        final Map<String, List<String>> legacyResults = await github.search(
-          'tasks',
-        );
-        expect(legacyResults, {
-          'https://github.com/tasks/tasks': ['tasks/tasks', 'Tasks app'],
-          'https://github.com/example/zero-stars': [
-            'example/zero-stars',
-            '[ARCHIVED] ${tr('noDescription')}',
-          ],
-        });
-      },
-    );
+      final Map<String, List<String>> legacyResults = await github.search(
+        'tasks',
+      );
+      expect(legacyResults, {
+        'https://github.com/tasks/tasks': ['tasks/tasks', 'Tasks app'],
+        'https://github.com/example/zero-stars': [
+          'example/zero-stars',
+          '[ARCHIVED] ${tr('noDescription')}',
+        ],
+      });
+    });
 
-    test('Codeberg searchCommonWithDetails parses stars_count', () async {
-      final _StubCodeberg codeberg = _StubCodeberg(
+    // Codeberg's own search, with only the HTTP answer stubbed: its API URL,
+    // the 'data' root and its token lookup all run for real.
+    test('Codeberg.searchWithDetails parses stars_count', () async {
+      SharedPreferences.setMockInitialValues({});
+      final _StubGitHub api = _StubGitHub(
+        hostChanged: true,
         Response(
           jsonEncode({
             'data': [
@@ -386,9 +365,13 @@ void main() {
           200,
         ),
       );
+      final Codeberg codeberg = Codeberg(apiHelper: api);
 
       final Map<String, SearchResultDetails> detailed = await codeberg
           .searchWithDetails('notes');
+      expect(api.requestedUrls, [
+        'https://codeberg.org/api/v1/repos/search?q=notes&limit=100',
+      ]);
       expect(detailed['https://codeberg.org/example/notes']?.starCount, 412);
       expect(detailed['https://codeberg.org/example/notes']?.subtitleLines, [
         'example/notes',
@@ -396,66 +379,60 @@ void main() {
       ]);
     });
 
-    test(
-      'GitLab.searchWithDetails parses star_count and keeps search() compatible',
-      () async {
-        final _StubGitLab gitlab = _StubGitLab(
-          Response(
-            jsonEncode([
-              {
-                'path_with_namespace': 'auroraoss/AuroraStore',
-                'name_with_namespace': 'Aurora OSS / AuroraStore',
-                'description': 'FOSS Google Play client',
-                'star_count': 2100,
-              },
-            ]),
-            200,
-          ),
-        );
+    test('GitLab.searchWithDetails parses star_count and keeps search() compatible', () async {
+      final _StubGitLab gitlab = _StubGitLab(
+        Response(
+          jsonEncode([
+            {
+              'path_with_namespace': 'auroraoss/AuroraStore',
+              'name_with_namespace': 'Aurora OSS / AuroraStore',
+              'description': 'FOSS Google Play client',
+              'star_count': 2100,
+            },
+          ]),
+          200,
+        ),
+      );
 
-        final Map<String, SearchResultDetails> detailed = await gitlab
-            .searchWithDetails('aurora');
-        expect(
-          detailed['https://gitlab.com/auroraoss/AuroraStore']?.starCount,
-          2100,
-        );
-        expect(
-          detailed['https://gitlab.com/auroraoss/AuroraStore']?.subtitleLines,
-          ['Aurora OSS / AuroraStore', 'FOSS Google Play client'],
-        );
+      final Map<String, SearchResultDetails> detailed = await gitlab
+          .searchWithDetails('aurora');
+      expect(
+        detailed['https://gitlab.com/auroraoss/AuroraStore']?.starCount,
+        2100,
+      );
+      expect(
+        detailed['https://gitlab.com/auroraoss/AuroraStore']?.subtitleLines,
+        ['Aurora OSS / AuroraStore', 'FOSS Google Play client'],
+      );
 
-        final Map<String, List<String>> legacy = await gitlab.search('aurora');
-        expect(legacy, {
-          'https://gitlab.com/auroraoss/AuroraStore': [
-            'Aurora OSS / AuroraStore',
-            'FOSS Google Play client',
-          ],
-        });
-      },
-    );
+      final Map<String, List<String>> legacy = await gitlab.search('aurora');
+      expect(legacy, {
+        'https://gitlab.com/auroraoss/AuroraStore': [
+          'Aurora OSS / AuroraStore',
+          'FOSS Google Play client',
+        ],
+      });
+    });
 
-    test(
-      'default AppSource.searchWithDetails wraps non-star sources with null starCount',
-      () async {
-        final _StubNonStarSource fdroid = _StubNonStarSource({
-          'https://f-droid.org/packages/org.tasks': [
-            'Tasks.org',
-            'Open source to-do list',
-          ],
-        });
+    test('default AppSource.searchWithDetails wraps non-star sources with null starCount', () async {
+      final _StubNonStarSource fdroid = _StubNonStarSource({
+        'https://f-droid.org/packages/org.tasks': [
+          'Tasks.org',
+          'Open source to-do list',
+        ],
+      });
 
-        final Map<String, SearchResultDetails> detailed = await fdroid
-            .searchWithDetails('tasks');
-        expect(
-          detailed['https://f-droid.org/packages/org.tasks']?.starCount,
-          isNull,
-        );
-        expect(
-          detailed['https://f-droid.org/packages/org.tasks']?.subtitleLines,
-          ['Tasks.org', 'Open source to-do list'],
-        );
-      },
-    );
+      final Map<String, SearchResultDetails> detailed = await fdroid
+          .searchWithDetails('tasks');
+      expect(
+        detailed['https://f-droid.org/packages/org.tasks']?.starCount,
+        isNull,
+      );
+      expect(
+        detailed['https://f-droid.org/packages/org.tasks']?.subtitleLines,
+        ['Tasks.org', 'Open source to-do list'],
+      );
+    });
   });
 
   group('filterAndSortSearchResults', () {
@@ -507,26 +484,23 @@ void main() {
       expect(sorted.map((entry) => entry.key).toList(), sampleResults.keys);
     });
 
-    test(
-      'sorts starred entries descending, keeps tie order, and puts null after zero',
-      () {
-        final List<MapEntry<String, SearchResultDisplayEntry>> sorted =
-            filterAndSortSearchResults(
-              sampleResults,
-              filterQuery: '',
-              sortByStars: true,
-            );
-        expect(sorted.map((entry) => entry.key).toList(), [
-          'GitHub|https://github.com/example/top',
-          'GitHub|https://github.com/example/tie-a',
-          'GitHub|https://github.com/example/tie-b',
-          'GitHub|https://github.com/example/low',
-          'GitHub|https://github.com/example/zero',
-          'FDroid|https://f-droid.org/packages/org.fdroid.first',
-          'FDroid|https://f-droid.org/packages/org.fdroid.second',
-        ]);
-      },
-    );
+    test('sorts starred entries descending, keeps tie order, and puts null after zero', () {
+      final List<MapEntry<String, SearchResultDisplayEntry>> sorted =
+          filterAndSortSearchResults(
+            sampleResults,
+            filterQuery: '',
+            sortByStars: true,
+          );
+      expect(sorted.map((entry) => entry.key).toList(), [
+        'GitHub|https://github.com/example/top',
+        'GitHub|https://github.com/example/tie-a',
+        'GitHub|https://github.com/example/tie-b',
+        'GitHub|https://github.com/example/low',
+        'GitHub|https://github.com/example/zero',
+        'FDroid|https://f-droid.org/packages/org.fdroid.first',
+        'FDroid|https://f-droid.org/packages/org.fdroid.second',
+      ]);
+    });
 
     test('combines text filter with star sorting', () {
       final List<MapEntry<String, SearchResultDisplayEntry>> filtered =
@@ -580,7 +554,8 @@ void main() {
         await tester.enterText(
           find.byWidgetPredicate(
             (Widget widget) =>
-                widget is TextField && widget.decoration?.hintText == tr('search'),
+                widget is TextField &&
+                widget.decoration?.hintText == tr('search'),
           ),
           'tasks',
         );
@@ -600,10 +575,7 @@ void main() {
           tr('addAppSearchResultsTitle'),
         );
         expect(sortChipFinder, findsOneWidget);
-        expect(
-          tester.widget<FilterChip>(sortChipFinder).selected,
-          isFalse,
-        );
+        expect(tester.widget<FilterChip>(sortChipFinder).selected, isFalse);
         expect(
           tester.getTopRight(sortChipFinder).dx,
           greaterThan(tester.getTopRight(selectTitleFinder).dx),
@@ -617,9 +589,7 @@ void main() {
           'esengine/DeepSeek-Reasonix · Reasoning engine',
         );
 
-        final double relevanceFirstY = tester
-            .getTopLeft(rollingTasksTitle)
-            .dy;
+        final double relevanceFirstY = tester.getTopLeft(rollingTasksTitle).dy;
         final double relevanceSecondY = tester.getTopLeft(tasksAppTitle).dy;
         final double relevanceThirdY = tester.getTopLeft(reasonixTitle).dy;
         expect(relevanceFirstY, lessThan(relevanceSecondY));
@@ -637,7 +607,8 @@ void main() {
 
         final Finder filterFieldFinder = find.byWidgetPredicate(
           (Widget widget) =>
-              widget is TextField && widget.decoration?.hintText == tr('filter'),
+              widget is TextField &&
+              widget.decoration?.hintText == tr('filter'),
         );
         await tester.enterText(filterFieldFinder, 'tasks');
         await tester.pumpAndSettle();
@@ -681,7 +652,8 @@ void main() {
         await tester.enterText(
           find.byWidgetPredicate(
             (Widget widget) =>
-                widget is TextField && widget.decoration?.hintText == tr('search'),
+                widget is TextField &&
+                widget.decoration?.hintText == tr('search'),
           ),
           'tasks',
         );
@@ -730,7 +702,8 @@ void main() {
         await tester.enterText(
           find.byWidgetPredicate(
             (Widget widget) =>
-                widget is TextField && widget.decoration?.hintText == tr('search'),
+                widget is TextField &&
+                widget.decoration?.hintText == tr('search'),
           ),
           'tasks',
         );

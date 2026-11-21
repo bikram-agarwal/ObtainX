@@ -152,6 +152,12 @@ class RateLimitError extends ObtainiumError {
     : remainingMinutes = null,
       super.withCode('RATE_LIMIT');
 
+  /// A throttle with no retry time, reported under its own [code] and
+  /// message ([BotVerificationError]).
+  RateLimitError._reportedAs(super.code, {required super.data})
+    : remainingMinutes = null,
+      super.withCode();
+
   /// Minutes to wait before retrying in the background.
   int get retryWaitMinutes => remainingMinutes ?? defaultRetryWaitMinutes;
 }
@@ -166,10 +172,16 @@ class CredsNeededError extends ObtainiumError {
     : super.withCode('CREDS_NEEDED', data: {'sourceName': sourceName});
 }
 
-/// The source returned a bot verification / CAPTCHA challenge instead of app data.
-class BotVerificationError extends ObtainiumError {
+/// The source returned a bot verification / CAPTCHA challenge instead of app
+/// data.
+///
+/// A [RateLimitError], as a Cloudflare challenge is (HttpService.getHttpError):
+/// asking again within seconds meets the same challenge, so background checks
+/// wait [RateLimitError.defaultRetryWaitMinutes] before retrying, and it isn't
+/// counted against update health. The message stays its own.
+class BotVerificationError extends RateLimitError {
   BotVerificationError(String sourceName)
-    : super.withCode('BOT_VERIFICATION', data: {'sourceName': sourceName});
+    : super._reportedAs('BOT_VERIFICATION', data: {'sourceName': sourceName});
 }
 
 class NoReleasesError extends ObtainiumError {

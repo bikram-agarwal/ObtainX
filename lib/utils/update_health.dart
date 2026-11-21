@@ -236,8 +236,8 @@ String updateHealthFailedChecksLabel(int count) =>
 String updateHealthFilteredReleasesLabel(int count) =>
     count < 1 ? tr('disabled') : plural('releases', count);
 
-// No '' ("use global default") stop: the sliders' globalValue puts the
-// thumb on the global value's stop instead.
+// No '' ("use global default") entry: the sliders' globalValue adds the
+// "Global (<value>)" stop in front of these.
 List<MapEntry<String, String>> _thresholdSliderOptions(
   List<int> values,
   String Function(int) label,

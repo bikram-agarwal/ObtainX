@@ -303,6 +303,14 @@ class HomePageState extends State<HomePage> {
   late AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
   final SharedUrlReceiver _sharedUrlReceiver = SharedUrlReceiver();
+
+  /// True when a link or share started ObtainX from cold. Back on its Add app
+  /// page then closes ObtainX, returning to the app the link came from, and
+  /// adding the app stays on that page instead of switching to Apps.
+  ///
+  /// A link or share that reaches ObtainX while it is running leaves this
+  /// false. LinkRelayActivity delivers those to the main window (#354), and
+  /// Back there must keep leading to the Apps tab.
   bool isLinkActivity = false;
 
   /// Bumps when [AppsPageState] FAB chrome (badge, mass obtain, selection)
@@ -443,8 +451,11 @@ class HomePageState extends State<HomePage> {
       }
     }
 
-    Future<void> handleSharedText(String sharedText) async {
-      isLinkActivity = true;
+    Future<void> handleSharedText(
+      String sharedText, {
+      bool startedApp = false,
+    }) async {
+      if (startedApp) isLinkActivity = true;
       final String? sharedUrl = SharedUrlReceiver.extractFirstUrl(sharedText);
       if (sharedUrl == null) {
         showError(UnsupportedURLError());
@@ -563,7 +574,7 @@ class HomePageState extends State<HomePage> {
     // pasted into Import from URL list never comes here: that page adds it as
     // it adds a URL. A refresh link only starts a check and leaves the user
     // where they are, so it doesn't make this a link activity.
-    Future<void> interpretIncomingLink(Uri uri) {
+    Future<void> interpretIncomingLink(Uri uri, {bool startedApp = false}) {
       if (uri.host == 'refresh') {
         // Not awaited: a check can take minutes, and the link and share
         // listeners below must not wait for it (links arriving unheard are
@@ -571,7 +582,7 @@ class HomePageState extends State<HomePage> {
         unawaited(refreshFromLink(uri));
         return Future<void>.value();
       }
-      isLinkActivity = true;
+      if (startedApp) isLinkActivity = true;
       // interpretLink reads an add link's URL before its own try, as upstream
       // does, and escapes that aren't UTF-8 throw there. Uncaught, that would
       // stop a cold start here, before the listeners below are set up.
@@ -582,7 +593,7 @@ class HomePageState extends State<HomePage> {
     final appLink = await _appLinks.getInitialLink();
     var initLinked = false;
     if (appLink != null) {
-      await interpretIncomingLink(appLink);
+      await interpretIncomingLink(appLink, startedApp: true);
       initLinked = true;
     }
     if (!mounted) return;
@@ -590,7 +601,7 @@ class HomePageState extends State<HomePage> {
     final String? initialSharedText = await _sharedUrlReceiver
         .getInitialSharedText();
     if (initialSharedText != null) {
-      await handleSharedText(initialSharedText);
+      await handleSharedText(initialSharedText, startedApp: true);
     }
     // Handle link when app is in warm state (front or background)
     if (!mounted) return;

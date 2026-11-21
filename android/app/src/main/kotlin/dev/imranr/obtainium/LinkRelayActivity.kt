@@ -5,27 +5,32 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 
-/// Hands `obtainium://` links and text shares to the existing ObtainX window,
-/// so a link or share never opens a second one (#354).
+/// Hands `obtainium://` links, text shares and app-store launches to the
+/// existing ObtainX window, so none of them opens a second one (#354).
 ///
 /// MainActivity is singleTop, which reuses a window only when it is on top of
-/// the caller's task. A browser that opens links without
-/// FLAG_ACTIVITY_NEW_TASK (Chrome adds the flag, other browsers may not) then
-/// stacks a second MainActivity, with its own Flutter engine, on top of the
-/// browser. The stock installer's status intent names MainActivity by class,
-/// so Android sends that intent to the original window instead. The install
-/// prompt then opens behind the browser, and the page that started the
-/// install waits for a result that never arrives. This relay starts
-/// MainActivity with the flags Chrome uses, so every caller gets Chrome's
-/// result: a single window, which receives every link, share and install
-/// result.
+/// the caller's task. A caller that starts it without
+/// FLAG_ACTIVITY_NEW_TASK (some browsers, most share sheets, an app opening
+/// "the app store") then stacks a second MainActivity, with its own Flutter
+/// engine, on top of the caller. The stock installer's status intent names
+/// MainActivity by class, so Android sends that intent to the original window
+/// instead. The install prompt then opens behind the caller, and the page that
+/// started the install waits for a result that never arrives.
 ///
-/// Why not launchMode="singleTask" on MainActivity: it routes links the same
-/// way, but it also closes any screen above MainActivity (file pickers, the
-/// install-permission page) when ObtainX is reopened from its icon.
+/// This relay starts MainActivity with NEW_TASK, CLEAR_TOP and SINGLE_TOP.
+/// NEW_TASK puts it in ObtainX's own task, and CLEAR_TOP with SINGLE_TOP hands
+/// the intent to the MainActivity already there (onNewIntent) instead of
+/// stacking another. Whatever caller and flags started the relay, there is one
+/// window, and it receives every link, share and install result. CLEAR_TOP also
+/// closes any ObtainX screen above MainActivity, such as a file picker, but
+/// only when a link, share or store launch arrives.
 ///
-/// Upstream Obtainium declares these two intent filters on MainActivity. When
-/// you sync, keep them on this activity.
+/// Why not launchMode="singleTask" on MainActivity: it routes these the same
+/// way, but it also closes those screens whenever ObtainX is reopened from its
+/// launcher icon.
+///
+/// Upstream Obtainium declares these intent filters on MainActivity. When you
+/// sync, keep them on this activity.
 class LinkRelayActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,19 +46,17 @@ class LinkRelayActivity : Activity() {
     /// Builds a new intent that holds only what MainActivity reads. A copy of
     /// the incoming intent would also carry a selector, component or flags
     /// that an explicit caller chose.
+    ///
+    /// Reopening from Recents never reaches here: this activity is
+    /// excludeFromRecents and finishes at once. MainActivity skips a share
+    /// replayed from Recents itself (getSharedTextFromIntent).
     private fun mainActivityIntentFor(source: Intent?): Intent {
         val target = Intent(this, MainActivity::class.java).addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP,
         )
-        val fromHistory = source != null &&
-            (source.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
-        if (source == null || fromHistory) {
-            // Reopened from Recents: open ObtainX, but do not replay the link.
-            return target
-        }
-        when (source.action) {
+        when (source?.action) {
             Intent.ACTION_VIEW -> {
                 val link = source.data
                 if (link?.scheme == LINK_SCHEME) {
@@ -71,6 +74,8 @@ class LinkRelayActivity : Activity() {
                         )
                 }
             }
+            // ACTION_MAIN with CATEGORY_APP_MARKET carries nothing to forward:
+            // it only opens ObtainX.
         }
         return target
     }

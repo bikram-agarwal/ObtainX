@@ -6,6 +6,8 @@ import 'package:device_info_plus_platform_interface/device_info_plus_platform_in
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/farsroid.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/providers/apps_provider_updates.dart';
+import 'package:obtainium/utils/update_health.dart';
 
 const _url = 'https://www.farsroid.com/example-app';
 const _universal = 'https://dl.farsroid.com/example/Example-1.2-universal.apk';
@@ -45,8 +47,12 @@ class _Farsroid extends Farsroid {
 
 class _BotVerificationFarsroid extends Farsroid {
   final bool onDownloadBox;
+  final int challengeStatus;
 
-  _BotVerificationFarsroid({this.onDownloadBox = false});
+  _BotVerificationFarsroid({
+    this.onDownloadBox = false,
+    this.challengeStatus = 200,
+  });
 
   static const _challengeHtml = '''
 <!DOCTYPE html>
@@ -72,7 +78,7 @@ class _BotVerificationFarsroid extends Farsroid {
         200,
       );
     }
-    return Response(_challengeHtml, 200);
+    return Response(_challengeHtml, challengeStatus);
   }
 }
 
@@ -181,11 +187,29 @@ void main() {
 
     test('throws BotVerificationError when download-box is gated', () async {
       await expectLater(
-        _BotVerificationFarsroid(
-          onDownloadBox: true,
-        ).getLatestAPKDetails(_url, const {}),
+        _BotVerificationFarsroid(onDownloadBox: true)
+            .getLatestAPKDetails(_url, const {}),
         throwsA(isA<BotVerificationError>()),
       );
+    });
+
+    test('recognises a gate that does not answer 200', () async {
+      await expectLater(
+        _BotVerificationFarsroid(challengeStatus: 403)
+            .getLatestAPKDetails(_url, const {}),
+        throwsA(isA<BotVerificationError>()),
+      );
+    });
+
+    // Handled like a Cloudflare challenge: waited out in the background, not
+    // retried within seconds, and not counted against update health.
+    test('is a rate limit, not a broken source', () {
+      final BotVerificationError error = BotVerificationError('Farsroid');
+      expect(error, isA<RateLimitError>());
+      expect(error.code, 'BOT_VERIFICATION');
+      expect(error.retryWaitMinutes, RateLimitError.defaultRetryWaitMinutes);
+      expect(checkFailureIsPersistent(error), isFalse);
+      expect(shouldCountFailedCheck(error), isFalse);
     });
   });
 }

@@ -718,6 +718,60 @@ const Duration _foregroundServiceNotificationDelay = Duration(seconds: 10);
 /// Android drops notification updates an app posts much faster than this.
 const Duration _foregroundCheckProgressInterval = Duration(seconds: 1);
 
+/// Runs [check] while UpdateCheckForegroundService keeps the process alive,
+/// and shows its progress in that service's notification once the check has
+/// run long enough to show one.
+///
+/// [check] gets the progress callback for [AppsProviderUpdates.checkUpdates],
+/// or null when Android refused the service; the check then runs as it did
+/// before the service existed. [elapsed] stands in for the real clock in tests.
+Future<T> runUpdateCheckKeptAlive<T>(
+  Future<T> Function(void Function(int completed, int total)? onProgress)
+  check, {
+  Duration Function()? elapsed,
+}) async {
+  // The background check's notification channel, so a user who silenced
+  // that channel isn't shown this one either.
+  final ObtainiumNotification channel = CheckingUpdatesNotification('');
+  final bool keptAlive = await NativeFeatures.startUpdateCheckForegroundService(
+    title: channel.title,
+    channelCode: channel.channelCode,
+    channelName: channel.channelName,
+    channelDescription: channel.channelDescription,
+  );
+  final Stopwatch running = Stopwatch()..start();
+  final Duration Function() sinceStart = elapsed ?? () => running.elapsed;
+  Duration? lastPosted;
+  void postProgress(int completed, int total) {
+    final Duration now = sinceStart();
+    if (now < _foregroundServiceNotificationDelay) return;
+    // The last count always goes through, so the notification doesn't sit
+    // at e.g. 47/50 while the results are saved.
+    if (completed < total &&
+        lastPosted != null &&
+        now - lastPosted! < _foregroundCheckProgressInterval) {
+      return;
+    }
+    lastPosted = now;
+    // Unawaited, but sent on the same channel as the stop below, so it can't
+    // land after it.
+    unawaited(
+      NativeFeatures.showUpdateCheckProgress(
+        completed: completed,
+        total: total,
+      ),
+    );
+  }
+
+  try {
+    return await check(keptAlive ? postProgress : null);
+  } finally {
+    if (keptAlive) {
+      await NativeFeatures.stopUpdateCheckForegroundService();
+    }
+  }
+}
+
 /// Update checking and pending-update bookkeeping for [AppsProvider].
 extension AppsProviderUpdates on AppsProvider {
   /// Fetches the latest [App] metadata from its source WITHOUT persisting it.
@@ -1116,57 +1170,22 @@ extension AppsProviderUpdates on AppsProvider {
 
   /// [checkUpdates] for a check the user started on screen (pull-to-refresh,
   /// check on start, obtainium://refresh). A foreground service keeps the
-  /// process running so the check finishes if the user leaves the app (#360),
-  /// with the checked/total count in its notification once it has run long
-  /// enough to show one.
+  /// process running so the check finishes if the user leaves the app (#360);
+  /// see [runUpdateCheckKeptAlive].
   ///
   /// Background checks don't use this: they already run as WorkManager work
   /// or under the useFGService foreground task.
   Future<List<App>> checkUpdatesInForeground({
     List<String>? specificIds,
     bool forceAll = false,
-  }) async {
-    // The background check's notification channel, so a user who silenced
-    // that channel isn't shown this one either.
-    final ObtainiumNotification channel = CheckingUpdatesNotification('');
-    final bool keptAlive =
-        await NativeFeatures.startUpdateCheckForegroundService(
-          title: channel.title,
-          channelCode: channel.channelCode,
-          channelName: channel.channelName,
-          channelDescription: channel.channelDescription,
-        );
-    final Stopwatch running = Stopwatch()..start();
-    Duration? lastPosted;
-    void postProgress(int completed, int total) {
-      final Duration elapsed = running.elapsed;
-      if (elapsed < _foregroundServiceNotificationDelay) return;
-      if (lastPosted != null &&
-          elapsed - lastPosted! < _foregroundCheckProgressInterval) {
-        return;
-      }
-      lastPosted = elapsed;
-      // Unawaited, but sent on the same channel as the stop below, so it
-      // can't land after it.
-      unawaited(
-        NativeFeatures.showUpdateCheckProgress(
-          completed: completed,
-          total: total,
-        ),
-      );
-    }
-
-    try {
-      return await checkUpdates(
+  }) {
+    return runUpdateCheckKeptAlive(
+      (void Function(int completed, int total)? onProgress) => checkUpdates(
         specificIds: specificIds,
         forceAll: forceAll,
-        onProgress: keptAlive ? postProgress : null,
-      );
-    } finally {
-      if (keptAlive) {
-        await NativeFeatures.stopUpdateCheckForegroundService();
-      }
-    }
+        onProgress: onProgress,
+      ),
+    );
   }
 
   Future<List<App>> _checkUpdatesInSession({

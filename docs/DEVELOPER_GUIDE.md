@@ -349,9 +349,10 @@ and `GeneratedForm` (in `generated_form_renderer.dart`) renders + validates them
 - `GeneratedFormSwitch` (supports `disabled`, and `turnsOffKeys` for exclusive switches)
 - `GeneratedFormDropdown` (`opts`, `disabledOptKeys`), `GeneratedFormSlider`
   (`opts`). Both take `globalValue` for a per-app override of a global
-  setting: `''` follows the global value and is shown in that value's place
-  as "<value> (global)" (a dropdown's `opts` keep their `''` entry; a
-  slider's don't),
+  setting: `''` follows the global value and is labelled "Global (<value>)".
+  Every value is listed besides it, so an app can be pinned to the current
+  global value. A dropdown's `opts` keep their `''` entry; a slider's hold only
+  the real values, and the renderer adds the `''` stop in front,
   `GeneratedFormTagInput` (chips, e.g. categories)
 - `GeneratedFormSubForm` (nested repeatable groups, e.g. HTML intermediate links)
 - `GeneratedFormSectionHeader` (section cards with `wrapFormSectionsInCards`)

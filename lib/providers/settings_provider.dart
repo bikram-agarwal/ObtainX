@@ -1571,7 +1571,10 @@ class SettingsProvider with ChangeNotifier {
 
   Future<void> resetLocaleSafe(BuildContext context) async {
     final Locale bestMatch = resolveBestSupportedLocale(
-      deviceLocale: context.deviceLocale,
+      // The platform's locale now, not easy_localization's deviceLocale: that
+      // is read once at startup, so a language changed in Android's settings
+      // while ObtainX runs wouldn't show until a restart.
+      deviceLocale: WidgetsBinding.instance.platformDispatcher.locale,
       supportedLocales: context.supportedLocales,
       fallbackLocale: context.fallbackLocale ?? fallbackLocale,
     );

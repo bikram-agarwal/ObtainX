@@ -587,23 +587,29 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   final void Function(dynamic newValue) onChanged;
 
   /// [GeneratedFormDropdown.opts] as listed. With a
-  /// [GeneratedFormDropdown.globalValue], the '' entry moves to the global
-  /// value's place, labelled as that value plus "(global)"; the value's own
-  /// entry stays only while the app is pinned to it, so that pin still shows
-  /// (and the field's value is always one of the items).
+  /// [GeneratedFormDropdown.globalValue], the '' entry is labelled with the
+  /// global value's current label ("Global (Stock)"). Every value keeps its
+  /// own entry, so an app can be pinned to the value the global has now and
+  /// keep it when the global value later changes.
   List<MapEntry<String, String>> _shownOpts(BuildContext context) {
     final List<MapEntry<String, String>> opts = formItem.opts ?? const [];
     final String Function(SettingsProvider)? globalValue = formItem.globalValue;
     if (globalValue == null || !opts.any((o) => o.key.isEmpty)) return opts;
-    final String globalKey = globalValue(context.read<SettingsProvider>());
-    if (!opts.any((o) => o.key == globalKey)) return opts;
+    // Watched, not read once: Add app stays alive beside Settings, so the
+    // global value can change while this form is open.
+    final String globalKey = context.select<SettingsProvider, String>(
+      globalValue,
+    );
+    final String? globalLabel = opts
+        .where((o) => o.key.isNotEmpty && o.key == globalKey)
+        .firstOrNull
+        ?.value;
+    if (globalLabel == null) return opts;
     return [
       for (final MapEntry<String, String> option in opts)
-        if (option.key == globalKey) ...[
-          MapEntry('', tr('xGlobal', args: [option.value])),
-          if (value?.toString() == globalKey) option,
-        ] else if (option.key.isNotEmpty)
-          option,
+        option.key.isEmpty
+            ? MapEntry('', tr('xGlobal', args: [globalLabel]))
+            : option,
     ];
   }
 
@@ -819,20 +825,17 @@ class _SliderFormItem extends StatefulWidget {
 }
 
 class _SliderFormItemState extends State<_SliderFormItem> {
-  late final List<MapEntry<String, String>> opts;
+  // The slider's stops. With GeneratedFormSlider.globalValue, the first stop
+  // stores '' (follows the global value, labelled "Global (<value>)") and
+  // every value follows it, so an app can be pinned to the value the global
+  // has now and keep it when the global value later changes.
+  late final List<MapEntry<String, String>> stops;
   late double sliderVal;
   // As on the settings page: on TV the wrapper is the one focus stop, so the
   // slider itself must not take focus.
   late final FocusNode _sliderFocusNode;
-  // GeneratedFormSlider.globalValue: the stop the global value is at (null
-  // without one, or when it isn't a stop), and whether the value is '', i.e.
-  // follows the global value. Only landing on that stop makes it follow
-  // again; an app pinned to the same value as the global stays pinned until
-  // the thumb is moved.
-  int? _globalIndex;
-  bool _followsGlobal = false;
 
-  int get _index => sliderVal.round().clamp(0, opts.length - 1);
+  int get _index => sliderVal.round().clamp(0, stops.length - 1);
 
   String _optLabel(MapEntry<String, String> opt) {
     final int? days = int.tryParse(opt.value);
@@ -842,20 +845,13 @@ class _SliderFormItemState extends State<_SliderFormItem> {
   @override
   void initState() {
     super.initState();
-    opts = widget.formItem.opts ?? const <MapEntry<String, String>>[];
-    final String Function(SettingsProvider)? globalValue =
-        widget.formItem.globalValue;
-    if (globalValue != null) {
-      final String globalKey = globalValue(context.read<SettingsProvider>());
-      final int index = opts.indexWhere((e) => e.key == globalKey);
-      if (index >= 0) _globalIndex = index;
-    }
-    int index = opts.indexWhere((e) => e.key == widget.initialValue);
-    if (index < 0 && _globalIndex != null) {
-      // '' (or a value that isn't a stop, shown as before as the default).
-      index = _globalIndex!;
-      _followsGlobal = true;
-    }
+    stops = [
+      if (widget.formItem.globalValue != null) const MapEntry('', ''),
+      ...?widget.formItem.opts,
+    ];
+    final int index = stops.indexWhere((e) => e.key == widget.initialValue);
+    // A value that isn't a stop shows as the first stop: following the global
+    // value where there is one, as '' does.
     sliderVal = (index >= 0 ? index : 0).toDouble();
     _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
   }
@@ -867,23 +863,38 @@ class _SliderFormItemState extends State<_SliderFormItem> {
   }
 
   void _commit() {
-    widget.onCommit(_followsGlobal ? '' : opts[_index].key);
+    widget.onCommit(stops[_index].key);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (opts.isEmpty) return Text(tr('dropdownNoOptsError'));
-    final double max = (opts.length - 1).toDouble();
-    final String optLabel = _optLabel(opts[_index]);
-    final String label = _followsGlobal
-        ? tr('xGlobal', args: [optLabel])
-        : optLabel;
-    final int? divisions = opts.length > 1 ? opts.length - 1 : null;
+    if (widget.formItem.opts?.isEmpty ?? true) {
+      return Text(tr('dropdownNoOptsError'));
+    }
+    final String Function(SettingsProvider)? globalValue =
+        widget.formItem.globalValue;
+    String? globalLabel;
+    if (globalValue != null) {
+      // Watched, not read once: Add app stays alive beside Settings, so the
+      // global value can change while this form is open.
+      final String globalKey = context.select<SettingsProvider, String>(
+        globalValue,
+      );
+      final MapEntry<String, String>? globalOpt = stops
+          .where((e) => e.key.isNotEmpty && e.key == globalKey)
+          .firstOrNull;
+      globalLabel = globalOpt != null
+          ? tr('xGlobal', args: [_optLabel(globalOpt)])
+          : tr('useGlobalDefault');
+    }
+    final MapEntry<String, String> stop = stops[_index];
+    final String label = stop.key.isEmpty && globalLabel != null
+        ? globalLabel
+        : _optLabel(stop);
+    final double max = (stops.length - 1).toDouble();
+    final int? divisions = stops.length > 1 ? stops.length - 1 : null;
     void onChanged(double value) {
-      setState(() {
-        sliderVal = value;
-        _followsGlobal = _globalIndex != null && _index == _globalIndex;
-      });
+      setState(() => sliderVal = value);
     }
 
     // Built exactly like the settings page's sliders (the M3E track and

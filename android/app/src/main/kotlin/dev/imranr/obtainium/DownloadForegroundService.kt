@@ -9,22 +9,43 @@ import android.os.Build
 import android.os.IBinder
 
 class DownloadForegroundService : Service() {
+    // Whether a startForeground on this instance succeeded. Concurrent
+    // downloads share the service, so a later download's refused start must
+    // not stop the service an earlier one is still running under.
+    private var inForeground = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildNotification(intent)
         val notificationId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, DEFAULT_NOTIFICATION_ID)
             ?: DEFAULT_NOTIFICATION_ID
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                notificationId,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
-        } else {
-            startForeground(notificationId, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    notificationId,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(notificationId, notification)
+            }
+            inForeground = true
+        } catch (_: Exception) {
+            // Android refused (e.g. ForegroundServiceStartNotAllowedException
+            // once Android 15's daily dataSync allowance is used up). Thrown
+            // here, it would crash the app; the download carries on
+            // unprotected, and its progress notification is still posted.
+            if (!inForeground) stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    /// Android 15+ stops dataSync services after their daily time allowance,
+    /// and crashes an app whose service is still running a few seconds later.
+    /// Running downloads carry on unprotected.
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
     }
 
     private fun buildNotification(intent: Intent?): Notification {

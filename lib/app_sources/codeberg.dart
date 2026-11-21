@@ -127,8 +127,11 @@ class Codeberg extends AppSource {
   /// per-app token only, so the codeberg.org token never reaches another host.
   bool readsGlobalToken = true;
 
-  final GitHub _gh = GitHub(hostChanged: true);
-  Codeberg() {
+  final GitHub _gh;
+
+  /// [apiHelper] stands in for the GitHub adapter that makes Codeberg's API
+  /// calls, for tests.
+  Codeberg({GitHub? apiHelper}) : _gh = apiHelper ?? GitHub(hostChanged: true) {
     name = 'Codeberg';
     hosts = [_defaultHost];
     canSearch = true;

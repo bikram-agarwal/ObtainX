@@ -64,6 +64,31 @@ const int _bgUpdateMaxAttempts = 4;
 const int _bgUpdateMaxRetryWaitSeconds = 30;
 const int _bgClientExceptionRetryWaitSeconds = 15 * 60;
 
+/// Seconds a background check waits before retrying an app whose check
+/// failed with [error] on attempt [attempt] (0 for the first try), or null
+/// when it isn't retried in this run: the failure is then reported, or for a
+/// rate limit past its last attempt, dropped quietly.
+@visibleForTesting
+int? backgroundRetryWaitSeconds(Object error, {required int attempt}) {
+  if (attempt >= _bgUpdateMaxAttempts) return null;
+  // A failure a quick retry won't fix (a plain 403 refusal, a broken source),
+  // or a source that answered with nothing usable: asking again seconds later
+  // only repeats the same request at the host and gets the same answer (#339).
+  if (checkFailureIsPersistent(error) || sourceAnsweredWithoutUpdate(error)) {
+    return null;
+  }
+  // A rate limit is waited out in full: capped, every retry landed inside the
+  // window and was wasted (upstream #3113).
+  if (error is RateLimitError) return error.retryWaitMinutes * 60;
+  // The cap also applies to a ClientException's wait, as upstream's does.
+  final int wait = error is ClientException
+      ? _bgClientExceptionRetryWaitSeconds
+      : attempt + 1;
+  return wait > _bgUpdateMaxRetryWaitSeconds
+      ? _bgUpdateMaxRetryWaitSeconds
+      : wait;
+}
+
 /// Legacy key written by ObtainX 2.9.7's reset-install-status action.
 ///
 /// Reconciliation removes it and restores the actual device version so affected
@@ -2474,21 +2499,14 @@ _bgRunUpdateCheck(
           (element) => element.key == key,
           orElse: () => MapEntry(key, 0),
         );
-        if (toCheckApp.value < _bgUpdateMaxAttempts) {
+        final int? retryWait = backgroundRetryWaitSeconds(
+          err,
+          attempt: toCheckApp.value,
+        );
+        if (retryWait != null) {
           toRetry.add(MapEntry(toCheckApp.key, toCheckApp.value + 1));
-          int minRetryIntervalForThisApp = err is RateLimitError
-              ? (err.retryWaitMinutes * 60)
-              : err is ClientException
-              ? (_bgClientExceptionRetryWaitSeconds)
-              : (toCheckApp.value + 1);
-          // A rate limit is waited out in full: capped, every retry landed
-          // inside the window and was wasted (upstream #3113).
-          if (minRetryIntervalForThisApp > _bgUpdateMaxRetryWaitSeconds &&
-              err is! RateLimitError) {
-            minRetryIntervalForThisApp = _bgUpdateMaxRetryWaitSeconds;
-          }
-          if (minRetryIntervalForThisApp > retryAfterXSeconds) {
-            retryAfterXSeconds = minRetryIntervalForThisApp;
+          if (retryWait > retryAfterXSeconds) {
+            retryAfterXSeconds = retryWait;
           }
         } else {
           if (err is! RateLimitError) {
@@ -2893,7 +2911,6 @@ class NativeFeatures {
     required String channelName,
     required String channelDescription,
   }) async {
-    if (!Platform.isAndroid) return false;
     try {
       return await _notificationsChannel.invokeMethod<bool>(
             'startUpdateCheckForegroundService',
@@ -2916,7 +2933,6 @@ class NativeFeatures {
     required int completed,
     required int total,
   }) async {
-    if (!Platform.isAndroid) return;
     try {
       await _notificationsChannel.invokeMethod(
         'showUpdateCheckProgress',
@@ -2930,7 +2946,6 @@ class NativeFeatures {
   }
 
   static Future<void> stopUpdateCheckForegroundService() async {
-    if (!Platform.isAndroid) return;
     try {
       await _notificationsChannel.invokeMethod(
         'stopUpdateCheckForegroundService',

@@ -270,10 +270,10 @@ class GeneratedFormDropdown extends GeneratedFormItem {
   String? labelTooltip;
 
   /// As [GeneratedFormSlider.globalValue], for a per-app override whose
-  /// [opts] start with a `''` ("use global default") entry: the key of the
-  /// option the global value is. The `''` entry then takes that option's
-  /// place in the list, as its label plus "(global)", and the option itself
-  /// is only listed while the app is pinned to it.
+  /// [opts] hold a `''` ("use global default") entry: the key of the option
+  /// the global value is. The `''` entry is then labelled with that option's
+  /// label ("Global (Stock)"), and every option stays listed, so an app can be
+  /// pinned to the value the global has now.
   final String Function(SettingsProvider settings)? globalValue;
 
   GeneratedFormDropdown(
@@ -323,10 +323,10 @@ class GeneratedFormSlider extends GeneratedFormItem {
   late bool required;
 
   /// For a per-app override of a global setting: the [opts] key the global
-  /// value is at. With it, `''` means "follow the global value", which has
-  /// no stop of its own: the thumb sits on the global value's stop, labelled
-  /// with that value plus "(global)", and leaving it there stores `''` again.
-  /// [opts] then holds only the real values.
+  /// value is at. With it, the slider gets a first stop that stores `''`
+  /// ("follow the global value"), labelled `Global (<value>)`, ahead of every
+  /// value in [opts], which holds only the real values. Landing on the global
+  /// value's own stop pins it, so it stays when the global value changes.
   final String Function(SettingsProvider settings)? globalValue;
 
   GeneratedFormSlider(

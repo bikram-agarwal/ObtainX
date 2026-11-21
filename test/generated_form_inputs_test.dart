@@ -143,9 +143,10 @@ void main() {
     expect(values()['days'], isNotEmpty);
   });
 
-  // A per-app override of a global value: '' is listed in the global value's
-  // place, as that value plus "(global)", and picking it stores '' again.
-  testWidgets('dropdown with a global default lists it in its place', (
+  // A per-app override of a global value: '' is labelled with the global
+  // value, and every value is listed besides it, so picking the value the
+  // global has now pins it instead of following the global.
+  testWidgets('dropdown with a global default lists it and every value', (
     tester,
   ) async {
     final values = await pumpForm(tester, [
@@ -170,8 +171,8 @@ void main() {
         .toList();
 
     expect(values()['choice'], '');
-    expect(find.text('Option B (global)'), findsOneWidget);
-    expect(listed(), ['Option A', 'Option B (global)']);
+    expect(find.text('Global (Option B)'), findsOneWidget);
+    expect(listed(), ['Global (Option B)', 'Option A', 'Option B']);
 
     await tester.tap(find.byType(DropdownButton<dynamic>));
     await tester.pumpAndSettle();
@@ -181,12 +182,18 @@ void main() {
 
     await tester.tap(find.byType(DropdownButton<dynamic>));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Option B (global)').last);
+    await tester.tap(find.text('Global (Option B)').last);
     await tester.pumpAndSettle();
     expect(values()['choice'], '');
+
+    await tester.tap(find.byType(DropdownButton<dynamic>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Option B').last);
+    await tester.pumpAndSettle();
+    expect(values()['choice'], 'b');
   });
 
-  testWidgets('dropdown pinned to the global value lists the pin too', (
+  testWidgets('dropdown pinned to the global value shows the pin', (
     tester,
   ) async {
     await pumpForm(tester, [
@@ -209,12 +216,14 @@ void main() {
         .items!
         .map((item) => item.value)
         .toList();
-    expect(keys, ['a', '', 'b']);
+    expect(keys, ['', 'a', 'b']);
     expect(find.text('Use global default'), findsNothing);
+    expect(find.text('Option B'), findsOneWidget);
   });
 
-  // A per-app override of a global value: '' sits on the global value's stop,
-  // labelled as the default, and returning there stores '' again.
+  // A per-app override of a global value: '' is a first stop of its own,
+  // labelled "Global (<value>)", ahead of every value, so landing on the
+  // global value's own stop pins it instead of following the global.
   testWidgets('slider with a global default shows and keeps it', (
     tester,
   ) async {
@@ -241,17 +250,22 @@ void main() {
     }
 
     expect(values()['days'], '');
-    expect(slider().value, 1);
-    expect(slider().max, 2);
-    expect(find.text('Option B (global)'), findsOneWidget);
+    expect(slider().value, 0);
+    expect(slider().max, 3);
+    expect(find.text('Global (Option B)'), findsOneWidget);
 
-    await moveTo(2);
+    await moveTo(3);
     expect(values()['days'], 'c');
     expect(find.text('Option C'), findsOneWidget);
 
-    await moveTo(1);
+    await moveTo(2);
+    expect(values()['days'], 'b');
+    expect(find.text('Option B'), findsOneWidget);
+    expect(find.text('Global (Option B)'), findsNothing);
+
+    await moveTo(0);
     expect(values()['days'], '');
-    expect(find.text('Option B (global)'), findsOneWidget);
+    expect(find.text('Global (Option B)'), findsOneWidget);
   });
 
   testWidgets('slider pinned to the global value stays pinned', (tester) async {
@@ -267,7 +281,67 @@ void main() {
       ],
     ]);
     expect(find.text('Option B'), findsOneWidget);
-    expect(find.text('Option B (global)'), findsNothing);
+    expect(find.text('Global (Option B)'), findsNothing);
+  });
+
+  // Add app stays alive beside Settings, so a global value changed there
+  // must reach a form that is already open.
+  testWidgets('a global value changed while the form is open is shown', (
+    tester,
+  ) async {
+    final SettingsProvider settings = SettingsProvider();
+    String global = 'b';
+    Map<String, dynamic> values = {};
+    const List<MapEntry<String, String>> opts = [
+      MapEntry('a', 'Option A'),
+      MapEntry('b', 'Option B'),
+      MapEntry('c', 'Option C'),
+    ];
+    await tester.pumpWidget(
+      ChangeNotifierProvider<SettingsProvider>.value(
+        value: settings,
+        child: MaterialApp(
+          home: Scaffold(
+            body: GeneratedForm(
+              items: [
+                [
+                  GeneratedFormSlider(
+                    'days',
+                    opts,
+                    label: 'Days',
+                    value: '',
+                    globalValue: (_) => global,
+                  ),
+                ],
+                [
+                  GeneratedFormDropdown(
+                    'choice',
+                    [const MapEntry('', 'Use global default'), ...opts],
+                    label: 'Pick',
+                    value: '',
+                    globalValue: (_) => global,
+                  ),
+                ],
+              ],
+              onValueChanges: (v, _, _) => values = v,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Global (Option B)'), findsNWidgets(2));
+
+    global = 'c';
+    // Any setting change notifies; this one needs no saved preferences.
+    settings.checkOnStart = true;
+    await tester.pump();
+
+    expect(find.text('Global (Option B)'), findsNothing);
+    expect(find.text('Global (Option C)'), findsNWidgets(2));
+    expect(tester.widget<Slider>(find.byType(Slider)).value, 0);
+    expect(values['days'], '');
+    expect(values['choice'], '');
   });
 
   // The options page's sliders must look like the settings page's: the M3E

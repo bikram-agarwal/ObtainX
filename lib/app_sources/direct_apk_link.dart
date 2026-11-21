@@ -18,6 +18,9 @@ class DirectAPKLink extends AppSource {
     versionDetectionDisallowed = true;
     // The link is the APK; a filter can only mean its URL (D22).
     apkFilterMatchesLinkUrl = true;
+    // ...and not a page: opening it in a browser would download the APK
+    // outside ObtainX's install flow.
+    urlIsPage = false;
     excludeCommonSettingKeys = [
       'versionExtractionRegEx',
       'matchGroupToUse',

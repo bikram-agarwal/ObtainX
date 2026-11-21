@@ -7,9 +7,8 @@
 // - rows and actions are keyed by listing key (a package tracked from two
 //   stores has two listings, each with its own health);
 // - every action re-reads the live listing right before it saves;
-// - the thresholds live in Settings → Updates, not on this page;
-// - tapping an app opens its options at the Update-health card, as the app
-//   page's Update health line does.
+// - the thresholds live in Settings → Update health, not on this page;
+// - tapping an app opens its options at the Update-health card.
 // The engine is utils/update_health.dart.
 
 import 'dart:async';
