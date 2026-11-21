@@ -48,6 +48,19 @@
                     android:name="com.android_package_installer.content.SESSION_API_PACKAGE_INSTALLED"
                     android:exported="false" />
             </intent-filter>
+            <!-- The obtainium:// and share filters are on LinkRelayActivity,
+                 not here (unlike upstream), so that a link or share can never
+                 open a second MainActivity (#354). -->
+        </activity>
+        <!-- Hands links and text shares to the existing MainActivity window.
+             LinkRelayActivity.kt explains why. Keep both filters here when
+             syncing with upstream. -->
+        <activity
+            android:name=".LinkRelayActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
