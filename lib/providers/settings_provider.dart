@@ -102,7 +102,21 @@ enum SortOrderSettings { ascending, descending }
 
 enum AppsListGroupBy { none, category, source, appType, updateStatus }
 
-enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
+// Append-only: legacy int prefs (`rightSwipeAction` / `leftSwipeAction`) map
+// stored indexes onto this order, so new values go after `none`. Dropdowns
+// sort alphabetically by localized label with `none` pinned last
+// ([swipeActionsSortedByLocalizedLabel]).
+enum SwipeAction {
+  update,
+  pin,
+  appOptions,
+  delete,
+  open,
+  appInfo,
+  edit,
+  none,
+  openAppSource,
+}
 
 // Installer selection, converged with upstream Obtainium: same pref key
 // (`installMethod`) and same values (these names). ObtainX drives it through the

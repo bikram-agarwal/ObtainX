@@ -710,6 +710,7 @@
     "swipeAction_edit": "Edit App",
     "swipeAction_delete": "Delete App",
     "swipeAction_open": "Open App",
+    "swipeAction_openAppSource": "Open App Source",
     "swipeAction_appInfo": "App Info",
     "swipeAction_none": "None",
     "userAppsOnly": "User",

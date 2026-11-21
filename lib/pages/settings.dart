@@ -72,6 +72,7 @@ IconData _swipeActionIcon(SwipeAction action) => switch (action) {
   SwipeAction.appOptions => Icons.tune_rounded,
   SwipeAction.delete => Icons.delete_rounded,
   SwipeAction.open => Icons.open_in_new_rounded,
+  SwipeAction.openAppSource => Icons.public_rounded,
   SwipeAction.appInfo => Icons.info_rounded,
   SwipeAction.edit => Icons.edit_rounded,
   SwipeAction.none => Icons.block_rounded,

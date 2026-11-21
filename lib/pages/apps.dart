@@ -1551,6 +1551,7 @@ class _SwipeableListItem extends StatefulWidget {
     required this.hasUpdate,
     required this.isPinned,
     required this.isInstalled,
+    required this.hasSourceUrl,
     required this.areDownloadsRunning,
     required this.keepAlive,
     required this.rightAction,
@@ -1564,6 +1565,7 @@ class _SwipeableListItem extends StatefulWidget {
   final bool hasUpdate;
   final bool isPinned;
   final bool isInstalled;
+  final bool hasSourceUrl;
   final bool areDownloadsRunning;
   final bool keepAlive;
   final SwipeAction rightAction;
@@ -1641,6 +1643,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
             !isAwaitingThirdPartyInstall;
       case SwipeAction.open:
         return widget.isInstalled;
+      case SwipeAction.openAppSource:
+        return widget.hasSourceUrl;
       case SwipeAction.none:
         return false;
       default:
@@ -1648,16 +1652,18 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     }
   }
 
-  /// Swipe-reveal label reflecting the card's current state: "Update" vs
-  /// "Install" depending on whether the app is installed, and "Pin" vs "Unpin"
-  /// depending on whether it's already pinned. Other actions use their generic
-  /// [SwipeAction] label.
-  String _actionLabel(SwipeAction action) {
+  /// Label for a swipe action. When [compact] is true (the strip revealed
+  /// under a swiped card), [SwipeAction.openAppSource] uses the shorter
+  /// "Source" label; TalkBack custom actions keep the full "Open App Source"
+  /// label for clarity.
+  String _actionLabel(SwipeAction action, {bool compact = false}) {
     switch (action) {
       case SwipeAction.update:
         return widget.isInstalled ? tr('update') : tr('install');
       case SwipeAction.pin:
         return widget.isPinned ? tr('unpin') : tr('pin');
+      case SwipeAction.openAppSource:
+        return compact ? tr('source') : tr('swipeAction_openAppSource');
       default:
         return tr('swipeAction_${action.name}');
     }
@@ -1681,6 +1687,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         return (Icons.delete_outline, Colors.red);
       case SwipeAction.open:
         return (Icons.open_in_new, Colors.orange);
+      case SwipeAction.openAppSource:
+        return (Icons.public, cs.tertiary);
       case SwipeAction.appInfo:
         return (Icons.info_outline, Colors.teal);
       case SwipeAction.none:
@@ -1786,6 +1794,25 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         if (packageId != null) {
           unawaited(packageManager.openApp(packageId));
         }
+      case SwipeAction.openAppSource:
+        final String? sourceUrl = app?.url.trim();
+        if (sourceUrl != null && sourceUrl.isNotEmpty) {
+          unawaited(
+            launchUrlString(
+              sourceUrl,
+              mode: LaunchMode.externalApplication,
+            ).catchError((Object error, StackTrace stackTrace) {
+              unawaited(
+                provider.logs.add(
+                  'Swipe open app source failed for ${widget.appId}: $error\n$stackTrace',
+                  level: LogLevel.error,
+                ),
+              );
+              showError(error);
+              return false;
+            }),
+          );
+        }
       case SwipeAction.appInfo:
         final String? packageId = app?.id;
         if (packageId != null) {
@@ -1833,7 +1860,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       bgIcon = icon;
       bgAlign = Alignment.centerLeft;
       iconColor = color;
-      bgLabel = _actionLabel(widget.rightAction);
+      bgLabel = _actionLabel(widget.rightAction, compact: true);
       bgIconLeading = true;
     } else if (_dragOffset < 0 && canSwipeLeft) {
       final (icon, color) = _actionVisuals(widget.leftAction, context);
@@ -1841,7 +1868,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       bgIcon = icon;
       bgAlign = Alignment.centerRight;
       iconColor = color;
-      bgLabel = _actionLabel(widget.leftAction);
+      bgLabel = _actionLabel(widget.leftAction, compact: true);
       bgIconLeading = false;
     } else {
       bgColor = Colors.transparent;
@@ -5190,6 +5217,7 @@ class AppsPageState extends State<AppsPage> {
         hasUpdate: hasUpdate || hasUncertainUpdate,
         isPinned: app.app.pinned,
         isInstalled: installed != null,
+        hasSourceUrl: app.app.url.trim().isNotEmpty,
         areDownloadsRunning: downloadsRunning,
         keepAlive: false,
         rightAction: settingsProvider.rightSwipeAction,
