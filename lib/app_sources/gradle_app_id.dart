@@ -102,9 +102,8 @@ String? _resolveInterpolation(String rawValue, List<String> trimmedLines) {
   if (!rawValue.contains(r'$')) {
     return rawValue;
   }
-  final RegExpMatch? reference = RegExp(
-    r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$',
-  ).firstMatch(rawValue);
+  final RegExpMatch? reference = RegExp(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$')
+      .firstMatch(rawValue);
   if (reference == null) {
     // Something more complex than a bare variable (concatenation, a function
     // call, `${rootProject.foo}`): not worth guessing at.

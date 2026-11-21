@@ -29,9 +29,10 @@ jobs:
           # Pinned for F-Droid reproducibility: F-Droid rebuilds the fdroid-flavor
           # APK and diffs it byte-for-byte against the signed release asset, so the
           # toolchain must be fixed (a floating `channel: stable` would break it).
-          # Keep this EQUAL to the .flutter submodule commit referenced by the
-          # fdroiddata recipe; bump both together when upgrading Flutter.
-          flutter-version: 3.47.6
+          # The fdroiddata recipe (metadata/dev.bikram.obtainx.yml) reads this
+          # line with sed and checks out the same Flutter version, so this is
+          # the only place to bump. Keep the `flutter-version: X.Y.Z` form.
+          flutter-version: 3.50.1
           cache: true
 
       - name: Cache Gradle packages

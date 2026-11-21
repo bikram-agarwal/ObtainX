@@ -1,12 +1,14 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
+import 'package:obtainium/app_sources/huaweiappgallery.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/installers/dhizuku_installer.dart';
@@ -23,6 +25,7 @@ class _RecordingShizukuPlatform extends ShizukuApkInstallerPlatform {
   String? selectedInstallerMode;
   String permissionResult = 'services_not_found';
   String? receivedFakeInstallSource;
+  bool? receivedRequestUpdateOwnership;
 
   @override
   Future<void> setInstallerMode(String mode) async {
@@ -34,12 +37,16 @@ class _RecordingShizukuPlatform extends ShizukuApkInstallerPlatform {
     return permissionResult;
   }
 
+  // shizuku_apk_installer 1.4.0 (447d88a0) signature (INST-H9).
   @override
   Future<int?> installAPKs(
     List<String> apkFilesURIs,
-    String fakeInstallSource,
-  ) async {
+    String fakeInstallSource, {
+    String? packageName,
+    bool requestUpdateOwnership = false,
+  }) async {
     receivedFakeInstallSource = fakeInstallSource;
+    receivedRequestUpdateOwnership = requestUpdateOwnership;
     return installSuccessCode;
   }
 }
@@ -416,24 +423,30 @@ void main() {
       expect(await dhizukuInstaller.checkPermission(), isTrue);
       expect(recordingPlatform.selectedInstallerMode, 'dhizuku');
 
+      // One `installerPackageName` contract for every installer (D14).
       await shizukuInstaller.installApk(
         const ['test.apk'],
         appId: 'dev.example.app',
-        installOptions: const {'shizukuPretendToBeGooglePlay': true},
+        installOptions: const {
+          'installerPackageName': 'com.android.vending',
+          'requestUpdateOwnership': true,
+        },
       );
       expect(recordingPlatform.selectedInstallerMode, 'shizuku');
       expect(
         recordingPlatform.receivedFakeInstallSource,
         'com.android.vending',
       );
+      expect(recordingPlatform.receivedRequestUpdateOwnership, isTrue);
 
       await dhizukuInstaller.installApk(
         const ['test.apk'],
         appId: 'dev.example.app',
-        installOptions: const {'shizukuPretendToBeGooglePlay': true},
+        installOptions: const {'installerPackageName': 'com.android.vending'},
       );
       expect(recordingPlatform.selectedInstallerMode, 'dhizuku');
       expect(recordingPlatform.receivedFakeInstallSource, isEmpty);
+      expect(recordingPlatform.receivedRequestUpdateOwnership, isFalse);
     },
   );
 
@@ -447,55 +460,52 @@ void main() {
     );
   });
 
-  test(
-    'parallel downloads install as ready, serialize installs, and defer self-update',
-    () async {
-      final Completer<String> slowDownload = Completer<String>();
-      final Completer<String> fastDownload = Completer<String>();
-      final Completer<String> selfUpdateDownload = Completer<String>();
-      final Completer<void> fastInstallStarted = Completer<void>();
-      final Completer<void> releaseFastInstall = Completer<void>();
-      final List<String> installOrder = [];
-      var activeInstalls = 0;
-      var maxActiveInstalls = 0;
+  test('parallel downloads install as ready, serialize installs, and defer self-update', () async {
+    final Completer<String> slowDownload = Completer<String>();
+    final Completer<String> fastDownload = Completer<String>();
+    final Completer<String> selfUpdateDownload = Completer<String>();
+    final Completer<void> fastInstallStarted = Completer<void>();
+    final Completer<void> releaseFastInstall = Completer<void>();
+    final List<String> installOrder = [];
+    var activeInstalls = 0;
+    var maxActiveInstalls = 0;
 
-      final Future<void> processing = processDownloadResultsAsReady<String>(
-        downloads: [
-          (id: 'slow', result: slowDownload.future),
-          (id: 'fast', result: fastDownload.future),
-          (id: 'self', result: selfUpdateDownload.future),
-        ],
-        deferUntilEnd: (String id) => id == 'self',
-        process: (String result) async {
-          activeInstalls++;
-          if (activeInstalls > maxActiveInstalls) {
-            maxActiveInstalls = activeInstalls;
-          }
-          installOrder.add(result);
-          if (result == 'fast') {
-            fastInstallStarted.complete();
-            await releaseFastInstall.future;
-          }
-          activeInstalls--;
-        },
-      );
+    final Future<void> processing = processDownloadResultsAsReady<String>(
+      downloads: [
+        (id: 'slow', result: slowDownload.future),
+        (id: 'fast', result: fastDownload.future),
+        (id: 'self', result: selfUpdateDownload.future),
+      ],
+      deferUntilEnd: (String id) => id == 'self',
+      process: (String result) async {
+        activeInstalls++;
+        if (activeInstalls > maxActiveInstalls) {
+          maxActiveInstalls = activeInstalls;
+        }
+        installOrder.add(result);
+        if (result == 'fast') {
+          fastInstallStarted.complete();
+          await releaseFastInstall.future;
+        }
+        activeInstalls--;
+      },
+    );
 
-      selfUpdateDownload.complete('self');
-      fastDownload.complete('fast');
-      await fastInstallStarted.future;
-      slowDownload.complete('slow');
-      await Future<void>.delayed(Duration.zero);
+    selfUpdateDownload.complete('self');
+    fastDownload.complete('fast');
+    await fastInstallStarted.future;
+    slowDownload.complete('slow');
+    await Future<void>.delayed(Duration.zero);
 
-      expect(installOrder, const ['fast']);
-      expect(maxActiveInstalls, 1);
+    expect(installOrder, const ['fast']);
+    expect(maxActiveInstalls, 1);
 
-      releaseFastInstall.complete();
-      await processing;
+    releaseFastInstall.complete();
+    await processing;
 
-      expect(installOrder, const ['fast', 'slow', 'self']);
-      expect(maxActiveInstalls, 1);
-    },
-  );
+    expect(installOrder, const ['fast', 'slow', 'self']);
+    expect(maxActiveInstalls, 1);
+  });
 
   test('F-Droid-style verification controls retain their help tooltip', () {
     for (final AppSource source in [FDroid(), FDroidRepo(), IzzyOnDroid()]) {
@@ -521,6 +531,15 @@ void main() {
     expect(isSecretSettingKey('virustotal-api-key'), isTrue);
     expect(
       isSecretSettingKey('virustotal-api-key-validated-fingerprint'),
+      isTrue,
+    );
+    expect(isSecretSettingKey(HuaweiAppGallery.sessionPrefsKey), isTrue);
+    // Codeberg/Forgejo token and its validation fingerprint (the fingerprint
+    // is ObtainX-only too: Obtainium has no Codeberg validation).
+    expect(isSecretSettingKey(Codeberg.tokenKey), isTrue);
+    expect(isSecretSettingKey(Codeberg.validatedTokenFingerprintKey), isTrue);
+    expect(
+      isObtainXOnlySettingKey(Codeberg.validatedTokenFingerprintKey),
       isTrue,
     );
     expect(isSecretSettingKey('updateInterval'), isFalse);

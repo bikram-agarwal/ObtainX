@@ -289,29 +289,26 @@ void main() {
     });
   });
 
-  test(
-    'same-release labels preserve ordering when both identify enough detail',
-    () {
-      _forEachPair((String a, String b) {
-        if (!versionsEffectivelyEqual(a, b)) return;
-        for (final third in _versionCorpus) {
-          final firstOrder = compareVersionsByNumericSegments(a, third);
-          final secondOrder = compareVersionsByNumericSegments(b, third);
-          if (firstOrder != null && secondOrder != null) {
-            expect(
-              firstOrder,
-              secondOrder,
-              reason: 'same-release ($a, $b) disagree against $third',
-            );
-          } else {
-            // A bare release can match either commit without making two distinct
-            // commits equivalent. Such a list must not use the version comparator.
-            expect(versionsHaveConsistentOrder([a, b, third]), isFalse);
-          }
+  test('same-release labels preserve ordering when both identify enough detail', () {
+    _forEachPair((String a, String b) {
+      if (!versionsEffectivelyEqual(a, b)) return;
+      for (final third in _versionCorpus) {
+        final firstOrder = compareVersionsByNumericSegments(a, third);
+        final secondOrder = compareVersionsByNumericSegments(b, third);
+        if (firstOrder != null && secondOrder != null) {
+          expect(
+            firstOrder,
+            secondOrder,
+            reason: 'same-release ($a, $b) disagree against $third',
+          );
+        } else {
+          // A bare release can match either commit without making two distinct
+          // commits equivalent. Such a list must not use the version comparator.
+          expect(versionsHaveConsistentOrder([a, b, third]), isFalse);
         }
-      });
-    },
-  );
+      }
+    });
+  });
 
   test('words and date stamps are not treated as build hashes', () {
     for (final String word in <String>[

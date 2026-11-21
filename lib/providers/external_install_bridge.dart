@@ -25,6 +25,10 @@ class InstallerTarget {
 /// Bridge to the two native helpers that have no Flutter-plugin equivalent:
 /// enumerating APK-install-capable activities and turning a downloaded file
 /// into a shareable content:// URI. All handoff orchestration stays in Dart.
+///
+/// Intentional divergence — do not "fix": no `launchInstallIntent` /
+/// `ExternalInstallResult` here. Upstream's result-request handoff (#3091) was
+/// removed from ObtainX (b9228270); see [ExternalInstaller].
 class ExternalInstallerBridge {
   ExternalInstallerBridge._();
 

@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 
+import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/app_sources/huaweiappgallery.dart';
 import 'package:obtainium/custom_errors.dart';
 
 import 'package:obtainium/app_sources/github.dart';
@@ -24,8 +26,10 @@ import 'package:shared_storage/shared_storage.dart' as saf;
 /// fingerprint are listed explicitly.
 bool isSecretSettingKey(String key) {
   return key.endsWith('-creds') ||
+      key == HuaweiAppGallery.sessionPrefsKey ||
       key == GitHub.validatedPATFingerprintKey ||
       key == GitLab.validatedPATFingerprintKey ||
+      key == Codeberg.validatedTokenFingerprintKey ||
       key == virusTotalApiKeyKey ||
       key == virusTotalValidatedApiKeyFingerprintKey;
 }
@@ -178,12 +182,21 @@ String readableLinkPayload(String payload) {
   }
 
   try {
-    return const JsonEncoder.withIndent(
-      '  ',
-    ).convert(expand(jsonDecode(payload)));
+    return const JsonEncoder.withIndent('  ')
+        .convert(expand(jsonDecode(payload)));
   } catch (_) {
     return payload;
   }
+}
+
+/// Whether [file], listed in the export folder, is an earlier auto-export that
+/// a new one replaces: a timestamped `-auto.json`, or the fixed [customName]
+/// file. Matched by display name, as a listed file's URI ends in its document
+/// ID (`primary:Backups/name.json`), not its name.
+bool isReplacedAutoExport(saf.DocumentFile file, String? customName) {
+  final String name = file.name ?? file.uri.pathSegments.last.split('/').last;
+  return name.endsWith('-auto.json') ||
+      (customName != null && name == '$customName.json');
 }
 
 /// Import/export of app configurations for [AppsProvider].
@@ -202,6 +215,10 @@ extension AppsProviderImportExport on AppsProvider {
     final folderNamesById = {
       for (final folder in settingsProvider.appFolders) folder.id: folder.name,
     };
+    int shouldExportSettings = settingsProvider.exportSettings;
+    if (overrideExportSettings != null) {
+      shouldExportSettings = overrideExportSettings;
+    }
     final appList = apps.values
         .where(
           (e) =>
@@ -226,15 +243,19 @@ extension AppsProviderImportExport on AppsProvider {
               }
             }
             additionalSettings['folderNames'] = folderNames;
-            appJson['additionalSettings'] = jsonEncode(additionalSettings);
           }
+          // Per-app credentials (an overridden source's token, e.g.
+          // github-creds) live in additionalSettings, not prefs, so an export
+          // without secrets strips them here too (upstream b0356157).
+          if (shouldExportSettings < 2) {
+            additionalSettings.removeWhere(
+              (String key, dynamic _) => isSecretSettingKey(key),
+            );
+          }
+          appJson['additionalSettings'] = jsonEncode(additionalSettings);
           return appJson;
         })
         .toList();
-    int shouldExportSettings = settingsProvider.exportSettings;
-    if (overrideExportSettings != null) {
-      shouldExportSettings = overrideExportSettings;
-    }
     Map<String, dynamic>? settingsMap;
     Map<String, dynamic>? settingsObtainXMap;
     if (shouldExportSettings > 0) {
@@ -278,21 +299,35 @@ extension AppsProviderImportExport on AppsProvider {
     if (isAuto && !settingsProvider.autoExportOnChanges) {
       return null;
     }
+    final String? customName = settingsProvider.autoExportFileName;
     var exportDir = await settingsProvider.getExportDir(
       warnIfInaccessible: true,
     );
     if (isAuto) {
       if (exportDir == null) {
+        if (settingsProvider.prefs?.getString('exportDir') != null) {
+          unawaited(
+            logs.add(
+              'Auto-export skipped: export directory permission unavailable',
+            ),
+          );
+        }
         return null;
       }
       final files = await saf
-          .listFiles(exportDir, columns: [saf.DocumentFileColumn.id])
-          .where((f) => f.uri.pathSegments.last.endsWith('-auto.json'))
+          .listFiles(
+            exportDir,
+            columns: [
+              saf.DocumentFileColumn.id,
+              saf.DocumentFileColumn.displayName,
+            ],
+          )
+          .where((f) => isReplacedAutoExport(f, customName))
           .toList();
-      if (files.isNotEmpty) {
-        for (var f in files) {
-          unawaited(saf.delete(f.uri));
-        }
+      for (final f in files) {
+        // Awaited so the old file is gone before its replacement (same custom
+        // name) is created (upstream b0356157).
+        await saf.delete(f.uri);
       }
     }
     if (exportDir == null || pickOnly) {
@@ -311,19 +346,24 @@ extension AppsProviderImportExport on AppsProvider {
         finalExport,
         indent: '    ',
       );
+      // An auto-export with a custom name keeps one fixed file, replaced each
+      // time, instead of a new timestamped file per change.
+      final String displayName = isAuto && customName != null
+          ? '$customName.json'
+          : '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json';
       final result = await saf.createFile(
         exportDir,
-        displayName:
-            '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
+        displayName: displayName,
         mimeType: 'application/json',
         bytes: bytes,
       );
       if (result == null) {
         throw ObtainiumError(tr('unexpectedError'));
       }
+      // Any volume, so an SD card path reads right too (upstream 1d699fd9).
       returnPath = exportDir.pathSegments
           .join('/')
-          .replaceFirst('tree/primary:', '/');
+          .replaceFirst(RegExp(r'^tree/[^:]+:'), '/');
     }
     return returnPath;
   }
@@ -370,7 +410,7 @@ extension AppsProviderImportExport on AppsProvider {
       settingsObtainXOverlay,
     );
     return BackupContent(
-      apps: importedApps,
+      apps: appsWithImportedShizukuBackend(importedApps, settingsMap),
       settingsMap: settingsMap,
       schema: schema,
     );
@@ -438,9 +478,13 @@ extension AppsProviderImportExport on AppsProvider {
     if (importSettings && settingsMap != null) {
       hasSettings = true;
       // 'appFolders' is skipped: already merged/persisted by
-      // _reconcileImportedFolders. Reload settings so the merged folder list
-      // (and everything else) is reflected in memory immediately.
-      _applyImportedSettings(settingsMap, skipKeys: const {'appFolders'});
+      // _reconcileImportedFolders. Upstream settings ObtainX dropped aren't
+      // written at all. Reload settings so the merged folder list (and
+      // everything else) is reflected in memory immediately.
+      _applyImportedSettings(
+        settingsMap,
+        skipKeys: const {'appFolders', ...droppedUpstreamSettingKeys},
+      );
       await settingsProvider.initializeSettings();
     }
     return MapEntry<List<App>, bool>(importedApps, hasSettings);
@@ -601,7 +645,7 @@ extension AppsProviderImportExport on AppsProvider {
 
 const int obtainiumSortColumnCount = 4;
 const String obtainXFolderViewSettingPrefix = 'folderView_';
-const String obtainXSettingsSectionPrefix = 'settingsSection_';
+// obtainXSettingsSectionPrefix lives in settings_provider.dart.
 
 /// Pref keys with no counterpart in upstream Obtainium. They're kept out of
 /// [SplitExportSettings.settings] (so an Obtainium import isn't polluted by keys
@@ -641,6 +685,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'swipeActionEnumVersion',
   'enableVirusTotalScanning',
   'githubValidatedPATFingerprint',
+  'codeberg-validated-token-fingerprint',
   'openAppInfoInAppManager',
   'folderCriteriaMigrationVersion',
   'collapsedGroups',
@@ -736,7 +781,8 @@ SplitExportSettings splitSettingsForExport(Map<String, dynamic> fullSettings) {
 }
 
 /// Merges the shared settings block with the ObtainX overlay on import. The
-/// overlay wins on conflicts (e.g. the real `sortColumn` over the sanitized one).
+/// overlay wins on conflicts (e.g. the real `sortColumn` over the sanitized
+/// one), then [normalizeImportedSettings] maps upstream-only values.
 Map<String, dynamic>? mergeImportedSettingsMaps(
   Map<String, dynamic>? sharedSettings,
   Map<String, dynamic>? settingsObtainX,
@@ -744,10 +790,33 @@ Map<String, dynamic>? mergeImportedSettingsMaps(
   if (sharedSettings == null) {
     return null;
   }
-  if (settingsObtainX == null || settingsObtainX.isEmpty) {
-    return Map<String, dynamic>.from(sharedSettings);
+  return normalizeImportedSettings(<String, dynamic>{
+    ...sharedSettings,
+    ...?settingsObtainX,
+  });
+}
+
+/// Obtainium's Shizuku backend setting (`shizukuInstallerMode`, #2844) also
+/// applies to apps whose per-app install method is Shizuku, so in Obtainium
+/// those install through Dhizuku when the backend is Dhizuku. ObtainX has
+/// Dhizuku as a mode of its own, so such apps get `installerMode: dhizuku`;
+/// otherwise they'd use real Shizuku and fail on a Dhizuku-only device.
+List<App> appsWithImportedShizukuBackend(
+  List<App> apps,
+  Map<String, dynamic>? settings,
+) {
+  if (settings?['shizukuInstallerMode'] != InstallerMode.dhizuku.name) {
+    return apps;
   }
-  return <String, dynamic>{...sharedSettings, ...settingsObtainX};
+  return apps.map((App app) {
+    if (app.additionalSettings['installerMode'] != InstallerMode.shizuku.name) {
+      return app;
+    }
+    return app.copyWith(
+      additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+        ..['installerMode'] = InstallerMode.dhizuku.name,
+    );
+  }).toList();
 }
 
 /// Obtainium reads `sortColumn` as an unchecked index into its 4-value
@@ -762,9 +831,44 @@ void sanitizeExportedSettingsForObtainium(Map<String, dynamic> settings) {
       (sortColumn < 0 || sortColumn >= obtainiumSortColumnCount)) {
     settings['sortColumn'] = SortColumnSettings.releaseDate.index;
   }
-  if (settings['installMethod'] == 'dhizuku') {
-    settings['installMethod'] = 'shizuku';
+  // Obtainium has no Dhizuku installer mode: since v1.7 it is a backend of its
+  // Shizuku mode (#2844). Writing both keys makes Obtainium really install
+  // through Dhizuku; ObtainX's own overlay keeps `installMethod: dhizuku`.
+  if (settings['installMethod'] == InstallerMode.dhizuku.name) {
+    settings['installMethod'] = InstallerMode.shizuku.name;
+    settings['shizukuInstallerMode'] = InstallerMode.dhizuku.name;
   }
+}
+
+/// Maps an imported backup's settings onto ObtainX's, before
+/// `droppedUpstreamSettingKeys` are skipped:
+/// - Obtainium's Shizuku sub-backend (`shizukuInstallerMode`, #2844) picks
+///   ObtainX's installer mode: `shizuku` + `dhizuku` → `dhizuku`; `auto` and
+///   `shizuku` stay `shizuku`. The key itself is then dropped.
+/// - `exportDir` is kept only as a `content://` folder: Obtainium's TV
+///   Downloads sentinel `tv-downloads:` (or anything else) has no folder
+///   behind it here, so every auto-export would fail with a toast (SET-H8).
+Map<String, dynamic> normalizeImportedSettings(Map<String, dynamic> settings) {
+  if (settings['installMethod'] == InstallerMode.shizuku.name &&
+      settings['shizukuInstallerMode'] == InstallerMode.dhizuku.name) {
+    settings['installMethod'] = InstallerMode.dhizuku.name;
+  }
+  // An older backup (ObtainX before the v1.7.4 sync, Obtainium before 1.7)
+  // has only the Wi-Fi-only / charging-only switches. Write the guard key it
+  // stands for too: a device that already stores the guard key reads that
+  // first, so an Import would otherwise keep the device's choice (D5).
+  for (final MapEntry<String, String> guard in bgGuardLegacyKeys.entries) {
+    final dynamic legacy = settings[guard.value];
+    if (legacy is bool && !settings.containsKey(guard.key)) {
+      settings[guard.key] = bgGuardModeFromLegacy(legacy).name;
+    }
+  }
+  final dynamic exportDir = settings['exportDir'];
+  if (exportDir != null &&
+      !(exportDir is String && exportDir.startsWith('content://'))) {
+    settings.remove('exportDir');
+  }
+  return settings;
 }
 
 const int currentExportSchemaVersion = 2;

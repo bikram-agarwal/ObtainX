@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -137,13 +137,14 @@ void main() {
   test(
     'active black theme only overrides surface styling temporarily',
     () async {
-      final SettingsProvider settings =
-          await _settingsWithPrefs(<String, Object>{
-            'theme': ThemeSettings.dark.index,
-            'useBlackTheme': false,
-            'useGradientBackground': true,
-            'shadingIntensity': 0.4,
-          });
+      final SettingsProvider settings = await _settingsWithPrefs(
+        <String, Object>{
+          'theme': ThemeSettings.dark.index,
+          'useBlackTheme': false,
+          'useGradientBackground': true,
+          'shadingIntensity': 0.4,
+        },
+      );
 
       settings.useBlackTheme = true;
 

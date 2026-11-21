@@ -5,7 +5,7 @@ import 'dart:ui';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/performance_recording_control.dart';
@@ -55,9 +55,8 @@ const environment = PerformanceEnvironment(
 Map<String, dynamic> reportData(PerformanceRecorder recorder) {
   final report = recorder.latestReport!;
   return jsonDecode(
-        report.substring(report.indexOf('{'), report.lastIndexOf('}') + 1),
-      )
-      as Map<String, dynamic>;
+    report.substring(report.indexOf('{'), report.lastIndexOf('}') + 1),
+  ) as Map<String, dynamic>;
 }
 
 FrameTiming frame(int start, int build, int raster) {

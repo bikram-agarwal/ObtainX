@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/backup_import_sheet.dart';
 import 'package:obtainium/components/ui_widgets.dart' show ExplainedWhenOff;
 import 'package:obtainium/custom_errors.dart';
@@ -15,17 +15,29 @@ import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/pick_file.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:provider/provider.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 
 /// The apps an `obtainium://app/` or `apps/` [link] carries, as entries that
-/// keep what it says about them ([UrlImportEntry.seed]). Throws on apps that
-/// can't be read.
+/// keep what it says about them ([UrlImportEntry.seed]), except how each is
+/// installed: a link can't choose an app's install method (D13, upstream
+/// #3457), so that stays the global one. Throws on apps that can't be read.
 List<UrlImportEntry> urlImportEntriesFromLink(
   Uri link,
   AppsProvider appsProvider,
 ) => [
   for (final App app in appsProvider.parseBackupContent(linkPayload(link)).apps)
-    UrlImportEntry(app.url, seed: app),
+    UrlImportEntry(app.url, seed: withoutLinkInstallSettings(app)),
 ];
+
+/// The per-app settings a link may not set: the install method ([App]'s
+/// `installerMode` setting).
+App withoutLinkInstallSettings(App app) {
+  if (!app.additionalSettings.containsKey('installerMode')) return app;
+  return app.copyWith(
+    additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+      ..remove('installerMode'),
+  );
+}
 
 /// What the Import from URL list box holds, as the apps to add.
 ///
@@ -229,7 +241,9 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
   String? _validateUrls(String? value) {
     if (value == null || value.trim().isEmpty) return null;
     if (linkImportIn(value) != null) return null;
-    final List<String> lines = value.trim().split('\n');
+    // Split the text as typed, so "Line N" counts the lines the user sees,
+    // blank ones included (upstream 1d699fd9).
+    final List<String> lines = value.split('\n');
     for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
       if (lines[lineIndex].trim().isEmpty) continue;
       if (linkImportIn(lines[lineIndex]) != null) continue;
@@ -385,6 +399,9 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
                                 enabled: !_isImporting,
                                 decoration: InputDecoration(
                                   labelText: tr('appURLList'),
+                                  // Top-left, not in the middle of the tall
+                                  // empty box (upstream fa5755b6).
+                                  alignLabelWithHint: true,
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(24),
                                   ),
@@ -417,12 +434,14 @@ class _ImportFromUrlListPageState extends State<ImportFromUrlListPage> {
                                         mainAxisSize: MainAxisSize.min,
                                         spacing: 8,
                                         children: [
-                                          const ExpressiveLoadingIndicator(
-                                            constraints:
-                                                BoxConstraints.tightFor(
-                                                  width: 24,
-                                                  height: 24,
-                                                ),
+                                          const LegacyMaterialBridge(
+                                            child: ExpressiveLoadingIndicator(
+                                              constraints:
+                                                  BoxConstraints.tightFor(
+                                                    width: 24,
+                                                    height: 24,
+                                                  ),
+                                            ),
                                           ),
                                           Text(tr('import')),
                                         ],
@@ -464,9 +483,8 @@ class _ImportFromUrlListHelp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final TextStyle? style = Theme.of(context).textTheme.bodyMedium?.copyWith(
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-    );
+    final TextStyle? style = Theme.of(context).textTheme.bodyMedium
+        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
     return Card.filled(
       margin: EdgeInsets.zero,
       child: Padding(

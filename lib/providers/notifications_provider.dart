@@ -7,13 +7,13 @@ import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:obtainium/main.dart';
-import 'package:obtainium/providers/apps_provider.dart' show formatDownloadSize;
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/format_utils.dart';
 
 // Fixed notification IDs. Kept small and distinct so notifications of different
 // kinds never overwrite each other; per-download notifications live in a
@@ -31,6 +31,21 @@ const int errorInstallingUpdatesNotificationId = 10;
 const int versionReviewNotificationId = 11;
 const int downloadNotificationBaseId = 100;
 
+/// Cancels the update notification [id] once nothing it could list is pending
+/// ([pendingUpdateIds] is empty), after a successful check (upstream #3415).
+/// ObtainX posts track-only updates separately, so it also clears
+/// [trackOnlyUpdateNotificationId]; see
+/// `AppsProviderUpdates.clearStaleUpdateNotifications`.
+Future<void> clearStaleUpdateNotification(
+  NotificationsProvider notificationsProvider,
+  List<String> pendingUpdateIds, {
+  int id = updateNotificationId,
+}) async {
+  if (pendingUpdateIds.isEmpty) {
+    await notificationsProvider.cancel(id);
+  }
+}
+
 /// Size of the ID space for per-download notifications. Kept just under the
 /// 32-bit signed max (minus [downloadNotificationBaseId]) so download IDs stay
 /// positive and clear of the small fixed IDs above, while making collisions
@@ -46,9 +61,17 @@ const int downloadNotificationIdRange = 2000000000;
 const int downloadedFileNotificationBaseId = 1000000;
 const int downloadedFileNotificationIdRange = 100000000;
 
+/// Stable notification ID for a string key within [base]'s range.
+int notificationIdForKey(String key, int base, int range) =>
+    base + (key.hashCode.abs() % range);
+
 /// Prefix for the download-notification Cancel action id; the app ID is appended
 /// so the tap handler knows which download to stop.
 const String cancelDownloadActionPrefix = 'cancel_download::';
+
+/// Prefix marking a notification payload that carries a listing key; tapping
+/// such a notification opens that app's page (upstream #3190).
+const String appIdTapPayloadPrefix = 'appIdTap::';
 
 /// Prefix for the download-complete notification's Install action id; the
 /// downloaded file's absolute path is appended so the tap handler knows what
@@ -58,6 +81,7 @@ const String installDownloadedFileActionPrefix = 'install_file::';
 /// Name under which the main isolate registers a port to receive download-cancel
 /// requests forwarded from the notification-action background isolate.
 const String _downloadCancelPortName = 'obtainium_download_cancel';
+ReceivePort? _downloadCancelPort;
 
 /// The app ID targeted by a download-cancel notification action, or null if
 /// [actionId] isn't a download-cancel action.
@@ -120,7 +144,11 @@ class ObtainiumNotification {
   int? progPercent;
   bool onlyAlertOnce;
   String? payload;
+
+  /// The listing key a tap opens (replaces [payload]); null for no app.
+  String? appId;
   List<AndroidNotificationAction>? androidActions;
+  StyleInformation? style;
 
   ObtainiumNotification(
     this.id,
@@ -133,9 +161,17 @@ class ObtainiumNotification {
     this.onlyAlertOnce = false,
     this.progPercent,
     this.payload,
+    this.appId,
     this.androidActions,
+    this.style,
   });
 }
+
+/// The listing a notification about [updates] opens when tapped: only a
+/// single-app notification opens one. A listing key, never the package ID,
+/// which names the wrong listing for an app tracked from two stores.
+String? _tapListingKey(List<App> updates) =>
+    updates.length == 1 ? updates.first.listingKey : null;
 
 class UpdateNotification extends ObtainiumNotification {
   UpdateNotification(List<App> updates, {int? id})
@@ -152,6 +188,7 @@ class UpdateNotification extends ObtainiumNotification {
         tr('updatesAvailableNotifChannel'),
         tr('updatesAvailableNotifDescription'),
         Importance.max,
+        appId: _tapListingKey(updates),
       );
 }
 
@@ -173,6 +210,7 @@ class TrackOnlyUpdateNotification extends ObtainiumNotification {
         tr('updatesAvailableNotifChannel'),
         tr('updatesAvailableNotifDescription'),
         Importance.max,
+        appId: _tapListingKey(updates),
       );
 }
 
@@ -206,6 +244,7 @@ class SilentUpdateNotification extends ObtainiumNotification {
         tr('appsUpdatedNotifChannel'),
         tr('appsUpdatedNotifDescription'),
         Importance.defaultImportance,
+        appId: _tapListingKey(updates),
       );
 }
 
@@ -224,6 +263,7 @@ class SilentUpdateAttemptNotification extends ObtainiumNotification {
         tr('appsPossiblyUpdatedNotifChannel'),
         tr('appsPossiblyUpdatedNotifDescription'),
         Importance.defaultImportance,
+        appId: _tapListingKey(updates),
       );
 }
 
@@ -238,6 +278,7 @@ class ErrorCheckingUpdatesNotification extends ObtainiumNotification {
         tr('errorCheckingUpdatesNotifDescription'),
         Importance.high,
         payload: "${tr('errorCheckingUpdates')}\n$error",
+        style: BigTextStyleInformation(error),
       );
 }
 
@@ -298,6 +339,9 @@ class ErrorInstallingUpdatesNotification extends ObtainiumNotification {
         tr('errorInstallingUpdateNotifDescription'),
         Importance.high,
         payload: "${tr('errorInstallingUpdate')}\n$error",
+        // Expandable, like the check-error one: it lists every failed group
+        // of the run (#3362).
+        style: BigTextStyleInformation(error),
       );
 }
 
@@ -322,14 +366,23 @@ class AppsRemovedNotification extends ObtainiumNotification {
 
 class DownloadNotification extends ObtainiumNotification {
   static const int _baseId = downloadNotificationBaseId;
+
+  /// [idKey] must be stable for the download (a listing key, or a listing key
+  /// plus asset URL), so two listings or apps with the same display name don't
+  /// share a progress notification (upstream c7cb068b). Without one, the ID
+  /// comes from the Cancel action's app ID, then the name, as before.
+  static int idForKey(String idKey) =>
+      notificationIdForKey(idKey, _baseId, downloadNotificationIdRange);
+
   DownloadNotification(
     String appName,
     int progPercent, {
     String? appId,
+    String? idKey,
     int? receivedBytes,
     int? totalBytes,
   }) : super(
-         _baseId + (appName.hashCode.abs() % downloadNotificationIdRange),
+         idForKey(idKey ?? appId ?? appName),
          tr('downloadingX', args: [appName]),
          formatDownloadSize(receivedBytes, totalBytes) ?? '',
          'APP_DOWNLOADING',
@@ -363,6 +416,7 @@ class DownloadedNotification extends ObtainiumNotification {
     String fileName,
     String downloadUrl, {
     String? installFilePath,
+    super.appId,
   }) : super(
          downloadedFileNotificationBaseId +
              (downloadUrl.hashCode.abs() % downloadedFileNotificationIdRange),
@@ -480,7 +534,10 @@ class NotificationsProvider {
     if (prevPort != null) {
       IsolateNameServer.removePortNameMapping(_downloadCancelPortName);
     }
-    final port = ReceivePort();
+    // Close the previous port: each registration otherwise leaked one
+    // (upstream 8c33f251).
+    _downloadCancelPort?.close();
+    final port = _downloadCancelPort = ReceivePort();
     IsolateNameServer.registerPortWithName(
       port.sendPort,
       _downloadCancelPortName,
@@ -491,6 +548,24 @@ class NotificationsProvider {
       }
     });
   }
+
+  /// Opens the app page of a listing, for a tapped single-app notification
+  /// (upstream #3190, routed through ObtainX's own navigation). Registered by
+  /// HomePage; a tap that arrives before that (one that launched the app) is
+  /// kept until it registers.
+  static void Function(String listingKey)? get onOpenAppRequested =>
+      _onOpenAppRequested;
+  static set onOpenAppRequested(void Function(String listingKey)? handler) {
+    _onOpenAppRequested = handler;
+    final String? pending = _pendingOpenAppListingKey;
+    if (handler != null && pending != null) {
+      _pendingOpenAppListingKey = null;
+      handler(pending);
+    }
+  }
+
+  static void Function(String listingKey)? _onOpenAppRequested;
+  static String? _pendingOpenAppListingKey;
 
   Future<void> checkLaunchByNotif() async {
     if (_launchNotifChecked) return;
@@ -510,6 +585,17 @@ class NotificationsProvider {
   }
 
   void _showNotificationPayload(String? payload, {bool doublePop = false}) {
+    if (payload != null && payload.startsWith(appIdTapPayloadPrefix)) {
+      final String listingKey = payload.substring(appIdTapPayloadPrefix.length);
+      if (listingKey.isEmpty) return;
+      final void Function(String listingKey)? openApp = _onOpenAppRequested;
+      if (openApp != null) {
+        openApp(listingKey);
+      } else {
+        _pendingOpenAppListingKey = listingKey;
+      }
+      return;
+    }
     if (payload?.isNotEmpty == true) {
       final lines = payload!.split('\n');
       final title = lines.first;
@@ -557,6 +643,7 @@ class NotificationsProvider {
     bool onlyAlertOnce = false,
     String? payload,
     List<AndroidNotificationAction>? androidActions,
+    StyleInformation? style,
   }) async {
     if (cancelExisting) {
       await cancel(id);
@@ -583,6 +670,7 @@ class NotificationsProvider {
           onlyAlertOnce: onlyAlertOnce,
           indeterminate: progPercent != null && progPercent < 0,
           actions: androidActions,
+          styleInformation: style,
         ),
       ),
       payload: payload,
@@ -603,7 +691,10 @@ class NotificationsProvider {
     cancelExisting: cancelExisting,
     onlyAlertOnce: notif.onlyAlertOnce,
     progPercent: notif.progPercent,
-    payload: notif.payload,
+    payload: notif.appId != null
+        ? '$appIdTapPayloadPrefix${notif.appId}'
+        : notif.payload,
     androidActions: notif.androidActions,
+    style: notif.style,
   );
 }

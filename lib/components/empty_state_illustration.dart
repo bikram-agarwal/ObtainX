@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Expressive empty-state scaffold: a code-drawn illustration, a title, an
 /// optional supporting line, and an optional call-to-action.

@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui' show FlutterView;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:obtainium/components/ui_widgets.dart' show TvInitialFocus;
 
 /// Presents [builder] as a modal bottom sheet with the app's standard chrome:
 /// the themed M3 Expressive shape, the framework drag handle, and (optionally)
@@ -447,10 +448,15 @@ class AppSheetContent extends StatelessWidget {
             padding.right,
             padding.bottom + bottomInset,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: crossAxisAlignment,
-            children: children,
+          // On TV a sheet would otherwise open unfocused, so the remote's
+          // first SELECT did nothing (D23). Covers every AppSheetContent
+          // sheet (filter, actions, view options, bulk, categories).
+          child: TvInitialFocus(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: crossAxisAlignment,
+              children: children,
+            ),
           ),
         ),
       ),

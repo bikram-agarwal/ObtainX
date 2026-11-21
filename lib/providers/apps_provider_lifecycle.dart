@@ -8,8 +8,9 @@ import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_package_manager/android_package_manager.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/logs_provider.dart';
@@ -20,6 +21,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:obtainium/services/app_check_store.dart';
+import 'package:obtainium/utils/color_utils.dart';
 
 /// App persistence (load/save/remove), icons, and version-detection helpers.
 const _corruptFileSuffix = '.corrupt';
@@ -68,6 +70,107 @@ class RemoveAppsWithModalResult {
       deferredUndoAppIds.isNotEmpty || removedFromObtainiumImmediately;
 }
 
+/// Whether a cached app icon can be reused instead of re-reading it from the
+/// platform.
+///
+/// An app's icon is packaged in its APK, so it can only change when the app is
+/// updated. The cache is therefore only stale when the installed package's
+/// [PackageInfo.lastUpdateTime] is newer than the cache file (or when
+/// [ignoreCache] forces a refresh), keeping the relatively expensive
+/// `getAppIcon` platform call off the hot path (upstream #3306).
+bool isIconCacheUsable({
+  required bool cacheExists,
+  required DateTime? cacheModified,
+  int? packageLastUpdateTime,
+  bool ignoreCache = false,
+}) {
+  if (ignoreCache || !cacheExists) {
+    return false;
+  }
+  if (packageLastUpdateTime == null || cacheModified == null) {
+    return true;
+  }
+  return cacheModified.millisecondsSinceEpoch >= packageLastUpdateTime;
+}
+
+// Icon loading, reading and caching are best-effort (upstream #3428/#3433):
+// Android can fail to draw a launcher icon ("width and height must be > 0"),
+// and the cache directory can be cleared while ObtainX runs. A failure falls
+// back instead of failing the load or save it is part of.
+
+/// [load]'s icon, or [fallback] when there's no loader or it throws.
+Future<Uint8List?> loadAppIconSafely(
+  Future<Uint8List?> Function()? load, {
+  Uint8List? fallback,
+}) async {
+  if (load == null) return fallback;
+  try {
+    return await load();
+  } catch (e) {
+    AppLogger.warn('Failed to load app icon', error: e);
+    return fallback;
+  }
+}
+
+/// The cached icon in [file], or null when it can't be read.
+Future<Uint8List?> readCachedAppIconSafely(File file) async {
+  try {
+    return await file.readAsBytes();
+  } catch (e) {
+    AppLogger.warn('Failed to read cached app icon', error: e);
+    return null;
+  }
+}
+
+/// Writes [bytes] to [file], recreating its directory if it was deleted.
+Future<void> writeCachedAppIconSafely(File file, Uint8List bytes) async {
+  try {
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes);
+  } catch (e) {
+    AppLogger.warn('Failed to write cached app icon', error: e);
+  }
+}
+
+/// [bulk]'s entry for [key], or else [lookup]'s answer.
+///
+/// The bulk installed-package list can come back incomplete (a truncated
+/// platform transaction, upstream #3215), so a package missing from it isn't
+/// proof that the app was uninstalled; a per-package lookup tells the two
+/// apart.
+Future<T?> resolveBulkOrLookup<T>(
+  String key,
+  Map<String, T> bulk, {
+  required Future<T?> Function(String key) lookup,
+}) async => bulk[key] ?? await lookup(key);
+
+/// Whether reconciliation may clear a recorded installed version when the
+/// package info is missing (upstream #3215).
+///
+/// A background load keeps a "Mark as updated" version (pseudo-version
+/// detection, installed == latest): the package list may just be incomplete
+/// there, and the next foreground load confirms a real uninstall. Pass the
+/// fork's string-enum predicates for [versionDetectionIsStandard], never a
+/// bool read of `versionDetection`.
+bool shouldClearInstalledVersion({
+  required bool installedInfoMissing,
+  required bool trackOnly,
+  required bool isBackground,
+  required bool versionDetectionIsStandard,
+  required String? installedVersion,
+  required String latestVersion,
+}) {
+  if (!installedInfoMissing || installedVersion == null || trackOnly) {
+    return false;
+  }
+  if (isBackground &&
+      !versionDetectionIsStandard &&
+      installedVersion == latestVersion) {
+    return false;
+  }
+  return true;
+}
+
 extension AppsProviderLifecycle on AppsProvider {
   String? _getRealInstalledVersion(App app, PackageInfo? installedInfo) {
     if (installedInfo == null) return null;
@@ -81,22 +184,28 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   Future<Directory> getAppsDir() async {
-    if (cachedAppsDir != null) return cachedAppsDir!;
+    final cached = cachedAppsDir;
+    if (cached != null && cached.existsSync()) return cached;
+    // The cached directory can disappear at runtime (external storage
+    // remounted after a system update, storage cleanup). Drop the stale
+    // reference and re-create it instead of renaming into a missing path
+    // (upstream #2860).
+    cachedAppsDir = null;
     final Directory appsDir = Directory(
       '${(await getAppStorageDir()).path}/app_data',
     );
-    if (!appsDir.existsSync()) {
-      try {
-        appsDir.createSync();
-      } catch (_) {
-        final fallbackDir = Directory(
-          '${(await getApplicationDocumentsDirectory()).path}/app_data',
-        );
-        if (!fallbackDir.existsSync()) {
-          fallbackDir.createSync(recursive: true);
-        }
-        return cachedAppsDir = fallbackDir;
+    try {
+      if (!appsDir.existsSync()) {
+        appsDir.createSync(recursive: true);
       }
+    } catch (_) {
+      final fallbackDir = Directory(
+        '${(await getApplicationDocumentsDirectory()).path}/app_data',
+      );
+      if (!fallbackDir.existsSync()) {
+        fallbackDir.createSync(recursive: true);
+      }
+      return cachedAppsDir = fallbackDir;
     }
     return cachedAppsDir = appsDir;
   }
@@ -128,6 +237,29 @@ extension AppsProviderLifecycle on AppsProvider {
     PackageInfo? installedInfo,
   ) {
     final originalApp = app;
+    final trackOnly = app.settings.getBool('trackOnly');
+    // A background load leaves a marked-updated app (pseudo detection,
+    // installed == latest) untouched, observations included, while its
+    // package info is missing: the bulk list may just be incomplete (#3215),
+    // and the next foreground load confirms a real uninstall. Version-code
+    // mode reads the device too, so it counts as standard. Track-only apps
+    // keep the rules below.
+    if (installedInfo == null &&
+        !trackOnly &&
+        app.installedVersion == app.latestVersion &&
+        !app.usesStandardVersionDetection &&
+        !shouldClearInstalledVersion(
+          installedInfoMissing: true,
+          trackOnly: trackOnly,
+          isBackground: isBg,
+          versionDetectionIsStandard:
+              app.usesStandardVersionDetection ||
+              app.usesVersionCodeAsOsVersion,
+          installedVersion: app.installedVersion,
+          latestVersion: app.latestVersion,
+        )) {
+      return null;
+    }
     app = normalizeSelectedSourceVersion(app);
     final resetToDevice = app.additionalSettings.containsKey(
       installStatusResetKey,
@@ -135,7 +267,6 @@ extension AppsProviderLifecycle on AppsProvider {
     final settings = Map<String, dynamic>.from(app.additionalSettings)
       ..remove(unreconciledVersionComparisonKey)
       ..remove(installStatusResetKey);
-    final trackOnly = app.settings.getBool('trackOnly');
     if (trackOnly && !isTempId(app)) {
       settings['trackOnlyTemporaryPackageId'] = false;
     }
@@ -287,9 +418,8 @@ extension AppsProviderLifecycle on AppsProvider {
       List<PackageInfo> installedAppsData = [];
       try {
         installedAppsData = singleId == null
-            ? await getAllInstalledInfo(
-                light: true,
-              ).timeout(installedInfoTimeout)
+            ? await getAllInstalledInfo(light: true)
+                  .timeout(installedInfoTimeout)
             : [
                 await getInstalledInfo(
                   singleId,
@@ -434,9 +564,9 @@ extension AppsProviderLifecycle on AppsProvider {
             }
             if (!reused) {
               try {
-                final json =
-                    jsonDecode(await File(item.path).readAsString())
-                        as Map<String, dynamic>;
+                final json = jsonDecode(
+                  await File(item.path).readAsString(),
+                ) as Map<String, dynamic>;
                 checks.apply(json, checkTimes);
                 app = App.fromJson(json);
                 // The file name is the record's identity, so a record whose
@@ -484,14 +614,47 @@ extension AppsProviderLifecycle on AppsProvider {
                   overrideSource: app.overrideSource,
                 );
                 final String sourceType = src.sourceIdentifier;
-                final PackageInfo? installedInfo = installedInfoAvailable
+                PackageInfo? installedInfo = installedInfoAvailable
                     ? installedAppsMap[app.id]
                     : before?.installedInfo;
+                bool installedInfoKnown = installedInfoAvailable;
+                // The bulk list can come back truncated (#3215), which read as
+                // an uninstall and, with removeOnExternalUninstall, removed a
+                // still-installed app. So a recorded install missing from it
+                // is confirmed with a per-package lookup. Track-only and
+                // uninstalled apps keep the cheap path, as upstream's do, and
+                // a single-app load already read its package that way.
+                if (installedInfoAvailable &&
+                    singleId == null &&
+                    installedInfo == null &&
+                    app.installedVersion != null &&
+                    !app.settings.getBool('trackOnly')) {
+                  try {
+                    installedInfo = await resolveBulkOrLookup(
+                      app.id,
+                      installedAppsMap,
+                      lookup: (String packageId) =>
+                          getInstalledInfo(packageId, throwOnError: true),
+                    );
+                  } catch (error) {
+                    // No answer either way: keep what was known, and leave
+                    // this app's install state alone this time.
+                    installedInfo = before?.installedInfo;
+                    installedInfoKnown = false;
+                    unawaited(
+                      logs.add(
+                        'Could not confirm whether ${app.id} is installed; '
+                        'leaving its install state unchanged: $error',
+                        level: LogLevel.warning,
+                      ),
+                    );
+                  }
+                }
                 // Sampled before the reconcile: "externally uninstalled" is the
                 // *transition* from a recorded version to none, and only step 1
                 // of the reconcile can make it.
                 final bool hadInstalledVersion = app.installedVersion != null;
-                final App? correctedApp = installedInfoAvailable
+                final App? correctedApp = installedInfoKnown
                     ? getCorrectedInstallStatusAppIfPossible(app, installedInfo)
                     : null;
                 if (correctedApp != null) {
@@ -924,8 +1087,10 @@ extension AppsProviderLifecycle on AppsProvider {
     String? name;
     final applicationInfo = info?.applicationInfo;
     if (applicationInfo != null) {
+      // Read apart, so an icon Android can't draw (#3428) doesn't also cost
+      // the label.
+      icon = await loadAppIconSafely(applicationInfo.getAppIcon);
       try {
-        icon = await applicationInfo.getAppIcon();
         name = await applicationInfo.getAppLabel();
       } catch (e) {
         unawaited(
@@ -1016,15 +1181,24 @@ extension AppsProviderLifecycle on AppsProvider {
 
     final File cachedIcon = File('${iconsCacheDir.path}/$packageId.png');
     final bool isInstalled = listing.installedInfo != null;
+    final bool cacheExists = cachedIcon.existsSync();
+    // An installed app's launcher icon ships in its APK, so the cached copy
+    // only goes stale when the package is updated (upstream #3306).
+    final bool cacheUsable = isIconCacheUsable(
+      ignoreCache: ignoreCache,
+      cacheExists: cacheExists,
+      cacheModified: cacheExists ? cachedIcon.lastModifiedSync() : null,
+      packageLastUpdateTime: listing.installedInfo?.lastUpdateTime,
+    );
     if (listing.icon != null && !ignoreCache) {
       // In-memory icons for non-installed apps (APK extract, store fetch) are
       // already the right answer. After a later install, that same in-memory
       // icon would otherwise stick forever and beat the device launcher icon.
       if (!isInstalled) return;
-      if (cachedIcon.existsSync()) return;
+      if (cacheUsable) return;
     }
 
-    if (ignoreCache && cachedIcon.existsSync()) {
+    if (ignoreCache && cacheExists) {
       await cachedIcon.delete();
     }
     Uint8List? icon;
@@ -1032,14 +1206,16 @@ extension AppsProviderLifecycle on AppsProvider {
     // ObtainX deduces can beat it. The launcher icon is re-derivable from the OS
     // for free, so it stays in the (disposable) cache. A non-installed app has
     // no launcher icon, so both of these come up empty and we fall through.
-    final bool alreadyCached = cachedIcon.existsSync() && !ignoreCache;
-    if (alreadyCached) {
-      icon = await cachedIcon.readAsBytes();
-    } else {
+    // An unreadable cache falls through to the platform icon, which then
+    // rewrites it (#3428).
+    if (cacheUsable) {
+      icon = await readCachedAppIconSafely(cachedIcon);
+    }
+    if (icon == null) {
       icon = await _getInstalledAppIconSafely(packageId);
       if (icon != null) {
         icon = await _resizeIconForStorage(icon);
-        await cachedIcon.writeAsBytes(icon);
+        await writeCachedAppIconSafely(cachedIcon, icon);
       }
     }
     // Deduced icons are for non-installed apps only: extracted from the app's
@@ -1058,7 +1234,7 @@ extension AppsProviderLifecycle on AppsProvider {
       if (url != null && url.isNotEmpty) {
         icon = await fetchStoreIcon(url);
         if (icon != null) {
-          await deducedIcon.writeAsBytes(icon);
+          await writeCachedAppIconSafely(deducedIcon, icon);
           unawaited(mirrorIconToIconsDir(packageId, isUserIcon: false));
         }
       }
@@ -1080,6 +1256,20 @@ extension AppsProviderLifecycle on AppsProvider {
       }
       notify();
     }
+  }
+
+  Future<void> _refreshCachedLauncherIcon(
+    String packageId,
+    Uint8List icon,
+  ) async {
+    // Not initialized until the provider's async init completes; the next
+    // [updateAppIcon] catches a stale cache by its timestamp anyway.
+    if (!iconsCacheDirReady) return;
+    // Recreates the cache directory if it was cleared meanwhile (#3433).
+    await writeCachedAppIconSafely(
+      File('${iconsCacheDir.path}/$packageId.png'),
+      await _resizeIconForStorage(icon),
+    );
   }
 
   bool hasUserAppIconOverride(String appId) =>
@@ -1187,7 +1377,26 @@ extension AppsProviderLifecycle on AppsProvider {
   }
 
   /// Atomically replaces one app record and invalidates older checkpoints.
+  ///
+  /// Re-resolves the apps directory and retries once if [directory] vanished
+  /// between the existence check and the rename, which otherwise fails the
+  /// save (upstream #2860). Any other failure (a blocked path, a full disk)
+  /// still fails it, so a record never lands outside its batch's directory.
   Future<void> _writeAppRecord(
+    Directory directory,
+    App app,
+    AppCheckStore checks,
+  ) async {
+    try {
+      await _writeAppRecordTo(directory, app, checks);
+    } on FileSystemException {
+      if (await directory.exists()) rethrow;
+      cachedAppsDir = null;
+      await _writeAppRecordTo(await getAppsDir(), app, checks);
+    }
+  }
+
+  Future<void> _writeAppRecordTo(
     Directory directory,
     App app,
     AppCheckStore checks,
@@ -1325,8 +1534,17 @@ extension AppsProviderLifecycle on AppsProvider {
                 installedAppName = info == null ? null : cached.app.name;
               } else {
                 final installed = await installedIconAndName(app.id, info);
-                icon = installed.icon;
+                // Still installed but the icon couldn't be drawn this time:
+                // keep the one shown rather than blanking it (#3428).
+                icon = installed.icon ?? (info != null ? cached?.icon : null);
                 installedAppName = installed.name;
+                // The package changed, so its launcher icon may have too:
+                // refresh the cached copy, not just the one in memory
+                // (upstream #3306).
+                final Uint8List? launcherIcon = installed.icon;
+                if (info != null && launcherIcon != null) {
+                  unawaited(_refreshCachedLauncherIcon(app.id, launcherIcon));
+                }
               }
             }
             app = app.copyWith(name: installedAppName ?? app.name);
@@ -1460,7 +1678,9 @@ extension AppsProviderLifecycle on AppsProvider {
               .listingsForPackage(packageId)
               .any((listing) => !removedKeys.contains(listing.listingKey)),
         );
-    final apkFiles = apkDir.listSync();
+    // Listed asynchronously so a large APK cache doesn't stall the UI isolate
+    // (upstream 8c33f251).
+    final apkFiles = await apkDir.list().toList();
     await Future.wait(
       listingKeys.map((listingKey) async {
         final String packageId = _packageIdForListingKey(listingKey);
@@ -1837,9 +2057,9 @@ extension AppsProviderLifecycle on AppsProvider {
         );
         if (savedApps.containsKey(listingKey)) continue;
         try {
-          final json =
-              jsonDecode(await File(item.path).readAsString())
-                  as Map<String, dynamic>;
+          final json = jsonDecode(
+            await File(item.path).readAsString(),
+          ) as Map<String, dynamic>;
           savedApps[listingKey] = App.fromJson(json);
         } catch (err) {
           // A record this sweep cannot parse is left alone; loadApps owns

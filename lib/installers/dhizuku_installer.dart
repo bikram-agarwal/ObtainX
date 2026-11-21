@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
 import 'package:obtainium/installers/shizuku_plugin.dart';
@@ -39,20 +39,43 @@ class DhizukuInstaller extends Installer {
     }
   }
 
+  /// The latest [installApk] call, for [releaseStalledInstall].
+  ShizukuPluginCall<int?>? _pendingInstall;
+
   @override
   Future<InstallResult> installApk(
     List<String> apkFilePaths, {
     required String appId,
     Map<String, dynamic> installOptions = const {},
   }) async {
+    // `installerPackageName` is ignored on purpose: Dhizuku installs as the
+    // device owner and the plugin can't set another installer of record
+    // there. Update ownership for a first install does apply (#3445).
+    final bool requestUpdateOwnership =
+        installOptions['requestUpdateOwnership'] as bool? ?? false;
     final uris = apkFilePaths.map((p) => File(p).uri.toString()).toList();
     final ShizukuApkInstaller dhizukuInstaller = ShizukuApkInstaller();
-    final int? code = await runExclusiveShizukuPluginCall(() async {
-      await dhizukuInstaller.setInstallerMode(InstallerMode.dhizuku);
-      return uris.length > 1
-          ? dhizukuInstaller.installAABSplits(uris, '')
-          : dhizukuInstaller.installAPK(uris.first, '');
-    });
-    return InstallResult.fromPlatformCode(code);
+    final ShizukuPluginCall<int?> install = startExclusiveShizukuPluginCall(
+      () async {
+        await dhizukuInstaller.setInstallerMode(InstallerMode.dhizuku);
+        return uris.length > 1
+            ? dhizukuInstaller.installAABSplits(
+                uris,
+                '',
+                requestUpdateOwnership: requestUpdateOwnership,
+              )
+            : dhizukuInstaller.installAPK(
+                uris.first,
+                '',
+                requestUpdateOwnership: requestUpdateOwnership,
+              );
+      },
+    );
+    _pendingInstall = install;
+    return InstallResult.fromPlatformCode(await install.result);
   }
+
+  @override
+  Future<void> releaseStalledInstall() async =>
+      _pendingInstall?.releaseIfStalled();
 }

@@ -1,7 +1,7 @@
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/pages/import_export.dart';
@@ -87,8 +87,7 @@ void main() {
     tester,
   ) async {
     await openPage(tester, {
-      'exportDir':
-          'content://com.android.externalstorage.documents/tree/primary%3AObtainX',
+      'exportDir': 'content://com.android.externalstorage.documents/tree/primary%3AObtainX',
     });
 
     expect(autoExport(tester).value, isFalse);
@@ -120,9 +119,9 @@ void main() {
         .text
         .style
         ?.color;
-    final Color onSurface = Theme.of(
-      tester.element(imports.first),
-    ).colorScheme.onSurface;
+    final Color onSurface = Theme.of(tester.element(imports.first))
+        .colorScheme
+        .onSurface;
 
     // No icons folder: both do nothing, and look it.
     for (final Finder button in [imports.first, exports.first]) {
@@ -156,8 +155,7 @@ void main() {
     tester,
   ) async {
     await openPage(tester, {
-      'exportDir':
-          'content://com.android.externalstorage.documents/tree/primary%3AObtainX',
+      'exportDir': 'content://com.android.externalstorage.documents/tree/primary%3AObtainX',
     });
 
     await tester.ensureVisible(find.text(tr('autoExportOnChanges')));

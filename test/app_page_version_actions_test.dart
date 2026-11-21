@@ -2,7 +2,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/pages/app.dart';
@@ -21,6 +21,10 @@ class _Apps extends ChangeNotifier implements AppsProvider {
   final AppListings apps = AppListings();
   @override
   final Map<String, ({String? title, String message})> appPageErrors = {};
+  // The app page's Downgrade gate asks the app's installer (v1.7.4 D13,
+  // getInstaller(app)), which reads the global install method from here.
+  @override
+  late SettingsProvider settingsProvider;
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
@@ -64,9 +68,8 @@ void main() {
       'assets/translations',
       const Locale('en'),
     ))!;
-    icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    icon = (await rootBundle.load('assets/graphics/logo_remember.png')).buffer
+        .asUint8List();
   });
   setUp(() async {
     SharedPreferences.setMockInitialValues({
@@ -194,7 +197,7 @@ void main() {
         const Locale('en'),
         translations: Translations(translations),
       );
-      final provider = _Apps();
+      final provider = _Apps()..settingsProvider = settings;
       final model = _app('2.21.0', '2.20.0', trackOnly: false);
       provider.apps[model.id] = AppInMemory(model, null, null, icon);
       addTearDown(provider.dispose);

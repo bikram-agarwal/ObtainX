@@ -9,12 +9,15 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/http/source_request_session.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
 import 'package:obtainium/services/bulk_scan_cache.dart';
 import 'package:obtainium/services/store_icon_resolver.dart';
+import 'package:obtainium/utils/min_update_age.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/version/partial_download_version.dart';
 
 // ── Bounded update-check parallelism (device-tuned) ─────────────────────────
@@ -146,6 +149,47 @@ bool installedVersionIsNewerOrEqual(String? installed, String latest) {
       decision.relation == VersionRelation.newer;
 }
 
+/// Stamps when [newApp]'s latest version changed (upstream #3407). With the
+/// per-app `detectionDateAsReleaseDate` option on (#3453), that time also
+/// stands in for the release date when the source gives none (direct APK
+/// links, most HTML pages).
+///
+/// Runs after min-age suppression: a dateless release stamped first would
+/// read as brand new, be held back, and be stamped again on every check.
+App recordLatestVersionChange(App currentApp, App newApp, {DateTime? now}) {
+  // An app added without a check (D10) carries a placeholder version, which
+  // was never seen at the source: its first real check is a first
+  // observation, so it doesn't date the release it finds.
+  final bool versionChanged =
+      newApp.latestVersion != currentApp.latestVersion &&
+      !hasOnlyPlaceholderApks(currentApp);
+  final bool firstObservation = currentApp.latestVersionChangedAt == null;
+  final DateTime? changedAt = versionChanged || firstObservation
+      ? (now ?? DateTime.now())
+      : currentApp.latestVersionChangedAt;
+  final bool useDetectionDate =
+      newApp.releaseDate == null &&
+      newApp.settings.getBool('detectionDateAsReleaseDate') &&
+      (versionChanged || currentApp.releaseDate != null);
+  return newApp.copyWith(
+    latestVersionChangedAt: changedAt,
+    releaseDate: useDetectionDate ? changedAt : newApp.releaseDate,
+  );
+}
+
+/// The `preferredApkIndex` a fetched update is saved with.
+///
+/// The fetched one, which the source resolved from the index the request
+/// started with (and #3473 may have moved to the ABI match), unless the user
+/// picked another APK while the request ran: then theirs wins while it still
+/// exists. Keeping the live index regardless (as before D12) undid #3473 on
+/// every check.
+int _mergedPreferredApkIndex(App requestedApp, App liveApp, App fetchedApp) =>
+    liveApp.preferredApkIndex != requestedApp.preferredApkIndex &&
+        liveApp.preferredApkIndex < fetchedApp.apkUrls.length
+    ? liveApp.preferredApkIndex
+    : fetchedApp.preferredApkIndex;
+
 /// Track-only open URL: RSS release page when [App.changeLog] is http(s), else
 /// [App.url].
 String trackOnlyDownloadPageUrl(App app) {
@@ -215,10 +259,11 @@ App? mergeFetchedUpdateWithLiveState({
       liveApp.overrideSource != requestedApp.overrideSource) {
     return null;
   }
-  final int preferredApkIndex =
-      liveApp.preferredApkIndex < fetchedApp.apkUrls.length
-      ? liveApp.preferredApkIndex
-      : fetchedApp.preferredApkIndex;
+  final int preferredApkIndex = _mergedPreferredApkIndex(
+    requestedApp,
+    liveApp,
+    fetchedApp,
+  );
   final bool malwareScanStillMatchesRelease =
       liveApp.latestVersion == fetchedApp.latestVersion;
   final settings = Map<String, dynamic>.from(liveApp.additionalSettings)
@@ -244,6 +289,13 @@ App? mergeFetchedUpdateWithLiveState({
   if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {
     settings[partialDownloadFingerprintKey] =
         fetchedApp.additionalSettings[partialDownloadFingerprintKey];
+  }
+  // GitHub's 7-day throttle on the archived check (D8): source-owned, so it
+  // comes from the fetch or the check repeats every time.
+  settings.remove(repoArchivedCheckedAtKey);
+  if (fetchedApp.additionalSettings[repoArchivedCheckedAtKey] != null) {
+    settings[repoArchivedCheckedAtKey] =
+        fetchedApp.additionalSettings[repoArchivedCheckedAtKey];
   }
   return normalizeSelectedSourceVersion(
     liveApp.copyWith(
@@ -276,6 +328,13 @@ App? mergeFetchedUpdateWithLiveState({
       latestMalwareScanReportUrl: malwareScanStillMatchesRelease
           ? liveApp.latestMalwareScanReportUrl
           : null,
+      // Update health's source-owned fields (D8). `updateHealthEnabled` and
+      // `updateHealthDismissedVersion` are the user's (Ignore on the Update
+      // health page), so they stay as the live row has them.
+      latestVersionChangedAt: fetchedApp.latestVersionChangedAt,
+      consecutiveFailedChecks: fetchedApp.consecutiveFailedChecks,
+      isArchived: fetchedApp.isArchived,
+      newerReleasesFilteredOut: fetchedApp.newerReleasesFilteredOut,
     ),
   );
 }
@@ -412,6 +471,8 @@ App prepareAppForTrackedSourceSwap({
     partialDownloadFingerprintKey,
     'skippedLatestVersion',
     unreconciledVersionComparisonKey,
+    // Describes the previous store's repository, as isArchived does.
+    repoArchivedCheckedAtKey,
     ...storeShapedAppSettingKeys,
   ]) {
     settings.remove(metadataKey);
@@ -476,6 +537,9 @@ App prepareAppForTrackedSourceSwap({
     latestMalwareScanStatus: null,
     latestMalwareScanDetail: null,
     latestMalwareScanReportUrl: null,
+    // Describes the previous store's project; getApp only overwrites it when
+    // the destination reports it.
+    isArchived: null,
     additionalSettings: settings,
   );
 }
@@ -495,10 +559,11 @@ App? mergeTrackedSourceSwap({
       liveApp.overrideSource != originalOverrideSource) {
     return null;
   }
-  final int preferredApkIndex =
-      liveApp.preferredApkIndex < fetchedApp.apkUrls.length
-      ? liveApp.preferredApkIndex
-      : fetchedApp.preferredApkIndex;
+  final int preferredApkIndex = _mergedPreferredApkIndex(
+    requestedApp,
+    liveApp,
+    fetchedApp,
+  );
   final Map<String, dynamic> settings =
       Map<String, dynamic>.from(requestedApp.additionalSettings)
         ..remove(sourceVersionCodesKey)
@@ -523,6 +588,13 @@ App? mergeTrackedSourceSwap({
   if (fetchedApp.additionalSettings[partialDownloadFingerprintKey] != null) {
     settings[partialDownloadFingerprintKey] =
         fetchedApp.additionalSettings[partialDownloadFingerprintKey];
+  }
+  // GitHub's 7-day throttle on the archived check (D8): source-owned, so it
+  // comes from the fetch or the check repeats every time.
+  settings.remove(repoArchivedCheckedAtKey);
+  if (fetchedApp.additionalSettings[repoArchivedCheckedAtKey] != null) {
+    settings[repoArchivedCheckedAtKey] =
+        fetchedApp.additionalSettings[repoArchivedCheckedAtKey];
   }
   return normalizeSelectedSourceVersion(
     liveApp.copyWith(
@@ -551,6 +623,13 @@ App? mergeTrackedSourceSwap({
       latestMalwareScanStatus: null,
       latestMalwareScanDetail: null,
       latestMalwareScanReportUrl: null,
+      // As in [mergeFetchedUpdateWithLiveState]: the source-owned update
+      // health fields from the fetch, the user's Ignore choices from the live
+      // row.
+      latestVersionChangedAt: fetchedApp.latestVersionChangedAt,
+      consecutiveFailedChecks: fetchedApp.consecutiveFailedChecks,
+      isArchived: fetchedApp.isArchived,
+      newerReleasesFilteredOut: fetchedApp.newerReleasesFilteredOut,
     ),
   );
 }
@@ -567,9 +646,45 @@ typedef _FetchedAppUpdate = ({App requestedApp, App fetchedApp});
 bool sourceAnsweredWithoutUpdate(Object error) =>
     error is NoReleasesError || error is NoAPKError || error is NoVersionError;
 
+/// Whether a check failure is one a quick retry won't fix (v1.6.17 sync D10,
+/// converging upstream #3187): a broken source or a rejected request, as
+/// opposed to a network problem, a timeout, a rate limit or a server error.
+///
+/// A persistent failure still moves the app's check time, so a source that
+/// always fails isn't re-asked on every 15-minute background wake, which also
+/// keeps the cheap wake-up skip working. A transient one doesn't, keeping the
+/// app first in line, and answers are left to [sourceAnsweredWithoutUpdate].
+bool checkFailureIsPersistent(Object error) {
+  if (sourceAnsweredWithoutUpdate(error)) return false;
+  // Most sources wrap a network exception in an unexpected ObtainiumError
+  // (rethrowOrWrapError); judge the exception itself.
+  final Object? cause = error is ObtainiumError ? error.cause : null;
+  if (cause != null && !checkFailureIsPersistent(cause)) return false;
+  if (isTransientNetworkError(error) ||
+      error is RateLimitError ||
+      error is RepositoryRenamedError) {
+    return false;
+  }
+  if (error is ObtainiumError && error.code == 'HTTP_ERROR') {
+    final Object? statusCode = error.data['statusCode'];
+    return !(statusCode is int &&
+        (statusCode >= 500 || statusCode == 408 || statusCode == 429));
+  }
+  return true;
+}
+
 /// [app] as saved after its source answered with [error] (one that
 /// [sourceAnsweredWithoutUpdate] accepts) at [checkedAt].
-App appAfterAnswerWithoutUpdate(App app, Object error, DateTime checkedAt) {
+///
+/// The answer counts as a failed check for update health (D8) unless
+/// [countFailedCheck] is false: a background retry re-asks within the run
+/// whose failure was already counted.
+App appAfterAnswerWithoutUpdate(
+  App app,
+  Object error,
+  DateTime checkedAt, {
+  bool countFailedCheck = true,
+}) {
   // A release exists and only its version couldn't be read, so keep what is
   // known instead of claiming the source has nothing.
   final App updated = error is NoVersionError
@@ -587,7 +702,12 @@ App appAfterAnswerWithoutUpdate(App app, Object error, DateTime checkedAt) {
   } else {
     clearNeedsAttentionCode(settings, needsAttentionVersionFilter);
   }
-  return updated.copyWith(additionalSettings: settings);
+  return updated.copyWith(
+    additionalSettings: settings,
+    consecutiveFailedChecks: countFailedCheck && shouldCountFailedCheck(error)
+        ? app.consecutiveFailedChecks + 1
+        : app.consecutiveFailedChecks,
+  );
 }
 
 /// Update checking and pending-update bookkeeping for [AppsProvider].
@@ -615,12 +735,44 @@ extension AppsProviderUpdates on AppsProvider {
       currentApp.additionalSettings,
       currentApp: currentApp,
     );
+    if (await _minAgeHoldsReleaseBack(currentApp, fetchedApp)) {
+      // Hold the update back until the release reaches the minimum update age
+      // (supply-chain delay, upstream #3004/#3303). Before the size probe, so
+      // a held-back release costs no extra request.
+      fetchedApp = applyMinAgeSuppression(currentApp, fetchedApp);
+    }
+    // After the suppression (see [recordLatestVersionChange]). A successful
+    // check ends a run of failed ones (D8).
+    fetchedApp = recordLatestVersionChange(
+      currentApp,
+      fetchedApp.copyWith(consecutiveFailedChecks: 0),
+    );
     fetchedApp = await _fillDownloadSizeIfUpdatePending(
       source,
       currentApp,
       fetchedApp,
     );
     return (requestedApp: currentApp, fetchedApp: fetchedApp);
+  }
+
+  /// Whether the app's minimum update age holds [fetchedApp]'s release back:
+  /// it is younger than that age, or the sources' lookback (the newest release
+  /// old enough) went below the installed version, which the Downgrade action
+  /// would then offer until the newer release ages. Never when nothing new was
+  /// fetched, or when the app has no matching release now: there is no current
+  /// release to fall back to.
+  Future<bool> _minAgeHoldsReleaseBack(App currentApp, App fetchedApp) async {
+    if (fetchedApp.latestVersion == currentApp.latestVersion) return false;
+    if (appHasNoMatchingRelease(currentApp)) return false;
+    final int minAgeDays = await effectiveMinUpdateAgeDays(
+      currentApp.additionalSettings,
+      settingsProvider: settingsProvider,
+    );
+    if (minAgeDays <= 0) return false;
+    if (isReleaseTooYoung(fetchedApp.releaseDate, minAgeDays)) return true;
+    return versionDecisionForApp(fetchedApp).relation ==
+            VersionRelation.newer &&
+        versionDecisionForApp(currentApp).relation != VersionRelation.newer;
   }
 
   /// For sources that don't publish an APK size in their metadata (GitLab,
@@ -652,32 +804,39 @@ extension AppsProviderUpdates on AppsProvider {
             fetchedApp.preferredApkIndex < fetchedApp.apkUrls.length)
         ? fetchedApp.preferredApkIndex
         : 0;
-    final String url = fetchedApp.apkUrls[idx].value;
-    if (url.isEmpty) return fetchedApp;
+    // A split set (base plus splits from separate URLs, upstream #3298) is
+    // the sum of its parts; one part of unknown size leaves the total unknown.
+    final List<String> urls = splitMultiApkUrl(fetchedApp.apkUrls[idx].value);
+    if (urls.isEmpty) return fetchedApp;
     try {
-      // Resolve the real download URL first: sources like GitLab and Uptodown
-      // rewrite the asset URL in assetUrlPrefetchModifier, so probing the
-      // unresolved URL returns a wrong or missing Content-Length. The install
-      // path already resolves before downloading; do the same here. (#3104)
-      final String resolvedUrl = await source.assetUrlPrefetchModifier(
-        url,
-        currentApp.url,
-        currentApp.additionalSettings,
-      );
-      if (resolvedUrl.isEmpty) return fetchedApp;
-      final Map<String, String>? headers = await source.getRequestHeaders(
-        currentApp.additionalSettings,
-        resolvedUrl,
-        forAPKDownload: true,
-      );
-      final int? size = await getDownloadSize(
-        resolvedUrl,
-        headers: headers,
-        allowInsecure: currentApp.settings.getBool('allowInsecure'),
-      );
-      if (size != null && size > 0) {
-        return fetchedApp.copyWith(apkSizeBytes: size);
+      int totalSize = 0;
+      for (final String url in urls) {
+        // Resolve the real download URL first: sources like GitLab and Uptodown
+        // rewrite the asset URL in assetUrlPrefetchModifier, so probing the
+        // unresolved URL returns a wrong or missing Content-Length. The install
+        // path already resolves before downloading; do the same here. (#3104)
+        final String resolvedUrl = await source.assetUrlPrefetchModifier(
+          url,
+          currentApp.url,
+          currentApp.additionalSettings,
+        );
+        if (resolvedUrl.isEmpty) return fetchedApp;
+        final Map<String, String>? headers = await source.getRequestHeaders(
+          currentApp.additionalSettings,
+          resolvedUrl,
+          forAPKDownload: true,
+        );
+        final int? size = await getDownloadSize(
+          resolvedUrl,
+          headers: headers,
+          allowInsecure: currentApp.settings.getBool('allowInsecure'),
+          allowInsecureRedirects: source.allowInsecureRedirects,
+          certificatePinning: settingsProvider.enableCertificatePinning,
+        );
+        if (size == null || size <= 0) return fetchedApp;
+        totalSize += size;
       }
+      return fetchedApp.copyWith(apkSizeBytes: totalSize);
     } catch (_) {
       // Best-effort: leave the size unknown on any failure.
     }
@@ -813,6 +972,10 @@ extension AppsProviderUpdates on AppsProvider {
       requestedApp.additionalSettings,
       currentApp: requestedApp,
     );
+    fetchedApp = recordLatestVersionChange(
+      requestedApp,
+      fetchedApp.copyWith(consecutiveFailedChecks: 0),
+    );
     fetchedApp = await _fillDownloadSizeIfUpdatePending(
       destinationSource,
       requestedApp,
@@ -847,6 +1010,10 @@ extension AppsProviderUpdates on AppsProvider {
     );
     final List<String> appIds = apps.values
         .where((app) => !app.app.settings.getBool('onDemandOnly'))
+        // Paused until the user resolves the rename (see
+        // [_fetchUpdateSnapshot]): a check would skip it, and its old
+        // lastUpdateCheck would keep it "due" on every wake-up.
+        .where((app) => !app.app.hasPendingRepoRename)
         .where(
           (app) =>
               forceAll ||
@@ -888,6 +1055,9 @@ extension AppsProviderUpdates on AppsProvider {
     for (final listing in apps.values) {
       final App app = listing.app;
       if (app.settings.getBool('onDemandOnly')) continue;
+      // Checks skip it until the rename is resolved, so its past due time
+      // would make every wake-up load in full (#317).
+      if (app.hasPendingRepoRename) continue;
       if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps &&
           app.installedVersion == null &&
           !app.settings.getBool('trackOnly')) {
@@ -910,11 +1080,16 @@ extension AppsProviderUpdates on AppsProvider {
   /// change the string without putting the device behind. Callers that surface
   /// this to the user (notifications) or act on it (background install) must
   /// filter with [appUpdateIsUserVisible] so they agree with the app list.
+  ///
+  /// [retriedIds] are checked again by a background retry after failing
+  /// earlier in the same background run, so a failure of theirs isn't
+  /// counted toward update health's failed checks a second time.
   Future<List<App>> checkUpdates({
     bool throwErrorsForRetry = false,
     List<String>? specificIds,
     bool forceAll = false,
     SettingsProvider? sp,
+    Set<String> retriedIds = const {},
   }) {
     return SourceRequestSession.run(
       () => _checkUpdatesInSession(
@@ -922,6 +1097,7 @@ extension AppsProviderUpdates on AppsProvider {
         specificIds: specificIds,
         forceAll: forceAll,
         sp: sp,
+        retriedIds: retriedIds,
       ),
     );
   }
@@ -931,10 +1107,16 @@ extension AppsProviderUpdates on AppsProvider {
     List<String>? specificIds,
     bool forceAll = false,
     SettingsProvider? sp,
+    Set<String> retriedIds = const {},
   }) async {
     final SettingsProvider settingsProvider = sp ?? this.settingsProvider;
-    if (updateCheckCompleter != null) {
-      return updateCheckCompleter!.future;
+    // A check already running may cover a different scope than this caller
+    // asked for (a folder or on-demand refresh during the startup or background
+    // check), so wait for it to finish and then run this one, instead of
+    // returning the other check's result (upstream 5bd8be8a).
+    while (updateCheckCompleter != null) {
+      final Completer<List<App>> runningCheck = updateCheckCompleter!;
+      await runningCheck.future.catchError((_) => <App>[]);
     }
     final completer = updateCheckCompleter = Completer<List<App>>();
     var completed = 0;
@@ -988,6 +1170,14 @@ extension AppsProviderUpdates on AppsProvider {
       // sourceAnsweredWithoutUpdate), keyed to that answer. Saved with the
       // next flush, the same as a found release.
       final Map<String, Object> pendingAnswered = {};
+      // Failed in a way a retry won't fix (see checkFailureIsPersistent), keyed
+      // to that failure: only their check time and failed-check count are
+      // saved, with the next flush.
+      final Map<String, Object> pendingPersistentFailures = {};
+      // Update health counts only the failures a retry won't fix (D8), and
+      // only in these save paths: D10 leaves transient failures unsaved.
+      bool countsAsFailedCheck(String appId, Object error) =>
+          !retriedIds.contains(appId) && shouldCountFailedCheck(error);
       DateTime lastSaveTime = DateTime.now();
       bool saveInProgress = false;
       const Duration saveInterval = Duration(seconds: 3);
@@ -1006,7 +1196,7 @@ extension AppsProviderUpdates on AppsProvider {
           // Concurrent TLS handshakes to the same host can fail on certain
           // devices or networks. Keep retries inside the bounded worker so
           // they cannot bypass the device-tuned concurrency limit.
-          const int maxRetries = 5;
+          const int maxRetries = 2;
           final Random random = Random();
           for (int attempt = 0; attempt < maxRetries; attempt++) {
             await Future.delayed(
@@ -1024,7 +1214,9 @@ extension AppsProviderUpdates on AppsProvider {
 
       Future<void> flushFetchedResults({bool force = false}) async {
         if (saveInProgress ||
-            (pendingResults.isEmpty && pendingAnswered.isEmpty)) {
+            (pendingResults.isEmpty &&
+                pendingAnswered.isEmpty &&
+                pendingPersistentFailures.isEmpty)) {
           return;
         }
         final DateTime now = DateTime.now();
@@ -1035,12 +1227,41 @@ extension AppsProviderUpdates on AppsProvider {
         pendingResults.clear();
         final Map<String, Object> answered = Map.from(pendingAnswered);
         pendingAnswered.clear();
+        final Map<String, Object> failed = Map.from(pendingPersistentFailures);
+        pendingPersistentFailures.clear();
         try {
+          final List<App> failedCheckTimes = [
+            for (final MapEntry<String, Object> failure in failed.entries)
+              if (apps[failure.key]?.app case final App liveApp)
+                liveApp.copyWith(
+                  lastUpdateCheck: now,
+                  consecutiveFailedChecks:
+                      countsAsFailedCheck(failure.key, failure.value)
+                      ? liveApp.consecutiveFailedChecks + 1
+                      : liveApp.consecutiveFailedChecks,
+                ),
+          ];
+          if (failedCheckTimes.isNotEmpty) {
+            // Only the check time and the failure count move; nothing about
+            // the install changed.
+            await saveApps(
+              failedCheckTimes,
+              attemptToCorrectInstallStatus: false,
+              updateInstalledInfo: false,
+            );
+          }
           final List<App> fetched = [];
           answered.forEach((String appId, Object error) {
             final App? liveApp = apps[appId]?.app;
             if (liveApp != null) {
-              fetched.add(appAfterAnswerWithoutUpdate(liveApp, error, now));
+              fetched.add(
+                appAfterAnswerWithoutUpdate(
+                  liveApp,
+                  error,
+                  now,
+                  countFailedCheck: !retriedIds.contains(appId),
+                ),
+              );
             }
           });
           for (final _FetchedAppUpdate result in batch) {
@@ -1089,7 +1310,11 @@ extension AppsProviderUpdates on AppsProvider {
               await updatePendingRepoRename(appId, e.newUrl);
             } else {
               errors.add(appId, e, appName: apps[appId]?.name);
-              if (sourceAnsweredWithoutUpdate(e)) pendingAnswered[appId] = e;
+              if (sourceAnsweredWithoutUpdate(e)) {
+                pendingAnswered[appId] = e;
+              } else if (checkFailureIsPersistent(e)) {
+                pendingPersistentFailures[appId] = e;
+              }
             }
           } finally {
             completed++;
@@ -1159,6 +1384,34 @@ extension AppsProviderUpdates on AppsProvider {
       }
     }
     return updateAppIds;
+  }
+
+  /// After a successful foreground check, cancels the background task's
+  /// update notifications that nothing pending is left for (upstream #3415):
+  /// tapping one opened ObtainX to an app already up to date. ObtainX posts
+  /// installable and track-only updates separately, so each is judged by its
+  /// own apps. The pending set matches what the background task notifies:
+  /// installed apps, uncertain version order included, on-demand-only apps
+  /// excluded.
+  Future<void> clearStaleUpdateNotifications(
+    NotificationsProvider notificationsProvider,
+  ) async {
+    final List<String> pending = findExistingUpdates(
+      installedOnly: true,
+      excludeOnDemandOnly: true,
+      includeVersionOrderUncertain: true,
+    );
+    bool isTrackOnly(String listingKey) =>
+        apps[listingKey]?.app.settings.getBool('trackOnly') ?? false;
+    await clearStaleUpdateNotification(
+      notificationsProvider,
+      pending.where((String key) => !isTrackOnly(key)).toList(),
+    );
+    await clearStaleUpdateNotification(
+      notificationsProvider,
+      pending.where(isTrackOnly).toList(),
+      id: trackOnlyUpdateNotificationId,
+    );
   }
 
   /// Device-tuned upper bound on how many update checks run in parallel. Low-RAM

@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/pages/import_from_url_list.dart';
 import 'package:obtainium/providers/apps_provider.dart';

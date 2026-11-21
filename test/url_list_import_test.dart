@@ -4,7 +4,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/backup_import_sheet.dart';
@@ -47,9 +47,8 @@ void main() {
       'assets/translations',
       const Locale('en'),
     ))!;
-    icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    icon = (await rootBundle.load('assets/graphics/logo_remember.png')).buffer
+        .asUint8List();
   });
   setUp(() async {
     SharedPreferences.setMockInitialValues({});

@@ -78,9 +78,8 @@ void main() {
     );
   });
   test('regex replacement handles multi-digit references in one pass', () {
-    final match = RegExp(
-      r'(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)',
-    ).firstMatch('abcdefghij')!;
+    final match = RegExp(r'(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)')
+        .firstMatch('abcdefghij')!;
     final service = VersionService();
     expect(service.replaceMatchGroupsInString(match, r'$1-$10-$1'), 'a-j-a');
     expect(service.replaceMatchGroupsInString(match, r'\$1/$1'), r'$1/a');
@@ -168,26 +167,23 @@ void main() {
       ]);
     }
   });
-  test(
-    'itch.io preserves prerelease labels when extracting and choosing a release',
-    () {
-      final source = ItchIO();
-      expect(
-        source.parseVersion(
-          html_parser.parse(
-            '<div class="page_widget">Version 1.2.3-beta10</div>',
-          ),
+  test('itch.io preserves prerelease labels when extracting and choosing a release', () {
+    final source = ItchIO();
+    expect(
+      source.parseVersion(
+        html_parser.parse(
+          '<div class="page_widget">Version 1.2.3-beta10</div>',
         ),
-        '1.2.3-beta10',
-      );
-      expect(
-        source.parseVersion(
-          html_parser.parse(
-            '<div class="page_widget">v1.2.3<br>Version 1.2.3-rc.1</div>',
-          ),
+      ),
+      '1.2.3-beta10',
+    );
+    expect(
+      source.parseVersion(
+        html_parser.parse(
+          '<div class="page_widget">v1.2.3<br>Version 1.2.3-rc.1</div>',
         ),
-        '1.2.3',
-      );
-    },
-  );
+      ),
+      '1.2.3',
+    );
+  });
 }

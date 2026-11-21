@@ -154,7 +154,7 @@ class _GitHub extends GitHub {
   ) async {
     return APKDetails('1.5.5-ced5040c', const [
       MapEntry('WaEnhancer-1.5.5.CED5040C.apk', 'https://example.com/wa.apk'),
-    ], AppNames('Example', 'Example'));
+    ], const AppNames('Example', 'Example'));
   }
 }
 
@@ -359,34 +359,28 @@ void main() {
     expect(appHasActionableUpdate(acknowledgeSourceRelease(app)), isFalse);
   });
 
-  test(
-    'track-only migration keeps an acknowledgement and adopts the actual device version',
-    () {
-      final provider = _Provider();
-      final app = _app('source alias', 'source alias', trackOnly: true);
-      final info = _Package('device label');
-      final corrected = provider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        info,
-      )!;
-      expect(corrected.installedVersion, 'device label');
-      expect(versionDecisionForApp(corrected).reason, 'sourceAcknowledged');
-      final restored = App.fromJson(corrected.toJson());
-      expect(
-        provider.getCorrectedInstallStatusAppIfPossible(restored, info),
-        isNull,
-      );
-      final external = provider.getCorrectedInstallStatusAppIfPossible(
-        restored,
-        _Package('new device label', code: 124),
-      )!;
-      expect(external.installedVersion, 'new device label');
-      expect(
-        versionDecisionForApp(external).reason,
-        isNot('sourceAcknowledged'),
-      );
-    },
-  );
+  test('track-only migration keeps an acknowledgement and adopts the actual device version', () {
+    final provider = _Provider();
+    final app = _app('source alias', 'source alias', trackOnly: true);
+    final info = _Package('device label');
+    final corrected = provider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      info,
+    )!;
+    expect(corrected.installedVersion, 'device label');
+    expect(versionDecisionForApp(corrected).reason, 'sourceAcknowledged');
+    final restored = App.fromJson(corrected.toJson());
+    expect(
+      provider.getCorrectedInstallStatusAppIfPossible(restored, info),
+      isNull,
+    );
+    final external = provider.getCorrectedInstallStatusAppIfPossible(
+      restored,
+      _Package('new device label', code: 124),
+    )!;
+    expect(external.installedVersion, 'new device label');
+    expect(versionDecisionForApp(external).reason, isNot('sourceAcknowledged'));
+  });
 
   test('Mark updated keeps the real device version on track-only apps', () {
     final app = _app('device label', 'source alias', trackOnly: true);
@@ -394,9 +388,8 @@ void main() {
     expect(marked.installedVersion, 'device label');
     expect(versionDecisionForApp(marked).reason, 'sourceAcknowledged');
     expect(
-      versionDecisionForApp(
-        marked.copyWith(latestVersion: 'next alias'),
-      ).relation,
+      versionDecisionForApp(marked.copyWith(latestVersion: 'next alias'))
+          .relation,
       VersionRelation.sourceChanged,
     );
   });
@@ -532,160 +525,150 @@ void main() {
     );
   }
 
-  test(
-    'normal source refresh carries the commit comparison through merge and reload',
-    () async {
-      final source = _GitHub('ahead');
-      final current = _app('1.5.5 (4D91B33C)', '1.5.5-ab12345');
-      final fetched = await SourceProvider().getApp(
-        source,
-        current.url,
-        current.additionalSettings,
-        currentApp: current,
-      );
-      final merged = mergeFetchedUpdateWithLiveState(
-        requestedApp: current,
-        liveApp: current,
-        fetchedApp: fetched,
-      )!;
-      expect(
-        versionDecisionForApp(App.fromJson(merged.toJson())).reason,
-        'sourceCommitAncestry',
-      );
-      expect(appHasActionableUpdate(merged), isTrue);
-      final installedWhileChecking = current.copyWith(
-        installedVersion: '1.5.5 (FED98765)',
-        additionalSettings: {
-          ...current.additionalSettings,
-          observedPackageIdKey: current.id,
-          observedVersionNameKey: '1.5.5 (FED98765)',
-          observedVersionCodeKey: 155,
-        },
-      );
-      final stale = mergeFetchedUpdateWithLiveState(
-        requestedApp: current,
-        liveApp: installedWhileChecking,
-        fetchedApp: fetched,
-      )!;
-      expect(stale.installedVersion, installedWhileChecking.installedVersion);
-      expect(versionDecisionForApp(stale).reason, 'differentBuildHashes');
-      expect(appHasActionableUpdate(stale), isFalse);
-    },
-  );
+  test('normal source refresh carries the commit comparison through merge and reload', () async {
+    final source = _GitHub('ahead');
+    final current = _app('1.5.5 (4D91B33C)', '1.5.5-ab12345');
+    final fetched = await SourceProvider().getApp(
+      source,
+      current.url,
+      current.additionalSettings,
+      currentApp: current,
+    );
+    final merged = mergeFetchedUpdateWithLiveState(
+      requestedApp: current,
+      liveApp: current,
+      fetchedApp: fetched,
+    )!;
+    expect(
+      versionDecisionForApp(App.fromJson(merged.toJson())).reason,
+      'sourceCommitAncestry',
+    );
+    expect(appHasActionableUpdate(merged), isTrue);
+    final installedWhileChecking = current.copyWith(
+      installedVersion: '1.5.5 (FED98765)',
+      additionalSettings: {
+        ...current.additionalSettings,
+        observedPackageIdKey: current.id,
+        observedVersionNameKey: '1.5.5 (FED98765)',
+        observedVersionCodeKey: 155,
+      },
+    );
+    final stale = mergeFetchedUpdateWithLiveState(
+      requestedApp: current,
+      liveApp: installedWhileChecking,
+      fetchedApp: fetched,
+    )!;
+    expect(stale.installedVersion, installedWhileChecking.installedVersion);
+    expect(versionDecisionForApp(stale).reason, 'differentBuildHashes');
+    expect(appHasActionableUpdate(stale), isFalse);
+  });
 
-  test(
-    'an unavailable GitHub comparison does not fail a refresh or imply an update',
-    () async {
-      for (final responseCode in [403, 404, 429, 500]) {
-        final app = _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c');
-        final resolved = await _GitHub(
-          'ahead',
-          responseCode: responseCode,
-        ).resolveVersionComparison(app);
-        expect(versionDecisionForApp(resolved).reason, 'differentBuildHashes');
-        expect(appHasActionableUpdate(resolved), isFalse);
-      }
-    },
-  );
+  test('an unavailable GitHub comparison does not fail a refresh or imply an update', () async {
+    for (final responseCode in [403, 404, 429, 500]) {
+      final app = _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c');
+      final resolved = await _GitHub(
+        'ahead',
+        responseCode: responseCode,
+      ).resolveVersionComparison(app);
+      expect(versionDecisionForApp(resolved).reason, 'differentBuildHashes');
+      expect(appHasActionableUpdate(resolved), isFalse);
+    }
+  });
 
   test('same hash tolerates case and punctuation without a lookup', () async {
     final source = _GitHub('ahead');
     final app = _app('1.5.5 (CED5040C)', '1.5.5-ced5040c');
     expect(
-      versionDecisionForApp(
-        await source.resolveVersionComparison(app),
-      ).relation,
+      versionDecisionForApp(await source.resolveVersionComparison(app))
+          .relation,
       VersionRelation.same,
     );
     expect(source.requests, 0);
   });
 
-  test('APKMirror preserves product prefixes and complete release metadata', () {
-    expect(
-      apkMirrorVersionFromTitle(
-        'Satellite Gateway stargate.android_20260817_00_RC00.release_dynamic_universal by Google LLC',
-      ),
-      'stargate.android_20260817_00_RC00.release_dynamic_universal',
-    );
-    expect(
-      apkMirrorVersionFromTitle(
-        'Google Play Protect Service C.6.odad-stub.948481320 by Google LLC',
-      ),
-      'C.6.odad-stub.948481320',
-    );
-    expect(
-      apkMirrorVersionFromTitle('1Password 8.12.9-28.BETA by AgileBits'),
-      '8.12.9-28.BETA',
-    );
-  });
-
   test(
-    'verdicts reuse existing JSON translations and preserve notification meaning',
-    () async {
-      final translations = (await const RootBundleAssetLoader().load(
-        'assets/translations',
-        const Locale('en'),
-      ))!;
-      for (final key in [
-        'effectivelyEqual',
-        'sameVersion',
-        'versionOrderUnclear',
-        'versionOrderUnclearSubtitle',
-        'version_variant_differs',
-        'version_variant_differs_detail',
-        'version_commit_ancestry_detail',
-      ]) {
-        expect(translations[key], isA<String>());
-        expect((translations[key] as String).isNotEmpty, isTrue);
-      }
-      Localization.load(
-        const Locale('en'),
-        translations: Translations(translations),
-      );
-      final sameRelease = versionDecisionForApp(_app('4.2.0-foss', '4.2.0'));
-      expect(versionDecisionTitleKey(sameRelease), 'effectivelyEqual');
-      final acknowledged = versionDecisionForApp(
-        acknowledgeSourceRelease(
-          _app('unrecognized', 'different', trackOnly: true),
-        ),
-      );
-      expect(versionDecisionTitleKey(acknowledged), 'sameVersion');
-      for (final app in [
-        _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),
-        _app('stable', 'nightly', mode: 'pseudo'),
-      ]) {
-        final decision = versionDecisionForApp(app);
-        expect(versionDecisionTitleKey(decision), 'versionOrderUnclear');
-        expect(
-          versionDecisionDetailKey(decision),
-          'versionOrderUnclearSubtitle',
-        );
-      }
-      final notification = VersionReviewNotification([
-        _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),
-      ]);
-      expect(notification.title, translations['versionOrderUnclear']);
-      expect(notification.title, isNot(translations['updatesAvailable']));
-      expect(notification.id, isNot(updateNotificationId));
-      expect(notification.message, 'Example');
-      final german = (await const RootBundleAssetLoader().load(
-        'assets/translations',
-        const Locale('de'),
-      ))!;
-      Localization.load(
-        const Locale('de'),
-        translations: Translations(german),
-        fallbackTranslations: Translations(translations),
-      );
-      expect(tr('versionOrderUnclear'), german['versionOrderUnclear']);
+    'APKMirror preserves product prefixes and complete release metadata',
+    () {
       expect(
-        tr('version_commit_ancestry_detail'),
-        german['version_commit_ancestry_detail'],
+        apkMirrorVersionFromTitle(
+          'Satellite Gateway stargate.android_20260817_00_RC00.release_dynamic_universal by Google LLC',
+        ),
+        'stargate.android_20260817_00_RC00.release_dynamic_universal',
       );
-      final localizedNotification = VersionReviewNotification([
-        _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),
-      ]);
-      expect(localizedNotification.title, german['versionOrderUnclear']);
+      expect(
+        apkMirrorVersionFromTitle(
+          'Google Play Protect Service C.6.odad-stub.948481320 by Google LLC',
+        ),
+        'C.6.odad-stub.948481320',
+      );
+      expect(
+        apkMirrorVersionFromTitle('1Password 8.12.9-28.BETA by AgileBits'),
+        '8.12.9-28.BETA',
+      );
     },
   );
+
+  test('verdicts reuse existing JSON translations and preserve notification meaning', () async {
+    final translations = (await const RootBundleAssetLoader().load(
+      'assets/translations',
+      const Locale('en'),
+    ))!;
+    for (final key in [
+      'effectivelyEqual',
+      'sameVersion',
+      'versionOrderUnclear',
+      'versionOrderUnclearSubtitle',
+      'version_variant_differs',
+      'version_variant_differs_detail',
+      'version_commit_ancestry_detail',
+    ]) {
+      expect(translations[key], isA<String>());
+      expect((translations[key] as String).isNotEmpty, isTrue);
+    }
+    Localization.load(
+      const Locale('en'),
+      translations: Translations(translations),
+    );
+    final sameRelease = versionDecisionForApp(_app('4.2.0-foss', '4.2.0'));
+    expect(versionDecisionTitleKey(sameRelease), 'effectivelyEqual');
+    final acknowledged = versionDecisionForApp(
+      acknowledgeSourceRelease(
+        _app('unrecognized', 'different', trackOnly: true),
+      ),
+    );
+    expect(versionDecisionTitleKey(acknowledged), 'sameVersion');
+    for (final app in [
+      _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),
+      _app('stable', 'nightly', mode: 'pseudo'),
+    ]) {
+      final decision = versionDecisionForApp(app);
+      expect(versionDecisionTitleKey(decision), 'versionOrderUnclear');
+      expect(versionDecisionDetailKey(decision), 'versionOrderUnclearSubtitle');
+    }
+    final notification = VersionReviewNotification([
+      _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),
+    ]);
+    expect(notification.title, translations['versionOrderUnclear']);
+    expect(notification.title, isNot(translations['updatesAvailable']));
+    expect(notification.id, isNot(updateNotificationId));
+    expect(notification.message, 'Example');
+    final german = (await const RootBundleAssetLoader().load(
+      'assets/translations',
+      const Locale('de'),
+    ))!;
+    Localization.load(
+      const Locale('de'),
+      translations: Translations(german),
+      fallbackTranslations: Translations(translations),
+    );
+    expect(tr('versionOrderUnclear'), german['versionOrderUnclear']);
+    expect(
+      tr('version_commit_ancestry_detail'),
+      german['version_commit_ancestry_detail'],
+    );
+    final localizedNotification = VersionReviewNotification([
+      _app('1.5.5 (4D91B33C)', '1.5.5-ced5040c'),
+    ]);
+    expect(localizedNotification.title, german['versionOrderUnclear']);
+  });
 }

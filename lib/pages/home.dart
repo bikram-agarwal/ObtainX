@@ -4,7 +4,7 @@ import 'dart:ui';
 
 import 'package:app_links/app_links.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -16,6 +16,7 @@ import 'package:obtainium/pages/import_from_url_list.dart'
     show importUrlListEntries, urlImportEntriesFromLink;
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/shared_url_receiver.dart';
@@ -358,6 +359,16 @@ class HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     initDeepLinks();
+    // Tapping a single-app update notification opens that listing (upstream
+    // #3190). One that launched the app is handed over once this registers.
+    NotificationsProvider.onOpenAppRequested = _openAppFromNotification;
+  }
+
+  Future<void> _openAppFromNotification(String listingKey) async {
+    final AppsProvider appsProvider = context.read<AppsProvider>();
+    await appsProvider.waitForInitialLoad();
+    if (!mounted || appsProvider.apps[listingKey] == null) return;
+    await switchToAppsTabAndOpenApp(listingKey);
   }
 
   /// Waits for [key.currentState] to become non-null by checking once per
@@ -388,6 +399,8 @@ class HomePageState extends State<HomePage> {
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
     final AppsProvider appsProvider = context.read<AppsProvider>();
+    final NotificationsProvider notificationsProvider = context
+        .read<NotificationsProvider>();
     final NavigatorState navigator = Navigator.of(context);
 
     Future<void> goToAddApp(String data) async {
@@ -446,7 +459,11 @@ class HomePageState extends State<HomePage> {
 
     Future<void> interpretLink(Uri uri) async {
       final action = uri.host;
-      final data = uri.path.length > 1 ? uri.path.substring(1) : '';
+      final data =
+          uri.queryParameters['url'] ??
+          (uri.path.length > 1
+              ? Uri.decodeComponent(uri.path.substring(1))
+              : '');
       try {
         if (action == 'add') {
           await handleAddUrl(data);
@@ -509,12 +526,56 @@ class HomePageState extends State<HomePage> {
       }
     }
 
+    // obtainium://refresh[?id=…] (upstream #3050) checks every app, or every
+    // listing whose package ID or listing key is the id. It can't change
+    // anything else.
+    Future<void> refreshFromLink(Uri uri) async {
+      try {
+        await appsProvider.waitForInitialLoad();
+        final String? targetId = uri.queryParameters['id']?.trim();
+        if (targetId == null || targetId.isEmpty) {
+          await appsProvider.checkUpdates(forceAll: true);
+        } else {
+          final List<String> listingKeys = appsProvider.apps.values
+              .where(
+                (AppInMemory listing) =>
+                    listing.listingKey == targetId ||
+                    listing.app.id == targetId,
+              )
+              .map((AppInMemory listing) => listing.listingKey)
+              .toList();
+          if (listingKeys.isEmpty) {
+            throw ObtainiumError(tr('appNotFound'));
+          }
+          await appsProvider.checkUpdates(specificIds: listingKeys);
+        }
+        // As after a pull-to-refresh: a successful check clears the update
+        // notifications nothing pending needs any more (upstream #3415).
+        unawaited(
+          appsProvider.clearStaleUpdateNotifications(notificationsProvider),
+        );
+      } catch (e) {
+        showError(e is CheckUpdatesException ? e.errors : e);
+      }
+    }
+
     // Another app or a browser opened the link, so back returns there. A link
     // pasted into Import from URL list never comes here: that page adds it as
-    // it adds a URL.
+    // it adds a URL. A refresh link only starts a check and leaves the user
+    // where they are, so it doesn't make this a link activity.
     Future<void> interpretIncomingLink(Uri uri) {
+      if (uri.host == 'refresh') {
+        // Not awaited: a check can take minutes, and the link and share
+        // listeners below must not wait for it (links arriving unheard are
+        // dropped). refreshFromLink shows its own errors.
+        unawaited(refreshFromLink(uri));
+        return Future<void>.value();
+      }
       isLinkActivity = true;
-      return interpretLink(uri);
+      // interpretLink reads an add link's URL before its own try, as upstream
+      // does, and escapes that aren't UTF-8 throw there. Uncaught, that would
+      // stop a cold start here, before the listeners below are set up.
+      return interpretLink(uri).catchError((Object e) => showError(e));
     }
 
     // Check initial link if app was in cold state (terminated)
@@ -524,6 +585,7 @@ class HomePageState extends State<HomePage> {
       await interpretIncomingLink(appLink);
       initLinked = true;
     }
+    if (!mounted) return;
     _sharedUrlReceiver.listen(handleSharedText);
     final String? initialSharedText = await _sharedUrlReceiver
         .getInitialSharedText();
@@ -531,6 +593,7 @@ class HomePageState extends State<HomePage> {
       await handleSharedText(initialSharedText);
     }
     // Handle link when app is in warm state (front or background)
+    if (!mounted) return;
     _linkSubscription = _appLinks.uriLinkStream.listen((uri) async {
       if (!initLinked) {
         await interpretIncomingLink(uri);
@@ -619,7 +682,11 @@ class HomePageState extends State<HomePage> {
                 state.runMassObtain();
               },
               tooltip: null,
-              child: const Icon(Icons.file_download_outlined, size: 20),
+              child: Icon(
+                Icons.file_download_outlined,
+                size: 20,
+                semanticLabel: tr('installUpdateApps'),
+              ),
             );
 
             leadingFab = Stack(
@@ -651,7 +718,11 @@ class HomePageState extends State<HomePage> {
                 state.openSelectionActionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.checklist, size: 20),
+              child: Icon(
+                Icons.checklist,
+                size: 20,
+                semanticLabel: plural('action', 2),
+              ),
             );
           } else {
             trailingFab = FloatingActionButton.small(
@@ -663,7 +734,11 @@ class HomePageState extends State<HomePage> {
                 state.openViewOptionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.tune, size: 20),
+              child: Icon(
+                Icons.tune,
+                size: 20,
+                semanticLabel: tr('appsViewOptions'),
+              ),
             );
           }
         } else if (!_homeFabNullStateRetryScheduled) {
@@ -1105,6 +1180,9 @@ class HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    if (NotificationsProvider.onOpenAppRequested == _openAppFromNotification) {
+      NotificationsProvider.onOpenAppRequested = null;
+    }
     appsTabFabChromeTick.dispose();
     _linkSubscription?.cancel();
     _sharedUrlReceiver.dispose();

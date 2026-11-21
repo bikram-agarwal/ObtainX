@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Shared ALL CAPS section title for app cards and additional-options section cards.
 /// Slightly larger than default [TextTheme.labelSmall].

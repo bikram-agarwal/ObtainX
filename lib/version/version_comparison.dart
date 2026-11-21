@@ -164,9 +164,8 @@ String? releaseBuildHash(String version, {String? assetName}) {
   final hash = hashes.single;
   // APK names can append a packaging build number after the commit. It is
   // neither another release component nor evidence of an Android versionCode.
-  final packagingBuild = RegExp(
-    r'^[.-]\d+(?:\.\d+)*(?=$|[._-])',
-  ).firstMatch(candidate.substring(hash.end));
+  final packagingBuild = RegExp(r'^[.-]\d+(?:\.\d+)*(?=$|[._-])')
+      .firstMatch(candidate.substring(hash.end));
   if (packagingBuild != null) {
     candidate = candidate.replaceRange(
       hash.end,
@@ -253,9 +252,8 @@ _ParsedRelease? _parseRelease(String input) {
   }
   final metadata = text.indexOf('+');
   if (metadata >= 0) {
-    if (!RegExp(
-      r'^[a-z0-9-]+(?:\.[a-z0-9-]+)*$',
-    ).hasMatch(text.substring(metadata + 1))) {
+    if (!RegExp(r'^[a-z0-9-]+(?:\.[a-z0-9-]+)*$')
+        .hasMatch(text.substring(metadata + 1))) {
       return null;
     }
     text = text.substring(0, metadata);

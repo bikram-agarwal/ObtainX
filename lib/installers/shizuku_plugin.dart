@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/services.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart';
 
 /// Shared entry point for the `shizuku_apk_installer` permission check, used by
@@ -32,16 +35,101 @@ Future<void> _shizukuPluginCallQueue = Future<void>.value();
 /// Serializing every native call removes the interleaving entirely. Queued
 /// calls run in submission order; a failing call passes its error to its own
 /// caller without breaking the queue for the calls behind it.
-Future<T> runExclusiveShizukuPluginCall<T>(Future<T> Function() call) {
-  final Completer<T> completer = Completer<T>();
+Future<T> runExclusiveShizukuPluginCall<T>(Future<T> Function() call) =>
+    startExclusiveShizukuPluginCall(call).result;
+
+/// How long a plugin call may stay pending once the install race (#3369, D15)
+/// has already settled its install by package polling, before it counts as
+/// stalled and [ShizukuPluginCall.releaseIfStalled] frees the queue. Not a
+/// const only so tests can shorten it.
+@visibleForTesting
+Duration shizukuStalledCallGrace = const Duration(seconds: 30);
+
+/// Queues [call] like [runExclusiveShizukuPluginCall] and returns a handle
+/// that can free the queue if the call's native result never arrives.
+ShizukuPluginCall<T> startExclusiveShizukuPluginCall<T>(
+  Future<T> Function() call,
+) {
+  final ShizukuPluginCall<T> handle = ShizukuPluginCall<T>._();
   _shizukuPluginCallQueue = _shizukuPluginCallQueue.then((_) async {
-    try {
-      completer.complete(await call());
-    } catch (error, stackTrace) {
-      completer.completeError(error, stackTrace);
-    }
+    if (handle._released.isCompleted) return;
+    handle._started = true;
+    final Future<void> settled = () async {
+      try {
+        final T value = await call();
+        if (!handle._result.isCompleted) handle._result.complete(value);
+      } catch (error, stackTrace) {
+        if (!handle._result.isCompleted) {
+          handle._result.completeError(error, stackTrace);
+        }
+      }
+    }();
+    await Future.any([settled, handle._released.future]);
   });
-  return completer.future;
+  return handle;
+}
+
+/// A call in the exclusive plugin queue (see [startExclusiveShizukuPluginCall]).
+class ShizukuPluginCall<T> {
+  ShizukuPluginCall._();
+
+  final Completer<T> _result = Completer<T>();
+  final Completer<void> _released = Completer<void>();
+  bool _started = false;
+
+  /// The call's own result.
+  Future<T> get result => _result.future;
+
+  /// Frees the queue from this call if it is still pending after [grace].
+  ///
+  /// Some ROMs (HyperOS, #3369) commit a privileged install but never deliver
+  /// the session result, so the plugin call never returns and every later
+  /// call waits behind it forever. The install race settles the app's own
+  /// outcome by polling; this handles the queue.
+  ///
+  /// Not released at once (D15 a): the plugin keeps one shared result slot,
+  /// so a late result could otherwise answer whichever call came next — the
+  /// cross-talk the queue exists to prevent (#283).
+  ///
+  /// The plugin answers any call made while a job is active with `cancelled`
+  /// and cancels that job. One harmless sacrificial call, sent past the queue
+  /// (which this call holds), therefore cancels the stalled job and is
+  /// expected to fail with `cancelled`; then the queue moves on. A call that
+  /// never reached the plugin is simply dropped from the queue.
+  Future<void> releaseIfStalled({Duration? grace}) async {
+    if (_result.isCompleted || _released.isCompleted) return;
+    grace ??= shizukuStalledCallGrace;
+    await Future.any<void>([
+      _result.future.then<void>((_) {}, onError: (Object _) {}),
+      Future<void>.delayed(grace),
+    ]);
+    if (_result.isCompleted || _released.isCompleted) return;
+    if (_started) {
+      AppLogger.warn(
+        'Shizuku plugin call still pending ${grace.inSeconds}s after its '
+        'install was settled; cancelling it to free the plugin queue.',
+      );
+      try {
+        await ShizukuApkInstaller().getPlatformVersion();
+      } on PlatformException catch (e) {
+        if (e.code != 'cancelled') {
+          AppLogger.info(
+            'Sacrificial Shizuku plugin call failed: ${e.code} ${e.message}',
+          );
+        }
+      } catch (e) {
+        AppLogger.info('Sacrificial Shizuku plugin call failed: $e');
+      }
+    }
+    if (_result.isCompleted || _released.isCompleted) return;
+    _result.completeError(
+      PlatformException(
+        code: 'cancelled',
+        message: 'Released a stalled plugin call',
+      ),
+    );
+    _released.complete();
+  }
 }
 
 /// Whether [resCode] means the plugin is ready to install in [mode].

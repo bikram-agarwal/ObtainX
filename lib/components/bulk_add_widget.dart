@@ -4,9 +4,8 @@ import 'dart:typed_data';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/apkpure.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
@@ -1010,18 +1009,18 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.secondaryContainer,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .secondaryContainer,
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
                                 tr('alreadyTracked'),
                                 style: TextStyle(
                                   fontSize: 10,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSecondaryContainer,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSecondaryContainer,
                                 ),
                               ),
                             )
@@ -1993,16 +1992,14 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
                   ? Text(
                       tr('githubRateLimitWithTokenText'),
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSecondaryContainer,
-                      ),
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(color: colorScheme.onSecondaryContainer),
                     )
                   : RichText(
                       textAlign: TextAlign.center,
                       text: TextSpan(
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: colorScheme.onSecondaryContainer,
-                        ),
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colorScheme.onSecondaryContainer),
                         children: [
                           TextSpan(text: tr('githubRateLimitWarningText')),
                           TextSpan(
@@ -2033,10 +2030,8 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: color,
-          fontWeight: FontWeight.bold,
-        ),
+        style: Theme.of(context).textTheme.labelMedium
+            ?.copyWith(color: color, fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -2066,19 +2061,16 @@ class BulkAddWidgetState extends State<BulkAddWidget> {
             Text(
               value,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: accentColor,
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(color: accentColor, fontWeight: FontWeight.bold),
             ),
             Text(
               label,
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: resolvedLabelColor),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: resolvedLabelColor),
             ),
           ],
         ),

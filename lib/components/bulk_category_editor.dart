@@ -1,9 +1,10 @@
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
+import 'package:obtainium/utils/color_utils.dart';
 
 enum BulkCategoryCoverageState { all, some, none }
 
@@ -198,9 +199,8 @@ int _compareBulkCategoryCoverage(
       item.state == BulkCategoryCoverageState.none ? 1 : 0;
   final groupComparison = group(first).compareTo(group(second));
   if (groupComparison != 0) return groupComparison;
-  return bulkCategoryKey(
-    first.category,
-  ).compareTo(bulkCategoryKey(second.category));
+  return bulkCategoryKey(first.category)
+      .compareTo(bulkCategoryKey(second.category));
 }
 
 class BulkCategoryEditorSheet extends StatefulWidget {
