@@ -1,0 +1,42 @@
+ObtainX, Obtainium'un modern ve güçlendirilmiş bir türevidir. Material 3 Expressive arayüzü ve güçlü araçlarla uygulama yönetimini zahmetsizleştirir. Güncellemeleri doğrudan kaynaktan alın: GitHub, GitLab, F-Droid, IzzyOnDroid, APKMirror, APKPure ve fazlası. Merkezi depo, hesap veya takip yok. 🚀
+
+<b>━━ ✨ ÖNE ÇIKAN ÖZELLİKLER (Obtainium'da yok) ━━</b>
+
+• <b>Derleme Doğrulama</b> — Kriptografik kontroller (F-Droid/Izzy yeniden üretilebilir derlemeler ve GitHub Release Attestations) kurcalanmış dosyaları kurulumdan önce işaretler. ObtainX güncellemeleri de GitHub doğrulaması taşır.
+• <b>Üçüncü Taraf Yükleyici Desteği</b> — Varsayılan yükleyicinin gizlediği APK üst verilerini görmek için güncellemeleri InstallerX veya App Manager'a devredin. Gelişmiş Koruma için şarttır.
+• <b>Cihazdan Toplu İçe Aktarma</b> — Telefonunuzdaki uygulamaları seçin, ObtainX kaynakları otomatik bulsun.
+• <b>Dinamik Klasörler</b> — Elle veya kurallı klasörler (ad, geliştirici, paket kimliği, kategori veya kaynak); her biri kendi düzenini korur.
+• <b>Yalnızca İsteğe Bağlı Mod</b> — Az güncellenen uygulamaları gizleyin ve genel taramada atlayın; istediğinizde denetleyin.
+• <b>Özelleştirilebilir Kaydırma</b> — Satır başına bağımsız sol/sağ eylemler: Güncelle, Yükle, Sabitle, Düzenle, Sil ve fazlası.
+• <b>Özel Uygulama Simgeleri</b> — Galeriden veya web'den istediğiniz simgeyi atayın.
+• <b>Silme Sonrası Geri Al</b> — Kaydırma ve toplu silmede 5 sn'lik Geri Al çubuğu.
+• <b>Doğrulanmış "Şurada da var" Bağlantıları</b> — Uygulamanın doğrulandığı diğer mağazaları gösterir.
+• <b>RegEx Asistanı</b> — RegEx bilmeden sürüm ve APK filtresi oluşturmanıza yardım eder.
+• <b>Güncelleme Boyutunu Önceden Görün</b> — İndirme boyutunu güncellemeden önce görün.
+• <b>Sürümü Atla</b> — Uygulamayı "güncellendi" saymadan sürümü atlayın.
+• <b>İndirmeyi Durdur</b> — İndirmeyi uygulama, bildirim veya kuyruktan iptal edin.
+• <b>Dosyaları Kaydet</b> — İndirilen APK'ları seçtiğiniz klasöre kaydedin.
+
+<b>━━ 🔧 GELİŞTİRİLMİŞ ÖZELLİKLER ━━</b>
+
+• <b>APKMirror Güncellemeleri</b> — Etkin (ana projede kapalı); ilgili sürüm sayfasını açar.
+• <b>Akıllı Sürüm Durumu</b> — İkili ayrım yerine altı farklı sürüm durumu.
+• <b>Uygulama Ekle — Tek Ekran</b> — URL, Arama ve Cihazdan tek sekmede, satır içi sonuçlarla.
+• <b>Düzenlenebilir Paket Kimliği</b> — Yalnızca takip edilen kaynaklarda kurulum algılamayı düzeltir.
+• <b>Etkin Filtre Çipleri</b> — Her filtre için kapatılabilir çip; dokunup temizleyin.
+• <b>Kategori Özelleştirme</b> — İstediğiniz renk, yeniden adlandırma ve toplu atama.
+
+<b>━━ 🎨 ARAYÜZ &amp; KULLANIM ━━</b>
+
+• <b>Uyarlanabilir Tablet, Katlanabilir ve Yatay Düzen</b> — Geniş ekranlarda gezinme rayı ve yan yana liste/ayrıntı görünümü; ekleme ve toplu aktarım da iki bölmeli çalışır — büyük telefonlar dahil.
+• <b>Material 3 Expressive</b> — Her ekranda kartlar, akıcı animasyonlar ve dinamik kontroller.
+• <b>Tam Tema Motoru</b> — Sistem/açık/koyu/AMOLED, Material You veya hex rengi, 9 palet algoritması, gölgeleme, gradyan, bulanıklık, köşe yuvarlaklığı ve ölçek.
+• <b>Uygulamaya Özel Renkler</b> — Her uygulamanın kendi simgesinden türetilen tema.
+• <b>Özelleştirilebilir Satırlar</b> — Tür, kaynak ve kategori rozet veya renk şeridi olarak.
+• Hero simge geçişleri, daraltılabilir arama, satır içi düzenleme, site simge rozetleri ve otomatik gizlenen eylem çubukları.
+
+<b>━━ 🔄 VERİLERİ OBTAINIUM'DAN AKTARIN ━━</b>
+Obtainium'da listenizi .json olarak dışa aktarın (İçe/Dışa Aktar → Dışa Aktar). ObtainX'te Yedekleme → İçe Aktar ile tüm uygulamalarınız anında yüklenir.
+
+<b>━━ 🛡️ ÖZGÜR &amp; AÇIK KAYNAK ━━</b>
+Özgür ve açık kaynaklı yazılım (GPLv3). Tamamen cihazda çalışır — hesap yok, telemetri yok, tescilli hizmet yok.
