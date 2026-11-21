@@ -603,7 +603,7 @@
     "filterRegexAssistPickLabelVersion": "選擇篩選應匹配的版本部分",
     "filterRegexAssistPickRawLineLabel": "從上次重新整理中選擇一行",
     "additionalOptionsSectionApk": "APK 選擇",
-    "additionalOptionsSectionAdvanced": "網路、背景和自動化",
+    "additionalOptionsSectionAdvanced": "進階",
     "removeFromObtainX": "從 ObtainX 移除",
     "changelog": "更新日誌",
     "appsViewOptions": "檢視選項",

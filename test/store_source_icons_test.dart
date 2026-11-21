@@ -32,6 +32,11 @@ void main() {
       'h5coml.vivo.com.cn': StoreSourceIconPaths.vivoAppStore,
       'detail-browser.vivo.com.cn': StoreSourceIconPaths.vivoAppStore,
       'rustore.ru': StoreSourceIconPaths.rustore,
+      'galaxystore.samsung.com': StoreSourceIconPaths.galaxyStore,
+      'apps.samsung.com': StoreSourceIconPaths.galaxyStore,
+      'apps.samsung.cn': StoreSourceIconPaths.galaxyStore,
+      'galaxyappstore.com': StoreSourceIconPaths.galaxyStore,
+      'apps.galaxyappstore.com': StoreSourceIconPaths.galaxyStore,
       'apk4free.net': StoreSourceIconPaths.apk4free,
       'farsroid.com': StoreSourceIconPaths.farsroid,
       'www.coolapk.com': StoreSourceIconPaths.coolapk,
@@ -71,6 +76,7 @@ void main() {
       StoreSourceIconPaths.apkpure,
       StoreSourceIconPaths.liteapks,
       StoreSourceIconPaths.vivoAppStore,
+      StoreSourceIconPaths.galaxyStore,
     ]) {
       expect(assetPath, endsWith('.png'), reason: assetPath);
     }
@@ -86,6 +92,10 @@ void main() {
     expect(
       storeSourceAssetPathForClassName('Forgejo'),
       StoreSourceIconPaths.forgejo,
+    );
+    expect(
+      storeSourceAssetPathForClassName('SamsungGalaxyStore'),
+      StoreSourceIconPaths.galaxyStore,
     );
   });
 

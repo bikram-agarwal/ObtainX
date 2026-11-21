@@ -613,7 +613,7 @@
     "filterRegexAssistPickLabelVersion": "フィルターが一致すべきバージョンの部分を選択",
     "filterRegexAssistPickRawLineLabel": "前回の更新から行を選択",
     "additionalOptionsSectionApk": "APKの選択",
-    "additionalOptionsSectionAdvanced": "ネットワーク、バックグラウンド、自動化",
+    "additionalOptionsSectionAdvanced": "詳細設定",
     "removeFromObtainX": "ObtainXから削除する",
     "changelog": "変更履歴",
     "appsViewOptions": "表示オプション",

@@ -127,6 +127,9 @@ class StoreSourceIconPaths {
       'assets/graphics/ic_huaweiappgallery.svg';
   static const String tencent = 'assets/graphics/ic_tencent.svg';
   static const String vivoAppStore = 'assets/graphics/ic_vivoappstore.png';
+  // Samsung's own logo, the icon galaxystore.samsung.com declares
+  // (/galaxyapps.png); its /favicon.ico is an outdated green leaf.
+  static const String galaxyStore = 'assets/graphics/ic_galaxystore.png';
   static const String rustore = 'assets/graphics/ic_rustore.svg';
   static const String apk4free = 'assets/graphics/ic_apk4free.svg';
   static const String farsroid = 'assets/graphics/ic_farsroid.svg';
@@ -202,6 +205,13 @@ String? storeSourceAssetPathForHost(String host) {
   if (normalized.contains('rustore.ru')) {
     return StoreSourceIconPaths.rustore;
   }
+  // SamsungGalaxyStore.hosts.
+  if (normalized.contains('galaxystore.samsung.com') ||
+      normalized.contains('apps.samsung.com') ||
+      normalized.contains('apps.samsung.cn') ||
+      normalized.contains('galaxyappstore.com')) {
+    return StoreSourceIconPaths.galaxyStore;
+  }
   if (normalized.contains('apk4free.net')) {
     return StoreSourceIconPaths.apk4free;
   }
@@ -273,6 +283,8 @@ String? storeSourceAssetPathForClassName(String className) {
       return StoreSourceIconPaths.vivoAppStore;
     case 'RuStore':
       return StoreSourceIconPaths.rustore;
+    case 'SamsungGalaxyStore':
+      return StoreSourceIconPaths.galaxyStore;
     case 'Apk4Free':
       return StoreSourceIconPaths.apk4free;
     case 'Farsroid':

@@ -632,7 +632,7 @@
     "filterRegexAssistPickLabelVersion": "Pick the part of the version the filter should match",
     "filterRegexAssistPickRawLineLabel": "Pick a line from last refresh",
     "additionalOptionsSectionApk": "APK selection",
-    "additionalOptionsSectionAdvanced": "Network, background & automation",
+    "additionalOptionsSectionAdvanced": "Advanced",
     "removeFromObtainX": "Remove from ObtainX",
     "changelog": "Changelog",
     "appsViewOptions": "View options",

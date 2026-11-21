@@ -615,7 +615,7 @@
     "filterRegexAssistPickLabelVersion": "Выберите часть версии, по которой должен совпадать фильтр",
     "filterRegexAssistPickRawLineLabel": "Выбрать строку из последнего обновления",
     "additionalOptionsSectionApk": "Выбор APK",
-    "additionalOptionsSectionAdvanced": "Сеть, фон и автоматизация",
+    "additionalOptionsSectionAdvanced": "Дополнительно",
     "removeFromObtainX": "Удалить из ObtainX",
     "changelog": "Изменения",
     "appsViewOptions": "Параметры отображения",

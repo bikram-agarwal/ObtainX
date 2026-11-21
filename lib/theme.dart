@@ -103,29 +103,36 @@ ThemeData buildObtainiumTheme(ColorScheme colorScheme, String? fontFamily) {
         ),
       ),
     ),
-    sliderTheme: SliderThemeData(
-      // `year2023: false` opts these components into the updated Material 3
-      // appearance. The flag is deprecated by Flutter and will be removed once
-      // the new look becomes the framework default, at which point these lines
-      // (and the `ignore` directives) can simply be deleted with no visual
-      // change. There is no replacement API to migrate to in the meantime.
-      // Tracking: https://github.com/flutter/flutter/issues/162186
-      // ignore: deprecated_member_use
-      year2023: false,
-      activeTrackColor: colorScheme.primary,
-      inactiveTrackColor: colorScheme.surfaceContainerHighest,
-      thumbColor: colorScheme.primary,
-      overlayColor: colorScheme.primary.withValues(alpha: 0.12),
-    ),
+    sliderTheme: appSliderTheme(colorScheme),
     progressIndicatorTheme: const ProgressIndicatorThemeData(
-      // See the note on `sliderTheme.year2023` above; no replacement API exists
-      // and this can be removed once the M3 look is the framework default.
+      // See the note on `year2023` in [appSliderTheme]; no replacement API
+      // exists and this can be removed once the M3 look is the framework
+      // default.
       // Tracking: https://github.com/flutter/flutter/issues/162186
       // ignore: deprecated_member_use
       year2023: false,
     ),
   );
 }
+
+/// Slider colours for [colorScheme]. A function of the scheme so a page with
+/// its own scheme rebuilds it (`buildAppPageThemedData`):
+/// `ThemeData.copyWith(colorScheme:)` keeps the old slider theme, and with it
+/// the app-wide colours.
+SliderThemeData appSliderTheme(ColorScheme colorScheme) => SliderThemeData(
+  // `year2023: false` opts these components into the updated Material 3
+  // appearance. The flag is deprecated by Flutter and will be removed once
+  // the new look becomes the framework default, at which point these lines
+  // (and the `ignore` directives) can simply be deleted with no visual
+  // change. There is no replacement API to migrate to in the meantime.
+  // Tracking: https://github.com/flutter/flutter/issues/162186
+  // ignore: deprecated_member_use
+  year2023: false,
+  activeTrackColor: colorScheme.primary,
+  inactiveTrackColor: colorScheme.surfaceContainerHighest,
+  thumbColor: colorScheme.primary,
+  overlayColor: colorScheme.primary.withValues(alpha: 0.12),
+);
 
 /// Corner radius for the outer corners of a connected tile run.
 const double connectedTileBigRadius = 24;
