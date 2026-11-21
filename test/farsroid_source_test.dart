@@ -43,6 +43,39 @@ class _Farsroid extends Farsroid {
   }
 }
 
+class _BotVerificationFarsroid extends Farsroid {
+  final bool onDownloadBox;
+
+  _BotVerificationFarsroid({this.onDownloadBox = false});
+
+  static const _challengeHtml = '''
+<!DOCTYPE html>
+<html>
+<head><title>Bot Verification</title></head>
+<body>
+  <form id="lsrecaptcha-form" method="POST" action="/.lsrecap/recaptcha?"></form>
+</body>
+</html>
+''';
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (onDownloadBox && url == _url) {
+      return Response(
+        '<div class="download-links" data-post-id="42" '
+        'data-post-version="1.2"></div>',
+        200,
+      );
+    }
+    return Response(_challengeHtml, 200);
+  }
+}
+
 class _Arm64Device extends DeviceInfoPlatform {
   @override
   Future<BaseDeviceInfo> deviceInfo() async => BaseDeviceInfo({
@@ -128,6 +161,30 @@ void main() {
           'releaseTitleAsVersion': true,
         }),
         throwsA(isA<NoVersionError>()),
+      );
+    });
+  });
+
+  group('Farsroid bot verification detection', () {
+    test('throws BotVerificationError when app page is gated', () async {
+      await expectLater(
+        _BotVerificationFarsroid().getLatestAPKDetails(_url, const {}),
+        throwsA(
+          isA<BotVerificationError>().having(
+            (e) => e.code,
+            'code',
+            'BOT_VERIFICATION',
+          ),
+        ),
+      );
+    });
+
+    test('throws BotVerificationError when download-box is gated', () async {
+      await expectLater(
+        _BotVerificationFarsroid(
+          onDownloadBox: true,
+        ).getLatestAPKDetails(_url, const {}),
+        throwsA(isA<BotVerificationError>()),
       );
     });
   });

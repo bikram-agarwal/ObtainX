@@ -51,6 +51,10 @@ class Farsroid extends AppSource {
       if (res.statusCode != 200) {
         throw getObtainiumHttpError(res);
       }
+      if (res.body.contains('lsrecaptcha-form') ||
+          res.body.contains('/.lsrecap/recaptcha')) {
+        throw BotVerificationError(name);
+      }
       final html = await parseHtmlOffIsolate(res.body);
       final dlinks = html.querySelectorAll('.download-links');
       if (dlinks.isEmpty) {
@@ -69,6 +73,10 @@ class Farsroid extends AppSource {
       );
       if (res2.statusCode != 200) {
         throw getObtainiumHttpError(res2);
+      }
+      if (res2.body.contains('lsrecaptcha-form') ||
+          res2.body.contains('/.lsrecap/recaptcha')) {
+        throw BotVerificationError(name);
       }
       Map<String, dynamic>? farsroidJson;
       try {

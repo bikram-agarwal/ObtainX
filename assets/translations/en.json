@@ -390,6 +390,7 @@
         "other": "Too many requests (rate limited) - try again in {} minutes"
     },
     "tooManyRequestsNoRetryTime": "Too many requests (rate limited) - the server didn't say when to try again",
+    "botVerificationBlocked": "{} is blocking automated requests with a bot verification (CAPTCHA) check",
     "apps": {
         "one": "{} App",
         "other": "{} Apps"
