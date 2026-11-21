@@ -105,6 +105,14 @@
             android:name=".DownloadForegroundService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+        <!-- Keeps a user-started update check alive in the background (#360).
+             stopWithTask: the check runs on the activity's Dart isolate, so
+             once the task is swiped away there is nothing left to keep alive. -->
+        <service
+            android:name=".UpdateCheckForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="true"
+            android:exported="false" />
         <!-- Foreground-service background-update mode (useFGService). The
              flutter_foreground_task plugin AAR ships this class but does NOT
              declare the component, and lib/main.dart starts it directly, so it

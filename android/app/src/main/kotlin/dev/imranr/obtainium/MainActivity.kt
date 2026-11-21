@@ -293,6 +293,9 @@ class MainActivity : FlutterActivity() {
     private var downloadWakeLock: PowerManager.WakeLock? = null
     private var downloadWifiLock: WifiManager.WifiLock? = null
     private var downloadForegroundServiceCount = 0
+    // Holds this activity's Dart isolate took on UpdateCheckForegroundService.
+    // Released in onDestroy: the isolate dies with the activity and can't.
+    private var updateCheckForegroundServiceHolds = 0
     private var openPersistedDocumentTreeResult: MethodChannel.Result? = null
     private var shareChannel: MethodChannel? = null
     private var initialSharedTextConsumed = false
@@ -387,6 +390,10 @@ class MainActivity : FlutterActivity() {
                 watcher,
                 InstallSessionOutcome.Success(watcher.packageInstallBroadcastReceived),
             )
+        }
+        while (updateCheckForegroundServiceHolds > 0) {
+            updateCheckForegroundServiceHolds -= 1
+            UpdateCheckForegroundService.release()
         }
         super.onDestroy()
     }
@@ -698,6 +705,42 @@ class MainActivity : FlutterActivity() {
                         } catch (ex: Exception) {
                             result.error("DOWNLOAD_SERVICE_ERROR", ex.message, null)
                         }
+                    }
+                    "startUpdateCheckForegroundService" -> {
+                        try {
+                            UpdateCheckForegroundService.acquire(
+                                this,
+                                title = requireNotNull(call.argument<String>("title")),
+                                channelCode =
+                                    requireNotNull(call.argument<String>("channelCode")),
+                                channelName =
+                                    requireNotNull(call.argument<String>("channelName")),
+                                channelDescription =
+                                    requireNotNull(call.argument<String>("channelDescription")),
+                            )
+                            updateCheckForegroundServiceHolds += 1
+                            result.success(true)
+                        } catch (ex: Exception) {
+                            result.error("UPDATE_CHECK_SERVICE_ERROR", ex.message, null)
+                        }
+                    }
+                    "showUpdateCheckProgress" -> {
+                        try {
+                            UpdateCheckForegroundService.showProgress(
+                                completed = call.argument<Int>("completed") ?: 0,
+                                total = call.argument<Int>("total") ?: 0,
+                            )
+                            result.success(null)
+                        } catch (ex: Exception) {
+                            result.error("NOTIFICATION_ERROR", ex.message, null)
+                        }
+                    }
+                    "stopUpdateCheckForegroundService" -> {
+                        if (updateCheckForegroundServiceHolds > 0) {
+                            updateCheckForegroundServiceHolds -= 1
+                            UpdateCheckForegroundService.release()
+                        }
+                        result.success(null)
                     }
                     else -> result.notImplemented()
                 }

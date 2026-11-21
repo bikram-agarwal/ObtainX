@@ -4041,12 +4041,14 @@ class AppsPageState extends State<AppsPage> {
       // category, source, state) plus the folder / on-demand boundary applied
       // by the last build. An explicit ID list bypasses the background
       // freshness interval while [checkUpdates] still applies the
-      // installed/track-only preference.
+      // installed/track-only preference. The foreground variant keeps the
+      // check running if the user leaves the app mid-refresh (#360).
       final NotificationsProvider notificationsProvider = context
           .read<NotificationsProvider>();
-      final Future<List<App>> refreshFuture = appsProvider.checkUpdates(
-        specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
-      );
+      final Future<List<App>> refreshFuture = appsProvider
+          .checkUpdatesInForeground(
+            specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
+          );
       return refreshFuture
           .then((List<App> updates) {
             // A successful check can leave the update notifications behind

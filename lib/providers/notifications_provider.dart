@@ -29,6 +29,7 @@ const int silentUpdateAttemptNotificationId = 8;
 const int malwareScanSkippedNotificationId = 9;
 const int errorInstallingUpdatesNotificationId = 10;
 const int versionReviewNotificationId = 11;
+// 12 is taken by UpdateCheckForegroundService (#360), which posts natively.
 const int downloadNotificationBaseId = 100;
 
 /// Cancels the update notification [id] once nothing it could list is pending

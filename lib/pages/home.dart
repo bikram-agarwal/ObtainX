@@ -534,7 +534,7 @@ class HomePageState extends State<HomePage> {
         await appsProvider.waitForInitialLoad();
         final String? targetId = uri.queryParameters['id']?.trim();
         if (targetId == null || targetId.isEmpty) {
-          await appsProvider.checkUpdates(forceAll: true);
+          await appsProvider.checkUpdatesInForeground(forceAll: true);
         } else {
           final List<String> listingKeys = appsProvider.apps.values
               .where(
@@ -547,7 +547,7 @@ class HomePageState extends State<HomePage> {
           if (listingKeys.isEmpty) {
             throw ObtainiumError(tr('appNotFound'));
           }
-          await appsProvider.checkUpdates(specificIds: listingKeys);
+          await appsProvider.checkUpdatesInForeground(specificIds: listingKeys);
         }
         // As after a pull-to-refresh: a successful check clears the update
         // notifications nothing pending needs any more (upstream #3415).

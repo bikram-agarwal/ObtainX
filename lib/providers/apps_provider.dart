@@ -2883,4 +2883,62 @@ class NativeFeatures {
       // Non-Android builds and older runners do not provide this channel.
     }
   }
+
+  /// Keeps this process running while a user-started update check finishes
+  /// in the background (#360). Returns false if Android refused, in which case
+  /// the check runs as before and stalls if the app is left.
+  static Future<bool> startUpdateCheckForegroundService({
+    required String title,
+    required String channelCode,
+    required String channelName,
+    required String channelDescription,
+  }) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _notificationsChannel.invokeMethod<bool>(
+            'startUpdateCheckForegroundService',
+            <String, Object?>{
+              'title': title,
+              'channelCode': channelCode,
+              'channelName': channelName,
+              'channelDescription': channelDescription,
+            },
+          ) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  static Future<void> showUpdateCheckProgress({
+    required int completed,
+    required int total,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _notificationsChannel.invokeMethod(
+        'showUpdateCheckProgress',
+        <String, Object?>{'completed': completed, 'total': total},
+      );
+    } on PlatformException {
+      // Progress is cosmetic; the service keeps the check alive without it.
+    } on MissingPluginException {
+      // Non-Android builds and older runners do not provide this channel.
+    }
+  }
+
+  static Future<void> stopUpdateCheckForegroundService() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _notificationsChannel.invokeMethod(
+        'stopUpdateCheckForegroundService',
+      );
+    } on PlatformException {
+      // Android will tear the service down if the process dies.
+    } on MissingPluginException {
+      // Non-Android builds and older runners do not provide this channel.
+    }
+  }
 }

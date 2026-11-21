@@ -710,6 +710,14 @@ App appAfterAnswerWithoutUpdate(
   );
 }
 
+/// How long Android 12+ holds back a new foreground service's notification.
+/// A short check ends inside it and never shows one, so progress waits as well.
+const Duration _foregroundServiceNotificationDelay = Duration(seconds: 10);
+
+/// Spacing between progress updates to the foreground check's notification;
+/// Android drops notification updates an app posts much faster than this.
+const Duration _foregroundCheckProgressInterval = Duration(seconds: 1);
+
 /// Update checking and pending-update bookkeeping for [AppsProvider].
 extension AppsProviderUpdates on AppsProvider {
   /// Fetches the latest [App] metadata from its source WITHOUT persisting it.
@@ -1084,12 +1092,15 @@ extension AppsProviderUpdates on AppsProvider {
   /// [retriedIds] are checked again by a background retry after failing
   /// earlier in the same background run, so a failure of theirs isn't
   /// counted toward update health's failed checks a second time.
+  ///
+  /// [onProgress] gets the checked and total app counts, at most every 250 ms.
   Future<List<App>> checkUpdates({
     bool throwErrorsForRetry = false,
     List<String>? specificIds,
     bool forceAll = false,
     SettingsProvider? sp,
     Set<String> retriedIds = const {},
+    void Function(int completed, int total)? onProgress,
   }) {
     return SourceRequestSession.run(
       () => _checkUpdatesInSession(
@@ -1098,8 +1109,64 @@ extension AppsProviderUpdates on AppsProvider {
         forceAll: forceAll,
         sp: sp,
         retriedIds: retriedIds,
+        onProgress: onProgress,
       ),
     );
+  }
+
+  /// [checkUpdates] for a check the user started on screen (pull-to-refresh,
+  /// check on start, obtainium://refresh). A foreground service keeps the
+  /// process running so the check finishes if the user leaves the app (#360),
+  /// with the checked/total count in its notification once it has run long
+  /// enough to show one.
+  ///
+  /// Background checks don't use this: they already run as WorkManager work
+  /// or under the useFGService foreground task.
+  Future<List<App>> checkUpdatesInForeground({
+    List<String>? specificIds,
+    bool forceAll = false,
+  }) async {
+    // The background check's notification channel, so a user who silenced
+    // that channel isn't shown this one either.
+    final ObtainiumNotification channel = CheckingUpdatesNotification('');
+    final bool keptAlive =
+        await NativeFeatures.startUpdateCheckForegroundService(
+          title: channel.title,
+          channelCode: channel.channelCode,
+          channelName: channel.channelName,
+          channelDescription: channel.channelDescription,
+        );
+    final Stopwatch running = Stopwatch()..start();
+    Duration? lastPosted;
+    void postProgress(int completed, int total) {
+      final Duration elapsed = running.elapsed;
+      if (elapsed < _foregroundServiceNotificationDelay) return;
+      if (lastPosted != null &&
+          elapsed - lastPosted! < _foregroundCheckProgressInterval) {
+        return;
+      }
+      lastPosted = elapsed;
+      // Unawaited, but sent on the same channel as the stop below, so it
+      // can't land after it.
+      unawaited(
+        NativeFeatures.showUpdateCheckProgress(
+          completed: completed,
+          total: total,
+        ),
+      );
+    }
+
+    try {
+      return await checkUpdates(
+        specificIds: specificIds,
+        forceAll: forceAll,
+        onProgress: keptAlive ? postProgress : null,
+      );
+    } finally {
+      if (keptAlive) {
+        await NativeFeatures.stopUpdateCheckForegroundService();
+      }
+    }
   }
 
   Future<List<App>> _checkUpdatesInSession({
@@ -1108,6 +1175,7 @@ extension AppsProviderUpdates on AppsProvider {
     bool forceAll = false,
     SettingsProvider? sp,
     Set<String> retriedIds = const {},
+    void Function(int completed, int total)? onProgress,
   }) async {
     final SettingsProvider settingsProvider = sp ?? this.settingsProvider;
     // A check already running may cover a different scope than this caller
@@ -1130,6 +1198,7 @@ extension AppsProviderUpdates on AppsProvider {
               const Duration(milliseconds: 250)) {
         lastProgressNotification = now;
         refreshProgress = total > 0 ? completed / total : 0.0;
+        onProgress?.call(completed, total);
       }
     }
 
