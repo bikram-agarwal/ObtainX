@@ -104,6 +104,42 @@ Uri? _importLinkIn(String text) {
   return uri;
 }
 
+/// Resolves the best matching tracked listing for an `obtainium://open` link.
+///
+/// Accepts either a package name (`app.id`) or a direct `listingKey`. When a
+/// package is tracked from multiple stores, prefers the actively installed,
+/// non-track-only listing so System App Info opens the copy ObtainX manages.
+AppInMemory? resolveOpenLinkTarget(AppListings apps, String? targetId) {
+  final String? normalizedId = targetId?.trim();
+  if (normalizedId == null || normalizedId.isEmpty) {
+    return null;
+  }
+  final List<AppInMemory> packageMatches = apps
+      .listingsForPackage(normalizedId)
+      .toList();
+  if (packageMatches.isEmpty) {
+    return apps[normalizedId];
+  }
+  if (packageMatches.length == 1) {
+    return packageMatches.single;
+  }
+  bool isTrackOnly(AppInMemory listing) =>
+      listing.app.additionalSettings['trackOnly'] == true;
+  bool isInstalled(AppInMemory listing) =>
+      listing.installedInfo != null || listing.app.installedVersion != null;
+
+  return packageMatches.firstWhere(
+    (AppInMemory listing) => isInstalled(listing) && !isTrackOnly(listing),
+    orElse: () => packageMatches.firstWhere(
+      isInstalled,
+      orElse: () => packageMatches.firstWhere(
+        (AppInMemory listing) => !isTrackOnly(listing),
+        orElse: () => packageMatches.first,
+      ),
+    ),
+  );
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -529,6 +565,21 @@ class HomePageState extends State<HomePage> {
               ),
             );
           }
+        } else if (action == 'open') {
+          await appsProvider.waitForInitialLoad();
+          final String? queryId = uri.queryParameters['id']?.trim();
+          final String? targetId =
+              queryId != null && queryId.isNotEmpty
+                  ? queryId
+                  : (data.trim().isNotEmpty ? data.trim() : null);
+          final AppInMemory? target = resolveOpenLinkTarget(
+            appsProvider.apps,
+            targetId,
+          );
+          if (target == null) {
+            throw ObtainiumError(tr('appNotFound'));
+          }
+          await goToExistingApp(target.listingKey);
         } else {
           throw ObtainiumError(tr('unknown'));
         }

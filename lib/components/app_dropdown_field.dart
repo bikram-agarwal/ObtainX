@@ -76,6 +76,9 @@ Widget appDropdownField<T>({
               value: fieldState.value,
               isExpanded: true,
               isDense: isDense,
+              // Allow wrapped multi-line labels (narrow screens / large text
+              // scales) to grow beyond kMinInteractiveDimension without clipping.
+              itemHeight: null,
               menuWidth: menuWidth,
               dropdownColor: scheme.surfaceContainerHigh,
               borderRadius: BorderRadius.circular(borderRadius),

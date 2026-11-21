@@ -3,6 +3,7 @@ package dev.imranr.obtainium
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 
 /// Hands `obtainium://` links, text shares and app-store launches to the
@@ -63,6 +64,19 @@ class LinkRelayActivity : Activity() {
                     target.setAction(Intent.ACTION_VIEW).setData(link)
                 }
             }
+            Intent.ACTION_SHOW_APP_INFO -> {
+                val packageName = source.getStringExtra(Intent.EXTRA_PACKAGE_NAME)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                if (packageName != null) {
+                    val openUri = Uri.Builder()
+                        .scheme(LINK_SCHEME)
+                        .authority(OPEN_HOST)
+                        .appendQueryParameter(OPEN_ID_PARAM, packageName)
+                        .build()
+                    target.setAction(Intent.ACTION_VIEW).setData(openUri)
+                }
+            }
             Intent.ACTION_SEND -> {
                 val type = source.type
                 if (type?.startsWith("text/") == true) {
@@ -82,5 +96,7 @@ class LinkRelayActivity : Activity() {
 
     private companion object {
         const val LINK_SCHEME = "obtainium"
+        const val OPEN_HOST = "open"
+        const val OPEN_ID_PARAM = "id"
     }
 }
