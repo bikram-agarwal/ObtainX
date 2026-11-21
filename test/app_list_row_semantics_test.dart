@@ -134,6 +134,82 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  // D30 #6: TalkBack can't swipe, so a row offers its swipe actions as custom
+  // actions. Default swipes: right = update (nothing to update here, so not
+  // offered), left = delete.
+  testWidgets('a row offers its swipe actions to TalkBack', (tester) async {
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    await openApps(tester);
+
+    final SemanticsNode row = tester.getSemantics(
+      find.bySemanticsLabel(RegExp(r'^App 0\b')),
+    );
+    final List<int> actionIds =
+        row.getSemanticsData().customSemanticsActionIds ?? const [];
+    expect(
+      actionIds,
+      contains(
+        CustomSemanticsAction.getIdentifier(
+          CustomSemanticsAction(label: tr('swipeAction_delete')),
+        ),
+      ),
+    );
+    expect(
+      actionIds,
+      isNot(
+        contains(
+          CustomSemanticsAction.getIdentifier(
+            CustomSemanticsAction(label: tr('update')),
+          ),
+        ),
+      ),
+    );
+
+    semantics.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  // D23 (#350): on TV the list's floating buttons and long-press selection
+  // are out of the remote's reach, so the app bar carries them.
+  testWidgets('on TV the app bar reaches refresh, view options and select', (
+    tester,
+  ) async {
+    settings.isTV = true;
+    await openApps(tester);
+
+    expect(find.byTooltip(tr('refresh')), findsOneWidget);
+    expect(find.byTooltip(tr('appsViewOptions')), findsOneWidget);
+    final Finder select = find.byTooltip(
+      tr('selectX', args: [tr('appsString')]),
+    );
+    expect(select, findsOneWidget);
+
+    // Select mode: a row tap selects it instead of opening the app.
+    await tester.tap(select);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('App 0').first);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('${plural('action', 2)} (1)'), findsOneWidget);
+    expect(find.byTooltip(tr('selectAll')), findsOneWidget);
+
+    // Close leaves select mode and clears the selection.
+    await tester.tap(find.byTooltip(tr('close')));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip(tr('refresh')), findsOneWidget);
+    expect(find.byTooltip('${plural('action', 2)} (1)'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phones get none of the TV app-bar actions', (tester) async {
+    await openApps(tester);
+    expect(find.byTooltip(tr('refresh')), findsNothing);
+    expect(
+      find.byTooltip(tr('selectX', args: [tr('appsString')])),
+      findsNothing,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('a flagged app shows the update-health marker', (tester) async {
     await openApps(tester);
 

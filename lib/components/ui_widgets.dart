@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
+import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
@@ -375,19 +376,151 @@ class ActionListTile extends StatelessWidget {
   }
 }
 
-class CustomAppBar extends StatelessWidget {
-  const CustomAppBar({super.key, required this.title, this.actions});
+/// Whether this is a TV, for the TV focus helpers below. A subtree without a
+/// [SettingsProvider] (a widget test, say) counts as not a TV.
+bool _isTV(BuildContext context, {required bool listen}) {
+  try {
+    return listen
+        ? context.select<SettingsProvider, bool>((p) => p.isTV)
+        : context.read<SettingsProvider>().isTV;
+  } on ProviderNotFoundException {
+    return false;
+  }
+}
 
-  final String title;
-  final List<Widget>? actions;
+/// Draws a high-contrast ring around [child] while focus is anywhere inside
+/// it, on TV only (v1.7.4 sync D23, ported from upstream).
+///
+/// Material's focus overlay is built for a mouse or keyboard and is barely
+/// visible from a sofa; on a TV the focus position is the only cursor. Does
+/// nothing on other devices.
+class TvFocusRing extends StatefulWidget {
+  const TvFocusRing({
+    super.key,
+    required this.child,
+    this.borderRadius = const BorderRadius.all(Radius.circular(16)),
+    this.width = 3,
+    this.color,
+  });
+
+  final Widget child;
+  final BorderRadiusGeometry borderRadius;
+  final double width;
+  final Color? color;
+
+  @override
+  State<TvFocusRing> createState() => _TvFocusRingState();
+}
+
+class _TvFocusRingState extends State<TvFocusRing> {
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
-    return SliverAppBar.large(
-      pinned: true,
-      automaticallyImplyLeading: false,
-      title: Text(title),
-      actions: actions,
+    if (!_isTV(context, listen: true)) return widget.child;
+    final Color color = widget.color ?? Theme.of(context).colorScheme.primary;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      includeSemantics: false,
+      onFocusChange: (bool focused) {
+        if (focused != _focused) setState(() => _focused = focused);
+      },
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          border: _focused
+              ? Border.all(color: color, width: widget.width)
+              : null,
+          borderRadius: widget.borderRadius,
+        ),
+        child: widget.child,
+      ),
     );
   }
+}
+
+/// On TV, gives each newly opened dialog, bottom sheet or popup a focused
+/// control when it opens without one (v1.7.4 sync D23).
+///
+/// Unfocused, the remote's first SELECT does nothing. The first control in
+/// reading order gets focus; dialogs list their actions safe option first
+/// (Cancel before the confirming button), so a confirmation opens on Cancel.
+/// A dialog that autofocuses something itself is left alone.
+class TvPopupFocusObserver extends NavigatorObserver {
+  TvPopupFocusObserver(this.isTV);
+
+  final bool Function() isTV;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (route is! PopupRoute || !isTV()) return;
+    // After the first frame builds the route, and one microtask later: the
+    // focus manager applies a pending autofocus in a microtask queued during
+    // that frame, which then runs first.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scheduleMicrotask(() {
+        // The route's own focus scope, found through its content (the scope
+        // node itself isn't public). Something focused in it already (an
+        // autofocus) wins.
+        final BuildContext? content = route.subtreeContext;
+        if (!route.isActive || content == null) return;
+        final FocusScopeNode scope = FocusScope.of(content);
+        if (scope.focusedChild != null) return;
+        final FocusTraversalPolicy policy =
+            FocusTraversalGroup.maybeOf(content) ??
+            ReadingOrderTraversalPolicy();
+        policy.findFirstFocus(scope, ignoreCurrentFocus: true)?.requestFocus();
+      });
+    });
+  }
+}
+
+/// On TV, focuses the first control below the app bar once [child] is shown,
+/// unless something there already has focus (v1.7.4 sync D23, ported from
+/// upstream).
+///
+/// Without it a new page or sheet opens unfocused, so the first SELECT does
+/// nothing until a direction key is pressed. Arrow-up still reaches the app
+/// bar.
+class TvInitialFocus extends StatefulWidget {
+  const TvInitialFocus({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<TvInitialFocus> createState() => _TvInitialFocusState();
+}
+
+class _TvInitialFocusState extends State<TvInitialFocus> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isTV(context, listen: false)) return;
+      final FocusScopeNode scope = FocusScope.of(context);
+      if (scope.hasFocus) return;
+      final FocusTraversalPolicy? policy = FocusTraversalGroup.maybeOf(context);
+      if (policy == null) return;
+      FocusNode? first = policy.findFirstFocus(scope, ignoreCurrentFocus: true);
+      // Skip leading app-bar buttons (Back, say) so the first content
+      // control gets the ring.
+      for (int i = 0; i < 4 && first != null; i++) {
+        final BuildContext? nodeContext = first.context;
+        final bool inAppBar =
+            nodeContext?.findAncestorWidgetOfExactType<CustomAppBar>() !=
+                null ||
+            nodeContext?.findAncestorWidgetOfExactType<SliverAppBar>() !=
+                null ||
+            nodeContext?.findAncestorWidgetOfExactType<AppBar>() != null;
+        if (!inAppBar) break;
+        if (!first.nextFocus()) return;
+        first = FocusManager.instance.primaryFocus;
+      }
+      first?.requestFocus();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

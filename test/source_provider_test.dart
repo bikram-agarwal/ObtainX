@@ -998,14 +998,16 @@ void main() {
     },
   );
 
-  test('APK filters also match the download URL', () async {
+  // 376672ad (HTML display names) and D22 (#353): sources whose APK names
+  // aren't file names, like HTML, match the filter against the URL too.
+  test('HTML-style sources also match the download URL', () async {
     const MapEntry<String, String> ironFoxApk = MapEntry(
       'IronFox-153.0.1.apk',
       'https://example.com/arm64-v8a/ironfox-153.0.1-arm64-v8a.apk',
     );
 
     final App app = await SourceProvider().getApp(
-      _StubSource(apkUrls: const [ironFoxApk]),
+      _StubSource(apkUrls: const [ironFoxApk])..apkFilterMatchesLinkUrl = true,
       'https://example.com/releases',
       <String, dynamic>{'apkFilterRegEx': 'arm64-v8a'},
     );

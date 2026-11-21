@@ -64,7 +64,7 @@ The same apps can be tracked from multiple stores — independently, simultaneou
 
 ### 🗂️ Smart Organization
 
-- **📥 Bulk import from fevice** — Select any apps already on your phone and ObtainX automatically finds their sources on stores you choose. No URL hunting one by one.
+- **📥 Bulk import from device** — Select any apps already on your phone and ObtainX automatically finds their sources on stores you choose. No URL hunting one by one.
 - **✅ Selective import or restore** — Insteadd of blindly importing entire backup (all or nothing), pick which apps and settings to import (add to existing content), or Restore (reset ObtainX, then add from backup).
 - **🗂️ Dynamic folders** — Group apps into folders manually or via automatic routing rules (by name, author, category, source etc.). Each folder retains its own layouts.
 - **🕐 On-Demand Only mode** — Mark rarely updated apps so they're hidden from the main list and aren't checked during global update scans. Query them only on-demand.

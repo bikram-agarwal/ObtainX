@@ -121,6 +121,37 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('earliestNextUpdateCheckDue', () {
+    // D30 #3: checks skip an app with a pending repo rename, so its old check
+    // time must not keep every wake-up "due".
+    test(
+      'a pending repo rename neither counts as due nor is checked',
+      () async {
+        final provider = await _provider();
+        final checkedNow = DateTime.now();
+        provider.apps['renamed'] = AppInMemory(
+          _app(
+            id: 'renamed',
+            lastUpdateCheck: DateTime(2020),
+          ).copyWith(pendingRepoRenameUrl: 'https://github.com/example/new'),
+          null,
+          null,
+          null,
+        );
+        provider.apps['b'] = AppInMemory(
+          _app(id: 'b', lastUpdateCheck: checkedNow),
+          null,
+          null,
+          null,
+        );
+
+        expect(
+          provider.earliestNextUpdateCheckDue(),
+          checkedNow.add(const Duration(minutes: 1440)),
+        );
+        expect(provider.getAppsSortedByUpdateCheckTime(), isEmpty);
+      },
+    );
+
     test('returns the soonest due time across tracked apps', () async {
       final provider = await _provider();
       final soonest = DateTime.now().subtract(const Duration(hours: 2));

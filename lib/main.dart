@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/app_ui_scaling.dart';
 import 'package:obtainium/components/legacy_material_bridge.dart';
+import 'package:obtainium/components/ui_widgets.dart' show TvPopupFocusObserver;
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/custom_errors.dart' show setAppLocale;
 import 'package:obtainium/theme/app_dialog_theme.dart';
@@ -270,6 +271,13 @@ class Obtainium extends StatefulWidget {
 
 class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   var existingUpdateInterval = -1;
+
+  /// TV: focuses the first control of each dialog or sheet that opens
+  /// without one (D23). One instance: [MaterialApp.navigatorObservers] is
+  /// rebuilt with the app, and an observer belongs to one Navigator.
+  late final TvPopupFocusObserver _tvPopupFocusObserver = TvPopupFocusObserver(
+    () => mounted && context.read<SettingsProvider>().isTV,
+  );
 
   /// Registration currently applied to the periodic task, so [build] does not
   /// re-register it on every rebuild. Charging and unmetered network are part
@@ -965,6 +973,7 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             supportedLocales: context.supportedLocales,
             locale: renderableLocale,
             navigatorKey: globalNavigatorKey,
+            navigatorObservers: [_tvPopupFocusObserver],
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
             themeAnimationDuration: Duration.zero,

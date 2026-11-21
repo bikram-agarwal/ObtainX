@@ -1946,6 +1946,9 @@ extension AppsProviderInstall on AppsProvider {
         urlsToSelectFrom,
         app.settings.getStringOrNull('apkFilterRegEx'),
         app.settings.getBool('invertAPKFilter'),
+        matchUrl: SourceProvider()
+            .getSource(app.url, overrideSource: app.overrideSource)
+            .apkFilterMatchesLinkUrl,
       );
       if (matching.isNotEmpty) {
         appFileUrl = matching.first;
@@ -2614,12 +2617,17 @@ extension AppsProviderInstall on AppsProvider {
       notify();
       willBeSilent = await canInstallSilently(apps[id]!.app);
       final installer = getInstaller(apps[id]!.app);
-      // Only the stock installer surfaces a system install prompt that pulls the
-      // user away; wait for them to return before proceeding.
+      // The stock installer and a third-party installer both need an activity
+      // on screen: the system install prompt, or the other app's own UI.
+      // Android blocks activity starts from the background, so after a
+      // download that finished in the background, post the "complete
+      // installation" notification and wait for the user to come back first
+      // (#376: the third-party installer never appeared). Shizuku, Dhizuku and
+      // Root install without a screen of their own.
       if (!willBeSilent &&
           allowUserInteraction &&
           notificationsProvider != null &&
-          installer.modeKey == 'system') {
+          (installer.modeKey == 'system' || installer.modeKey == 'external')) {
         await waitForUserToReturnToForeground(notificationsProvider);
       }
     } catch (e) {

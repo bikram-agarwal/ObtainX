@@ -506,6 +506,8 @@ class HTML extends AppSource {
   HTML() {
     name = 'HTML';
     suppressStandardVersionExtraction = true;
+    // Its APK "names" are display names; filters target hosts and paths (D22).
+    apkFilterMatchesLinkUrl = true;
     // A zip is the only way some hosts can serve a build: GitHub Actions
     // artifacts are auth-walled, so re-hosters like nightly.link hand out
     // `<artifact>.zip`. The download side already unpacks one and installs the
@@ -727,6 +729,7 @@ class HTML extends AppSource {
           links,
           additionalSettings['apkFilterRegEx'],
           additionalSettings['invertAPKFilter'],
+          matchUrl: apkFilterMatchesLinkUrl,
         );
         if (links.isEmpty) {
           throw NoReleasesError(note: currentUrl);

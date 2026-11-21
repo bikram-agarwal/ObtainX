@@ -1,22 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Languages offered in Android's per-app language setting (Android 13+). Keep in
+  step with supportedLocales in lib/main.dart and assets/translations/.
+  Esperanto is left out on purpose: the app carries it as en-EO (an
+  easy_localization workaround), and the "eo" Android would pass matches no
+  app locale, so it would silently fall back to English. It stays selectable in
+  ObtainX's own language setting.
+-->
 <locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="ar"/>
+    <locale android:name="bn"/>
     <locale android:name="bs"/>
+    <locale android:name="ca"/>
     <locale android:name="cs"/>
+    <locale android:name="da"/>
     <locale android:name="de"/>
+    <locale android:name="el"/>
     <locale android:name="en"/>
     <locale android:name="es"/>
     <locale android:name="fa"/>
     <locale android:name="fr"/>
+    <locale android:name="gl"/>
     <locale android:name="hu"/>
+    <locale android:name="id"/>
     <locale android:name="it"/>
     <locale android:name="ja"/>
+    <locale android:name="ko"/>
+    <locale android:name="ml"/>
     <locale android:name="nl"/>
     <locale android:name="pl"/>
     <locale android:name="pt"/>
+    <locale android:name="pt-BR"/>
     <locale android:name="ru"/>
     <locale android:name="sv"/>
     <locale android:name="tr"/>
     <locale android:name="uk"/>
     <locale android:name="vi"/>
     <locale android:name="zh"/>
+    <locale android:name="zh-Hant-TW"/>
 </locale-config>

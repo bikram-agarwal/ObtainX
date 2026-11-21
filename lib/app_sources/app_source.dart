@@ -78,6 +78,13 @@ abstract class AppSource {
   bool showReleaseCommitShaAsVersionToggle = false;
   bool versionDetectionDisallowed = false;
   bool suppressStandardVersionExtraction = false;
+
+  /// Whether the per-app (and global) APK filter regex is matched against an
+  /// APK's link URL as well as its name (D22, #353). Off for sources whose APK
+  /// names are real file names (forges, stores): their URLs carry the owner,
+  /// repo and tag, so an inverted filter matched every asset and dropped them
+  /// all. On for HTML and direct links, whose filters target hosts and paths.
+  bool apkFilterMatchesLinkUrl = false;
   List<String> excludeCommonSettingKeys = [];
   bool urlsAlwaysHaveExtension = false;
 

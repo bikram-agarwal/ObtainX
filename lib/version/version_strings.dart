@@ -126,9 +126,13 @@ class VersionService {
     String? matchGroupString,
     String stringToCheck,
   ) {
-    if (versionExtractionRegEx?.isNotEmpty == true) {
+    // A blank regex (whitespace only, e.g. a cleared field) counts as unset,
+    // as in [extractVersionWithGlobalDefault]: run as a regex it matches
+    // nothing useful and failed the check with NoVersionError (D30 #9).
+    if (versionExtractionRegEx != null &&
+        versionExtractionRegEx.trim().isNotEmpty) {
       String? version = stringToCheck;
-      final match = RegExp(versionExtractionRegEx!).allMatches(version);
+      final match = RegExp(versionExtractionRegEx).allMatches(version);
       if (match.isEmpty) {
         throw NoVersionError();
       }

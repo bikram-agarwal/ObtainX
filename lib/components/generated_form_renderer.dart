@@ -679,17 +679,29 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   }
 }
 
-class _TVTextFieldFocus extends StatefulWidget {
+/// TV: keeps a text field out of the remote's way until SELECT activates it.
+///
+/// A focused text field takes the arrow keys for its caret, so a remote that
+/// lands in one can't leave it. This puts a focusable frame around the field
+/// instead; SELECT (or Enter) hands focus to the field, and when the field
+/// loses focus (Done, BACK) the frame takes it back. Everything inside the
+/// field, suffix buttons included, stays out of D-pad traversal until then,
+/// so a button the remote must reach belongs beside the field.
+class TvTextFieldFocus extends StatefulWidget {
   final Widget child;
   final FocusNode textFocusNode;
 
-  const _TVTextFieldFocus({required this.child, required this.textFocusNode});
+  const TvTextFieldFocus({
+    super.key,
+    required this.child,
+    required this.textFocusNode,
+  });
 
   @override
-  State<_TVTextFieldFocus> createState() => _TVTextFieldFocusState();
+  State<TvTextFieldFocus> createState() => _TvTextFieldFocusState();
 }
 
-class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
+class _TvTextFieldFocusState extends State<TvTextFieldFocus> {
   final FocusNode _outerFocus = FocusNode();
   bool _activated = false;
 
@@ -700,7 +712,7 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
   }
 
   @override
-  void didUpdateWidget(covariant _TVTextFieldFocus oldWidget) {
+  void didUpdateWidget(covariant TvTextFieldFocus oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.textFocusNode != oldWidget.textFocusNode) {
       oldWidget.textFocusNode.removeListener(_onTextFocusChange);
@@ -724,6 +736,15 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
 
   @override
   Widget build(BuildContext context) {
+    // Off TV the field is tapped and typed into directly; the frame would
+    // only get in the way (and keep the field from taking focus).
+    bool isTV;
+    try {
+      isTV = context.select<SettingsProvider, bool>((s) => s.isTV);
+    } on ProviderNotFoundException {
+      isTV = false;
+    }
+    if (!isTV) return widget.child;
     return Focus(
       focusNode: _outerFocus,
       onKeyEvent: (node, event) {
@@ -1068,7 +1089,7 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 },
               );
               if (context.read<SettingsProvider>().isTV) {
-                return _TVTextFieldFocus(
+                return TvTextFieldFocus(
                   textFocusNode: focusNode,
                   child: textField,
                 );

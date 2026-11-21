@@ -2181,8 +2181,13 @@ class SettingsProvider with ChangeNotifier {
 
   int get exportSettings {
     try {
-      return prefs?.getInt('exportSettings') ??
-          1; // 0 for no, 1 for yes but no secrets, 2 for everything
+      // 0 for no, 1 for yes but no secrets, 2 for everything. Clamped like
+      // the setter: an imported backup writes the pref directly, and an
+      // out-of-range value (say 3) would otherwise read as "everything" in
+      // the `>= 2` checks and auto-export secrets without the warning.
+      final int? stored = prefs?.getInt('exportSettings');
+      if (stored == null || stored < 0 || stored > 2) return 1;
+      return stored;
     } catch (e) {
       final val = prefs?.getBool('exportSettings') == true ? 1 : 0;
       prefs?.setInt('exportSettings', val);

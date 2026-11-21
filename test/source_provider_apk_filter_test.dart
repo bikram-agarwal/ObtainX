@@ -116,6 +116,22 @@ void main() {
     expect(app.apkUrls.map((entry) => entry.key), ['app-fdroid.apk']);
   });
 
+  // D22 (#353): a source whose APK names are file names matches the filter
+  // against the name only. Every URL here contains "example", so matching the
+  // URL too made an inverted "example" filter drop every APK.
+  test('an inverted filter is matched against file names only', () async {
+    final app = await getApp({
+      'apkFilterRegEx': 'example',
+      'invertAPKFilter': true,
+      'autoApkFilterByArch': false,
+    });
+
+    expect(app.apkUrls.map((entry) => entry.key), [
+      'app-release.apk',
+      'app-fdroid.apk',
+    ]);
+  });
+
   test(
     'blank per-app filter keeps all APKs when no global filter is set',
     () async {

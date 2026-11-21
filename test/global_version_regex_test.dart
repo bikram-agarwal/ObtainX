@@ -36,6 +36,14 @@ String? _extract(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // D30 #9: sources that call extractVersion directly (HTML, SourceForge)
+  // got a whitespace-only per-app regex run as a regex, which failed the check.
+  test('extractVersion treats a blank regex as unset', () {
+    expect(extractVersion('   ', null, 'app-2.5.5.1.apk'), isNull);
+    expect(extractVersion('', null, 'app-2.5.5.1.apk'), isNull);
+    expect(extractVersion(null, null, 'app-2.5.5.1.apk'), isNull);
+  });
+
   group('extractVersionWithGlobalDefault', () {
     test('trims with the global regex when the app has none', () async {
       final settings = await _settings({

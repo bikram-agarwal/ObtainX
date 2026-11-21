@@ -410,6 +410,7 @@ class AddAppPageState extends State<AddAppPage> {
   late final TextEditingController _searchSomeSourcesController;
   late final TextEditingController _searchResultFilterController;
   late final FocusNode _searchSomeSourcesFocusNode;
+  late final FocusNode _searchResultFilterFocusNode;
   final GlobalKey _searchResultFilterKey = GlobalKey();
 
   void linkFn(String input) {
@@ -450,6 +451,7 @@ class AddAppPageState extends State<AddAppPage> {
     _searchSomeSourcesController = TextEditingController();
     _searchResultFilterController = TextEditingController();
     _searchSomeSourcesFocusNode = FocusNode();
+    _searchResultFilterFocusNode = FocusNode();
     if (widget._initialUrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) linkFn(widget._initialUrl!);
@@ -465,6 +467,7 @@ class AddAppPageState extends State<AddAppPage> {
     _searchSomeSourcesController.dispose();
     _searchResultFilterController.dispose();
     _searchSomeSourcesFocusNode.dispose();
+    _searchResultFilterFocusNode.dispose();
     super.dispose();
   }
 
@@ -787,6 +790,7 @@ class AddAppPageState extends State<AddAppPage> {
     VoidCallback? onTap,
   }) {
     final bool showSupportedSourcesButton = userInput.trim().isEmpty;
+    final bool isTV = context.read<SettingsProvider>().isTV;
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     final TextStyle? launcherTextStyle = matchLauncherButton
         ? Theme.of(context).textTheme.labelLarge
@@ -887,7 +891,9 @@ class AddAppPageState extends State<AddAppPage> {
             minWidth: 0,
             minHeight: 0,
           ),
-          suffixIcon: supportedSourcesButton,
+          // TV: beside the field instead (below), where the remote can reach
+          // it (D23).
+          suffixIcon: isTV ? null : supportedSourcesButton,
         );
 
     final Widget textField = TextField(
@@ -923,6 +929,24 @@ class AddAppPageState extends State<AddAppPage> {
       decoration: decoration,
     );
 
+    if (isTV) {
+      // D23: the field doesn't trap the remote, and the supported-sources
+      // button sits beside it (a suffix inside it would be unreachable).
+      return SizedBox(
+        height: SettingsProvider.collapsedHeaderHeight,
+        child: Row(
+          children: [
+            Expanded(
+              child: TvTextFieldFocus(
+                textFocusNode: _urlFieldFocusNode,
+                child: textField,
+              ),
+            ),
+            supportedSourcesButton,
+          ],
+        ),
+      );
+    }
     return SizedBox(
       height: SettingsProvider.collapsedHeaderHeight,
       child: textField,
@@ -2482,49 +2506,57 @@ class AddAppPageState extends State<AddAppPage> {
                 ),
               ),
             );
+      final bool isTV = context.read<SettingsProvider>().isTV;
+      final Widget searchHelp = HelpHintIcon(
+        richMessage: _tooltipMessageWithBoldMarkdown(
+          tr(
+            widget._searchAddsMultipleApps
+                ? 'searchSourceAddAppsTooltip'
+                : 'searchSourcesAddAppTooltip',
+          ),
+        ),
+        icon: Icons.info_outline_rounded,
+        padding: EdgeInsets.zero,
+        showDuration: const Duration(seconds: 10),
+      );
+      final Widget searchField = TextField(
+        focusNode: _searchSomeSourcesFocusNode,
+        controller: _searchSomeSourcesController,
+        onChanged: (String text) {
+          setState(() {
+            searchQuery = text.trim();
+          });
+        },
+        textInputAction: TextInputAction.search,
+        onSubmitted: (_) {
+          if (!searchDisabled) {
+            _searchSomeSourcesFocusNode.unfocus();
+            hapticSelection();
+            runInlineSearch(appsProvider: appsProvider);
+          }
+        },
+        decoration: appPageOutlinedInputDecoration(
+          context,
+          labelText: null,
+          hintText: tr('search'),
+          isDense: true,
+          borderRadius: 30,
+        ).copyWith(suffixIcon: isTV ? null : searchHelp),
+      );
       return Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
-            child: TextField(
-              focusNode: _searchSomeSourcesFocusNode,
-              controller: _searchSomeSourcesController,
-              onChanged: (String text) {
-                setState(() {
-                  searchQuery = text.trim();
-                });
-              },
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) {
-                if (!searchDisabled) {
-                  _searchSomeSourcesFocusNode.unfocus();
-                  hapticSelection();
-                  runInlineSearch(appsProvider: appsProvider);
-                }
-              },
-              decoration:
-                  appPageOutlinedInputDecoration(
-                    context,
-                    labelText: null,
-                    hintText: tr('search'),
-                    isDense: true,
-                    borderRadius: 30,
-                  ).copyWith(
-                    suffixIcon: HelpHintIcon(
-                      richMessage: _tooltipMessageWithBoldMarkdown(
-                        tr(
-                          widget._searchAddsMultipleApps
-                              ? 'searchSourceAddAppsTooltip'
-                              : 'searchSourcesAddAppTooltip',
-                        ),
-                      ),
-                      icon: Icons.info_outline_rounded,
-                      padding: EdgeInsets.zero,
-                      showDuration: const Duration(seconds: 10),
-                    ),
-                  ),
-            ),
+            // TV (D23): the field doesn't trap the remote, and its help
+            // button sits beside it, where the remote can reach it.
+            child: isTV
+                ? TvTextFieldFocus(
+                    textFocusNode: _searchSomeSourcesFocusNode,
+                    child: searchField,
+                  )
+                : searchField,
           ),
+          if (isTV) searchHelp,
           const SizedBox(width: 10),
           trailingSearch,
         ],
@@ -2629,29 +2661,34 @@ class AddAppPageState extends State<AddAppPage> {
               ),
             ),
           ),
-          TextField(
-            key: _searchResultFilterKey,
-            controller: _searchResultFilterController,
-            onChanged: (v) => setState(() => _searchResultFilter = v),
-            decoration:
-                appPageOutlinedInputDecoration(
-                  context,
-                  labelText: null,
-                  hintText: tr('filter'),
-                  isDense: true,
-                  borderRadius: 30,
-                ).copyWith(
-                  prefixIcon: const Icon(Icons.filter_list_rounded, size: 20),
-                  suffixIcon: _searchResultFilter.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: () {
-                            _searchResultFilterController.clear();
-                            setState(() => _searchResultFilter = '');
-                          },
-                        )
-                      : null,
-                ),
+          // TV (D23): the field doesn't trap the remote above the results.
+          TvTextFieldFocus(
+            textFocusNode: _searchResultFilterFocusNode,
+            child: TextField(
+              key: _searchResultFilterKey,
+              focusNode: _searchResultFilterFocusNode,
+              controller: _searchResultFilterController,
+              onChanged: (v) => setState(() => _searchResultFilter = v),
+              decoration:
+                  appPageOutlinedInputDecoration(
+                    context,
+                    labelText: null,
+                    hintText: tr('filter'),
+                    isDense: true,
+                    borderRadius: 30,
+                  ).copyWith(
+                    prefixIcon: const Icon(Icons.filter_list_rounded, size: 20),
+                    suffixIcon: _searchResultFilter.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              _searchResultFilterController.clear();
+                              setState(() => _searchResultFilter = '');
+                            },
+                          )
+                        : null,
+                  ),
+            ),
           ),
           if (entries.isEmpty)
             Padding(

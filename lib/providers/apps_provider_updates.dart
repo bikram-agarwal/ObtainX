@@ -1010,6 +1010,10 @@ extension AppsProviderUpdates on AppsProvider {
     );
     final List<String> appIds = apps.values
         .where((app) => !app.app.settings.getBool('onDemandOnly'))
+        // Paused until the user resolves the rename (see
+        // [_fetchUpdateSnapshot]): a check would skip it, and its old
+        // lastUpdateCheck would keep it "due" on every wake-up.
+        .where((app) => !app.app.hasPendingRepoRename)
         .where(
           (app) =>
               forceAll ||
@@ -1051,6 +1055,9 @@ extension AppsProviderUpdates on AppsProvider {
     for (final listing in apps.values) {
       final App app = listing.app;
       if (app.settings.getBool('onDemandOnly')) continue;
+      // Checks skip it until the rename is resolved, so its past due time
+      // would make every wake-up load in full (#317).
+      if (app.hasPendingRepoRename) continue;
       if (settingsProvider.onlyCheckInstalledOrTrackOnlyApps &&
           app.installedVersion == null &&
           !app.settings.getBool('trackOnly')) {

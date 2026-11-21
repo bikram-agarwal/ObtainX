@@ -682,7 +682,11 @@ class HomePageState extends State<HomePage> {
                 state.runMassObtain();
               },
               tooltip: null,
-              child: const Icon(Icons.file_download_outlined, size: 20),
+              child: Icon(
+                Icons.file_download_outlined,
+                size: 20,
+                semanticLabel: tr('installUpdateApps'),
+              ),
             );
 
             leadingFab = Stack(
@@ -714,7 +718,11 @@ class HomePageState extends State<HomePage> {
                 state.openSelectionActionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.checklist, size: 20),
+              child: Icon(
+                Icons.checklist,
+                size: 20,
+                semanticLabel: plural('action', 2),
+              ),
             );
           } else {
             trailingFab = FloatingActionButton.small(
@@ -726,7 +734,11 @@ class HomePageState extends State<HomePage> {
                 state.openViewOptionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.tune, size: 20),
+              child: Icon(
+                Icons.tune,
+                size: 20,
+                semanticLabel: tr('appsViewOptions'),
+              ),
             );
           }
         } else if (!_homeFabNullStateRetryScheduled) {

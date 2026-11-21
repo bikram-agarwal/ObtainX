@@ -126,4 +126,19 @@ void main() {
     expect(details.version, '1.2.3');
     expect(details.apkUrls.single.value, _apkUrl);
   });
+
+  // D30 #11: an implausible update_time is no release date.
+  test('ignores update times that aren\'t a plausible date', () async {
+    for (final String raw in ['0', '1', '1791812310000', 'soon']) {
+      final source = _Tencent(
+        _page([
+          _component([
+            {..._record, 'update_time': raw},
+          ]),
+        ]),
+      );
+      final details = await source.getLatestAPKDetails(_url, {});
+      expect(details.releaseDate, isNull, reason: raw);
+    }
+  });
 }

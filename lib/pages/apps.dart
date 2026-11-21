@@ -6,6 +6,7 @@ import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/rendering.dart'
     show
         PaintingContext,
@@ -39,7 +40,7 @@ import 'package:obtainium/components/empty_state_illustration.dart';
 import 'package:obtainium/components/rippling_wavy_progress/circular.dart';
 import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/components/ui_widgets.dart'
-    show ActionListTile, AppSwitch, AppSwitchListTile;
+    show ActionListTile, AppSwitch, AppSwitchListTile, TvFocusRing;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
@@ -959,38 +960,49 @@ class _AppListItem extends StatelessWidget {
       }
     }
 
+    // TV: one focus stop per row (D23). The update buttons are left out of
+    // D-pad traversal (Update all and the app page reach the same action);
+    // the download Stop/Dismiss buttons stay focusable.
+    final bool isTV = context.read<SettingsProvider>().isTV;
+
     Widget buildUpdateButton() {
       final trackOnly = app.app.additionalSettings['trackOnly'] == true;
-      return IconButton(
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-        color: colorScheme.primary,
-        tooltip: buildVerificationBlocked
-            ? buildVerificationBlockedMessage
-            : trackOnly
-            ? tr('openDownloadPage')
-            : tr('update'),
-        onPressed: areDownloadsRunning || buildVerificationBlocked
-            ? null
-            : onUpdateOrOpenReleasePressed,
-        icon: const Icon(Icons.install_mobile),
+      return ExcludeFocus(
+        excluding: isTV,
+        child: IconButton(
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          color: colorScheme.primary,
+          tooltip: buildVerificationBlocked
+              ? buildVerificationBlockedMessage
+              : trackOnly
+              ? tr('openDownloadPage')
+              : tr('update'),
+          onPressed: areDownloadsRunning || buildVerificationBlocked
+              ? null
+              : onUpdateOrOpenReleasePressed,
+          icon: const Icon(Icons.install_mobile),
+        ),
       );
     }
 
     Widget buildUncertainUpdateButton() {
-      return IconButton(
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-        color: colorScheme.primary,
-        tooltip: buildVerificationBlocked
-            ? buildVerificationBlockedMessage
-            : tr('uncertainUpdateTooltip'),
-        onPressed: areDownloadsRunning || buildVerificationBlocked
-            ? null
-            : onUpdateOrOpenReleasePressed,
-        icon: const Icon(Icons.help_outline),
+      return ExcludeFocus(
+        excluding: isTV,
+        child: IconButton(
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          color: colorScheme.primary,
+          tooltip: buildVerificationBlocked
+              ? buildVerificationBlockedMessage
+              : tr('uncertainUpdateTooltip'),
+          onPressed: areDownloadsRunning || buildVerificationBlocked
+              ? null
+              : onUpdateOrOpenReleasePressed,
+          icon: const Icon(Icons.help_outline),
+        ),
       );
     }
 
@@ -1478,17 +1490,22 @@ class _AppListItem extends StatelessWidget {
       ),
     );
 
+    // TV: the row is the one focus stop, so it shows where focus is (D23).
+    final Widget focusableTile = TvFocusRing(
+      borderRadius: itemBorderRadius ?? const BorderRadius.all(Radius.zero),
+      child: tile,
+    );
     if (itemBorderRadius != null) {
       return RepaintBoundary(
         child: Material(
           color: effectiveFillColor,
           shape: RoundedRectangleBorder(borderRadius: itemBorderRadius!),
           clipBehavior: Clip.antiAlias,
-          child: tile,
+          child: focusableTile,
         ),
       );
     }
-    return RepaintBoundary(child: tile);
+    return RepaintBoundary(child: focusableTile);
   }
 }
 
@@ -1842,7 +1859,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     final TextStyle? labelStyle = Theme.of(context).textTheme.labelLarge
         ?.copyWith(color: iconColor, fontWeight: FontWeight.w600);
 
-    return GestureDetector(
+    final Widget swipeable = GestureDetector(
       onHorizontalDragStart: (_) => _settleController.stop(),
       onHorizontalDragUpdate: (details) {
         _settleController.stop();
@@ -1904,6 +1921,21 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           ],
         ),
       ),
+    );
+    // TalkBack can't swipe: offer the configured swipe actions as custom
+    // actions on the row instead (D30 #6; upstream's tile did the same for
+    // install/update and remove). No label of its own, so the row's content
+    // stays its only announcement (upstream b7e32b00).
+    return Semantics(
+      customSemanticsActions: <CustomSemanticsAction, VoidCallback>{
+        if (canSwipeRight)
+          CustomSemanticsAction(label: _actionLabel(widget.rightAction)): () =>
+              _executeAction(widget.rightAction, context),
+        if (canSwipeLeft)
+          CustomSemanticsAction(label: _actionLabel(widget.leftAction)): () =>
+              _executeAction(widget.leftAction, context),
+      },
+      child: swipeable,
     );
   }
 }
@@ -3053,9 +3085,10 @@ class AppsPageState extends State<AppsPage> {
                           runMassObtain();
                         },
                         tooltip: null,
-                        child: const Icon(
+                        child: Icon(
                           Icons.file_download_outlined,
                           size: 20,
+                          semanticLabel: tr('installUpdateApps'),
                         ),
                       ),
                       if (pageUpdateCount > 0)
@@ -3086,7 +3119,11 @@ class AppsPageState extends State<AppsPage> {
                       openSelectionActionsSheet();
                     },
                     tooltip: null,
-                    child: const Icon(Icons.checklist, size: 20),
+                    child: Icon(
+                      Icons.checklist,
+                      size: 20,
+                      semanticLabel: plural('action', 2),
+                    ),
                   )
                 else
                   FloatingActionButton.small(
@@ -3104,7 +3141,11 @@ class AppsPageState extends State<AppsPage> {
                       openViewOptionsSheet();
                     },
                     tooltip: null,
-                    child: const Icon(Icons.tune, size: 20),
+                    child: Icon(
+                      Icons.tune,
+                      size: 20,
+                      semanticLabel: tr('appsViewOptions'),
+                    ),
                   ),
               ],
             ),
@@ -3114,15 +3155,86 @@ class AppsPageState extends State<AppsPage> {
     );
   }
 
+  /// TV only (D23, #350): a remote has no long-press, so the app bar's Select
+  /// turns this on and a row tap then toggles the row, even with nothing
+  /// selected yet. Close, BACK or clearing the selection turns it off.
+  bool _tvSelectionMode = false;
+
   bool clearSelected() {
-    if (selectedAppIds.isNotEmpty) {
+    if (selectedAppIds.isNotEmpty || _tvSelectionMode) {
       setState(() {
         selectedAppIds.clear();
+        _tvSelectionMode = false;
       });
       _notifyHomeFabChromeIfChanged();
       return true;
     }
     return false;
+  }
+
+  /// TV only (D23, #350): the floating buttons and long-press selection can't
+  /// be reached with a remote, so the app bar carries their actions. Phones
+  /// keep the floating buttons and never see these.
+  List<Widget> _tvAppBarActions() {
+    if (_tvSelectionMode || selectedAppIds.isNotEmpty) {
+      final int selected = selectedAppIds.length;
+      return [
+        IconButton(
+          tooltip: '${plural('action', 2)} ($selected)',
+          onPressed: selected == 0 ? null : openSelectionActionsSheet,
+          icon: Badge(
+            isLabelVisible: selected > 0,
+            label: Text('$selected'),
+            child: const Icon(Icons.checklist),
+          ),
+        ),
+        IconButton(
+          tooltip: tr('selectAll'),
+          icon: const Icon(Icons.select_all),
+          onPressed: () {
+            setState(() {
+              selectedAppIds = {
+                for (final AppInMemory listed in _listedAppsCache)
+                  listed.listingKey,
+              };
+            });
+            _notifyHomeFabChromeIfChanged();
+          },
+        ),
+        IconButton(
+          tooltip: tr('close'),
+          icon: const Icon(Icons.close),
+          onPressed: clearSelected,
+        ),
+      ];
+    }
+    return [
+      IconButton(
+        tooltip: tr('refresh'),
+        icon: const Icon(Icons.refresh),
+        onPressed: () => _refreshIndicatorKey.currentState?.show(),
+      ),
+      if (hasMassObtainOperations)
+        IconButton(
+          tooltip: tr('installUpdateApps'),
+          onPressed: runMassObtain,
+          icon: Badge(
+            isLabelVisible: pageUpdateCount > 0,
+            label: Text('$pageUpdateCount'),
+            child: const Icon(Icons.file_download_outlined),
+          ),
+        ),
+      IconButton(
+        tooltip: tr('appsViewOptions'),
+        icon: const Icon(Icons.tune),
+        onPressed: openViewOptionsSheet,
+      ),
+      IconButton(
+        tooltip: tr('selectX', args: [tr('appsString')]),
+        icon: const Icon(Icons.check_box_outlined),
+        onPressed: () => setState(() => _tvSelectionMode = true),
+      ),
+    ];
   }
 
   /// Called by [_HomePageState] when the system back button is pressed while
@@ -5101,7 +5213,7 @@ class AppsPageState extends State<AppsPage> {
           showCategoriesBadge: _effectiveShowCategoriesBadge(settingsProvider),
           showAuthorBadge: _effectiveShowAuthorBadge(settingsProvider),
           showVersionBadge: _effectiveShowVersionBadge(settingsProvider),
-          onTap: selectedAppIds.isNotEmpty
+          onTap: selectedAppIds.isNotEmpty || _tvSelectionMode
               ? () => toggleAppSelected(app)
               : navigateToAppPage,
           onLongPress: () => toggleAppSelected(app),
@@ -6490,7 +6602,10 @@ class AppsPageState extends State<AppsPage> {
       settingsProvider,
     );
     final bool shouldInterceptBack =
-        selectedAppIds.isNotEmpty || _searchExpanded || isFilterActive;
+        selectedAppIds.isNotEmpty ||
+        _tvSelectionMode ||
+        _searchExpanded ||
+        isFilterActive;
 
     final PreferredSizeWidget? filterChipsBar = _buildFilterChipsRow(
       showFilterSheet,
@@ -6500,7 +6615,7 @@ class AppsPageState extends State<AppsPage> {
       canPop: !shouldInterceptBack,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
-        if (selectedAppIds.isNotEmpty) {
+        if (selectedAppIds.isNotEmpty || _tvSelectionMode) {
           clearSelected();
         } else if (_searchExpanded) {
           setState(() {
@@ -6596,6 +6711,8 @@ class AppsPageState extends State<AppsPage> {
                                         .withValues(alpha: 0.72)
                                   : null,
                               actions: [
+                                if (settingsProvider.isTV && !_searchExpanded)
+                                  ..._tvAppBarActions(),
                                 if (!_searchExpanded)
                                   IconButton(
                                     icon: const Icon(Icons.search),

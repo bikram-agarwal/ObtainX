@@ -16,6 +16,8 @@ class DirectAPKLink extends AppSource {
 
   DirectAPKLink() {
     versionDetectionDisallowed = true;
+    // The link is the APK; a filter can only mean its URL (D22).
+    apkFilterMatchesLinkUrl = true;
     excludeCommonSettingKeys = [
       'versionExtractionRegEx',
       'matchGroupToUse',

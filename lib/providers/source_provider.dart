@@ -523,6 +523,7 @@ class SourceProvider {
         apk.apkUrls,
         additionalSettings['apkFilterRegEx'],
         additionalSettings['invertAPKFilter'],
+        matchUrl: source.apkFilterMatchesLinkUrl,
       );
     } else {
       // The global APK filter (upstream #2979) stands in for an unset app
@@ -532,7 +533,12 @@ class SourceProvider {
         settings.globalApkFilterRegEx,
       );
       if (globalApkFilterRegEx != null) {
-        apk.apkUrls = filterApks(apk.apkUrls, globalApkFilterRegEx, false);
+        apk.apkUrls = filterApks(
+          apk.apkUrls,
+          globalApkFilterRegEx,
+          false,
+          matchUrl: source.apkFilterMatchesLinkUrl,
+        );
       }
     }
     if (apk.apkUrls.isEmpty && !trackOnly) {

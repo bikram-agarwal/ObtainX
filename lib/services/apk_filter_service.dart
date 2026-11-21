@@ -59,16 +59,21 @@ class ApkFilterService {
         return MapEntry(apkSegs.isNotEmpty ? apkSegs.last : segments.last, e);
       }).toList();
 
+  /// Keeps the APKs [apkFilterRegEx] matches (or, with [invert], those it
+  /// doesn't). It's matched against the APK's name, and also its link URL
+  /// when [matchUrl] is set (see [AppSource.apkFilterMatchesLinkUrl]).
   List<MapEntry<String, String>> filterApks(
     List<MapEntry<String, String>> apkUrls,
     String? apkFilterRegEx,
-    bool? invert,
-  ) {
+    bool? invert, {
+    bool matchUrl = false,
+  }) {
     if (apkFilterRegEx?.isNotEmpty == true) {
       final reg = RegExp(apkFilterRegEx!);
       apkUrls = apkUrls.where((element) {
         final hasMatch =
-            reg.hasMatch(element.key) || reg.hasMatch(element.value);
+            reg.hasMatch(element.key) ||
+            (matchUrl && reg.hasMatch(element.value));
         return invert == true ? !hasMatch : hasMatch;
       }).toList();
     }
@@ -227,5 +232,11 @@ Future<int> resolvePreferredApkIndexForArchFilter(
 List<MapEntry<String, String>> filterApks(
   List<MapEntry<String, String>> apkUrls,
   String? apkFilterRegEx,
-  bool? invert,
-) => ApkFilterService().filterApks(apkUrls, apkFilterRegEx, invert);
+  bool? invert, {
+  bool matchUrl = false,
+}) => ApkFilterService().filterApks(
+  apkUrls,
+  apkFilterRegEx,
+  invert,
+  matchUrl: matchUrl,
+);

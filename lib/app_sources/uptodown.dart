@@ -139,11 +139,17 @@ parseUptodownTechnicalFields(
   dateStr ??= nonEmptyCells.length >= 5
       ? nonEmptyCells[nonEmptyCells.length - 5]
       : null;
-  extension ??=
+  // Only when the cell there is a file type: the offsets drift whenever the
+  // table changes, and a drifted cell (a size such as "174.92 mb") is no
+  // extension (D30 #11).
+  final String? positionalExtension =
       (nonEmptyCells.length >= 4
               ? nonEmptyCells[nonEmptyCells.length - 4]
               : null)
           ?.toLowerCase();
+  if (_uptodownFileExtensions.contains(positionalExtension)) {
+    extension ??= positionalExtension;
+  }
 
   return (appId: appId, dateStr: dateStr, extension: extension);
 }

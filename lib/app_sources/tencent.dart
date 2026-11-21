@@ -83,15 +83,22 @@ class Tencent extends AppSource {
       }
     } catch (_) {}
 
+    // Seconds since the epoch. Only a plausible date counts: 0, a placeholder
+    // or a value already in milliseconds would otherwise show as 1970 or a
+    // far-future release (D30 #11). Android dates from 2008.
     DateTime? releaseDate;
-    try {
-      final rawTime = appDetail['update_time']?.toString();
-      if (rawTime != null) {
-        releaseDate = DateTime.fromMillisecondsSinceEpoch(
-          int.parse(rawTime) * 1000,
-        );
+    final int? updateSeconds = int.tryParse(
+      appDetail['update_time']?.toString() ?? '',
+    );
+    if (updateSeconds != null) {
+      final DateTime parsed = DateTime.fromMillisecondsSinceEpoch(
+        updateSeconds * 1000,
+      );
+      if (parsed.isAfter(DateTime(2008)) &&
+          parsed.isBefore(DateTime.now().add(const Duration(days: 1)))) {
+        releaseDate = parsed;
       }
-    } catch (_) {}
+    }
 
     return APKDetails(
       version,

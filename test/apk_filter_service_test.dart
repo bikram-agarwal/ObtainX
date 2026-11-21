@@ -143,6 +143,22 @@ void main() {
     );
   });
 
+  // D22 (#353): the URL is matched only for sources that ask for it (HTML,
+  // direct links), whose APK "names" aren't file names.
+  test('filterApks matches the URL only when asked to', () {
+    const apks = [
+      MapEntry('app.apk', 'https://mirror.example/app.apk'),
+      MapEntry('app-beta.apk', 'https://cdn.example/app-beta.apk'),
+    ];
+    final service = ApkFilterService();
+    expect(service.filterApks(apks, 'mirror', false), isEmpty);
+    expect(service.filterApks(apks, 'mirror', false, matchUrl: true), [
+      apks.first,
+    ]);
+    expect(service.filterApks(apks, 'example', true), apks);
+    expect(service.filterApks(apks, 'example', true, matchUrl: true), isEmpty);
+  });
+
   // Phase C C-17: universal APKs lead the filtered list, so a stored choice
   // (a position) must follow them or a multi-flavour app switches flavour.
   group('carryPreferredApkIndex', () {
