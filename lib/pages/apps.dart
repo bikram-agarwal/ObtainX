@@ -1579,6 +1579,7 @@ class _SwipeableListItem extends StatefulWidget {
 class _SwipeableListItemState extends State<_SwipeableListItem>
     with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   double _dragOffset = 0;
+  bool _crossedThreshold = false;
 
   // Eases [_dragOffset] back to 0 on release so the revealed action (icon +
   // label) slides and fades out smoothly instead of snapping — mirroring
@@ -1887,18 +1888,25 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         ?.copyWith(color: iconColor, fontWeight: FontWeight.w600);
 
     final Widget swipeable = GestureDetector(
-      onHorizontalDragStart: (_) => _settleController.stop(),
+      onHorizontalDragStart: (_) {
+        _settleController.stop();
+        _crossedThreshold = false;
+      },
       onHorizontalDragUpdate: (details) {
         _settleController.stop();
-        setState(() {
-          _dragOffset += details.delta.dx;
-          _dragOffset = _dragOffset.clamp(
-            canSwipeLeft ? -maxDrag : 0.0,
-            canSwipeRight ? maxDrag : 0.0,
-          );
-        });
+        final double nextOffset = (_dragOffset + details.delta.dx).clamp(
+          canSwipeLeft ? -maxDrag : 0.0,
+          canSwipeRight ? maxDrag : 0.0,
+        );
+        final bool nowCrossed = nextOffset.abs() > swipeThreshold;
+        if (nowCrossed && !_crossedThreshold) {
+          hapticMediumImpact();
+        }
+        _crossedThreshold = nowCrossed;
+        setState(() => _dragOffset = nextOffset);
       },
       onHorizontalDragEnd: (_) {
+        _crossedThreshold = false;
         if (_dragOffset > swipeThreshold && canSwipeRight) {
           _executeAction(widget.rightAction, context);
           setState(() => _dragOffset = 0);
@@ -1909,7 +1917,10 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           _settleToZero();
         }
       },
-      onHorizontalDragCancel: _settleToZero,
+      onHorizontalDragCancel: () {
+        _crossedThreshold = false;
+        _settleToZero();
+      },
       child: ClipRect(
         child: Stack(
           children: [

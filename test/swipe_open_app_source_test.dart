@@ -410,4 +410,88 @@ void main() {
     semantics.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('swiping past threshold triggers haptic feedback when tactile feedback is enabled', (
+    WidgetTester tester,
+  ) async {
+    final List<String> hapticCalls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (MethodCall call) async {
+          if (call.method == 'HapticFeedback.vibrate') {
+            hapticCalls.add(call.arguments as String? ?? '');
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    settings.tactileFeedbackEnabled = true;
+    settings.rightSwipeAction = SwipeAction.openAppSource;
+    settings.leftSwipeAction = SwipeAction.openAppSource;
+
+    provider.apps['org.example.swipehaptic'] = AppInMemory(
+      const App(
+        id: 'org.example.swipehaptic',
+        url: 'https://github.com/example/swipe-haptic',
+        name: 'Swipe Haptic App',
+        author: 'Example',
+        installedVersion: '1.0.0',
+        latestVersion: '1.0.0',
+        preferredApkIndex: 0,
+        additionalSettings: <String, dynamic>{},
+      ),
+      null,
+      null,
+      iconBytes,
+    );
+
+    await openApps(tester);
+    final Finder rowFinder = find.text('Swipe Haptic App');
+
+    // Drag right past the 80px threshold.
+    final TestGesture rightGesture = await tester.startGesture(
+      tester.getCenter(rowFinder),
+    );
+    await rightGesture.moveBy(const Offset(25, 0));
+    await tester.pump();
+    expect(hapticCalls, isEmpty);
+    await rightGesture.moveBy(const Offset(95, 0));
+    await tester.pump();
+    expect(hapticCalls, <String>['HapticFeedbackType.mediumImpact']);
+    await rightGesture.up();
+    await tester.pumpAndSettle();
+
+    hapticCalls.clear();
+
+    // Drag left past the 80px threshold.
+    final TestGesture leftGesture = await tester.startGesture(
+      tester.getCenter(rowFinder),
+    );
+    await leftGesture.moveBy(const Offset(-25, 0));
+    await tester.pump();
+    expect(hapticCalls, isEmpty);
+    await leftGesture.moveBy(const Offset(-95, 0));
+    await tester.pump();
+    expect(hapticCalls, <String>['HapticFeedbackType.mediumImpact']);
+    await leftGesture.up();
+    await tester.pumpAndSettle();
+
+    // Disabled tactile feedback emits no haptic.
+    hapticCalls.clear();
+    settings.tactileFeedbackEnabled = false;
+    final TestGesture disabledGesture = await tester.startGesture(
+      tester.getCenter(rowFinder),
+    );
+    await disabledGesture.moveBy(const Offset(25, 0));
+    await tester.pump();
+    await disabledGesture.moveBy(const Offset(95, 0));
+    await tester.pump();
+    expect(hapticCalls, isEmpty);
+    await disabledGesture.up();
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
