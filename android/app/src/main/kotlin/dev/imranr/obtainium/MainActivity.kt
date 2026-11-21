@@ -617,6 +617,17 @@ class MainActivity : FlutterActivity() {
                 "uses24HourFormat" -> {
                     result.success(DateFormat.is24HourFormat(this))
                 }
+                "dateFormatOrder" -> {
+                    // The phone's day/month/year order for its language and
+                    // region, e.g. "dMy" (#355).
+                    result.success(
+                        try {
+                            String(DateFormat.getDateFormatOrder(this))
+                        } catch (_: IllegalArgumentException) {
+                            null
+                        },
+                    )
+                }
                 else -> result.notImplemented()
             }
         }

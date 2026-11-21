@@ -153,6 +153,18 @@ class BulkImportService {
     }
   }
 
+  /// Android's day/month/year order for the phone's language and region,
+  /// e.g. "dMy" (#355), or null when the platform can't say.
+  static Future<String?> dateFormatOrder() async {
+    try {
+      return await _deviceAppsChannel.invokeMethod<String>('dateFormatOrder');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// Returns all installed apps, filtered by system/user.
   ///
   /// Backed by the app's own `getInstalledAppsLight` platform method, which

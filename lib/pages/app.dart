@@ -3360,20 +3360,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    String formatDateTimeToMinute(DateTime dateTime) {
-      final local = dateTime.toLocal();
-      final year = local.year.toString();
-      final month = local.month.toString().padLeft(2, '0');
-      final day = local.day.toString().padLeft(2, '0');
-      final hour = local.hour.toString().padLeft(2, '0');
-      final minute = local.minute.toString().padLeft(2, '0');
-      return '$year-$month-$day $hour:$minute';
-    }
-
-    String formatCheckedAtTimestamp(BuildContext ctx, DateTime dateTime) {
+    // Date in the phone's day/month/year order, time in its 12/24-hour
+    // setting (#355).
+    String formatDeviceDateTime(BuildContext ctx, DateTime dateTime) {
       final local = dateTime.toLocal();
       final materialLocalizations = MaterialLocalizations.of(ctx);
-      final date = formatDeviceOrderedNumericDate(ctx, local);
+      final date = formatDeviceOrderedNumericDate(local);
       final time = materialLocalizations.formatTimeOfDay(
         TimeOfDay.fromDateTime(local),
         alwaysUse24HourFormat:
@@ -4303,10 +4295,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
 
       final lastUpdateCheckValue = app?.app.lastUpdateCheck == null
           ? tr('never')
-          : formatCheckedAtTimestamp(
-              pageThemeContext,
-              app!.app.lastUpdateCheck!,
-            );
+          : formatDeviceDateTime(pageThemeContext, app!.app.lastUpdateCheck!);
 
       Future<void> markTrackOnlyAsNotInstalledOnDevice() async {
         if (app == null) return;
@@ -4585,7 +4574,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
-                  : formatDateTimeToMinute(app!.app.releaseDate!),
+                  : formatDeviceDateTime(
+                      pageThemeContext,
+                      app!.app.releaseDate!,
+                    ),
               changeLogFn,
             ),
           );
@@ -4653,7 +4645,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
-                  : formatDateTimeToMinute(app!.app.releaseDate!),
+                  : formatDeviceDateTime(
+                      pageThemeContext,
+                      app!.app.releaseDate!,
+                    ),
               changeLogFn,
             ),
           );

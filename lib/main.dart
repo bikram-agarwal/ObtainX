@@ -10,6 +10,9 @@ import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/components/ui_widgets.dart' show TvPopupFocusObserver;
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/custom_errors.dart' show setAppLocale;
+import 'package:obtainium/date_time_format.dart' show setSystemDateOrder;
+import 'package:obtainium/services/bulk_import_service.dart'
+    show BulkImportService;
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_text_button_theme.dart';
@@ -223,6 +226,8 @@ void main() async {
     settingsProvider.initializeSettings(),
     np.initialize(),
     Workmanager().initialize(callbackDispatcher),
+    // Before the first frame, so no date is drawn in the wrong order (#355).
+    BulkImportService.dateFormatOrder().then(setSystemDateOrder),
   ]);
   if ((await androidInfoFuture).version.sdkInt >= 29) {
     SystemChrome.setSystemUIOverlayStyle(
@@ -340,6 +345,15 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       requestNonOptionalPermissions();
     });
+  }
+
+  /// The phone's language or region changed while ObtainX was alive (the
+  /// activity handles locale changes itself, so it isn't recreated): re-read
+  /// the date order. Dates already drawn update when they next rebuild.
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    super.didChangeLocales(locales);
+    unawaited(BulkImportService.dateFormatOrder().then(setSystemDateOrder));
   }
 
   @override

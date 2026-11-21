@@ -1024,7 +1024,7 @@ class _AppListItem extends StatelessWidget {
     final String versionText = app.app.installedVersion ?? tr('none');
     final String changesButtonString = app.app.releaseDate == null
         ? (showChangesFn != null ? tr('changes') : '')
-        : formatDeviceOrderedNumericDate(context, app.app.releaseDate!);
+        : formatDeviceOrderedNumericDate(app.app.releaseDate!);
 
     final bool hasTrailingWidgets =
         skipActive ||
