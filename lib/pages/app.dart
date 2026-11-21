@@ -5120,14 +5120,22 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Tooltip(
-                        message: tr('copyToClipboard'),
-                        child: SizedBox.square(
-                          dimension: 18,
-                          child: InkResponse(
-                            onTap: () => unawaited(copyCertificateHash(hash)),
-                            radius: 10,
-                            child: const Icon(Icons.copy_rounded, size: 14),
+                      Semantics(
+                        container: true,
+                        button: true,
+                        enabled: true,
+                        label: tr('copyToClipboard'),
+                        excludeSemantics: true,
+                        onTap: () => unawaited(copyCertificateHash(hash)),
+                        child: Tooltip(
+                          message: tr('copyToClipboard'),
+                          child: SizedBox.square(
+                            dimension: 18,
+                            child: InkResponse(
+                              onTap: () => unawaited(copyCertificateHash(hash)),
+                              radius: 10,
+                              child: const Icon(Icons.copy_rounded, size: 14),
+                            ),
                           ),
                         ),
                       ),

@@ -39,8 +39,12 @@ class _Apps extends ChangeNotifier implements AppsProvider {
   }
 }
 
+class _SigningInfo extends SigningInfo {
+  const _SigningInfo({super.signingCertificateHistory});
+}
+
 class _InstalledPackage extends PackageInfo {
-  const _InstalledPackage()
+  const _InstalledPackage({super.signingInfo})
     : super(
         installLocation: AndroidInstallLocation.unspecified,
         packageName: 'org.example.app',
@@ -104,11 +108,16 @@ void main() {
     settings.dispose();
   });
 
-  Future<void> openPage(WidgetTester tester, App app, {bool installed = true}) {
+  Future<void> openPage(
+    WidgetTester tester,
+    App app, {
+    bool installed = true,
+    SigningInfo? signingInfo,
+  }) {
     provider.apps[app.id] = AppInMemory(
       app,
       null,
-      installed ? const _InstalledPackage() : null,
+      installed ? _InstalledPackage(signingInfo: signingInfo) : null,
       icon,
     );
     tester.view.devicePixelRatio = 1;
@@ -202,6 +211,58 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text(tr('appNotCheckedYet')), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('copy certificate hash button has an accessible label and copies', (
+    tester,
+  ) async {
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    final List<String> copiedTexts = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (MethodCall call) async {
+        if (call.method == 'Clipboard.setData') {
+          final Map<dynamic, dynamic> args =
+              call.arguments as Map<dynamic, dynamic>;
+          copiedTexts.add(args['text'] as String);
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    final Uint8List signatureBytes = Uint8List.fromList(<int>[1, 2, 3, 4]);
+    final String expectedHash = certificateHashesFromSignatures([
+      signatureBytes,
+    ]).single;
+
+    await openPage(
+      tester,
+      _app(),
+      signingInfo: _SigningInfo(signingCertificateHistory: [signatureBytes]),
+    );
+    await settle(tester);
+
+    final Finder copyNode = find.bySemanticsLabel(tr('copyToClipboard'));
+    expect(copyNode, findsOneWidget);
+    final SemanticsData data = tester.getSemantics(copyNode).getSemanticsData();
+    expect(data.label, tr('copyToClipboard'));
+    expect(data.tooltip, isEmpty);
+    expect(data.flagsCollection.isButton, isTrue);
+    expect(data.hasAction(SemanticsAction.tap), isTrue);
+
+    tester.semantics.tap(find.semantics.byLabel(tr('copyToClipboard')));
+    await tester.pump();
+
+    expect(copiedTexts, <String>[expectedHash]);
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }
