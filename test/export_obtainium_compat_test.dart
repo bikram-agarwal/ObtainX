@@ -423,4 +423,40 @@ void main() {
     );
     expect(hasSecretsInSettingsMap(<String, dynamic>{'theme': 0}), isFalse);
   });
+
+  test('categoryColorHexFromInt and parseCategoryColorHex round-trip', () {
+    expect(categoryColorHexFromInt(0xFFFF5733), '#FF5733');
+    expect(categoryColorHexFromInt(0xFF00AB12), '#00AB12');
+    expect(parseCategoryColorHex('#FF5733'), 0xFFFF5733);
+    expect(parseCategoryColorHex('00ab12'), 0xFF00AB12);
+    expect(parseCategoryColorHex('#80FF5733'), 0x80FF5733);
+    expect(parseCategoryColorHex('invalid'), isNull);
+  });
+
+  test('ExportSchema preserves categoryColors HEX map', () {
+    final ExportSchema schema = ExportSchema(
+      schemaVersion: currentExportSchemaVersion,
+      exportedAt: '2026-11-21T00:00:00.000',
+      appVersion: '2.22.0',
+      apps: const <Map<String, dynamic>>[],
+      categoryColors: const <String, String>{
+        'Games': '#FF5733',
+        'Tools': '#1E88E5',
+      },
+    );
+
+    final Map<String, dynamic> encoded = schema.toJson();
+    expect(encoded['categoryColors'], <String, String>{
+      'Games': '#FF5733',
+      'Tools': '#1E88E5',
+    });
+
+    final ExportSchema decoded = ExportSchema.fromJson(
+      jsonDecode(jsonEncode(encoded)) as Map<String, dynamic>,
+    );
+    expect(decoded.categoryColors, <String, String>{
+      'Games': '#FF5733',
+      'Tools': '#1E88E5',
+    });
+  });
 }

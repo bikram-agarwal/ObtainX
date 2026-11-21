@@ -47,9 +47,35 @@ bool hasSecretsInSettingsMap(Map<String, dynamic>? settingsMap) {
 class BackupContent {
   final List<App> apps;
   final Map<String, dynamic>? settingsMap;
+  final Map<String, int>? categoryColors;
   final ExportSchema? schema;
 
-  const BackupContent({required this.apps, this.settingsMap, this.schema});
+  const BackupContent({
+    required this.apps,
+    this.settingsMap,
+    this.categoryColors,
+    this.schema,
+  });
+}
+
+/// Formats an ARGB32 color integer as `#RRGGBB` for backup export.
+String categoryColorHexFromInt(int argb) {
+  final int rgb = argb & 0xFFFFFF;
+  return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+}
+
+/// Parses a `#RRGGBB` / `#AARRGGBB` (with or without `#`) hex string into an
+/// ARGB32 integer, returning null for invalid inputs.
+int? parseCategoryColorHex(String rawHex) {
+  final String normalized = rawHex.trim().replaceFirst('#', '');
+  if (normalized.length != 6 && normalized.length != 8) {
+    return null;
+  }
+  final int? parsed = int.tryParse(normalized, radix: 16);
+  if (parsed == null) {
+    return null;
+  }
+  return normalized.length == 6 ? (0xFF000000 | parsed) : parsed;
 }
 
 /// One app for Import from URL list to add: a typed URL, or an app that an
@@ -278,6 +304,25 @@ extension AppsProviderImportExport on AppsProvider {
       settingsMap = splitSettings.settings;
       settingsObtainXMap = splitSettings.settingsObtainX;
     }
+    final Map<String, int> liveCategoryColors = settingsProvider.categories;
+    final Map<String, String> exportedCategoryColors = <String, String>{};
+    if (shouldExportSettings > 0) {
+      liveCategoryColors.forEach((String category, int colorInt) {
+        exportedCategoryColors[category] = categoryColorHexFromInt(colorInt);
+      });
+    } else {
+      for (final Map<String, dynamic> appJson in appList) {
+        final List<dynamic>? categories = appJson['categories'] as List?;
+        if (categories == null) continue;
+        for (final dynamic cat in categories) {
+          final String? name = cat is String ? cat : null;
+          final int? colorInt = name != null ? liveCategoryColors[name] : null;
+          if (name != null && colorInt != null) {
+            exportedCategoryColors[name] = categoryColorHexFromInt(colorInt);
+          }
+        }
+      }
+    }
     final schema = ExportSchema(
       schemaVersion: currentExportSchemaVersion,
       exportedAt: DateTime.now().toIso8601String(),
@@ -285,6 +330,9 @@ extension AppsProviderImportExport on AppsProvider {
       apps: appList,
       settings: settingsMap,
       settingsObtainX: settingsObtainXMap,
+      categoryColors: exportedCategoryColors.isEmpty
+          ? null
+          : exportedCategoryColors,
     );
     return schema.toJson();
   }
@@ -409,9 +457,30 @@ extension AppsProviderImportExport on AppsProvider {
       sharedSettings,
       settingsObtainXOverlay,
     );
+    final Map<String, String>? rawCategoryColors = hasSchemaVersion
+        ? schema!.categoryColors
+        : (decodedJSON is Map && decodedJSON['categoryColors'] is Map
+              ? (decodedJSON['categoryColors'] as Map).map(
+                  (k, v) => MapEntry(k.toString(), v.toString()),
+                )
+              : null);
+    Map<String, int>? parsedCategoryColors;
+    if (rawCategoryColors != null && rawCategoryColors.isNotEmpty) {
+      parsedCategoryColors = <String, int>{};
+      rawCategoryColors.forEach((String name, String hex) {
+        final int? colorInt = parseCategoryColorHex(hex);
+        if (colorInt != null) {
+          parsedCategoryColors![name] = colorInt;
+        }
+      });
+      if (parsedCategoryColors.isEmpty) {
+        parsedCategoryColors = null;
+      }
+    }
     return BackupContent(
       apps: appsWithImportedShizukuBackend(importedApps, settingsMap),
       settingsMap: settingsMap,
+      categoryColors: parsedCategoryColors,
       schema: schema,
     );
   }
@@ -486,6 +555,31 @@ extension AppsProviderImportExport on AppsProvider {
         skipKeys: const {'appFolders', ...droppedUpstreamSettingKeys},
       );
       await settingsProvider.initializeSettings();
+    }
+    final Map<String, int>? importedCategoryColors =
+        backupContent.categoryColors;
+    if (importedCategoryColors != null && importedCategoryColors.isNotEmpty) {
+      final Set<String> importedAppCategories = importedApps
+          .expand((App a) => a.categories)
+          .toSet();
+      final Map<String, int> mergedCategories = Map<String, int>.from(
+        settingsProvider.categories,
+      );
+      bool changed = false;
+      importedCategoryColors.forEach((String name, int colorInt) {
+        final bool shouldInclude =
+            hasSettings || importedAppCategories.contains(name);
+        if (!shouldInclude) return;
+        if (replaceExisting || !mergedCategories.containsKey(name)) {
+          if (mergedCategories[name] != colorInt) {
+            mergedCategories[name] = colorInt;
+            changed = true;
+          }
+        }
+      });
+      if (changed) {
+        settingsProvider.setCategories(mergedCategories, appsProvider: this);
+      }
     }
     return MapEntry<List<App>, bool>(importedApps, hasSettings);
   }
@@ -884,6 +978,7 @@ class ExportSchema {
   final List<Map<String, dynamic>> apps;
   final Map<String, dynamic>? settings;
   final Map<String, dynamic>? settingsObtainX;
+  final Map<String, String>? categoryColors;
 
   ExportSchema({
     required this.schemaVersion,
@@ -892,6 +987,7 @@ class ExportSchema {
     required this.apps,
     this.settings,
     this.settingsObtainX,
+    this.categoryColors,
   });
 
   factory ExportSchema.fromJson(Map<String, dynamic> json) {
@@ -918,6 +1014,9 @@ class ExportSchema {
           [],
       settings: json['settings'] as Map<String, dynamic>?,
       settingsObtainX: json['settingsObtainX'] as Map<String, dynamic>?,
+      categoryColors: (json['categoryColors'] as Map?)?.map(
+        (k, v) => MapEntry(k.toString(), v.toString()),
+      ),
     );
   }
 
@@ -931,6 +1030,9 @@ class ExportSchema {
     };
     if (settingsObtainX != null && settingsObtainX!.isNotEmpty) {
       json['settingsObtainX'] = settingsObtainX;
+    }
+    if (categoryColors != null && categoryColors!.isNotEmpty) {
+      json['categoryColors'] = categoryColors;
     }
     return json;
   }

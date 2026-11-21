@@ -22,7 +22,6 @@ import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
-import 'package:obtainium/utils/color_utils.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -256,14 +255,6 @@ class _ImportExportPageState extends State<ImportExportPage> {
         importSettings: selection.importSettings,
         replaceExisting: replaceExisting,
       );
-      final cats = settingsProvider.categories;
-      appsProvider.apps.forEach((key, appInMemory) {
-        for (var category in appInMemory.app.categories) {
-          if (!cats.containsKey(category)) {
-            cats[category] = generateRandomLightColor().toARGB32();
-          }
-        }
-      });
       appsProvider.addMissingCategories(settingsProvider);
       String resultMessage =
           '${tr(replaceExisting ? 'restoredX' : 'importedX', args: [plural('apps', importResult.key.length).toLowerCase()])}${importResult.value ? ' + ${tr('settings').toLowerCase()}' : ''}';
