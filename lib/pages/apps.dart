@@ -3064,7 +3064,10 @@ class AppsPageState extends State<AppsPage> {
 
   AppsFilter filter = AppsFilter();
   final AppsFilter neutralFilter = AppsFilter();
-  var updatesOnlyFilter = AppsFilter(
+
+  /// Installed apps with an update, as the "Updates available" launcher
+  /// shortcut shows them. A new filter each time: filters are mutable.
+  AppsFilter get updatesOnlyFilter => AppsFilter(
     upToDateFilterIntent: CategoryFilterIntent.exclude,
     installedFilterIntent: CategoryFilterIntent.include,
   );
@@ -3087,14 +3090,19 @@ class AppsPageState extends State<AppsPage> {
     showAppsViewOptionsSheet(context, folderId: _viewSettingsId);
   }
 
-  void showUpdatesOnly() {
+  void showUpdatesOnly() => _showOnly(updatesOnlyFilter);
+
+  /// Shows only the listings of [packageId], one per store it's tracked from.
+  void showPackageListings(String packageId) =>
+      _showOnly(AppsFilter(packageIdFilter: packageId));
+
+  /// Replaces the filter with [shown] and closes search.
+  void _showOnly(AppsFilter shown) {
     setState(() {
-      filter = AppsFilter(
-        upToDateFilterIntent: CategoryFilterIntent.exclude,
-        installedFilterIntent: CategoryFilterIntent.include,
-      );
-      _searchController.clear();
+      filter = shown;
       _searchExpanded = false;
+      _searchController.clear();
+      _searchFocusNode.unfocus();
     });
   }
 
@@ -3792,8 +3800,9 @@ class AppsPageState extends State<AppsPage> {
     final chips = <Widget>[];
 
     // ── Text filters ────────────────────────────────────────────────────────
-    // Author and app-ID have no other on-page indicator (they can only be set
-    // from the filter sheet), so always surface them as chips. The name filter
+    // Author and app ID have no other on-page indicator (author is set from
+    // the filter sheet, app ID by an obtainium://open link), so always surface
+    // them as chips. The name filter
     // normally lives in the search bar, but it can also be set from the sheet —
     // in which case the search bar stays collapsed and shows nothing — so add a
     // name chip only while the search bar is collapsed, to avoid duplicating the
@@ -3813,6 +3822,14 @@ class AppsPageState extends State<AppsPage> {
         _filterChip(
           '${tr('author')}: ${filter.authorFilter.trim()}',
           () => setState(() => filter.authorFilter = ''),
+        ),
+      );
+    }
+    if (filter.packageIdFilter.isNotEmpty) {
+      chips.add(
+        _filterChip(
+          '${tr('appId')}: ${filter.packageIdFilter}',
+          () => setState(() => filter.packageIdFilter = ''),
         ),
       );
     }
@@ -4202,6 +4219,7 @@ class AppsPageState extends State<AppsPage> {
       Object.hashAll(filter.excludedCategoryFilter.toList()..sort()),
       filter.categoryMatchMode.index,
       filter.sourceFilter,
+      filter.packageIdFilter,
       _effectiveSortColumn(settingsProvider).index,
       _effectiveSortOrder(settingsProvider).index,
       _effectiveGroupBy(settingsProvider).index,
@@ -4267,6 +4285,10 @@ class AppsPageState extends State<AppsPage> {
       // Reused below to compute cross-folder search matches so the two lists
       // never drift apart.
       bool appMatchesFilters(AppInMemory app) {
+        if (filter.packageIdFilter.isNotEmpty &&
+            app.app.id != filter.packageIdFilter) {
+          return false;
+        }
         if (!appMatchesUpToDateFilter(app.app, filter.upToDateFilterIntent)) {
           return false;
         }
@@ -4428,16 +4450,17 @@ class AppsPageState extends State<AppsPage> {
       // ── Cross-folder search matches ─────────────────────────────────────
       // On the main page, apps that live inside a folder — or in the On-Demand
       // Only bucket — are hidden from the list, so a plain search would
-      // dead-end on them. When a text search is active we gather those hidden
-      // matches here and render them below the results under per-bucket
-      // headers. In a folder / on-demand view the user deliberately narrowed
+      // dead-end on them. When a text search or a package filter is active we
+      // gather those hidden matches here and render them below the results
+      // under per-bucket headers. In a folder / on-demand view the user deliberately narrowed
       // scope, so search stays scoped there and this stays empty.
       _crossFolderMatchesCache = const [];
       final bool crossFolderSearchActive =
           !widget.onDemandOnlyList &&
           widget.folderId == null &&
           (filter.nameFilter.trim().isNotEmpty ||
-              filter.authorFilter.trim().isNotEmpty);
+              filter.authorFilter.trim().isNotEmpty ||
+              filter.packageIdFilter.isNotEmpty);
       if (crossFolderSearchActive) {
         final Set<String> mainListedIds = {
           for (final a in _listedAppsCache) a.listingKey,
@@ -9211,6 +9234,12 @@ class AppsFilter {
   CategoryFilterMatchMode categoryMatchMode;
   String sourceFilter;
 
+  /// Only the listings of this package ID, as an `obtainium://open` link
+  /// (App Info's "App details") shows a package tracked from several stores.
+  /// The filter sheet doesn't set it, and a folder saved from the sheet
+  /// doesn't keep it: folder conditions have no package ID.
+  String packageIdFilter;
+
   AppsFilter({
     this.nameFilter = '',
     this.authorFilter = '',
@@ -9222,6 +9251,7 @@ class AppsFilter {
     Set<String>? excludedCategoryFilter,
     this.categoryMatchMode = CategoryFilterMatchMode.any,
     this.sourceFilter = '',
+    this.packageIdFilter = '',
   }) : includedCategoryFilter = includedCategoryFilter ?? categoryFilter,
        excludedCategoryFilter = excludedCategoryFilter ?? const {};
 
@@ -9371,7 +9401,8 @@ class AppsFilter {
         other.excludedCategoryFilter,
       ) &&
       categoryMatchMode == other.categoryMatchMode &&
-      sourceFilter.trim() == other.sourceFilter.trim();
+      sourceFilter.trim() == other.sourceFilter.trim() &&
+      packageIdFilter == other.packageIdFilter;
 }
 
 class _NoScrollbarBehavior extends MaterialScrollBehavior {

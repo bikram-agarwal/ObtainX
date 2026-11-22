@@ -28,6 +28,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_storage/shared_storage.dart' as saf;
 import 'package:flutter_fgbg/flutter_fgbg.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
@@ -2822,7 +2823,12 @@ class NativeFeatures {
     }
   }
 
-  /// Deletes a SAF document off the Android main thread via [_storageChannel].
+  // The SAF calls below run off the Android main thread through
+  // [_storageChannel], which only MainActivity's engine has. The background
+  // worker's engine has none, so there they fall back to the shared_storage
+  // plugin, whose calls run on the main thread, as they did before.
+
+  /// Deletes a SAF document.
   static Future<bool> deleteDocument(Uri uri) async {
     try {
       return await _storageChannel.invokeMethod<bool>(
@@ -2833,9 +2839,56 @@ class NativeFeatures {
     } on PlatformException {
       return false;
     } on MissingPluginException {
-      return false;
+      try {
+        return await saf.delete(uri) ?? false;
+      } catch (_) {
+        return false;
+      }
     }
   }
+
+  /// The document named [displayName] in the SAF folder [treeUri], or null.
+  ///
+  /// One query, where the plugin's findFile makes one per file in the folder.
+  /// Throws [PlatformException] when the folder can't be read.
+  static Future<Uri?> findDocument(Uri treeUri, String displayName) async {
+    try {
+      final String? found = await _storageChannel.invokeMethod<String>(
+        'findDocument',
+        <String, String>{
+          'treeUri': treeUri.toString(),
+          'displayName': displayName,
+        },
+      );
+      return found == null ? null : Uri.parse(found);
+    } on MissingPluginException {
+      return (await saf.findFile(treeUri, displayName))?.uri;
+    }
+  }
+
+  /// Copies [source] into the SAF folder [treeUri] as [displayName], replacing
+  /// a document of that name, and returns whether it landed. A copy that fails
+  /// partway leaves no partial document behind.
+  ///
+  /// False when the folder can't take a new document. Throws
+  /// [PlatformException] when the copy fails, and [MissingPluginException] in
+  /// the background worker's engine, which copies with the plugin instead.
+  static Future<bool> copyFileToDocument(
+    File source,
+    Uri treeUri,
+    String displayName, {
+    required String mimeType,
+  }) async =>
+      await _storageChannel.invokeMethod<bool>(
+        'copyFileToDocument',
+        <String, String>{
+          'path': source.path,
+          'treeUri': treeUri.toString(),
+          'displayName': displayName,
+          'mimeType': mimeType,
+        },
+      ) ??
+      false;
 
   static Future<void> showDownloadProgressNotification({
     required int id,

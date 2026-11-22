@@ -8,6 +8,7 @@ import 'package:android_package_manager/android_package_manager.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_archive/flutter_archive.dart';
 import 'package:flutter_fgbg/flutter_fgbg.dart';
@@ -2982,6 +2983,11 @@ extension AppsProviderInstall on AppsProvider {
 
   /// Writes [source] into the SAF tree as [displayName] without loading the
   /// whole file into memory. Replaces an existing document with the same name.
+  ///
+  /// The copy runs off the Android main thread
+  /// ([NativeFeatures.copyFileToDocument]). The background worker's engine
+  /// can't reach that, so there the file goes through the plugin a chunk at a
+  /// time, each write on the main thread.
   Future<bool> _chunkedCopyApkToSafTree(
     File source,
     Uri treeUri,
@@ -2997,14 +3003,22 @@ extension AppsProviderInstall on AppsProvider {
                   : (displayName.toLowerCase().endsWith('.json')
                         ? 'application/json'
                         : '*/*')));
-    final dynamic existing = await saf.findFile(treeUri, displayName);
-    if (existing != null) {
-      final Uri? existingUri = existing is Map
-          ? Uri.parse(Map<String, dynamic>.from(existing)['uri'] as String)
-          : (existing as dynamic).uri as Uri?;
-      if (existingUri != null) {
-        await NativeFeatures.deleteDocument(existingUri);
-      }
+    try {
+      return await NativeFeatures.copyFileToDocument(
+        source,
+        treeUri,
+        displayName,
+        mimeType: resolvedMime,
+      );
+    } on MissingPluginException {
+      // The background worker: copy with the plugin below.
+    }
+    final Uri? existingUri = await NativeFeatures.findDocument(
+      treeUri,
+      displayName,
+    );
+    if (existingUri != null) {
+      await NativeFeatures.deleteDocument(existingUri);
     }
     Uri? documentUri;
     var isFirstChunk = true;

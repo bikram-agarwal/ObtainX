@@ -864,6 +864,30 @@ void main() {
     expect(haptics, hasLength(1));
   });
 
+  test('a settings import reaches the category and folder caches', () async {
+    final SettingsProvider settings = SettingsProvider();
+    await settings.initializeSettings();
+    await settings.prefs!.setString('categories', '{"Old":4294901760}');
+    await settings.prefs!.setString(
+      'folderView_f1',
+      jsonEncode({'pinUpdates': false}),
+    );
+    await settings.initializeSettings();
+    // Read once, so both answers are held in memory.
+    expect(settings.categories, {'Old': 4294901760});
+    expect(settings.folderPinUpdates('f1'), isFalse);
+
+    // As an import does: prefs written directly, then initialized again.
+    await settings.prefs!.setString('categories', '{"New":4278190335}');
+    await settings.prefs!.setString(
+      'folderView_f1',
+      jsonEncode({'pinUpdates': true}),
+    );
+    await settings.initializeSettings();
+    expect(settings.categories, {'New': 4278190335});
+    expect(settings.folderPinUpdates('f1'), isTrue);
+  });
+
   test('a Codeberg token goes only to its own host', () async {
     final Codeberg codeberg = Codeberg();
     const Map<String, dynamic> settings = <String, dynamic>{

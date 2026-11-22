@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart' show mapEquals;
 
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/huaweiappgallery.dart';
@@ -15,6 +16,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:obtainium/services/json_file_work.dart';
+import 'package:obtainium/utils/color_utils.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
 /// Secret settings excluded from the "settings without secrets" backup mode.
@@ -47,6 +49,9 @@ bool hasSecretsInSettingsMap(Map<String, dynamic>? settingsMap) {
 class BackupContent {
   final List<App> apps;
   final Map<String, dynamic>? settingsMap;
+
+  /// The category colors the backup carries, from either place it can hold
+  /// them ([categoryColorsFromBackup]).
   final Map<String, int>? categoryColors;
   final ExportSchema? schema;
 
@@ -64,18 +69,114 @@ String categoryColorHexFromInt(int argb) {
   return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
 }
 
+final RegExp _categoryColorHex = RegExp(r'^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$');
+
 /// Parses a `#RRGGBB` / `#AARRGGBB` (with or without `#`) hex string into an
 /// ARGB32 integer, returning null for invalid inputs.
 int? parseCategoryColorHex(String rawHex) {
-  final String normalized = rawHex.trim().replaceFirst('#', '');
-  if (normalized.length != 6 && normalized.length != 8) {
-    return null;
+  final RegExpMatch? match = _categoryColorHex.firstMatch(rawHex.trim());
+  if (match == null) return null;
+  final String digits = match.group(1)!;
+  final int parsed = int.parse(digits, radix: 16);
+  return digits.length == 6 ? (0xFF000000 | parsed) : parsed;
+}
+
+/// The `categoryColors` an export writes, or null for none.
+///
+/// Exported settings already hold every color, in the `categories` setting, so
+/// the colors are written here only when settings aren't exported, and only
+/// for the categories the exported apps use.
+Map<String, String>? categoryColorsForExport({
+  required bool settingsExported,
+  required Map<String, int> colors,
+  required Iterable<Map<String, dynamic>> appJsons,
+}) {
+  if (settingsExported) return null;
+  final Map<String, String> exported = <String, String>{};
+  for (final Map<String, dynamic> appJson in appJsons) {
+    final List<dynamic>? categories = appJson['categories'] as List?;
+    if (categories == null) continue;
+    for (final String name in categories.whereType<String>()) {
+      final int? color = colors[name];
+      if (color != null) exported[name] = categoryColorHexFromInt(color);
+    }
   }
-  final int? parsed = int.tryParse(normalized, radix: 16);
-  if (parsed == null) {
-    return null;
+  return exported.isEmpty ? null : exported;
+}
+
+/// The category colors a backup carries, or null for none: its
+/// `categoryColors` ([hexColors]) when it has them, else the `categories`
+/// setting in its [settingsMap]. That setting is a JSON string, as the pref
+/// stores it, in ObtainX and Obtainium backups alike.
+///
+/// The colors are read even when the settings aren't imported, so apps
+/// imported without them keep their categories' colors.
+Map<String, int>? categoryColorsFromBackup({
+  Map<String, String>? hexColors,
+  Map<String, dynamic>? settingsMap,
+}) {
+  final Map<String, int> colors = <String, int>{};
+  if (hexColors != null && hexColors.isNotEmpty) {
+    hexColors.forEach((String name, String hex) {
+      final int? color = parseCategoryColorHex(hex);
+      if (color != null) colors[name] = color;
+    });
+  } else {
+    dynamic stored = settingsMap?['categories'];
+    if (stored is String) {
+      try {
+        stored = jsonDecode(stored);
+      } on FormatException {
+        stored = null;
+      }
+    }
+    if (stored is Map) {
+      stored.forEach((dynamic name, dynamic color) {
+        if (name is String && color is int) colors[name] = color;
+      });
+    }
   }
-  return normalized.length == 6 ? (0xFF000000 | parsed) : parsed;
+  return colors.isEmpty ? null : colors;
+}
+
+/// The category map an import leaves: [current] (empty after a restore, which
+/// resets the settings first) with the backup's [backupColors] merged in.
+///
+/// With [settingsImported], every backup color is taken and wins over the
+/// current one, as every other imported setting does. Without, only the
+/// categories the [importedApps] use are added, and current colors stay.
+/// Categories only [current] has are always kept: apps may still carry them.
+///
+/// A category that any app in [library] carries and that has no color still
+/// gets [newColor]. The map is written once, and a category missing from it
+/// would be stripped from every app ([SettingsProvider.setCategories]).
+Map<String, int> categoriesAfterImport({
+  required Map<String, int> current,
+  required Map<String, int>? backupColors,
+  required bool settingsImported,
+  required Iterable<App> importedApps,
+  required Iterable<App> library,
+  required int Function() newColor,
+}) {
+  final Map<String, int> merged = Map<String, int>.from(current);
+  if (backupColors != null) {
+    final Set<String> importedCategories = importedApps
+        .expand((App app) => app.categories)
+        .toSet();
+    backupColors.forEach((String name, int color) {
+      if (settingsImported) {
+        merged[name] = color;
+      } else if (importedCategories.contains(name)) {
+        merged.putIfAbsent(name, () => color);
+      }
+    });
+  }
+  for (final App app in library) {
+    for (final String name in app.categories) {
+      merged.putIfAbsent(name, newColor);
+    }
+  }
+  return merged;
 }
 
 /// One app for Import from URL list to add: a typed URL, or an app that an
@@ -304,25 +405,6 @@ extension AppsProviderImportExport on AppsProvider {
       settingsMap = splitSettings.settings;
       settingsObtainXMap = splitSettings.settingsObtainX;
     }
-    final Map<String, int> liveCategoryColors = settingsProvider.categories;
-    final Map<String, String> exportedCategoryColors = <String, String>{};
-    if (shouldExportSettings > 0) {
-      liveCategoryColors.forEach((String category, int colorInt) {
-        exportedCategoryColors[category] = categoryColorHexFromInt(colorInt);
-      });
-    } else {
-      for (final Map<String, dynamic> appJson in appList) {
-        final List<dynamic>? categories = appJson['categories'] as List?;
-        if (categories == null) continue;
-        for (final dynamic cat in categories) {
-          final String? name = cat is String ? cat : null;
-          final int? colorInt = name != null ? liveCategoryColors[name] : null;
-          if (name != null && colorInt != null) {
-            exportedCategoryColors[name] = categoryColorHexFromInt(colorInt);
-          }
-        }
-      }
-    }
     final schema = ExportSchema(
       schemaVersion: currentExportSchemaVersion,
       exportedAt: DateTime.now().toIso8601String(),
@@ -330,9 +412,11 @@ extension AppsProviderImportExport on AppsProvider {
       apps: appList,
       settings: settingsMap,
       settingsObtainX: settingsObtainXMap,
-      categoryColors: exportedCategoryColors.isEmpty
-          ? null
-          : exportedCategoryColors,
+      categoryColors: categoryColorsForExport(
+        settingsExported: shouldExportSettings > 0,
+        colors: settingsProvider.categories,
+        appJsons: appList,
+      ),
     );
     return schema.toJson();
   }
@@ -457,30 +541,13 @@ extension AppsProviderImportExport on AppsProvider {
       sharedSettings,
       settingsObtainXOverlay,
     );
-    final Map<String, String>? rawCategoryColors = hasSchemaVersion
-        ? schema!.categoryColors
-        : (decodedJSON is Map && decodedJSON['categoryColors'] is Map
-              ? (decodedJSON['categoryColors'] as Map).map(
-                  (k, v) => MapEntry(k.toString(), v.toString()),
-                )
-              : null);
-    Map<String, int>? parsedCategoryColors;
-    if (rawCategoryColors != null && rawCategoryColors.isNotEmpty) {
-      parsedCategoryColors = <String, int>{};
-      rawCategoryColors.forEach((String name, String hex) {
-        final int? colorInt = parseCategoryColorHex(hex);
-        if (colorInt != null) {
-          parsedCategoryColors![name] = colorInt;
-        }
-      });
-      if (parsedCategoryColors.isEmpty) {
-        parsedCategoryColors = null;
-      }
-    }
     return BackupContent(
       apps: appsWithImportedShizukuBackend(importedApps, settingsMap),
       settingsMap: settingsMap,
-      categoryColors: parsedCategoryColors,
+      categoryColors: categoryColorsFromBackup(
+        hexColors: schema?.categoryColors,
+        settingsMap: settingsMap,
+      ),
       schema: schema,
     );
   }
@@ -547,39 +614,31 @@ extension AppsProviderImportExport on AppsProvider {
     if (importSettings && settingsMap != null) {
       hasSettings = true;
       // 'appFolders' is skipped: already merged/persisted by
-      // _reconcileImportedFolders. Upstream settings ObtainX dropped aren't
+      // _reconcileImportedFolders. 'categories' is skipped: it is merged with
+      // the current categories below. Upstream settings ObtainX dropped aren't
       // written at all. Reload settings so the merged folder list (and
       // everything else) is reflected in memory immediately.
       _applyImportedSettings(
         settingsMap,
-        skipKeys: const {'appFolders', ...droppedUpstreamSettingKeys},
+        skipKeys: const {
+          'appFolders',
+          'categories',
+          ...droppedUpstreamSettingKeys,
+        },
       );
       await settingsProvider.initializeSettings();
     }
-    final Map<String, int>? importedCategoryColors =
-        backupContent.categoryColors;
-    if (importedCategoryColors != null && importedCategoryColors.isNotEmpty) {
-      final Set<String> importedAppCategories = importedApps
-          .expand((App a) => a.categories)
-          .toSet();
-      final Map<String, int> mergedCategories = Map<String, int>.from(
-        settingsProvider.categories,
-      );
-      bool changed = false;
-      importedCategoryColors.forEach((String name, int colorInt) {
-        final bool shouldInclude =
-            hasSettings || importedAppCategories.contains(name);
-        if (!shouldInclude) return;
-        if (replaceExisting || !mergedCategories.containsKey(name)) {
-          if (mergedCategories[name] != colorInt) {
-            mergedCategories[name] = colorInt;
-            changed = true;
-          }
-        }
-      });
-      if (changed) {
-        settingsProvider.setCategories(mergedCategories, appsProvider: this);
-      }
+    final Map<String, int> currentCategories = settingsProvider.categories;
+    final Map<String, int> importedCategories = categoriesAfterImport(
+      current: currentCategories,
+      backupColors: backupContent.categoryColors,
+      settingsImported: hasSettings,
+      importedApps: importedApps,
+      library: apps.values.map((AppInMemory listing) => listing.app),
+      newColor: () => generateRandomLightColor().toARGB32(),
+    );
+    if (!mapEquals(importedCategories, currentCategories)) {
+      settingsProvider.setCategories(importedCategories, appsProvider: this);
     }
     return MapEntry<List<App>, bool>(importedApps, hasSettings);
   }

@@ -430,7 +430,155 @@ void main() {
     expect(parseCategoryColorHex('#FF5733'), 0xFFFF5733);
     expect(parseCategoryColorHex('00ab12'), 0xFF00AB12);
     expect(parseCategoryColorHex('#80FF5733'), 0x80FF5733);
+    expect(parseCategoryColorHex(' #FF5733 '), 0xFFFF5733);
     expect(parseCategoryColorHex('invalid'), isNull);
+    // Only an optional leading '#' and six or eight hex digits.
+    expect(parseCategoryColorHex('-12345'), isNull);
+    expect(parseCategoryColorHex('+12345'), isNull);
+    expect(parseCategoryColorHex('FF#5733'), isNull);
+    expect(parseCategoryColorHex('##FF5733'), isNull);
+    expect(parseCategoryColorHex('#FF573'), isNull);
+  });
+
+  group('category colors in backups', () {
+    const int red = 0xFFFF0000;
+    const int blue = 0xFF0000FF;
+    const int green = 0xFF00FF00;
+
+    App app(String id, List<String> categories) => App(
+      id: id,
+      url: 'https://github.com/example/$id',
+      author: 'example',
+      name: id,
+      latestVersion: '1.0',
+      preferredApkIndex: 0,
+      additionalSettings: const {},
+      categories: categories,
+    );
+
+    test('an export with settings leaves them to the categories setting', () {
+      expect(
+        categoryColorsForExport(
+          settingsExported: true,
+          colors: {'Games': red},
+          appJsons: [
+            {
+              'categories': ['Games'],
+            },
+          ],
+        ),
+        isNull,
+      );
+    });
+
+    test('an export without settings writes the exported apps\' colors', () {
+      expect(
+        categoryColorsForExport(
+          settingsExported: false,
+          colors: {'Games': red, 'Tools': blue, 'Unused': green},
+          appJsons: [
+            {
+              'categories': ['Games', 'Uncolored'],
+            },
+            {
+              'categories': ['Tools', 7],
+            },
+            {'categories': null},
+          ],
+        ),
+        {'Games': '#FF0000', 'Tools': '#0000FF'},
+      );
+      expect(
+        categoryColorsForExport(
+          settingsExported: false,
+          colors: {'Games': red},
+          appJsons: [
+            {'categories': <String>[]},
+          ],
+        ),
+        isNull,
+      );
+    });
+
+    test('colors come from categoryColors, else the categories setting', () {
+      expect(
+        categoryColorsFromBackup(
+          hexColors: {'Games': '#FF0000', 'Bad': 'nope'},
+          settingsMap: {'categories': '{"Games":$blue}'},
+        ),
+        {'Games': red},
+      );
+      // ObtainX and Obtainium store the setting as a JSON string.
+      expect(
+        categoryColorsFromBackup(
+          settingsMap: {'categories': '{"Games":$red,"Tools":"x"}'},
+        ),
+        {'Games': red},
+      );
+      expect(
+        categoryColorsFromBackup(
+          settingsMap: {
+            'categories': {'Tools': blue},
+          },
+        ),
+        {'Tools': blue},
+      );
+      expect(
+        categoryColorsFromBackup(settingsMap: {'categories': '{broken'}),
+        isNull,
+      );
+      expect(categoryColorsFromBackup(settingsMap: {'theme': 1}), isNull);
+      expect(categoryColorsFromBackup(), isNull);
+    });
+
+    test('importing settings takes every backup color over the current', () {
+      final Map<String, int> result = categoriesAfterImport(
+        current: {'Games': red, 'LocalOnly': green},
+        backupColors: {'Games': blue, 'Tools': red},
+        settingsImported: true,
+        importedApps: [app('a', [])],
+        library: [
+          app('a', []),
+          app('b', ['LocalOnly']),
+        ],
+        newColor: () => fail('no category lacks a color'),
+      );
+      expect(result, {'Games': blue, 'Tools': red, 'LocalOnly': green});
+    });
+
+    test('without settings, only the imported apps\' categories are added', () {
+      final Map<String, int> result = categoriesAfterImport(
+        current: {'Games': red},
+        backupColors: {'Games': blue, 'Tools': blue, 'Unused': green},
+        settingsImported: false,
+        importedApps: [
+          app('a', ['Games', 'Tools']),
+        ],
+        library: [
+          app('a', ['Games', 'Tools']),
+        ],
+        newColor: () => fail('no category lacks a color'),
+      );
+      expect(result, {'Games': red, 'Tools': blue});
+    });
+
+    test('a category no color covers gets a new one, so none is orphaned', () {
+      int colorsMade = 0;
+      final Map<String, int> result = categoriesAfterImport(
+        current: const {},
+        backupColors: null,
+        settingsImported: false,
+        importedApps: [
+          app('a', ['Games']),
+        ],
+        library: [
+          app('a', ['Games']),
+          app('b', ['Games', 'Tools']),
+        ],
+        newColor: () => green + colorsMade++,
+      );
+      expect(result, {'Games': green, 'Tools': green + 1});
+    });
   });
 
   test('ExportSchema preserves categoryColors HEX map', () {

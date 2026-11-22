@@ -27,15 +27,15 @@ AppInMemory _makeListing({
 }
 
 void main() {
-  group('resolveOpenLinkTarget', () {
-    test('returns null for null, empty, or unknown id', () {
+  group('openLinkTargets', () {
+    test('is empty for null, empty, or unknown id', () {
       final AppListings apps = AppListings();
-      expect(resolveOpenLinkTarget(apps, null), isNull);
-      expect(resolveOpenLinkTarget(apps, '   '), isNull);
-      expect(resolveOpenLinkTarget(apps, 'com.example.missing'), isNull);
+      expect(openLinkTargets(apps, null), isEmpty);
+      expect(openLinkTargets(apps, '   '), isEmpty);
+      expect(openLinkTargets(apps, 'com.example.missing'), isEmpty);
     });
 
-    test('resolves a single listing by package id or listingKey', () {
+    test('finds a single listing by package id or listing key', () {
       final AppListings apps = AppListings();
       final AppInMemory listing = _makeListing(
         id: 'com.example.app',
@@ -43,38 +43,38 @@ void main() {
       );
       apps[listing.listingKey] = listing;
 
-      expect(resolveOpenLinkTarget(apps, 'com.example.app'), same(listing));
-      expect(
-        resolveOpenLinkTarget(apps, 'com.example.app__fdroid'),
+      expect(openLinkTargets(apps, 'com.example.app'), [same(listing)]);
+      expect(openLinkTargets(apps, ' com.example.app__fdroid '), [
         same(listing),
-      );
+      ]);
     });
 
-    test('prefers installed non-track-only listing among multiple stores', () {
+    test('a package tracked from several stores gives every listing', () {
       final AppListings apps = AppListings();
-      final AppInMemory trackOnlyListing = _makeListing(
-        id: 'com.example.app',
-        listingId: 'com.example.app__trackonly',
-        installedVersion: '1.0.0',
-        trackOnly: true,
-      );
-      final AppInMemory uninstalledListing = _makeListing(
-        id: 'com.example.app',
-        listingId: 'com.example.app__github',
-      );
-      final AppInMemory installedListing = _makeListing(
+      // The first listing is keyed by the bare package ID, so a link naming
+      // the package must not stop at it.
+      final AppInMemory first = _makeListing(id: 'com.example.app');
+      final AppInMemory fdroid = _makeListing(
         id: 'com.example.app',
         listingId: 'com.example.app__fdroid',
         installedVersion: '1.0.0',
       );
-      apps[trackOnlyListing.listingKey] = trackOnlyListing;
-      apps[uninstalledListing.listingKey] = uninstalledListing;
-      apps[installedListing.listingKey] = installedListing;
+      final AppInMemory trackOnly = _makeListing(
+        id: 'com.example.app',
+        listingId: 'com.example.app__trackonly',
+        trackOnly: true,
+      );
+      final AppInMemory other = _makeListing(id: 'com.example.other');
+      for (final AppInMemory listing in [first, fdroid, trackOnly, other]) {
+        apps[listing.listingKey] = listing;
+      }
 
       expect(
-        resolveOpenLinkTarget(apps, 'com.example.app'),
-        same(installedListing),
+        openLinkTargets(apps, 'com.example.app'),
+        unorderedEquals([same(first), same(fdroid), same(trackOnly)]),
       );
+      // A listing key still names just that listing.
+      expect(openLinkTargets(apps, 'com.example.app__fdroid'), [same(fdroid)]);
     });
   });
 }

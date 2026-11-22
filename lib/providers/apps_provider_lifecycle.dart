@@ -21,7 +21,6 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:obtainium/services/app_check_store.dart';
-import 'package:obtainium/utils/color_utils.dart';
 
 /// App persistence (load/save/remove), icons, and version-detection helpers.
 const _corruptFileSuffix = '.corrupt';
@@ -1992,18 +1991,6 @@ extension AppsProviderLifecycle on AppsProvider {
       data: 'package:$appId',
     );
     await intent.launch();
-  }
-
-  void addMissingCategories(SettingsProvider settingsProvider) {
-    final cats = Map<String, int>.from(settingsProvider.categories);
-    apps.forEach((key, value) {
-      for (var c in value.app.categories) {
-        if (!cats.containsKey(c)) {
-          cats[c] = generateRandomLightColor().toARGB32();
-        }
-      }
-    });
-    settingsProvider.setCategories(cats, appsProvider: this);
   }
 
   /// Strips every category outside [knownCategories] from every saved app, and

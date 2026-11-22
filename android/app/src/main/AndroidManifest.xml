@@ -43,13 +43,14 @@
                     android:name="com.android_package_installer.content.SESSION_API_PACKAGE_INSTALLED"
                     android:exported="false" />
             </intent-filter>
-            <!-- The obtainium://, share and APP_MARKET filters are on
-                 LinkRelayActivity, not here (unlike upstream), so that none of
-                 them can open a second MainActivity (#354). -->
+            <!-- The obtainium://, share, APP_MARKET and SHOW_APP_INFO filters
+                 are on LinkRelayActivity, not here (unlike upstream), so that
+                 none of them can open a second MainActivity (#354). -->
         </activity>
-        <!-- Hands links, text shares and app-store launches to the existing
-             MainActivity window. LinkRelayActivity.kt explains why. Keep these
-             filters here when syncing with upstream. -->
+        <!-- Hands links, text shares, app-store launches and App Info's
+             "App details" to the existing MainActivity window.
+             LinkRelayActivity.kt explains why. Keep these filters here when
+             syncing with upstream. -->
         <activity
             android:name=".LinkRelayActivity"
             android:exported="true"

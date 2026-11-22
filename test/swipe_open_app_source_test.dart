@@ -600,4 +600,63 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  // An obtainium://open link (App Info's "App details") for a package tracked
+  // from several stores shows its listings, and only them.
+  testWidgets('showPackageListings shows one package, until its chip goes', (
+    WidgetTester tester,
+  ) async {
+    AppInMemory listing(String id, String name, {String? listingId}) =>
+        AppInMemory(
+          App(
+            id: id,
+            listingId: listingId,
+            url: 'https://github.com/example/${name.replaceAll(' ', '-')}',
+            name: name,
+            author: 'Example',
+            latestVersion: '1.0.0',
+            preferredApkIndex: 0,
+            additionalSettings: const <String, dynamic>{},
+          ),
+          null,
+          null,
+          iconBytes,
+        );
+    for (final AppInMemory app in [
+      listing('org.example.multi', 'Multi GitHub'),
+      listing(
+        'org.example.multi',
+        'Multi FDroid',
+        listingId: 'org.example.multi__fdroid',
+      ),
+      listing('org.example.other', 'Other App'),
+    ]) {
+      provider.apps[app.listingKey] = app;
+    }
+    await openApps(tester);
+    expect(find.text('Other App'), findsOneWidget);
+
+    tester
+        .state<AppsPageState>(find.byType(AppsPage))
+        .showPackageListings('org.example.multi');
+    await tester.pumpAndSettle();
+    expect(find.text('Multi GitHub'), findsOneWidget);
+    expect(find.text('Multi FDroid'), findsOneWidget);
+    expect(find.text('Other App'), findsNothing);
+    final Finder chip = find.widgetWithText(
+      InputChip,
+      '${tr('appId')}: org.example.multi',
+    );
+    expect(chip, findsOneWidget);
+
+    await tester.tap(
+      find.descendant(of: chip, matching: find.byIcon(Icons.close)),
+    );
+    await tester.pumpAndSettle();
+    expect(chip, findsNothing);
+    expect(find.text('Other App'), findsOneWidget);
+    expect(find.text('Multi GitHub'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }

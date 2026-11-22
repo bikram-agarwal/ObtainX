@@ -255,7 +255,6 @@ class _ImportExportPageState extends State<ImportExportPage> {
         importSettings: selection.importSettings,
         replaceExisting: replaceExisting,
       );
-      appsProvider.addMissingCategories(settingsProvider);
       String resultMessage =
           '${tr(replaceExisting ? 'restoredX' : 'importedX', args: [plural('apps', importResult.key.length).toLowerCase()])}${importResult.value ? ' + ${tr('settings').toLowerCase()}' : ''}';
       // Settings restore is the only way `iconsDir` comes back, so only a

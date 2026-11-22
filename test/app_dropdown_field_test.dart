@@ -143,12 +143,15 @@ void main() {
                   return appDropdownField<String>(
                     context: context,
                     value: 'off',
-                    menuWidth: appDropdownMenuWidth(
-                      context,
-                      const <String>['Off', longOption],
-                    ),
+                    menuWidth: appDropdownMenuWidth(context, const <String>[
+                      'Off',
+                      longOption,
+                    ]),
                     items: const <DropdownMenuItem<String>>[
-                      DropdownMenuItem<String>(value: 'off', child: Text('Off')),
+                      DropdownMenuItem<String>(
+                        value: 'off',
+                        child: Text('Off'),
+                      ),
                       DropdownMenuItem<String>(
                         value: 'enforce',
                         child: Text(longOption),

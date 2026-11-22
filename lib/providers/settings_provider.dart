@@ -274,7 +274,12 @@ class SettingsProvider with ChangeNotifier {
       // Already fully initialized on this instance — the migrations and native
       // lookups below are one-time work. Just notify so late listeners rebuild.
       // An import writes prefs directly and then calls this, so the
-      // top-level mirrors (the global APK filter, haptics) are re-read here too.
+      // top-level mirrors (the global APK filter, haptics) are re-read here
+      // too, and the decoded caches are dropped: kept, they would go on
+      // answering with the settings from before the import.
+      _categoriesMemory = null;
+      _appFoldersMemory = null;
+      _folderViewCache.clear();
       _globalApkFilterRegExMirror = globalApkFilterRegEx;
       _tactileFeedbackEnabled = tactileFeedbackEnabled;
       HttpService.setDefaultCertificatePinning(enableCertificatePinning);

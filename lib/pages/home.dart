@@ -104,40 +104,21 @@ Uri? _importLinkIn(String text) {
   return uri;
 }
 
-/// Resolves the best matching tracked listing for an `obtainium://open` link.
+/// The listings an `obtainium://open` link (App Info's "App details") names.
 ///
-/// Accepts either a package name (`app.id`) or a direct `listingKey`. When a
-/// package is tracked from multiple stores, prefers the actively installed,
-/// non-track-only listing so System App Info opens the copy ObtainX manages.
-AppInMemory? resolveOpenLinkTarget(AppListings apps, String? targetId) {
-  final String? normalizedId = targetId?.trim();
-  if (normalizedId == null || normalizedId.isEmpty) {
-    return null;
-  }
-  final List<AppInMemory> packageMatches = apps
-      .listingsForPackage(normalizedId)
+/// [targetId] is a package ID, giving every listing of that package, one per
+/// store it's tracked from, or a listing key, giving that one listing. A
+/// package's first listing is keyed by its bare package ID, so the package
+/// match is tried first. Empty when nothing matches.
+List<AppInMemory> openLinkTargets(AppListings apps, String? targetId) {
+  final String id = targetId?.trim() ?? '';
+  if (id.isEmpty) return const [];
+  final List<AppInMemory> packageListings = apps
+      .listingsForPackage(id)
       .toList();
-  if (packageMatches.isEmpty) {
-    return apps[normalizedId];
-  }
-  if (packageMatches.length == 1) {
-    return packageMatches.single;
-  }
-  bool isTrackOnly(AppInMemory listing) =>
-      listing.app.additionalSettings['trackOnly'] == true;
-  bool isInstalled(AppInMemory listing) =>
-      listing.installedInfo != null || listing.app.installedVersion != null;
-
-  return packageMatches.firstWhere(
-    (AppInMemory listing) => isInstalled(listing) && !isTrackOnly(listing),
-    orElse: () => packageMatches.firstWhere(
-      isInstalled,
-      orElse: () => packageMatches.firstWhere(
-        (AppInMemory listing) => !isTrackOnly(listing),
-        orElse: () => packageMatches.first,
-      ),
-    ),
-  );
+  if (packageListings.isNotEmpty) return packageListings;
+  final AppInMemory? listing = apps.containsListingKey(id) ? apps[id] : null;
+  return listing == null ? const [] : [listing];
 }
 
 class HomePage extends StatefulWidget {
@@ -503,6 +484,16 @@ class HomePageState extends State<HomePage> {
       state.linkFn(data);
     }
 
+    // A package tracked from several stores: the Apps list, showing only its
+    // listings, so the user picks the store.
+    Future<void> goToPackageListings(String packageId) async {
+      unawaited(switchToPage(0));
+      final state = await _waitForState(
+        pages[0].widget.key as GlobalKey<AppsPageState>,
+      );
+      state.showPackageListings(packageId);
+    }
+
     Future<void> goToExistingApp(String appId) async {
       // Go to Apps page
       unawaited(switchToPage(0));
@@ -616,18 +607,21 @@ class HomePageState extends State<HomePage> {
         } else if (action == 'open') {
           await appsProvider.waitForInitialLoad();
           final String? queryId = uri.queryParameters['id']?.trim();
-          final String? targetId =
-              queryId != null && queryId.isNotEmpty
-                  ? queryId
-                  : (data.trim().isNotEmpty ? data.trim() : null);
-          final AppInMemory? target = resolveOpenLinkTarget(
+          final String? targetId = queryId != null && queryId.isNotEmpty
+              ? queryId
+              : (data.trim().isNotEmpty ? data.trim() : null);
+          final List<AppInMemory> targets = openLinkTargets(
             appsProvider.apps,
             targetId,
           );
-          if (target == null) {
+          if (targets.isEmpty) {
             throw ObtainiumError(tr('appNotFound'));
           }
-          await goToExistingApp(target.listingKey);
+          if (targets.length == 1) {
+            await goToExistingApp(targets.single.listingKey);
+          } else {
+            await goToPackageListings(targets.first.app.id);
+          }
         } else {
           throw ObtainiumError(tr('unknown'));
         }

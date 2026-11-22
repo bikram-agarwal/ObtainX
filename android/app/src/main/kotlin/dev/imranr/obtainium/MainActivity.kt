@@ -47,6 +47,7 @@ import io.flutter.plugin.common.MethodChannel
 import lab.neruno.android_package_manager.toMap
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.util.IllformedLocaleException
@@ -766,6 +767,51 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "findDocument" -> {
+                    val treeUri = call.argument<String>("treeUri")
+                    val displayName = call.argument<String>("displayName")
+                    if (treeUri.isNullOrBlank() || displayName.isNullOrEmpty()) {
+                        result.success(null)
+                    } else {
+                        storageExecutor.execute {
+                            try {
+                                val found = findChildDocument(Uri.parse(treeUri), displayName)
+                                mainHandler.post { result.success(found?.toString()) }
+                            } catch (e: Exception) {
+                                mainHandler.post {
+                                    result.error("FIND_DOCUMENT_FAILED", e.message ?: e.javaClass.name, null)
+                                }
+                            }
+                        }
+                    }
+                }
+                "copyFileToDocument" -> {
+                    val path = call.argument<String>("path")
+                    val treeUri = call.argument<String>("treeUri")
+                    val displayName = call.argument<String>("displayName")
+                    val mimeType = call.argument<String>("mimeType")
+                    if (path.isNullOrBlank() || treeUri.isNullOrBlank() ||
+                        displayName.isNullOrEmpty() || mimeType.isNullOrBlank()
+                    ) {
+                        result.success(false)
+                    } else {
+                        storageExecutor.execute {
+                            try {
+                                val copied = copyFileToDocument(
+                                    File(path),
+                                    Uri.parse(treeUri),
+                                    displayName,
+                                    mimeType,
+                                )
+                                mainHandler.post { result.success(copied) }
+                            } catch (e: Exception) {
+                                mainHandler.post {
+                                    result.error("COPY_TO_DOCUMENT_FAILED", e.message ?: e.javaClass.name, null)
+                                }
+                            }
+                        }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -959,6 +1005,80 @@ class MainActivity : FlutterActivity() {
             ?.toString()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+    }
+
+    /// The ID of the folder [treeUri] names: the tree's root, or, for a
+    /// document URI inside the tree, that document (as DocumentFile.fromTreeUri
+    /// reads it).
+    private fun treeFolderDocumentId(treeUri: Uri): String =
+        if (DocumentsContract.isDocumentUri(this, treeUri)) {
+            DocumentsContract.getDocumentId(treeUri)
+        } else {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        }
+
+    /// The child named [displayName] of the folder [treeUri] names, or null.
+    /// One query: DocumentFile.findFile makes one more for each child's name.
+    /// Runs on [storageExecutor].
+    private fun findChildDocument(treeUri: Uri, displayName: String): Uri? {
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(
+            treeUri,
+            treeFolderDocumentId(treeUri),
+        )
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        )
+        contentResolver.query(children, projection, null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.getString(1) == displayName) {
+                    return DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(0))
+                }
+            }
+        }
+        return null
+    }
+
+    /// Copies [source] into the folder [treeUri] names as [displayName],
+    /// replacing a document of that name. False when the provider creates no
+    /// document; throws when the copy fails, after deleting what it wrote.
+    /// Runs on [storageExecutor].
+    private fun copyFileToDocument(
+        source: File,
+        treeUri: Uri,
+        displayName: String,
+        mimeType: String,
+    ): Boolean {
+        findChildDocument(treeUri, displayName)?.let { existing ->
+            // As before: a document that won't go leaves the new one to take
+            // a numbered name.
+            try {
+                DocumentsContract.deleteDocument(contentResolver, existing)
+            } catch (_: Exception) {
+            }
+        }
+        val folder = DocumentsContract.buildDocumentUriUsingTree(
+            treeUri,
+            treeFolderDocumentId(treeUri),
+        )
+        val created = DocumentsContract.createDocument(
+            contentResolver,
+            folder,
+            mimeType,
+            displayName,
+        ) ?: return false
+        try {
+            val output = contentResolver.openOutputStream(created, "w")
+                ?: throw IOException("No output stream for $created")
+            output.use { out -> source.inputStream().use { it.copyTo(out) } }
+        } catch (e: Exception) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, created)
+            } catch (_: Exception) {
+            }
+            throw e
+        }
+        return true
     }
 
     private fun hasPersistedDocumentTreePermission(uriString: String?): Boolean {
@@ -1789,7 +1909,10 @@ class MainActivity : FlutterActivity() {
             val longLabel = item["longLabel"] ?: shortLabel
             val uri = item["uri"] ?: return@mapIndexedNotNull null
             val iconRes = iconMap[id] ?: return@mapIndexedNotNull null
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri), this, MainActivity::class.java)
+            // Through LinkRelayActivity, as every obtainium:// link goes: the
+            // launcher adds only NEW_TASK to a dynamic shortcut, which stacks a
+            // second MainActivity when another screen is on top of it (#354).
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri), this, LinkRelayActivity::class.java)
             ShortcutInfo.Builder(this, id)
                 .setShortLabel(shortLabel)
                 .setLongLabel(longLabel)

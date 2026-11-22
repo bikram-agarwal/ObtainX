@@ -6,8 +6,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 
-/// Hands `obtainium://` links, text shares and app-store launches to the
-/// existing ObtainX window, so none of them opens a second one (#354).
+/// Hands `obtainium://` links, text shares, app-store launches and App Info's
+/// "App details" to the existing ObtainX window, so none of them opens a
+/// second one (#354). ObtainX's launcher shortcuts are `obtainium://` links
+/// sent here too.
 ///
 /// MainActivity is singleTop, which reuses a window only when it is on top of
 /// the caller's task. A caller that starts it without
@@ -64,6 +66,8 @@ class LinkRelayActivity : Activity() {
                     target.setAction(Intent.ACTION_VIEW).setData(link)
                 }
             }
+            // App Info's "App details", shown for apps ObtainX installed:
+            // open the app's page, as an obtainium://open link does.
             Intent.ACTION_SHOW_APP_INFO -> {
                 val packageName = source.getStringExtra(Intent.EXTRA_PACKAGE_NAME)
                     ?.trim()

@@ -64,9 +64,12 @@ extension AppsProviderIconBackup on AppsProvider {
   }
 
   Future<void> _deleteMirroredDoc(Uri treeUri, String displayName) async {
-    final saf.DocumentFile? existing = await saf.findFile(treeUri, displayName);
+    final Uri? existing = await NativeFeatures.findDocument(
+      treeUri,
+      displayName,
+    );
     if (existing != null) {
-      await NativeFeatures.deleteDocument(existing.uri);
+      await NativeFeatures.deleteDocument(existing);
     }
   }
 
@@ -163,19 +166,19 @@ extension AppsProviderIconBackup on AppsProvider {
         }
         try {
           final Uint8List bytes = await entity.readAsBytes();
-          final saf.DocumentFile? existing = await saf.findFile(
+          final Uri? existing = await NativeFeatures.findDocument(
             treeUri,
             fileName,
           );
           if (existing != null) {
             final Uint8List? existingBytes = await saf.getDocumentContent(
-              existing.uri,
+              existing,
             );
             if (existingBytes != null && listEquals(existingBytes, bytes)) {
               // Already up to date - not an export, so don't count it as one.
               continue;
             }
-            await NativeFeatures.deleteDocument(existing.uri);
+            await NativeFeatures.deleteDocument(existing);
           }
           await saf.createFile(
             treeUri,
