@@ -1220,13 +1220,9 @@ void main() {
       expect(details.version, '2.0');
       expect(details.apkUrls.map((apk) => apk.value), [
         'https://repo.example/repo/org.example.app_21.apk',
-        'https://repo.example/repo/org.example.app_20.apk',
       ]);
       expect(details.versionCode, 21);
-      expect(details.versionCodesByAsset, {
-        'org.example.app_21.apk': 21,
-        'org.example.app_20.apk': 20,
-      });
+      expect(details.versionCodesByAsset, {'org.example.app_21.apk': 21});
       expect(details.names.author, 'Example Dev');
       expect(details.names.name, 'Example App');
       expect(
@@ -1234,7 +1230,7 @@ void main() {
         'https://repo.example/repo/org.example.app/en-US/icon.png',
       );
       expect(details.changeLog, 'https://example.org/changes');
-      expect(details.apkSizeBytes, 200);
+      expect(details.apkSizeBytes, 210);
       expect(
         details.releaseDate,
         DateTime.fromMillisecondsSinceEpoch(1767225600021),

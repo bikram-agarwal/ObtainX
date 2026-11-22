@@ -303,16 +303,11 @@ class FDroidRepo extends AppSource {
               .map((s) => s.trim())
               .where((s) => s.isNotEmpty)
               .toList();
-      if (deviceAbis.isNotEmpty) {
-        // A release with no <nativecode> element is architecture-universal.
-        final compatible = selectedReleases.where((e) {
-          final List<String> nativecode = nativecodeOf(e);
-          return nativecode.isEmpty || nativecode.any(deviceAbis.contains);
-        }).toList();
-        if (compatible.isNotEmpty) {
-          selectedReleases = compatible;
-        }
-      }
+      selectedReleases = filterReleasesByPreferredAbi(
+        selectedReleases,
+        deviceAbis,
+        nativecodeOf: nativecodeOf,
+      );
       selectedReleases = newestBuildPerNativecode(
         selectedReleases,
         nativecodeOf: nativecodeOf,
@@ -413,6 +408,32 @@ class FDroidRepo extends AppSource {
     }
   }
 
+  /// Narrows [releases] to the device's highest-priority supported ABI from
+  /// [deviceAbis], falling back to architecture-universal releases (empty
+  /// nativecode) when no explicit ABI matches, or leaving [releases] unchanged
+  /// when neither matches.
+  static List<T> filterReleasesByPreferredAbi<T>(
+    List<T> releases,
+    List<String> deviceAbis, {
+    required List<String> Function(T release) nativecodeOf,
+  }) {
+    if (deviceAbis.isEmpty || releases.length <= 1) {
+      return releases;
+    }
+    for (final String abi in deviceAbis) {
+      final List<T> explicitMatches = releases
+          .where((release) => nativecodeOf(release).contains(abi))
+          .toList();
+      if (explicitMatches.isNotEmpty) {
+        return explicitMatches;
+      }
+    }
+    final List<T> universalReleases = releases
+        .where((release) => nativecodeOf(release).isEmpty)
+        .toList();
+    return universalReleases.isNotEmpty ? universalReleases : releases;
+  }
+
   /// Keeps only the newest build (highest versionCode) of each nativecode
   /// set, in the original order (upstream #3455). A repo can publish several
   /// builds under one version name (KDE does), and the default APK of a new
@@ -505,18 +526,11 @@ class FDroidRepo extends AppSource {
         .toList();
     if (selectedReleases.length > 1) {
       final List<String> deviceAbis = await _supportedAbisOrNone(supportedAbis);
-      if (deviceAbis.isNotEmpty) {
-        final compatible = selectedReleases
-            .where(
-              (release) =>
-                  release.nativecode.isEmpty ||
-                  release.nativecode.any(deviceAbis.contains),
-            )
-            .toList();
-        if (compatible.isNotEmpty) {
-          selectedReleases = compatible;
-        }
-      }
+      selectedReleases = filterReleasesByPreferredAbi(
+        selectedReleases,
+        deviceAbis,
+        nativecodeOf: (release) => release.nativecode,
+      );
       selectedReleases = newestBuildPerNativecode(
         selectedReleases,
         nativecodeOf: (release) => release.nativecode,
