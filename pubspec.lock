@@ -369,12 +369,11 @@ packages:
     source: hosted
     version: "1.1.0"
   flutter_charset_detector_web:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      name: flutter_charset_detector_web
-      sha256: c10eed0edeec0e032753f72bc99fb0a655f7e1b1a11467787ef4c75398c4a6f3
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/flutter_charset_detector_web_stub"
+      relative: true
+    source: path
     version: "2.1.0"
   flutter_fgbg:
     dependency: "direct main"

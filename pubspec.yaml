@@ -123,6 +123,23 @@ dependencies:
   # bruckcode.de, MIT, also via m3e_design.
   progress_indicator_m3e: ^0.1.1
 
+# Android-only app: flutter_charset_detector is a purely federated plugin and
+# never imports its web implementation, so Android builds gain nothing from it
+# while the published package drags a bundled jschardet.min.js (~1.17 MB
+# uncompressed, ~712 KB compressed) into assets/flutter_assets/ of every APK.
+# Overriding it with the local no-op stand-in keeps that package asset out and
+# leaves the federated plugin graph resolvable; Android keeps using
+# flutter_charset_detector_android.
+#
+# This is about the bundled asset, not about dependency count: flutter_web_plugins
+# and package:web stay in pubspec.lock because other plugins (url_launcher_web,
+# shared_preferences_web, app_links_web, workmanager_web, fluttertoast, ...) still
+# pull them in.
+# See third_party/flutter_charset_detector_web_stub.
+dependency_overrides:
+  flutter_charset_detector_web:
+    path: third_party/flutter_charset_detector_web_stub
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

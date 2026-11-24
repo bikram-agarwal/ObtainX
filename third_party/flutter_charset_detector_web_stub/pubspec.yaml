@@ -1,0 +1,13 @@
+name: flutter_charset_detector_web
+description: Android-only stand-in for the web implementation of flutter_charset_detector. Not published.
+version: 2.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.14.0
+  flutter: ">=3.50.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_charset_detector_platform_interface: ^1.1.0
