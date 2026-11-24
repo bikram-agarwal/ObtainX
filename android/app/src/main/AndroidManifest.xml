@@ -129,6 +129,10 @@
         <receiver
             android:name=".DownloadActionReceiver"
             android:exported="false" />
+        <!-- The Stop action on UpdateCheckForegroundService's notification. -->
+        <receiver
+            android:name=".UpdateCheckActionReceiver"
+            android:exported="false" />
         <meta-data
             android:name="dev.imranr.obtainium.service.NOTIFICATION_ICON"
             android:resource="@drawable/ic_notification" />

@@ -14,8 +14,34 @@ const _universal = 'https://dl.farsroid.com/example/Example-1.2-universal.apk';
 const _arm64 = 'https://dl.farsroid.com/example/Example-1.2-arm64-v8a.apk';
 const _armv7 = 'https://dl.farsroid.com/example/Example-1.2-armeabi-v7a.apk';
 
-/// Serves the app page and the download box with the three APKs above.
+/// The app page as Farsroid serves it since upstream #3489: the version in
+/// `h3.version-name`, the links as base64 JSON split across `data-j`
+/// attributes inside `#secure-json`.
+String _appPage(List<String> links, {String version = '1.2'}) {
+  final String encoded = base64Encode(
+    utf8.encode(
+      jsonEncode([
+        for (final link in links) {'url': link},
+      ]),
+    ),
+  );
+  final int half = encoded.length ~/ 2;
+  return '<h3 class="version-name">Example $version</h3>'
+      '<div id="secure-json">'
+      '<i data-j="${encoded.substring(0, half)}"></i>'
+      '<i data-j="${encoded.substring(half)}"></i>'
+      '</div>';
+}
+
+/// Serves the app page with [links] (by default the three APKs above).
 class _Farsroid extends Farsroid {
+  final List<String> links;
+  final String? page;
+
+  _Farsroid({this.links = const [_universal, _arm64, _armv7], this.page});
+
+  final List<String> requestedUrls = <String>[];
+
   @override
   Future<Response> sourceRequest(
     String url,
@@ -23,22 +49,10 @@ class _Farsroid extends Farsroid {
     bool followRedirects = true,
     Object? postBody,
   }) async {
-    if (url == _url) {
-      return Response(
-        '<div class="download-links" data-post-id="42" '
-        'data-post-version="1.2"></div>',
-        200,
-      );
-    }
+    requestedUrls.add(url);
+    if (url != _url) return Response('Not found', 404);
     return Response(
-      jsonEncode({
-        'data': {
-          'content': [
-            for (final link in [_universal, _arm64, _armv7])
-              '<a href="$link">${Uri.parse(link).pathSegments.last}</a>',
-          ].join(),
-        },
-      }),
+      page ?? _appPage(links),
       200,
       request: Request('GET', Uri.parse(url)),
     );
@@ -46,13 +60,9 @@ class _Farsroid extends Farsroid {
 }
 
 class _BotVerificationFarsroid extends Farsroid {
-  final bool onDownloadBox;
   final int challengeStatus;
 
-  _BotVerificationFarsroid({
-    this.onDownloadBox = false,
-    this.challengeStatus = 200,
-  });
+  _BotVerificationFarsroid({this.challengeStatus = 200});
 
   static const _challengeHtml = '''
 <!DOCTYPE html>
@@ -71,13 +81,6 @@ class _BotVerificationFarsroid extends Farsroid {
     bool followRedirects = true,
     Object? postBody,
   }) async {
-    if (onDownloadBox && url == _url) {
-      return Response(
-        '<div class="download-links" data-post-id="42" '
-        'data-post-version="1.2"></div>',
-        200,
-      );
-    }
     return Response(_challengeHtml, challengeStatus);
   }
 }
@@ -132,6 +135,63 @@ void main() {
     DeviceInfoPlatform.instance = _Arm64Device();
   });
 
+  // v1.7.5 sync S5 (upstream #3489): everything comes from the app page.
+  group('Farsroid app page', () {
+    test('reads the version and the links from the page alone', () async {
+      final _Farsroid source = _Farsroid();
+      final details = await source.getLatestAPKDetails(_url, {
+        'useFirstApkOfVersion': false,
+      });
+      expect(details.version, '1.2');
+      expect(details.apkUrls.map((apk) => apk.value), [
+        _universal,
+        _arm64,
+        _armv7,
+      ]);
+      expect(details.apkUrls.first.key, 'Example-1.2-universal.apk');
+      expect(source.requestedUrls, [_url]);
+    });
+
+    test('the first APK of the version is the one named after it', () async {
+      const String older =
+          'https://dl.farsroid.com/example/Example-1.1-universal.apk';
+      final details = await _Farsroid(links: const [older, _universal])
+          .getLatestAPKDetails(_url, {'useFirstApkOfVersion': true});
+      expect(details.apkUrls.map((apk) => apk.value), [_universal]);
+    });
+
+    test('resolves relative links and drops non-APK links', () async {
+      final details = await _Farsroid(
+        links: const ['/dl/Example-1.2.apk', 'https://www.farsroid.com/'],
+      ).getLatestAPKDetails(_url, {'useFirstApkOfVersion': false});
+      expect(details.apkUrls.map((apk) => apk.value), [
+        'https://www.farsroid.com/dl/Example-1.2.apk',
+      ]);
+    });
+
+    test('a page without the download JSON has no releases', () async {
+      await expectLater(
+        _Farsroid(
+          page:
+              '<div class="download-links" data-post-id="42" '
+              'data-post-version="1.2"></div>',
+        ).getLatestAPKDetails(_url, const {}),
+        throwsA(isA<NoReleasesError>()),
+      );
+    });
+
+    test('unreadable download JSON means no APK', () async {
+      await expectLater(
+        _Farsroid(
+          page:
+              '<h3 class="version-name">Example 1.2</h3>'
+              '<div id="secure-json"><i data-j="not base64!"></i></div>',
+        ).getLatestAPKDetails(_url, const {}),
+        throwsA(isA<NoAPKError>()),
+      );
+    });
+  });
+
   // v1.7.4 sync D12: the arch filter keeps universal APKs as alternatives
   // next to the ABI match; the single-APK paths must still pick the latter.
   group('Farsroid single-APK paths with the arch filter', () {
@@ -182,14 +242,6 @@ void main() {
             'BOT_VERIFICATION',
           ),
         ),
-      );
-    });
-
-    test('throws BotVerificationError when download-box is gated', () async {
-      await expectLater(
-        _BotVerificationFarsroid(onDownloadBox: true)
-            .getLatestAPKDetails(_url, const {}),
-        throwsA(isA<BotVerificationError>()),
       );
     });
 

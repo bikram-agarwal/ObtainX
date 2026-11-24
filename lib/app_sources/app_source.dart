@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart' as http;
+import 'package:obtainium/app_sources/fdroid_index_cache.dart';
 import 'package:obtainium/app_sources/izzyondroid.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -192,13 +193,18 @@ abstract class AppSource {
     final allowInsecure =
         additionalSettingsPlusSourceConfig['allowInsecure'] == true;
     final certificatePinning = sp.enableCertificatePinning;
-    Future<http.Response> loadResponse() async {
+    // [conditionalHeaders]: the index cache's If-None-Match/If-Modified-Since.
+    Future<http.Response> loadResponse([
+      Map<String, String> conditionalHeaders = const {},
+    ]) async {
       final service = HttpService();
       final sharedClient = session?.clientFor(allowInsecure);
       final streamed = await service.sourceRequestStreamResponse(
         method,
         url,
-        requestHeaders,
+        conditionalHeaders.isEmpty
+            ? requestHeaders
+            : {...?requestHeaders, ...conditionalHeaders},
         additionalSettingsPlusSourceConfig,
         followRedirects: followRedirects,
         postBody: postBody,
@@ -219,17 +225,18 @@ abstract class AppSource {
 
     // The gate wraps only the network load, so a response the session already
     // cached (the index.xml dedupe below) never takes a slot.
-    Future<http.Response> gatedLoadResponse() => enableHostRequestGate
+    Future<http.Response> gatedLoadResponse([
+      Map<String, String> conditionalHeaders = const {},
+    ]) => enableHostRequestGate
         ? HostRequestGate.instance.runResponse(
             Uri.parse(url),
             maxConcurrentRequestsPerHost,
-            loadResponse,
+            () => loadResponse(conditionalHeaders),
           )
-        : loadResponse();
+        : loadResponse(conditionalHeaders);
 
     final String requestPath = Uri.parse(url).path;
-    if (session != null &&
-        method == 'GET' &&
+    if (method == 'GET' &&
         (requestPath.endsWith('/index.xml') ||
             requestPath.endsWith('/index-v2.json'))) {
       // Key after URL/header customization so credentials, TLS policy and
@@ -243,7 +250,21 @@ abstract class AppSource {
         followRedirects,
         for (final name in headerNames) [name, requestHeaders![name]],
       ]);
-      return session.repositoryResponse(key, gatedLoadResponse);
+      // Intentional divergence (v1.7.5 sync S4): upstream caches the index in
+      // FDroidRepo, above this method. Here the disk cache (ETag/Last-
+      // Modified, upstream #3486) sits below the session dedupe, keyed like
+      // it: the session shares the one 200 it returns, so every app of a
+      // repository in an update check gets the same response and the index
+      // is parsed once. It also covers IzzyOnDroid and both index formats.
+      Future<http.Response> cachedLoadResponse() =>
+          FdroidIndexCache.shared.fetch(
+            url,
+            (_, conditionalHeaders) => gatedLoadResponse(conditionalHeaders),
+            cacheKey: key,
+          );
+      return session == null
+          ? cachedLoadResponse()
+          : session.repositoryResponse(key, cachedLoadResponse);
     }
     return gatedLoadResponse();
   }
@@ -763,8 +784,10 @@ abstract class AppSource {
       final bool perAppValueUnset =
           perAppValue == null ||
           (perAppValue is String && perAppValue.trim().isEmpty);
+      // An overridden host reads only the per-app value; unset is empty or
+      // false, never the global value (upstream #3500).
       var val = hostChanged && !hostIdenticalDespiteAnyChange
-          ? perAppValue
+          ? (perAppValue ?? (e is GeneratedFormSwitch ? false : ''))
           : !perAppValueUnset
           ? perAppValue
           : (e is GeneratedFormSwitch

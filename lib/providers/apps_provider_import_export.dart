@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show mapEquals;
 
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/huaweiappgallery.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/custom_errors.dart';
 
 import 'package:obtainium/app_sources/github.dart';
@@ -16,6 +17,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:obtainium/services/json_file_work.dart';
+import 'package:obtainium/utils/app_id_utils.dart';
 import 'package:obtainium/utils/color_utils.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
@@ -316,6 +318,41 @@ String readableLinkPayload(String payload) {
   }
 }
 
+/// The installed version an imported [app] starts with (upstream #3531): the
+/// one on this device, else the exported one for a track-only or
+/// pseudo-versioned app, whose version is the user's mark rather than the
+/// device's. Any other app that isn't installed here has none.
+///
+/// v1.7.5 sync D-02: asks [App.usesStandardVersionDetection], as
+/// `versionDetection` is a string enum here. Upstream's
+/// `getBool('versionDetection')` reads 'auto' and 'standard' as false and would
+/// keep every app's exported version. Saving still runs the install-status
+/// reconciliation, which clears the version again for an app it can verify
+/// isn't installed: only track-only apps it can't verify (a temporary ID, or a
+/// version the user marked) keep theirs.
+String? resolveImportedInstalledVersion(
+  App app,
+  String? deviceInstalledVersion,
+) {
+  if (deviceInstalledVersion != null) return deviceInstalledVersion;
+  if (app.settings.getBool('trackOnly') || !app.usesStandardVersionDetection) {
+    return app.installedVersion;
+  }
+  return null;
+}
+
+/// [app] from a backup, ready to save: its installed version from
+/// [resolveImportedInstalledVersion], and never "the package ID may change"
+/// (upstream #3527). A file could otherwise carry that flag past the check that
+/// stops an update from installing a different package.
+App prepareImportedApp(App app, String? deviceInstalledVersion) => app.copyWith(
+  installedVersion: resolveImportedInstalledVersion(
+    app,
+    deviceInstalledVersion,
+  ),
+  allowIdChange: false,
+);
+
 /// Whether [file], listed in the export folder, is an earlier auto-export that
 /// a new one replaces: a timestamped `-auto.json`, or the fixed [customName]
 /// file. Matched by display name, as a listed file's URI ends in its document
@@ -526,6 +563,19 @@ extension AppsProviderImportExport on AppsProvider {
     } catch (e) {
       throw ObtainiumError('${tr('failedToImport')}: ${e.toString()}');
     }
+    // Upstream #3527 (v1.7.5 sync D-01): an ID that names a path outside the
+    // apps folder rejects the whole backup. Checked here, at parse time, so it
+    // runs before a restore resets settings and wipes the library, and so it
+    // covers every reader: file import and restore, the backup picker, and
+    // `obtainium://` links and pasted JSON (Import from URL list).
+    for (final App app in importedApps) {
+      if (!hasSafeStorageIds(app)) {
+        AppLogger.warn(
+          'Rejected import with unsafe app ID: ${app.id} (${app.listingKey})',
+        );
+        throw ObtainiumError(tr('invalidInput'));
+      }
+    }
     // Resolve settings: shared block plus optional ObtainX overlay.
     final Map<String, dynamic>? sharedSettings = hasSchemaVersion
         ? schema!.settings
@@ -603,8 +653,9 @@ extension AppsProviderImportExport on AppsProvider {
     for (var i = 0; i < importedApps.length; i++) {
       final a = importedApps[i];
       final installedInfo = await getInstalledInfo(a.id);
-      importedApps[i] = a.copyWith(
-        installedVersion: a.usesVersionCodeAsOsVersion
+      importedApps[i] = prepareImportedApp(
+        a,
+        a.usesVersionCodeAsOsVersion
             ? installedInfo?.versionCode.toString()
             : installedInfo?.versionName,
       );

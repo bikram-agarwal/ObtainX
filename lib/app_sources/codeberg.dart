@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart' show Response;
+import 'package:obtainium/app_sources/forgejo_pagination.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/components/generated_form_model.dart';
@@ -350,19 +351,28 @@ class Codeberg extends AppSource {
       // The delegate decides from the previous check what it can skip, e.g.
       // re-reading the repository's archived flag.
       _gh.previouslyCheckedApp = previouslyCheckedApp;
+      final Map<String, dynamic> settings = await _requestSettings(
+        additionalSettings,
+      );
       return await _gh.fetchReleaseDetailsWithTagFallback(
         standardUrl,
-        await _requestSettings(additionalSettings),
+        settings,
         (bool useTagUrl) async {
           final standardUri = Uri.parse(standardUrl);
           final apiPath =
               '/api/v1/repos${standardUri.path}/${useTagUrl ? 'tags' : 'releases'}';
           return standardUri
-              .replace(path: apiPath, queryParameters: {'per_page': '100'})
+              .replace(path: apiPath, queryParameters: {'limit': '50'})
               .toString();
         },
         null,
         repoApiUrl: _repoApiUrl(standardUrl),
+        // Forgejo ignores GitHub's per_page and serves 30 releases a page, so
+        // read every page (up to 10 of 50) before filtering (upstream #3533).
+        releaseListLoader: (String requestUrl) => fetchAllForgejoPages(
+          Uri.parse(requestUrl),
+          (Uri uri) => _gh.sourceRequest(uri.toString(), settings),
+        ),
       );
     } catch (e) {
       rethrowOrWrapError(e);

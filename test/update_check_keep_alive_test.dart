@@ -87,4 +87,34 @@ void main() {
     );
     expect(methods().last, 'stopUpdateCheckForegroundService');
   });
+
+  // v1.7.5 sync U1: the notification's Stop. Natively it shows the
+  // notification as stopping (no counter, no Stop); a progress post would
+  // bring both back, so the stopped check posts none while its in-flight apps
+  // finish. Its normal return then releases the service.
+  test('after a Stop the check posts no more progress, then releases '
+      'the service', () async {
+    bool stopped = false;
+    final List<String> result = await runUpdateCheckKeptAlive(
+      (progress) async {
+        progress!(2, 10);
+        stopped = true; // The notification's Stop reached the check.
+        progress(3, 10);
+        progress(10, 10); // A last count, which normally always posts.
+        return ['a', 'b'];
+      },
+      elapsed: () => const Duration(seconds: 20),
+      isCancelled: () => stopped,
+    );
+    expect(result, ['a', 'b']);
+    expect(
+      [
+        for (final MethodCall c in calls)
+          if (c.method == 'showUpdateCheckProgress')
+            (c.arguments as Map<Object?, Object?>)['completed'],
+      ],
+      [2],
+    );
+    expect(methods().last, 'stopUpdateCheckForegroundService');
+  });
 }

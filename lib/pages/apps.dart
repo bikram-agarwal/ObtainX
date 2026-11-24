@@ -3119,6 +3119,29 @@ class AppsPageState extends State<AppsPage> {
     }
   }
 
+  /// Set by [_refreshFromTitleTap] for the refresh it starts, so that one runs
+  /// without the pull's haptic: a tap gets none.
+  bool _refreshStartedByTitleTap = false;
+
+  /// A tap on the page title checks the visible apps exactly as a pull does
+  /// (v1.7.5 sync U1: ObtainX's take on upstream #698's refresh button, with
+  /// no setting and pull-to-refresh kept). It goes through the indicator, so
+  /// the same refresh() runs with its animation, the visible IDs and the #360
+  /// foreground service. While any check runs it does nothing: the title
+  /// can't stop one (the notification's Stop does), and it mustn't queue a
+  /// second check behind it.
+  void _refreshFromTitleTap() {
+    final ExpressiveRefreshIndicatorState? indicator =
+        _refreshIndicatorKey.currentState;
+    if (indicator == null ||
+        refreshingSince != null ||
+        context.read<AppsProvider>().refreshProgress != null) {
+      return;
+    }
+    _refreshStartedByTitleTap = true;
+    indicator.show();
+  }
+
   void openSelectionActionsSheet() {
     openSelectionActionsSheetHandler?.call();
   }
@@ -4085,7 +4108,9 @@ class AppsPageState extends State<AppsPage> {
     Future<List<App>> refresh() {
       _storeScanGeneration++;
       _deferredStoreScanTimer?.cancel();
-      hapticLightImpact();
+      // The pull's haptic. A title tap is a tap, and taps don't buzz (U1).
+      if (!_refreshStartedByTitleTap) hapticLightImpact();
+      _refreshStartedByTitleTap = false;
       setState(() {
         refreshingSince = DateTime.now();
         // Note: [_appListIconWarmFutures] is intentionally NOT cleared here.
@@ -6804,6 +6829,12 @@ class AppsPageState extends State<AppsPage> {
                                         ? tr('onDemandOnlyAppsTitle')
                                         : currentFolderName ??
                                               tr('appsString')),
+                              // Not on TV: its app bar has Refresh, and a
+                              // title button would be one more D-pad stop (D23).
+                              onTitleTap: settingsProvider.isTV
+                                  ? null
+                                  : _refreshFromTitleTap,
+                              titleTapSemanticsHint: tr('refresh'),
                               matchGradientBackground:
                                   settingsProvider.useGradientBackground,
                               progressiveBlurOverlayColor: isLargeScreen

@@ -47,6 +47,10 @@ const double _fabMinimumSafeBottomPadding = 16.0;
 /// taking layout space, so the scrolled content has to reserve this itself or
 /// the last card ends up underneath it.
 const double _bottomActionFabHeight = 56.0;
+
+/// Corner radius of the search and result-filter fields' pills, which their
+/// TV focus ring follows too.
+const double _searchFieldRadius = 30;
 InlineSpan _tooltipMessageWithBoldMarkdown(String message) {
   final List<String> messageParts = message.split('**');
   return TextSpan(
@@ -1005,6 +1009,8 @@ class AddAppPageState extends State<AddAppPage> {
             Expanded(
               child: TvTextFieldFocus(
                 textFocusNode: _urlFieldFocusNode,
+                // The pill radius of the field's decoration above (U2).
+                borderRadius: SettingsProvider.collapsedHeaderHeight / 2,
                 child: textField,
               ),
             ),
@@ -2623,7 +2629,7 @@ class AddAppPageState extends State<AddAppPage> {
           labelText: null,
           hintText: tr('search'),
           isDense: true,
-          borderRadius: 30,
+          borderRadius: _searchFieldRadius,
         ).copyWith(suffixIcon: isTV ? null : searchHelp),
       );
       return Row(
@@ -2635,6 +2641,7 @@ class AddAppPageState extends State<AddAppPage> {
             child: isTV
                 ? TvTextFieldFocus(
                     textFocusNode: _searchSomeSourcesFocusNode,
+                    borderRadius: _searchFieldRadius,
                     child: searchField,
                   )
                 : searchField,
@@ -2792,6 +2799,7 @@ class AddAppPageState extends State<AddAppPage> {
           // TV (D23): the field doesn't trap the remote above the results.
           TvTextFieldFocus(
             textFocusNode: _searchResultFilterFocusNode,
+            borderRadius: _searchFieldRadius,
             child: TextField(
               key: _searchResultFilterKey,
               focusNode: _searchResultFilterFocusNode,
@@ -2803,7 +2811,7 @@ class AddAppPageState extends State<AddAppPage> {
                     labelText: null,
                     hintText: tr('filter'),
                     isDense: true,
-                    borderRadius: 30,
+                    borderRadius: _searchFieldRadius,
                   ).copyWith(
                     prefixIcon: const Icon(Icons.filter_list_rounded, size: 20),
                     suffixIcon: _searchResultFilter.isNotEmpty

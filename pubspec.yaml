@@ -98,7 +98,7 @@ dependencies:
       url: https://github.com/ImranR98/shizuku_apk_installer
       ref: 447d88a0d134ec80d986064fdf458b55644d2ab3
   markdown: ^7.3.1
-  flutter_typeahead: ^7.0.0
+  flutter_typeahead: ^7.0.1
   battery_plus: ^7.1.2
   flutter_charset_detector: ^6.0.0
   flutter_markdown_plus: ^1.0.12

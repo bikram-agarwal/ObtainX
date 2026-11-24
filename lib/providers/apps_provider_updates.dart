@@ -725,10 +725,17 @@ const Duration _foregroundCheckProgressInterval = Duration(seconds: 1);
 /// [check] gets the progress callback for [AppsProviderUpdates.checkUpdates],
 /// or null when Android refused the service; the check then runs as it did
 /// before the service existed. [elapsed] stands in for the real clock in tests.
+///
+/// The notification's progress posts carry a Stop action (v1.7.5 sync U1,
+/// upstream #698), which reaches [AppsProvider.cancelUpdateCheck] through the
+/// notifications channel. Tapping it switches the notification to "stopping"
+/// natively; [isCancelled] then holds back this check's remaining progress, so
+/// its last counts don't bring the Stop back while the in-flight apps finish.
 Future<T> runUpdateCheckKeptAlive<T>(
   Future<T> Function(void Function(int completed, int total)? onProgress)
   check, {
   Duration Function()? elapsed,
+  bool Function()? isCancelled,
 }) async {
   // The background check's notification channel, so a user who silenced
   // that channel isn't shown this one either.
@@ -743,6 +750,7 @@ Future<T> runUpdateCheckKeptAlive<T>(
   final Duration Function() sinceStart = elapsed ?? () => running.elapsed;
   Duration? lastPosted;
   void postProgress(int completed, int total) {
+    if (isCancelled?.call() ?? false) return;
     final Duration now = sinceStart();
     if (now < _foregroundServiceNotificationDelay) return;
     // The last count always goes through, so the notification doesn't sit
@@ -1185,6 +1193,9 @@ extension AppsProviderUpdates on AppsProvider {
         forceAll: forceAll,
         onProgress: onProgress,
       ),
+      // Batches never overlap, so while this one reports progress the token
+      // is its own (see [_checkUpdatesInSession]).
+      isCancelled: () => updateCheckCancellation?.isCancelled ?? false,
     );
   }
 
@@ -1206,6 +1217,10 @@ extension AppsProviderUpdates on AppsProvider {
       await runningCheck.future.catchError((_) => <App>[]);
     }
     final completer = updateCheckCompleter = Completer<List<App>>();
+    // This batch's own token (upstream #698): a Stop cancels only the check
+    // running now, and one queued behind it then starts with a fresh token.
+    final CancellationToken cancellation = updateCheckCancellation =
+        CancellationToken();
     var completed = 0;
     var total = 0;
     DateTime lastProgressNotification = DateTime.fromMillisecondsSinceEpoch(0);
@@ -1379,7 +1394,9 @@ extension AppsProviderUpdates on AppsProvider {
       }
 
       Future<void> runWorker() async {
-        while (nextIndex < total) {
+        // After a Stop the apps already being fetched finish and are saved;
+        // the rest keep their lastUpdateCheck, so the next check takes them.
+        while (nextIndex < total && !cancellation.isCancelled) {
           final String appId = appIds[nextIndex++];
           try {
             final _FetchedAppUpdate? update =
@@ -1429,6 +1446,9 @@ extension AppsProviderUpdates on AppsProvider {
       rethrow;
     } finally {
       updateCheckCompleter = null;
+      // A Stop that lands after this (a late tap on a notification that is
+      // going away) has nothing to cancel; a queued check sets its own token.
+      updateCheckCancellation = null;
       finishPendingAutoExport();
       refreshProgress = null;
     }

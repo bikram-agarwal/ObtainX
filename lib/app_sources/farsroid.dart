@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:http/http.dart' as http;
-import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
@@ -40,9 +39,9 @@ class Farsroid extends AppSource {
     );
   }
 
-  /// LiteSpeed's reCAPTCHA gate, served in place of the page or the API
-  /// answer. Checked before the status code, since the gate isn't known to
-  /// always answer 200.
+  /// LiteSpeed's reCAPTCHA gate, served in place of the app page (the one
+  /// request since upstream #3489). Checked before the status code, since
+  /// the gate isn't known to always answer 200.
   void _throwIfBotVerification(http.Response res) {
     if (res.body.contains('lsrecaptcha-form') ||
         res.body.contains('/.lsrecap/recaptcha')) {
@@ -64,28 +63,26 @@ class Farsroid extends AppSource {
         throw getObtainiumHttpError(res);
       }
       final html = await parseHtmlOffIsolate(res.body);
-      final dlinks = html.querySelectorAll('.download-links');
+      // The page carries its download links as base64 JSON split across
+      // `data-j` attributes; the old download-box API is gone (upstream
+      // #3489).
+      final dlinks = html.querySelectorAll('#secure-json [data-j]');
       if (dlinks.isEmpty) {
         throw NoReleasesError();
       }
-      final postId = dlinks.first.attributes['data-post-id'] ?? '';
-      var version = dlinks.first.attributes['data-post-version'] ?? '';
+      final base64 = dlinks.map((n) => n.attributes['data-j'] ?? '').join();
+      var version =
+          html.querySelector('h3.version-name')?.text.trim().split(' ').last ??
+          '';
 
-      if (postId.isEmpty || version.isEmpty) {
+      if (base64.isEmpty || version.isEmpty) {
         throw NoVersionError();
       }
 
-      final res2 = await sourceRequest(
-        'https://${hosts[0]}/api/download-box/?post_id=$postId&post_version=$version',
-        additionalSettings,
-      );
-      _throwIfBotVerification(res2);
-      if (res2.statusCode != 200) {
-        throw getObtainiumHttpError(res2);
-      }
-      Map<String, dynamic>? farsroidJson;
+      List<dynamic>? farsroidJson;
       try {
-        farsroidJson = jsonDecode(res2.body) as Map<String, dynamic>?;
+        farsroidJson =
+            jsonDecode(utf8.decode(base64Decode(base64))) as List<dynamic>?;
       } catch (e) {
         unawaited(
           LogsProvider().add(
@@ -95,19 +92,17 @@ class Farsroid extends AppSource {
         );
         throw NoAPKError();
       }
-      final html2 = farsroidJson?['data']?['content'] as String? ?? '';
-      if (html2.isEmpty) {
-        throw NoAPKError();
-      }
-      final requestUrl = res2.request?.url;
+      final requestUrl = res.request?.url;
       if (requestUrl == null) throw NoAPKError();
       var apkLinks =
-          (await grabLinksCommon(html2, requestUrl, {
-                ...additionalSettings,
-                'skipSort': true,
-              }))
-              .map((l) => MapEntry(Uri.parse(l.key).pathSegments.last, l.key))
-              .toList();
+          farsroidJson
+              ?.map((l) => l?['url'] as String? ?? '')
+              .where((l) => l.isNotEmpty)
+              .map((l) => ensureAbsoluteUrl(l, requestUrl))
+              .where((l) => AppSource.isApkOrContainerFile(l))
+              .map((l) => MapEntry(Uri.parse(l).pathSegments.last, l))
+              .toList() ??
+          <MapEntry<String, String>>[];
 
       apkLinks = filterApks(
         apkLinks,
@@ -133,7 +128,14 @@ class Farsroid extends AppSource {
             : apkLinks;
       }
       if (additionalSettings['useFirstApkOfVersion'] == true) {
-        apkLinks = singleApkCandidates = [singleApkCandidates.first];
+        // The first APK named after the version (upstream #3489), among the
+        // ABI matches above.
+        apkLinks = singleApkCandidates = [
+          singleApkCandidates.firstWhere(
+            (l) => l.key.toLowerCase().contains(version.toLowerCase()),
+            orElse: () => singleApkCandidates.first,
+          ),
+        ];
       }
 
       if (additionalSettings['releaseTitleAsVersion'] == true) {

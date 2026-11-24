@@ -39,6 +39,7 @@ import 'package:obtainium/providers/apps_provider_install.dart';
 import 'package:obtainium/providers/apps_provider_lifecycle.dart';
 import 'package:obtainium/providers/apps_provider_updates.dart';
 import 'package:obtainium/utils/bg_update_guards.dart';
+import 'package:obtainium/utils/cache_dir_utils.dart';
 import 'package:obtainium/utils/translation_loader.dart';
 import 'package:obtainium/version/app_version.dart';
 export 'package:obtainium/version/app_version.dart';
@@ -1506,6 +1507,15 @@ class AppsProvider with ChangeNotifier {
   final ValueNotifier<double?> refreshProgressNotifier = ValueNotifier(null);
   double? get refreshProgress => refreshProgressNotifier.value;
   set refreshProgress(double? value) => refreshProgressNotifier.value = value;
+
+  /// The running [checkUpdates] batch's cancellation, or null when none runs
+  /// (upstream #698). Cancelling lets the apps already being checked finish
+  /// and leaves the rest for the next check. ObtainX triggers it from the Stop
+  /// action of the "checking for updates" notification (v1.7.5 sync U1).
+  CancellationToken? updateCheckCancellation;
+
+  /// Stops the running update check, if any. See [updateCheckCancellation].
+  void cancelUpdateCheck() => updateCheckCancellation?.cancel();
   LogsProvider logs = LogsProvider();
 
   int _cachedPendingUpdateCount = 0;
@@ -1844,7 +1854,10 @@ class AppsProvider with ChangeNotifier {
       });
       // Let the download notification's Cancel action reach this provider,
       // including taps routed through the FLN background isolate.
-      NativeFeatures.registerDownloadCancelHandler(cancelDownload);
+      NativeFeatures.registerDownloadCancelHandler(
+        cancelDownload,
+        onUpdateCheckStop: cancelUpdateCheck,
+      );
       NotificationsProvider.onDownloadCancelRequested = cancelDownload;
       NotificationsProvider.listenForDownloadCancelFromMain();
       // Let the download-complete notification's Install action hand the
@@ -1864,22 +1877,18 @@ class AppsProvider with ChangeNotifier {
           await getExternalStorageDirectory(),
         );
       } catch (_) {}
-      if (cacheRoot == null) {
-        // Internal cache, which the FileProvider shares too
-        // (`internal_cache` in file_paths.xml).
-        final Directory internalCache = await getApplicationCacheDirectory();
-        _apkDir = Directory('${internalCache.path}/apks');
-        _iconsCacheDir = Directory('${internalCache.path}/icons');
-      } else {
-        _apkDir = cacheRoot;
-        _iconsCacheDir = Directory('${cacheRoot.path}/icons');
-      }
-      if (!_apkDir!.existsSync()) {
-        _apkDir!.createSync(recursive: true);
-      }
-      if (!_iconsCacheDir!.existsSync()) {
-        _iconsCacheDir!.createSync(recursive: true);
-      }
+      // Upstream #3488 (v1.7.5 sync D-05): an external cache some ROMs can't
+      // write to falls back to the internal cache (its `apks` and `icons`
+      // folders), which the FileProvider shares too (`internal_cache` in
+      // file_paths.xml). Before, createSync threw here and the whole init
+      // failed, so no app loaded. [cacheRoot] stays the primary volume's cache
+      // (#3356).
+      final cacheDirs = resolveCacheDirectories(
+        externalCacheRoot: cacheRoot,
+        internalCacheRoot: await getApplicationCacheDirectory(),
+      );
+      _apkDir = cacheDirs.apkDir;
+      _iconsCacheDir = cacheDirs.iconsDir;
       _userAppIconsDir = Directory(
         '${(await getAppStorageDir()).path}/user_icons',
       );
@@ -2631,11 +2640,18 @@ class NativeFeatures {
   static bool _downloadCancelHandlerRegistered = false;
 
   static void registerDownloadCancelHandler(
-    FutureOr<void> Function(String appId) handler,
-  ) {
+    FutureOr<void> Function(String appId) handler, {
+    VoidCallback? onUpdateCheckStop,
+  }) {
     if (_downloadCancelHandlerRegistered) return;
     _downloadCancelHandlerRegistered = true;
     _notificationsChannel.setMethodCallHandler((call) async {
+      // The Stop action of the "checking for updates" notification (v1.7.5
+      // sync U1): MainActivity.stopUpdateCheckFromNotification.
+      if (call.method == 'cancelUpdateCheck') {
+        onUpdateCheckStop?.call();
+        return;
+      }
       if (call.method != 'cancelDownload') {
         throw MissingPluginException();
       }
@@ -2987,6 +3003,8 @@ class NativeFeatures {
               'channelCode': channelCode,
               'channelName': channelName,
               'channelDescription': channelDescription,
+              // The notification's Stop action (v1.7.5 sync U1).
+              'cancelLabel': tr('cancel'),
             },
           ) ??
           false;

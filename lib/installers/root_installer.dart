@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:android_package_manager/android_package_manager.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/core/logging/app_logger.dart';
@@ -14,6 +16,36 @@ const int _statusFailureInvalid = 4;
 const int _statusFailureConflict = 5;
 const int _statusFailureStorage = 6;
 const int _statusFailureIncompatible = 7;
+
+/// Android 14, from which `pm install` refuses an app that targets an API
+/// below [_lowTargetSdkBlockBelow] unless told to bypass that block.
+const int _androidApiLevelU = 34;
+const int _lowTargetSdkBlockBelow = 23;
+
+/// The `pm install` line of the root install script (upstream #3478).
+///
+/// v1.7.5 sync D-07: ObtainX's shape. The user is the script's `$uid`, set to
+/// the Android user ObtainX runs as (or the current user when that can't be
+/// read), not a number with upstream's user-0 fallback. `-i` is the installer
+/// of record from [installerPackageNameForApp] (D14).
+@visibleForTesting
+String buildRootInstallCommand({
+  required String installerPackageName,
+  required List<String> stagedApks,
+  required bool bypassLowTargetSdkBlock,
+}) => [
+  'pm',
+  'install',
+  '-r',
+  if (installerPackageName.isNotEmpty) ...[
+    '-i',
+    RootInstaller._quoteShell(installerPackageName),
+  ],
+  '--user',
+  '"\$uid"',
+  if (bypassLowTargetSdkBlock) '--bypass-low-target-sdk-block',
+  ...stagedApks,
+].join(' ');
 
 /// Installs via the Android `pm` CLI over root (`su`) (upstream #3277).
 ///
@@ -80,15 +112,19 @@ class RootInstaller extends Installer {
       ].join('\n');
       final stagedApks = [
         for (var i = 0; i < apkFilePaths.length; i++) '"\$d/obt$i.apk"',
-      ].join(' ');
+      ];
       // The installer of record from [installerPackageNameForApp] (Google
       // Play, or the Galaxy Store for a Samsung app; D14), the same option
       // Shizuku reads.
       final installerPackageName =
           installOptions['installerPackageName'] as String? ?? '';
-      final installLine = installerPackageName.isNotEmpty
-          ? 'pm install -r -i ${_quoteShell(installerPackageName)} --user "\$uid" $stagedApks'
-          : 'pm install -r --user "\$uid" $stagedApks';
+      final installLine = buildRootInstallCommand(
+        installerPackageName: installerPackageName,
+        stagedApks: stagedApks,
+        bypassLowTargetSdkBlock:
+            apkFilePaths.isNotEmpty &&
+            await _shouldBypassLowTargetSdkBlock(apkFilePaths.first),
+      );
       // The user ObtainX runs as, not the foreground user: in a work profile
       // or secondary user, `am get-current-user` names a different user.
       final int? ownUserId = await _ownAndroidUserId();
@@ -183,6 +219,25 @@ class RootInstaller extends Installer {
       return uid == null ? null : uid ~/ 100000;
     } on ProcessException {
       return null;
+    }
+  }
+
+  /// Whether Android would refuse the base APK at [apkPath] for targeting an
+  /// API below 23, as it does from Android 14 (upstream #3478). The session
+  /// installers aren't refused this way; plain `pm install` is. Anything that
+  /// can't be read leaves the usual command.
+  Future<bool> _shouldBypassLowTargetSdkBlock(String apkPath) async {
+    try {
+      final int sdkInt = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+      if (sdkInt < _androidApiLevelU) return false;
+      final PackageInfo? info = await AndroidPackageManager()
+          .getPackageArchiveInfo(archiveFilePath: apkPath);
+      final int? targetSdkVersion = info?.applicationInfo?.targetSdkVersion;
+      return targetSdkVersion != null &&
+          targetSdkVersion < _lowTargetSdkBlockBelow;
+    } catch (e) {
+      AppLogger.warn('Failed to inspect target SDK for $apkPath: $e');
+      return false;
     }
   }
 

@@ -77,7 +77,7 @@
     "pseudoVersion": "Pseudoversion",
     "osInstalledVersion": "OS installed",
     "selectAll": "Alle auswählen",
-    "deselectX": "{} abgewählt",
+    "deselectX": "{} abwählen",
     "removeSelectedApps": "Ausgewählte Apps entfernen",
     "changeX": "{} ändern",
     "installUpdateSelectedApps": "Ausgewählte Apps installieren/aktualisieren",

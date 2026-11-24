@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -28,15 +29,23 @@ private const val UPDATE_CHECK_WIFI_LOCK_TAG = "ObtainX:UpdateCheckWifiLock"
 /// under the useFGService foreground task.
 ///
 /// Callers pair [acquire] with [release]; the service stops when the last holder
-/// releases. Everything here runs on the main thread (method-channel handlers
-/// and service callbacks), so the state below needs no locking.
+/// releases. Everything here runs on the main thread (method-channel handlers,
+/// service callbacks and UpdateCheckActionReceiver), so the state below needs
+/// no locking.
+///
+/// Its notification carries a Stop action once progress shows (v1.7.5 sync U1,
+/// upstream #698's cancel). Stop asks the Dart check to take no more apps
+/// ([MainActivity.stopUpdateCheckFromNotification]); the apps already being
+/// checked finish, and the check's release then stops this service.
 class UpdateCheckForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private lateinit var title: String
     private lateinit var channelCode: String
+    private lateinit var cancelLabel: String
     // Built once per start: progress repaints the notification every second.
     private lateinit var contentIntent: PendingIntent
+    private lateinit var stopIntent: PendingIntent
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,10 +67,26 @@ class UpdateCheckForegroundService : Service() {
             requireNotNull(extras.getStringExtra(EXTRA_CHANNEL_DESCRIPTION)),
         )
         contentIntent = openAppPendingIntent(this, NOTIFICATION_ID)
+        // Dart passes its own "Cancel" (tr('cancel')), as the download service's
+        // cancel action gets it; Android's own string stands in without one.
+        cancelLabel = extras.getStringExtra(EXTRA_CANCEL_LABEL)
+            ?: getString(android.R.string.cancel)
+        stopIntent = PendingIntent.getBroadcast(
+            this,
+            NOTIFICATION_ID,
+            Intent(this, UpdateCheckActionReceiver::class.java).apply {
+                action = UpdateCheckActionReceiver.ACTION_STOP_UPDATE_CHECK
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         // Called even when the check has already finished: a service started
         // with startForegroundService that stops before startForeground crashes
         // the app.
-        val notification = buildNotification(completed = null, total = null)
+        val notification = buildNotification(
+            completed = null,
+            total = null,
+            stoppable = false,
+        )
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -109,14 +134,27 @@ class UpdateCheckForegroundService : Service() {
 
     private fun showProgress(completed: Int, total: Int) {
         getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(completed, total))
+            .notify(NOTIFICATION_ID, buildNotification(completed, total, stoppable = true))
     }
 
-    // No action buttons and no immediate-display behavior, so on Android 12+
-    // the system holds this notification back for its first 10 seconds and a
-    // short check never shows one. The Dart caller waits as long before
-    // posting progress.
-    private fun buildNotification(completed: Int?, total: Int?): Notification {
+    // After a Stop: no counter and no Stop until the check lets go. Dart posts
+    // no more progress for a cancelled check, so only a check queued behind
+    // it, which goes on, brings the counter and the Stop back.
+    private fun showStopping() {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildNotification(null, null, stoppable = false))
+    }
+
+    // The first notification has no action buttons and no immediate-display
+    // behavior, so on Android 12+ the system holds it back for its first 10
+    // seconds and a short check never shows one (an action button would
+    // show it at once). The Dart caller waits as long before posting
+    // progress, and the Stop action comes with that first progress.
+    private fun buildNotification(
+        completed: Int?,
+        total: Int?,
+        stoppable: Boolean,
+    ): Notification {
         val builder = Notification.Builder(this, channelCode)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
@@ -130,6 +168,15 @@ class UpdateCheckForegroundService : Service() {
                 .setProgress(total, completed.coerceIn(0, total), false)
         } else {
             builder.setProgress(0, 0, true)
+        }
+        if (stoppable) {
+            builder.addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, R.drawable.ic_notification),
+                    cancelLabel,
+                    stopIntent,
+                ).build(),
+            )
         }
         return builder.build()
     }
@@ -185,6 +232,7 @@ class UpdateCheckForegroundService : Service() {
         private const val EXTRA_CHANNEL_CODE = "channelCode"
         private const val EXTRA_CHANNEL_NAME = "channelName"
         private const val EXTRA_CHANNEL_DESCRIPTION = "channelDescription"
+        private const val EXTRA_CANCEL_LABEL = "cancelLabel"
 
         private var holders = 0
         private var startPending = false
@@ -199,6 +247,7 @@ class UpdateCheckForegroundService : Service() {
             channelCode: String,
             channelName: String,
             channelDescription: String,
+            cancelLabel: String?,
         ) {
             if (instance == null && !startPending) {
                 context.startForegroundService(
@@ -207,6 +256,7 @@ class UpdateCheckForegroundService : Service() {
                         putExtra(EXTRA_CHANNEL_CODE, channelCode)
                         putExtra(EXTRA_CHANNEL_NAME, channelName)
                         putExtra(EXTRA_CHANNEL_DESCRIPTION, channelDescription)
+                        if (cancelLabel != null) putExtra(EXTRA_CANCEL_LABEL, cancelLabel)
                     },
                 )
                 startPending = true
@@ -223,6 +273,12 @@ class UpdateCheckForegroundService : Service() {
 
         fun showProgress(completed: Int, total: Int) {
             instance?.showProgress(completed, total)
+        }
+
+        /// Stop was tapped: show the notification as stopping. Nothing to do
+        /// when the service is already gone (a tap racing the check's end).
+        fun showStopping() {
+            instance?.showStopping()
         }
     }
 }

@@ -179,6 +179,8 @@ class _Apps extends ChangeNotifier implements AppsProvider {
   @override
   Completer<List<App>>? updateCheckCompleter;
   @override
+  CancellationToken? updateCheckCancellation;
+  @override
   double? refreshProgress;
 
   @override

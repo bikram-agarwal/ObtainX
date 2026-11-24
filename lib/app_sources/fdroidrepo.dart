@@ -633,6 +633,9 @@ class FDroidRepo extends AppSource {
     return app;
   }
 
+  /// Plain [sourceRequest] calls on purpose (v1.7.5 sync S4): the index
+  /// cache lives in [AppSource.sourceRequest], below the session dedupe, for
+  /// both index formats. Don't route these through upstream's `_requestIndex`.
   Future<Response> sourceRequestWithURLVariants(
     String url,
     Map<String, dynamic> additionalSettings,

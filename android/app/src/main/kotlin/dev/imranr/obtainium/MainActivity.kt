@@ -212,6 +212,23 @@ class MainActivity : FlutterActivity() {
             channelToNotify?.invokeMethod("cancelDownload", appId)
         }
 
+        /// The Stop action of UpdateCheckForegroundService's notification
+        /// (v1.7.5 sync U1, upstream #698), via UpdateCheckActionReceiver. The
+        /// check runs on this activity's Dart isolate, which keeps running in
+        /// the background, so the same notifications-channel handler that takes
+        /// download cancels takes this. Unlike a download cancel nothing is
+        /// queued: with no handler ready there is no check to stop, and Dart
+        /// ignores a Stop that arrives after its check ended.
+        fun stopUpdateCheckFromNotification() {
+            var channelToNotify: MethodChannel? = null
+            synchronized(downloadCancelLock) {
+                if (downloadCancelHandlerReady) {
+                    channelToNotify = notificationsMethodChannel
+                }
+            }
+            channelToNotify?.invokeMethod("cancelUpdateCheck", null)
+        }
+
         private fun consumePendingDownloadCancels(): List<String> {
             synchronized(downloadCancelLock) {
                 downloadCancelHandlerReady = true
@@ -859,6 +876,7 @@ class MainActivity : FlutterActivity() {
                                     requireNotNull(call.argument<String>("channelName")),
                                 channelDescription =
                                     requireNotNull(call.argument<String>("channelDescription")),
+                                cancelLabel = call.argument<String>("cancelLabel"),
                             )
                             updateCheckForegroundServiceHolds += 1
                             result.success(true)

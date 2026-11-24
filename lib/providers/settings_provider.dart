@@ -226,6 +226,11 @@ const Set<String> droppedUpstreamSettingKeys = {
   'useAndroidCertStore',
   'dclWarningShown',
   'shizukuInstallerMode',
+  // v1.7.5 sync: the opt-in refresh button (ObtainX refreshes on a tap of the
+  // page title, always on) and the system-disabled-apps check (skipped:
+  // on-demand apps cover it per app).
+  'useRefreshButton',
+  'checkSystemDisabledApps',
 };
 
 class SettingsProvider with ChangeNotifier {

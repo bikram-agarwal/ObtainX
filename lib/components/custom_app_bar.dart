@@ -16,6 +16,8 @@ class CustomAppBar extends StatefulWidget {
     this.titleStyle,
     this.matchGradientBackground = false,
     this.progressiveBlurOverlayColor,
+    this.onTitleTap,
+    this.titleTapSemanticsHint,
   });
 
   final String title;
@@ -42,6 +44,13 @@ class CustomAppBar extends StatefulWidget {
   /// Optional tint override for progressive blur.
   final Color? progressiveBlurOverlayColor;
 
+  /// Compact layout only: makes the title text itself (not the space beside
+  /// it) a button. The apps pages refresh on it (v1.7.5 sync U1).
+  final VoidCallback? onTitleTap;
+
+  /// TalkBack's "double-tap to …" for [onTitleTap].
+  final String? titleTapSemanticsHint;
+
   @override
   State<CustomAppBar> createState() => _CustomAppBarState();
 }
@@ -58,6 +67,54 @@ class _CustomAppBarState extends State<CustomAppBar> {
   // bottom) carries the "progressive" feel. See ProgressiveTopEdgeOverlay for
   // why graduated multi-pass blur is deliberately avoided (GPU cost).
   static const double _blurSigma = 3.0;
+
+  // Room the title's ripple takes on each side of the text. On the leading
+  // side the ripple is shifted back by as much, so a tappable title sits
+  // where a plain one does (see [_compactTitle] for pages with a back button).
+  static const double _titleTapInset = 8;
+
+  Widget _compactTitle(BuildContext context) {
+    final Widget text = Text(
+      widget.title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+    final VoidCallback? onTitleTap = widget.onTitleTap;
+    if (onTitleTap == null) return text;
+    final bool rtl = Directionality.of(context) == TextDirection.rtl;
+    // With a leading back button the title starts right at the button's
+    // slot, so the ripple gets no room (and no shift) on that side: shifting
+    // it would cover the back button's touch area, and a tap there would
+    // refresh instead of going back.
+    final double startInset = widget.leading == null ? _titleTapInset : 0;
+    // Only the text is the button: left-aligned and sized to the title, so
+    // the empty space beside it stays inert. TalkBack reads e.g. "Apps,
+    // button, double-tap to refresh".
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Transform.translate(
+        offset: Offset(rtl ? startInset : -startInset, 0),
+        child: Semantics(
+          container: true,
+          button: true,
+          onTapHint: widget.titleTapSemanticsHint,
+          child: InkWell(
+            onTap: onTitleTap,
+            customBorder: const StadiumBorder(),
+            child: Padding(
+              padding: EdgeInsetsDirectional.only(
+                start: startInset,
+                end: _titleTapInset,
+                top: 6,
+                bottom: 6,
+              ),
+              child: text,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildBlur(Color overlayColor) {
     return ScrollLinkedProgressiveBlur(
@@ -163,11 +220,7 @@ class _CustomAppBarState extends State<CustomAppBar> {
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.fastEaseInToSlowEaseOut,
                     style: resolvedCompactTitle,
-                    child: Text(
-                      widget.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    child: _compactTitle(context),
                   ),
                 ),
                 const SizedBox(width: 10),

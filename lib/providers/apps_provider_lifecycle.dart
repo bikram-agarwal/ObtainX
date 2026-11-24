@@ -21,6 +21,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:obtainium/services/app_check_store.dart';
+import 'package:obtainium/utils/app_id_utils.dart';
 
 /// App persistence (load/save/remove), icons, and version-detection helpers.
 const _corruptFileSuffix = '.corrupt';
@@ -486,7 +487,9 @@ extension AppsProviderLifecycle on AppsProvider {
                 ))
                   listing.listingKey,
               })
-                File('${appsDirectory.path}/$recordName.json'),
+                // v1.7.5 sync D-01: names only a record inside this folder.
+                if (isValidAppId(recordName))
+                  File('${appsDirectory.path}/$recordName.json'),
             ];
       final DateTime staleSaveTempCutoff = DateTime.now().subtract(
         _staleSaveTempAge,
@@ -600,6 +603,30 @@ extension AppsProviderLifecycle on AppsProvider {
                   );
                 }
               }
+            }
+            // Upstream #3527 (v1.7.5 sync D-01): the package ID inside a record
+            // names its icon files, and its removal after a load error or an
+            // uninstall. A record whose IDs could name a path outside these
+            // folders (only an import from before this check could write one)
+            // is set aside, as corrupt JSON is.
+            if (app != null && !hasSafeStorageIds(app)) {
+              unawaited(
+                logs.add(
+                  'Skipping app JSON with unsafe ID: ${app.id} (${item.path})',
+                  level: LogLevel.warning,
+                ),
+              );
+              try {
+                await item.rename('${item.path}$_corruptFileSuffix');
+              } catch (error) {
+                unawaited(
+                  logs.add(
+                    'Could not set aside ${item.path}: $error',
+                    level: LogLevel.warning,
+                  ),
+                );
+              }
+              app = null;
             }
             if (app != null) {
               final String loadingAppId = app.id;
@@ -1400,6 +1427,20 @@ extension AppsProviderLifecycle on AppsProvider {
     App app,
     AppCheckStore checks,
   ) async {
+    // Upstream #3527 (v1.7.5 sync D-01): the record is named after the listing
+    // key, and APKs and icons after it and the package ID, so neither may name
+    // a path outside these folders. Every source of an ID ends up here: Add
+    // app, a source's own package lookup, links, backups and renames.
+    if (!hasSafeStorageIds(app)) {
+      unawaited(
+        logs.add(
+          'Refusing to write app JSON with unsafe ID: ${app.id} '
+          '(${app.listingKey})',
+          level: LogLevel.warning,
+        ),
+      );
+      throw ObtainiumError(tr('invalidInput'));
+    }
     final String listingKey = app.listingKey;
     final filePath = '${directory.path}/$listingKey.json';
     final tmpFile = File(
@@ -1683,6 +1724,18 @@ extension AppsProviderLifecycle on AppsProvider {
     await Future.wait(
       listingKeys.map((listingKey) async {
         final String packageId = _packageIdForListingKey(listingKey);
+        // Upstream #3527 (v1.7.5 sync D-01): never build a path to delete from
+        // an ID that could name one outside these folders; just forget it.
+        if (!isValidAppId(listingKey) || !isValidAppId(packageId)) {
+          unawaited(
+            logs.add(
+              'Refusing to delete files for unsafe app ID: $listingKey',
+              level: LogLevel.warning,
+            ),
+          );
+          apps.remove(listingKey);
+          return;
+        }
         final bool lastListingForPackage = packagesLosingLastListing.contains(
           packageId,
         );
@@ -2127,6 +2180,16 @@ extension AppsProviderLifecycle on AppsProvider {
     final Directory appsDirectory = await getAppsDir();
     await Future.wait(
       appIds.map((String appId) async {
+        // v1.7.5 sync D-01, as in [removeApps].
+        if (!isValidAppId(appId)) {
+          unawaited(
+            logs.add(
+              'Refusing to delete files for unsafe app ID: $appId',
+              level: LogLevel.warning,
+            ),
+          );
+          return;
+        }
         if (deleteMainJson) {
           final File mainJson = File('${appsDirectory.path}/$appId.json');
           if (mainJson.existsSync()) {

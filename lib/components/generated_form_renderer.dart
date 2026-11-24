@@ -713,14 +713,21 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
 /// loses focus (Done, BACK) the frame takes it back. Everything inside the
 /// field, suffix buttons included, stays out of D-pad traversal until then,
 /// so a button the remote must reach belongs beside the field.
+///
+/// The frame's ring follows the field's corners ([borderRadius], the radius
+/// the field's own decoration uses) and is painted over the field: ObtainX's
+/// fields are filled, so a ring behind one would be hidden by its fill except
+/// at the corners (v1.7.5 sync U2, upstream #3491).
 class TvTextFieldFocus extends StatefulWidget {
   final Widget child;
   final FocusNode textFocusNode;
+  final double borderRadius;
 
   const TvTextFieldFocus({
     super.key,
     required this.child,
     required this.textFocusNode,
+    this.borderRadius = 4,
   });
 
   @override
@@ -788,13 +795,13 @@ class _TvTextFieldFocusState extends State<TvTextFieldFocus> {
       child: ListenableBuilder(
         listenable: _outerFocus,
         builder: (context, child) => Container(
-          decoration: _outerFocus.hasFocus && !_activated
+          foregroundDecoration: _outerFocus.hasFocus && !_activated
               ? BoxDecoration(
                   border: Border.all(
                     color: Theme.of(context).colorScheme.primary,
                     width: 2,
                   ),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(widget.borderRadius),
                 )
               : null,
           child: ExcludeFocus(excluding: !_activated, child: widget.child),
@@ -1145,6 +1152,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
               if (context.read<SettingsProvider>().isTV) {
                 return TvTextFieldFocus(
                   textFocusNode: focusNode,
+                  // The filled field's corners; an underlined one has none.
+                  borderRadius: widget.outlinedInputFields ? outlinedRadius : 4,
                   child: textField,
                 );
               }

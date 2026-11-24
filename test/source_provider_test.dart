@@ -611,16 +611,26 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   DeviceInfoPlatform.instance = _FakeAndroidDeviceInfoPlatform();
-  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-      .setMockMethodCallHandler(
-        const MethodChannel('plugins.flutter.io/path_provider'),
-        (MethodCall methodCall) async {
+  const MethodChannel pathProviderChannel = MethodChannel(
+    'plugins.flutter.io/path_provider',
+  );
+  // No cache directory by default, so the F-Droid index cache stays off.
+  void mockPathProvider({String? cacheDirectory}) {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (
+          MethodCall methodCall,
+        ) async {
           if (methodCall.method == 'getApplicationDocumentsDirectory') {
             return Directory.systemTemp.path;
           }
+          if (methodCall.method == 'getApplicationCacheDirectory') {
+            return cacheDirectory;
+          }
           return null;
-        },
-      );
+        });
+  }
+
+  mockPathProvider();
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -668,6 +678,75 @@ void main() {
       expect(requests.length, 5);
     }, _RealHttpOverrides());
   });
+
+  // v1.7.5 sync S4: the index cache sits below the session dedupe, so every
+  // app of a repository shares one response (and one parse) per operation,
+  // and a later operation costs a 304 instead of the whole index.
+  test(
+    'repository indexes revalidate from disk, one request per operation',
+    () async {
+      final Directory cacheDirectory = await Directory.systemTemp.createTemp(
+        'obtainx_index_cache',
+      );
+      mockPathProvider(cacheDirectory: cacheDirectory.path);
+      addTearDown(() {
+        mockPathProvider();
+        cacheDirectory.deleteSync(recursive: true);
+      });
+      const String index =
+          '<fdroid><application id="dev.example"><name>Café 名前</name>'
+          '</application></fdroid>';
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final conditions = <String?>[];
+        server.listen((request) async {
+          final String? ifNoneMatch = request.headers.value(
+            HttpHeaders.ifNoneMatchHeader,
+          );
+          conditions.add(ifNoneMatch);
+          if (ifNoneMatch == '"v1"') {
+            request.response.statusCode = HttpStatus.notModified;
+            request.response.headers.set(HttpHeaders.etagHeader, '"v1"');
+          } else {
+            request.response.headers.set(HttpHeaders.etagHeader, '"v1"');
+            request.response.headers.contentType = ContentType(
+              'application',
+              'xml',
+              charset: 'utf-8',
+            );
+            request.response.add(utf8.encode(index));
+          }
+          await request.response.close();
+        });
+        final url = 'http://127.0.0.1:${server.port}/index.xml';
+        final source = _AuthenticatedRepo();
+        Future<List<Response>> operation() => SourceRequestSession.run(
+          () => Future.wait(
+            List.generate(6, (_) => source.sourceRequest(url, {'auth': 'a'})),
+          ),
+        );
+
+        final List<Response> first = await operation();
+        expect(conditions, [null]);
+        expect(first.every((r) => identical(r, first.first)), isTrue);
+        expect(first.first.body, index);
+
+        final List<Response> second = await operation();
+        expect(conditions, [null, '"v1"']);
+        expect(second.every((r) => identical(r, second.first)), isTrue);
+        expect(second.first.statusCode, 200);
+        expect(second.first.bodyBytes, utf8.encode(index));
+        expect(second.first.body, index);
+        // index.xml is decoded with the response's charset, restored from disk.
+        final RepositoryIndex parsed = await parseRepositoryIndex(second.first);
+        expect(
+          parsed.findApplication('dev.example')?.querySelector('name')?.text,
+          'Café 名前',
+        );
+      }, _RealHttpOverrides());
+    },
+  );
 
   test(
     'source resolution reuses templates but returns fresh mutable sources',

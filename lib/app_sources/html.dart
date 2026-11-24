@@ -53,12 +53,28 @@ List<String> collectAllStringsFromJSONObject(dynamic obj) {
 List<MapEntry<String, String>> getLinksInLines(String lines) =>
     // Quotes, brackets and angle brackets end a URL found in raw text or code,
     // and trailing punctuation belongs to the text around it (upstream #2816).
-    RegExp(r'''(?:(?:http|https|ftp)://)[^\s"'<>()\[\]{}]+''')
+    // Parentheses stay when balanced, as in `app_2.9.0(275).apk` (#3497).
+    RegExp(r'''(?:(?:http|https|ftp)://)[^\s"'<>\[\]{}]+''')
         .allMatches(lines)
-        .map((match) => match.group(0)!.replaceFirst(RegExp(r'[.,;:!?]+$'), ''))
+        .map((match) => trimTrailingUrlPunctuation(match.group(0)!))
         .where((url) => url.isNotEmpty)
         .map((url) => MapEntry(url, url.split('/').last))
         .toList();
+
+/// Drops trailing punctuation, and a trailing `)` while the URL has more
+/// closing than opening parentheses (it belongs to the surrounding text).
+String trimTrailingUrlPunctuation(String url) {
+  var result = url;
+  while (true) {
+    result = result.replaceFirst(RegExp(r'[.,;:!?]+$'), '');
+    if (result.endsWith(')') &&
+        '('.allMatches(result).length < ')'.allMatches(result).length) {
+      result = result.substring(0, result.length - 1);
+      continue;
+    }
+    return result;
+  }
+}
 
 /// Collects absolute and root-relative URLs found in element attributes
 /// (e.g. `<script src="/js/app.js">`), resolved against [reqUrl] (#3294).
