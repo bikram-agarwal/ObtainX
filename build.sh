@@ -43,12 +43,27 @@ flutter clean
 flutter pub get
 APP_VERSION="$(grep '^version: ' pubspec.yaml | sed 's/version: //; s/+.*//' | head -1)"
 DART_DEFINE="--dart-define=APP_VERSION=$APP_VERSION"
+# Release AOT flags: keep the Dart symbol table out of the APK
+# (--split-debug-info), which shrinks libapp.so.
+# --extra-gen-snapshot-options=--strip was dropped after measuring it: with
+# --split-debug-info already in place the resulting libapp.so is byte-identical
+# with and without it.
+# Deliberately no --obfuscate: class names are persisted (AppSource.
+# sourceIdentifier is runtimeType.toString(), App.overrideSource stores it),
+# so mangling them would break tracked apps, backups and cross-flavor installs
+# on the next release. Symbols are kept for line-number symbolication only.
+# The universal and per-ABI builds write to separate directories: both emit
+# app.android-*.symbols, and one run would otherwise overwrite the other's.
+AOT_FLAGS="--release --split-debug-info=./debug_symbols/universal"
+AOT_FLAGS_PER_ABI="--release --split-debug-info=./debug_symbols/split"
 # TODO: Remove once Flutter's libdartjni.so no longer embeds a non-reproducible build ID
 sed -i -E 's/^(-Wl,)(--build-id=none,)?/\1--build-id=none,/' ${PUB_CACHE:-$HOME/.pub-cache}/hosted/*/jni-*/src/CMakeLists.txt
 
-flutter build apk $DART_DEFINE --flavor normal && flutter build apk $DART_DEFINE --split-per-abi --flavor normal
+flutter build apk $DART_DEFINE $AOT_FLAGS --flavor normal && flutter build apk $DART_DEFINE $AOT_FLAGS_PER_ABI --split-per-abi --flavor normal
 for file in ./build/app/outputs/flutter-apk/app-*normal*.apk*; do mv "$file" "${file//-normal/}"; done
-# Do the same for the F-Droid flavour
+# Do the same for the F-Droid flavour. No AOT_FLAGS here: F-Droid rebuilds this
+# flavour independently and must reproduce it byte for byte, so it stays on the
+# plain release build the fdroiddata recipe uses.
 flutter build apk $DART_DEFINE --flavor fdroid -t lib/main_fdroid.dart && \
     flutter build apk $DART_DEFINE --split-per-abi --flavor fdroid -t lib/main_fdroid.dart
 for file in ./build/app/outputs/flutter-apk/*.sha1; do gpg --sign --detach-sig "$file"; done

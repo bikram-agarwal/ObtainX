@@ -43,6 +43,8 @@ app.*.symbols
 
 # Obfuscation related
 app.*.map.json
+# Symbol maps written by the release build (build.sh / CI)
+/debug_symbols/
 
 # Android Studio will place build artifacts here
 /android/app/debug
