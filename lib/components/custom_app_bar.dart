@@ -94,8 +94,11 @@ class _CustomAppBarState extends State<CustomAppBar> {
       alignment: AlignmentDirectional.centerStart,
       child: Transform.translate(
         offset: Offset(rtl ? startInset : -startInset, 0),
+        // No `container: true`: the button flag, tap and hint must annotate
+        // the app bar's own title node, which is the route's heading and names
+        // the page for TalkBack. A separate node took the label away from it
+        // (v1.7.5 sync Phase C).
         child: Semantics(
-          container: true,
           button: true,
           onTapHint: widget.titleTapSemanticsHint,
           child: InkWell(
@@ -207,10 +210,12 @@ class _CustomAppBarState extends State<CustomAppBar> {
         iconTheme: IconThemeData(color: colorScheme.onSurface),
         actionsIconTheme: IconThemeData(color: colorScheme.onSurface),
         flexibleSpace: headerBackground,
+        // Directional, so a right-to-left layout gets the same 20 px start
+        // inset; the title tap's ripple shift relies on it (Phase C).
         title: Padding(
-          padding: EdgeInsets.only(
-            left: widget.leading != null ? 0 : 20,
-            right: 4,
+          padding: EdgeInsetsDirectional.only(
+            start: widget.leading != null ? 0 : 20,
+            end: 4,
           ),
           child: Row(
             children: [

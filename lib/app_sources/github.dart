@@ -264,7 +264,7 @@ class GitHub extends AppSource {
       helpUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token',
       assistIcon: Icons.verified_user_outlined,
       assistTooltip: tr('validateGitHubPAT'),
-      assistAction: _validatePATFromSettingsForm,
+      assistAction: _validatePATFromSourceConfigForm,
     ),
     GeneratedFormTextField(
       'GHReqPrefix',
@@ -647,14 +647,24 @@ class GitHub extends AppSource {
     settingsProvider.setSettingString(validatedPATFingerprintKey, fingerprint);
   }
 
-  static Future<String?> validatePAT(String creds) async {
+  /// The GET that [validatePAT] sends; tests replace it.
+  @visibleForTesting
+  static Future<Response> Function(Uri url, {Map<String, String>? headers})
+  patValidationGet = get;
+
+  /// Checks [creds] against `GET <apiHost>/user`. [apiHost] is the API host
+  /// the token is for ([getAPIHost]); github.com's by default.
+  static Future<String?> validatePAT(
+    String creds, {
+    String apiHost = 'https://api.github.com',
+  }) async {
     final String? token = tokenFromCreds(creds);
     if (token == null) {
       return tr('githubPATRequiredForDefaultVerification');
     }
     try {
-      final Response response = await get(
-        Uri.parse('https://api.github.com/user'),
+      final Response response = await patValidationGet(
+        Uri.parse('$apiHost/user'),
         headers: <String, String>{
           HttpHeaders.authorizationHeader: 'Bearer $token',
           HttpHeaders.acceptHeader: 'application/vnd.github+json',
@@ -676,19 +686,47 @@ class GitHub extends AppSource {
     }
   }
 
-  static Future<void> _validatePATFromSettingsForm(
+  /// Validates the token typed into this source's own config field and
+  /// returns the error to show, or null when it is valid.
+  ///
+  /// The token is checked against this source's own API host. For a custom
+  /// host (GitHub Enterprise), the global token's validated fingerprint is
+  /// left alone: that fingerprint is github.com's, and storing or clearing it
+  /// here changed build verification for every github.com app (v1.7.5 sync,
+  /// plan §6 Q3). A github.com token keeps the old behaviour: validating it
+  /// records it as the validated token, which is what lets build verification
+  /// use it (Phase C). Settings validates the global token with its own
+  /// control.
+  Future<String?> validatePATFromSourceConfig(
+    String creds,
+    SettingsProvider settingsProvider,
+  ) async {
+    final String apiHost = await getAPIHost(const {});
+    final String? error = await validatePAT(creds, apiHost: apiHost);
+    if (apiHost != 'https://api.github.com') return error;
+    if (error == null) {
+      storePATValidation(creds, settingsProvider);
+    } else {
+      clearPATValidation(settingsProvider);
+    }
+    return error;
+  }
+
+  Future<void> _validatePATFromSourceConfigForm(
     BuildContext context,
     FormValuesTextPatch patch,
     Map<String, dynamic> values,
   ) async {
     final String creds = values[githubCredsKey]?.toString() ?? '';
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
-    final String? error = await validatePAT(creds);
+    final String? error = await validatePATFromSourceConfig(
+      creds,
+      settingsProvider,
+    );
     if (!context.mounted) {
       return;
     }
     if (error == null) {
-      storePATValidation(creds, settingsProvider);
       ScaffoldMessenger.of(context).showSnackBar(
         buildAppSnackBar(
           context,
@@ -697,7 +735,6 @@ class GitHub extends AppSource {
         ),
       );
     } else {
-      clearPATValidation(settingsProvider);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(buildAppSnackBar(context, error, type: ToastType.error));
@@ -835,10 +872,19 @@ class GitHub extends AppSource {
   /// github.com's API lives on api.github.com; a custom host (GitHub
   /// Enterprise Server) serves it under `/api/v3` on the same host
   /// (upstream #3500).
+  ///
+  /// GitHub Enterprise Cloud with data residency (`<subdomain>.ghe.com`) is
+  /// the exception: its API is `https://api.<subdomain>.ghe.com`, as GitHub
+  /// documents, which is what ObtainX built for every custom host before
+  /// v1.7.5. Upstream's `/api/v3` alone would break those hosts (v1.7.5 sync
+  /// Phase C).
   Future<String> getAPIHost(Map<String, dynamic> additionalSettings) async {
     final host = hosts.isNotEmpty ? hosts[0] : 'github.com';
     if (host == 'github.com' || host == 'www.github.com') {
       return 'https://api.github.com';
+    }
+    if (host.toLowerCase().endsWith('.ghe.com')) {
+      return 'https://api.$host';
     }
     return 'https://$host/api/v3';
   }

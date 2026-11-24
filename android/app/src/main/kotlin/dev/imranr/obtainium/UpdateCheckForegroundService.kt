@@ -138,8 +138,9 @@ class UpdateCheckForegroundService : Service() {
     }
 
     // After a Stop: no counter and no Stop until the check lets go. Dart posts
-    // no more progress for a cancelled check, so only a check queued behind
-    // it, which goes on, brings the counter and the Stop back.
+    // no more progress for a cancelled check, and a post already on its way is
+    // dropped while [stopping] is set, so only a check queued behind it, which
+    // goes on, brings the counter and the Stop back.
     private fun showStopping() {
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(null, null, stoppable = false))
@@ -238,6 +239,13 @@ class UpdateCheckForegroundService : Service() {
         private var startPending = false
         private var instance: UpdateCheckForegroundService? = null
 
+        /// Set by a Stop until the stopped check lets go. A progress post Dart
+        /// sent before it saw the cancel can still arrive after the tap; while
+        /// this is set it's dropped, so the counter and the Stop don't come back
+        /// for the stopped check (v1.7.5 sync Phase C). A check queued behind
+        /// it posts its own progress once the stopped one releases.
+        private var stopping = false
+
         /// Starts the service unless it is already running or starting. Throws
         /// if Android refuses the start (e.g. ForegroundServiceStartNotAllowedException
         /// when the app is already in the background).
@@ -250,6 +258,8 @@ class UpdateCheckForegroundService : Service() {
             cancelLabel: String?,
         ) {
             if (instance == null && !startPending) {
+                // A fresh service: no Stop from an earlier one can be pending.
+                stopping = false
                 context.startForegroundService(
                     Intent(context, UpdateCheckForegroundService::class.java).apply {
                         putExtra(EXTRA_TITLE, title)
@@ -267,17 +277,21 @@ class UpdateCheckForegroundService : Service() {
         /// Stops the service once the last holder releases. A release that
         /// lands before the service has started is handled in onStartCommand.
         fun release() {
+            stopping = false
             if (holders > 0) holders -= 1
             if (holders == 0) instance?.stopNow()
         }
 
         fun showProgress(completed: Int, total: Int) {
+            if (stopping) return
             instance?.showProgress(completed, total)
         }
 
         /// Stop was tapped: show the notification as stopping. Nothing to do
         /// when the service is already gone (a tap racing the check's end).
         fun showStopping() {
+            if (instance == null) return
+            stopping = true
             instance?.showStopping()
         }
     }

@@ -153,52 +153,46 @@ void main() {
         },
       );
 
-      test(
-        'prioritizes arm64-v8a over armeabi-v7a when both are supported',
-        () async {
-          final multiAbiIndexV2 = jsonEncode({
-            'packages': {
-              _appId: {
-                'metadata': {
-                  'name': {'en-US': 'Notesnook'},
-                },
-                'versions': {
-                  'd': _version(15594, 'app_15594.apk', 'x86_64'),
-                  'c': _version(15593, 'app_15593.apk', 'arm64-v8a'),
-                  'b': _version(15592, 'app_15592.apk', 'x86'),
-                  'a': _version(15591, 'app_15591.apk', 'armeabi-v7a'),
-                },
+      test('prioritizes arm64-v8a over armeabi-v7a when both are supported', () async {
+        final multiAbiIndexV2 = jsonEncode({
+          'packages': {
+            _appId: {
+              'metadata': {
+                'name': {'en-US': 'Notesnook'},
+              },
+              'versions': {
+                'd': _version(15594, 'app_15594.apk', 'x86_64'),
+                'c': _version(15593, 'app_15593.apk', 'arm64-v8a'),
+                'b': _version(15592, 'app_15592.apk', 'x86'),
+                'a': _version(15591, 'app_15591.apk', 'armeabi-v7a'),
               },
             },
-          });
-          const multiAbiIndexXml =
-              '<?xml version="1.0" encoding="utf-8"?><fdroid>'
-              '<repo name="Test Repo"></repo>'
-              '<application id="$_appId"><name>Notesnook</name>'
-              '<package><version>3.4.12</version><versioncode>15594</versioncode>'
-              '<apkname>app_15594.apk</apkname><nativecode>x86_64</nativecode></package>'
-              '<package><version>3.4.12</version><versioncode>15593</versioncode>'
-              '<apkname>app_15593.apk</apkname><nativecode>arm64-v8a</nativecode></package>'
-              '<package><version>3.4.12</version><versioncode>15592</versioncode>'
-              '<apkname>app_15592.apk</apkname><nativecode>x86</nativecode></package>'
-              '<package><version>3.4.12</version><versioncode>15591</versioncode>'
-              '<apkname>app_15591.apk</apkname><nativecode>armeabi-v7a</nativecode></package>'
-              '</application></fdroid>';
-          final repo = _CustomFDroidRepo(
-            ['arm64-v8a', 'armeabi-v7a', 'armeabi'],
-            indexXml: v1 ? multiAbiIndexXml : null,
-            indexV2: v1 ? null : multiAbiIndexV2,
-          );
-          final details = await repo.getLatestAPKDetails(
-            '$_repo?appId=$_appId',
-            {
-              'trySelectingSuggestedVersionCode': false,
-              'autoSelectHighestVersionCode': false,
-            },
-          );
-          expect(details.apkUrls.map((e) => e.value), ['$_repo/app_15593.apk']);
-        },
-      );
+          },
+        });
+        const multiAbiIndexXml =
+            '<?xml version="1.0" encoding="utf-8"?><fdroid>'
+            '<repo name="Test Repo"></repo>'
+            '<application id="$_appId"><name>Notesnook</name>'
+            '<package><version>3.4.12</version><versioncode>15594</versioncode>'
+            '<apkname>app_15594.apk</apkname><nativecode>x86_64</nativecode></package>'
+            '<package><version>3.4.12</version><versioncode>15593</versioncode>'
+            '<apkname>app_15593.apk</apkname><nativecode>arm64-v8a</nativecode></package>'
+            '<package><version>3.4.12</version><versioncode>15592</versioncode>'
+            '<apkname>app_15592.apk</apkname><nativecode>x86</nativecode></package>'
+            '<package><version>3.4.12</version><versioncode>15591</versioncode>'
+            '<apkname>app_15591.apk</apkname><nativecode>armeabi-v7a</nativecode></package>'
+            '</application></fdroid>';
+        final repo = _CustomFDroidRepo(
+          ['arm64-v8a', 'armeabi-v7a', 'armeabi'],
+          indexXml: v1 ? multiAbiIndexXml : null,
+          indexV2: v1 ? null : multiAbiIndexV2,
+        );
+        final details = await repo.getLatestAPKDetails('$_repo?appId=$_appId', {
+          'trySelectingSuggestedVersionCode': false,
+          'autoSelectHighestVersionCode': false,
+        });
+        expect(details.apkUrls.map((e) => e.value), ['$_repo/app_15593.apk']);
+      });
 
       test('falls back to universal only when no explicit ABI matches', () async {
         final universalIndexV2 = jsonEncode({

@@ -190,5 +190,27 @@ void main() {
         throwsA(isA<ObtainiumError>()),
       );
     });
+
+    // Phase C: in a link or pasted app JSON the ID is only a hint, and a
+    // missing one means "infer it", as before v1.7.5. A backup still needs one.
+    test('a link app with no ID is read when IDs are hints, and only then', () {
+      const String noId =
+          '[{"url":"https://github.com/a/b","author":"a","name":"b",'
+          '"additionalSettings":"{}"}]';
+      final content = provider.parseBackupContent(noId, idsAreHints: true);
+      expect(content.apps.single.id, isEmpty);
+      expect(
+        () => provider.parseBackupContent(noId),
+        throwsA(isA<ObtainiumError>()),
+      );
+      // A given ID must still be safe, hints or not.
+      expect(
+        () => provider.parseBackupContent(
+          jsonEncode([_app(id: '../escape').toJson()]),
+          idsAreHints: true,
+        ),
+        throwsA(isA<ObtainiumError>()),
+      );
+    });
   });
 }

@@ -629,6 +629,10 @@ extension AppsProviderLifecycle on AppsProvider {
               app = null;
             }
             if (app != null) {
+              // A listing key, not the package ID: removing by package ID
+              // removed the package's first listing, not this one, when another
+              // store's listing failed to load (v1.7.5 sync Q3).
+              final String loadingListingKey = app.listingKey;
               final String loadingAppId = app.id;
               final String loadingAppName = app.finalName;
               final AppInMemory? before = apps[app.listingKey];
@@ -686,7 +690,7 @@ extension AppsProviderLifecycle on AppsProvider {
                 if (correctedApp != null) {
                   app = correctedApp;
                   dataChanged = true;
-                  correctedInstallStatusIds.add(correctedApp.id);
+                  correctedInstallStatusIds.add(loadingListingKey);
                   // Absence from the device is the signal for "externally
                   // uninstalled" — not a null installedVersion, which is also
                   // the state left behind by an explicit install status reset,
@@ -700,7 +704,7 @@ extension AppsProviderLifecycle on AppsProvider {
                   if (hadInstalledVersion &&
                       correctedApp.installedVersion == null &&
                       installedInfo == null) {
-                    removedAppIds.add(correctedApp.id);
+                    removedAppIds.add(loadingListingKey);
                   }
                 }
                 final folderMembershipChanged = reconcileAppFolderMemberships(
@@ -756,7 +760,7 @@ extension AppsProviderLifecycle on AppsProvider {
                     ),
                   );
                 } else {
-                  errors.add([loadingAppId, loadingAppName, e.toString()]);
+                  errors.add([loadingListingKey, loadingAppName, e.toString()]);
                 }
               }
             }
@@ -809,7 +813,10 @@ extension AppsProviderLifecycle on AppsProvider {
             ),
           );
         }
-        await removeApps(errors.map((e) => e[0]).toList());
+        await removeApps(
+          errors.map((e) => e[0]).toList(),
+          exactListingKeys: true,
+        );
         unawaited(
           NotificationsProvider().notify(
             AppsRemovedNotification(errors.map((e) => [e[1], e[2]]).toList()),
@@ -1704,10 +1711,29 @@ extension AppsProviderLifecycle on AppsProvider {
   /// Per-package files - launcher/deduced icons - are only deleted once the
   /// last listing of that package goes, since the other store's listing of the
   /// same package still displays them.
-  Future<void> removeApps(List<String> appIds) async {
+  ///
+  /// [exactListingKeys]: [appIds] are listing keys to remove as given, with no
+  /// package-ID expansion, even when a key isn't in memory. Load errors need
+  /// this: a record that failed to load never enters [apps], so its bare key
+  /// `pkg` would otherwise expand to the package's healthy `pkg@Store` listing
+  /// and delete that instead (v1.7.5 sync Q3).
+  Future<void> removeApps(
+    List<String> appIds, {
+    bool exactListingKeys = false,
+  }) async {
     if (appIds.isEmpty) return;
     final Directory appsDirectory = await getAppsDir();
-    final List<String> listingKeys = _listingKeysFromIds(appIds);
+    final List<String> listingKeys = exactListingKeys
+        ? appIds.toSet().toList()
+        : _listingKeysFromIds(appIds);
+    // [AppListings.remove] falls back from a package ID to that package's
+    // only listing; an exact key that isn't in memory must not take it.
+    void forget(String listingKey) {
+      if (!exactListingKeys || apps.containsListingKey(listingKey)) {
+        apps.remove(listingKey);
+      }
+    }
+
     final Set<String> removedKeys = listingKeys.toSet();
     final Set<String> packagesLosingLastListing =
         {
@@ -1733,7 +1759,7 @@ extension AppsProviderLifecycle on AppsProvider {
               level: LogLevel.warning,
             ),
           );
-          apps.remove(listingKey);
+          forget(listingKey);
           return;
         }
         final bool lastListingForPackage = packagesLosingLastListing.contains(
@@ -1763,7 +1789,7 @@ extension AppsProviderLifecycle on AppsProvider {
             );
           }
         }
-        apps.remove(listingKey);
+        forget(listingKey);
       }),
     );
     await appCheckStore?.remove(listingKeys);

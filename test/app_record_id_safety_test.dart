@@ -15,8 +15,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // v1.7.5 sync D-01 (upstream #3527, with the assertions of its import
-// integration test): what the app-record store writes, loads and deletes, on
-// a real temporary folder.
+// integration test) and Q3: what the app-record store writes, loads and
+// deletes, on a real temporary folder.
 
 class _Logs implements LogsProvider {
   final messages = <String>[];
@@ -203,6 +203,58 @@ void main() {
       expect(File('$appsPath/bad.json').existsSync(), isFalse);
       expect(File('$appsPath/bad.json.corrupt').existsSync(), isTrue);
     });
+
+    test(
+      "a load error in another store's listing removes that listing, not the "
+      "package's first one (Q3)",
+      () async {
+        final provider = await _provider();
+        final String appsPath = provider.cachedAppsDir!.path;
+        final File healthy = File('$appsPath/${_app.id}.json');
+        final File broken = File('$appsPath/${_app.id}@Gone.json');
+        await healthy.writeAsString(jsonEncode(_app.toJson()));
+        // A source no build knows any more: its listing can't load.
+        await broken.writeAsString(
+          jsonEncode(
+            _app
+                .copyWith(
+                  listingId: '${_app.id}@Gone',
+                  overrideSource: 'NoSuchSource',
+                )
+                .toJson(),
+          ),
+        );
+        await provider.loadApps();
+        expect(provider.apps.keys, [_app.id]);
+        expect(healthy.existsSync(), isTrue);
+        expect(broken.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      "a load error in a package's bare listing removes that listing, not the "
+      "package's other store's listing (Q3, Phase C)",
+      () async {
+        final provider = await _provider();
+        final String appsPath = provider.cachedAppsDir!.path;
+        final String otherKey = '${_app.id}@Other';
+        final File broken = File('$appsPath/${_app.id}.json');
+        final File healthy = File('$appsPath/$otherKey.json');
+        // The bare record names a source no build knows any more, so it can't
+        // load and never enters memory; its key alone must not expand to the
+        // package's healthy listing.
+        await broken.writeAsString(
+          jsonEncode(_app.copyWith(overrideSource: 'NoSuchSource').toJson()),
+        );
+        await healthy.writeAsString(
+          jsonEncode(_app.copyWith(listingId: otherKey).toJson()),
+        );
+        await provider.loadApps();
+        expect(provider.apps.keys, [otherKey]);
+        expect(healthy.existsSync(), isTrue);
+        expect(broken.existsSync(), isFalse);
+      },
+    );
   });
 
   group('removing records', () {

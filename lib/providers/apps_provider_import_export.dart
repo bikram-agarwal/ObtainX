@@ -538,7 +538,15 @@ extension AppsProviderImportExport on AppsProvider {
   }
 
   /// Parses a backup JSON string into a [BackupContent] object.
-  BackupContent parseBackupContent(String appsJSON) {
+  ///
+  /// [idsAreHints]: the apps' IDs are only hints, as in `obtainium://` links
+  /// and pasted app JSON (Import from URL list), where a missing `id` means
+  /// "infer it from the source". An app with no ID and no listing ID is then
+  /// accepted; any ID that is given must still be safe.
+  BackupContent parseBackupContent(
+    String appsJSON, {
+    bool idsAreHints = false,
+  }) {
     dynamic decodedJSON;
     try {
       decodedJSON = jsonDecode(appsJSON);
@@ -569,6 +577,9 @@ extension AppsProviderImportExport on AppsProvider {
     // covers every reader: file import and restore, the backup picker, and
     // `obtainium://` links and pasted JSON (Import from URL list).
     for (final App app in importedApps) {
+      // A link's app with no ID at all: Import from URL list infers it, and
+      // the write guard checks whatever ID it ends up with (Phase C).
+      if (idsAreHints && app.id.isEmpty && app.listingId == null) continue;
       if (!hasSafeStorageIds(app)) {
         AppLogger.warn(
           'Rejected import with unsafe app ID: ${app.id} (${app.listingKey})',

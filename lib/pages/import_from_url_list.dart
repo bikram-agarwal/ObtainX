@@ -25,7 +25,10 @@ List<UrlImportEntry> urlImportEntriesFromLink(
   Uri link,
   AppsProvider appsProvider,
 ) => [
-  for (final App app in appsProvider.parseBackupContent(linkPayload(link)).apps)
+  for (final App app
+      in appsProvider
+          .parseBackupContent(linkPayload(link), idsAreHints: true)
+          .apps)
     UrlImportEntry(app.url, seed: withoutLinkInstallSettings(app)),
 ];
 

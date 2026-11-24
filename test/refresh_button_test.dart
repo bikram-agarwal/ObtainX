@@ -296,6 +296,10 @@ void main() {
     expect(title.flagsCollection.isButton, isTrue);
     expect(data.hasAction(SemanticsAction.tap), isTrue);
     expect(title.hintOverrides?.onTapHint, tr('refresh'));
+    // Still the page's heading and route name, as a plain title is: TalkBack
+    // announces the page by it and finds it by heading navigation (Phase C).
+    expect(title.flagsCollection.isHeader, isTrue);
+    expect(title.flagsCollection.namesRoute, isTrue);
     semantics.dispose();
   });
 
