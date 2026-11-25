@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:obtainium/providers/apps_provider.dart' show packageManager;
 import 'package:obtainium/providers/logs_provider.dart';
@@ -38,9 +39,16 @@ class ExternalInstallerBridge {
     'dev.imranr.obtainium/external_install',
   );
 
+  @visibleForTesting
+  static Future<List<InstallerTarget>> Function()?
+  listTargetsOverrideForTesting;
+
   /// Lists installer apps, enriching each native package/activity pair with a
   /// human-readable label and launcher icon fetched via the package manager.
   Future<List<InstallerTarget>> listTargets() async {
+    if (listTargetsOverrideForTesting != null) {
+      return listTargetsOverrideForTesting!();
+    }
     if (!Platform.isAndroid) return const [];
     List<dynamic>? raw;
     try {
