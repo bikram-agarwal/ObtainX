@@ -46,17 +46,41 @@ jobs:
       - name: Build APKs
         run: |
           flutter pub get
+          # Release AOT flags: keep the Dart symbol table out of the APK
+          # (--split-debug-info), which shrinks libapp.so. No --obfuscate:
+          # class names are persisted (AppSource.sourceIdentifier is
+          # runtimeType.toString(), App.overrideSource stores it), so mangling
+          # them would break tracked apps, backups and cross-flavor installs.
+          # The universal and per-ABI builds write to separate directories:
+          # both emit app.android-*.symbols, and one run would otherwise
+          # overwrite the other's maps.
+          AOT_FLAGS="--release --split-debug-info=./debug_symbols/universal"
+          AOT_FLAGS_PER_ABI="--release --split-debug-info=./debug_symbols/split"
           # TODO: Remove once Flutter's libdartjni.so no longer embeds a non-reproducible build ID
           sed -i -e 's/-Wl,/-Wl,--build-id=none,/' ${PUB_CACHE:-$HOME/.pub-cache}/hosted/*/jni-*/src/CMakeLists.txt
           # No key.properties exists in CI, so build.gradle.kts already sets
           # signingConfig = null and produces unsigned APKs (signing happens
           # separately in the sign.sh script).
-          flutter build apk --flavor normal && flutter build apk --split-per-abi --flavor normal
+          flutter build apk $AOT_FLAGS --flavor normal && flutter build apk $AOT_FLAGS_PER_ABI --split-per-abi --flavor normal
           for file in build/app/outputs/flutter-apk/app-*normal*.apk*; do mv "$file" "${file//-normal/}"; done
+          # The fdroid flavour stays on a plain release build: F-Droid rebuilds
+          # it independently and must reproduce it byte for byte.
           flutter build apk --flavor fdroid -t lib/main_fdroid.dart && flutter build apk --split-per-abi --flavor fdroid -t lib/main_fdroid.dart
           rm -f ./build/app/outputs/flutter-apk/*.sha1
           cp ./sign.sh ./build/app/outputs/flutter-apk/
           ls -l ./build/app/outputs/flutter-apk/
+
+      # The runner is gone once this job ends, so without this step the maps
+      # from both builds would be lost. They are only needed for line-number
+      # symbolication (this build is not obfuscated) and expire after
+      # retention-days (90), unlike the release itself.
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: obtainx-debug-symbols-${{ steps.extract_version.outputs.tag }}
+          path: debug_symbols/**/*.symbols
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Save Unsigned APKs as Action Artifacts
         uses: actions/upload-artifact@v7
