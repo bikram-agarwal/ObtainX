@@ -1,7 +1,6 @@
 name: Bug Report
-description: File a report for any bug you find in the app.
-title: "[BUG] "
-labels: ["bug"]
+description: An unexpected problem or behavior
+type: "Bug"
 body:
   - type: markdown
     attributes:

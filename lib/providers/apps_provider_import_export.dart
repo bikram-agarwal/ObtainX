@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart' show mapEquals;
 
+import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/app_sources/huaweiappgallery.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/custom_errors.dart';
 
 import 'package:obtainium/app_sources/github.dart';
@@ -13,6 +17,8 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
 import 'package:obtainium/services/json_file_work.dart';
+import 'package:obtainium/utils/app_id_utils.dart';
+import 'package:obtainium/utils/color_utils.dart';
 import 'package:shared_storage/shared_storage.dart' as saf;
 
 /// Secret settings excluded from the "settings without secrets" backup mode.
@@ -24,8 +30,10 @@ import 'package:shared_storage/shared_storage.dart' as saf;
 /// fingerprint are listed explicitly.
 bool isSecretSettingKey(String key) {
   return key.endsWith('-creds') ||
+      key == HuaweiAppGallery.sessionPrefsKey ||
       key == GitHub.validatedPATFingerprintKey ||
       key == GitLab.validatedPATFingerprintKey ||
+      key == Codeberg.validatedTokenFingerprintKey ||
       key == virusTotalApiKeyKey ||
       key == virusTotalValidatedApiKeyFingerprintKey;
 }
@@ -43,9 +51,134 @@ bool hasSecretsInSettingsMap(Map<String, dynamic>? settingsMap) {
 class BackupContent {
   final List<App> apps;
   final Map<String, dynamic>? settingsMap;
+
+  /// The category colors the backup carries, from either place it can hold
+  /// them ([categoryColorsFromBackup]).
+  final Map<String, int>? categoryColors;
   final ExportSchema? schema;
 
-  const BackupContent({required this.apps, this.settingsMap, this.schema});
+  const BackupContent({
+    required this.apps,
+    this.settingsMap,
+    this.categoryColors,
+    this.schema,
+  });
+}
+
+/// Formats an ARGB32 color integer as `#RRGGBB` for backup export.
+String categoryColorHexFromInt(int argb) {
+  final int rgb = argb & 0xFFFFFF;
+  return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+}
+
+final RegExp _categoryColorHex = RegExp(r'^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$');
+
+/// Parses a `#RRGGBB` / `#AARRGGBB` (with or without `#`) hex string into an
+/// ARGB32 integer, returning null for invalid inputs.
+int? parseCategoryColorHex(String rawHex) {
+  final RegExpMatch? match = _categoryColorHex.firstMatch(rawHex.trim());
+  if (match == null) return null;
+  final String digits = match.group(1)!;
+  final int parsed = int.parse(digits, radix: 16);
+  return digits.length == 6 ? (0xFF000000 | parsed) : parsed;
+}
+
+/// The `categoryColors` an export writes, or null for none.
+///
+/// Exported settings already hold every color, in the `categories` setting, so
+/// the colors are written here only when settings aren't exported, and only
+/// for the categories the exported apps use.
+Map<String, String>? categoryColorsForExport({
+  required bool settingsExported,
+  required Map<String, int> colors,
+  required Iterable<Map<String, dynamic>> appJsons,
+}) {
+  if (settingsExported) return null;
+  final Map<String, String> exported = <String, String>{};
+  for (final Map<String, dynamic> appJson in appJsons) {
+    final List<dynamic>? categories = appJson['categories'] as List?;
+    if (categories == null) continue;
+    for (final String name in categories.whereType<String>()) {
+      final int? color = colors[name];
+      if (color != null) exported[name] = categoryColorHexFromInt(color);
+    }
+  }
+  return exported.isEmpty ? null : exported;
+}
+
+/// The category colors a backup carries, or null for none: its
+/// `categoryColors` ([hexColors]) when it has them, else the `categories`
+/// setting in its [settingsMap]. That setting is a JSON string, as the pref
+/// stores it, in ObtainX and Obtainium backups alike.
+///
+/// The colors are read even when the settings aren't imported, so apps
+/// imported without them keep their categories' colors.
+Map<String, int>? categoryColorsFromBackup({
+  Map<String, String>? hexColors,
+  Map<String, dynamic>? settingsMap,
+}) {
+  final Map<String, int> colors = <String, int>{};
+  if (hexColors != null && hexColors.isNotEmpty) {
+    hexColors.forEach((String name, String hex) {
+      final int? color = parseCategoryColorHex(hex);
+      if (color != null) colors[name] = color;
+    });
+  } else {
+    dynamic stored = settingsMap?['categories'];
+    if (stored is String) {
+      try {
+        stored = jsonDecode(stored);
+      } on FormatException {
+        stored = null;
+      }
+    }
+    if (stored is Map) {
+      stored.forEach((dynamic name, dynamic color) {
+        if (name is String && color is int) colors[name] = color;
+      });
+    }
+  }
+  return colors.isEmpty ? null : colors;
+}
+
+/// The category map an import leaves: [current] (empty after a restore, which
+/// resets the settings first) with the backup's [backupColors] merged in.
+///
+/// With [settingsImported], every backup color is taken and wins over the
+/// current one, as every other imported setting does. Without, only the
+/// categories the [importedApps] use are added, and current colors stay.
+/// Categories only [current] has are always kept: apps may still carry them.
+///
+/// A category that any app in [library] carries and that has no color still
+/// gets [newColor]. The map is written once, and a category missing from it
+/// would be stripped from every app ([SettingsProvider.setCategories]).
+Map<String, int> categoriesAfterImport({
+  required Map<String, int> current,
+  required Map<String, int>? backupColors,
+  required bool settingsImported,
+  required Iterable<App> importedApps,
+  required Iterable<App> library,
+  required int Function() newColor,
+}) {
+  final Map<String, int> merged = Map<String, int>.from(current);
+  if (backupColors != null) {
+    final Set<String> importedCategories = importedApps
+        .expand((App app) => app.categories)
+        .toSet();
+    backupColors.forEach((String name, int color) {
+      if (settingsImported) {
+        merged[name] = color;
+      } else if (importedCategories.contains(name)) {
+        merged.putIfAbsent(name, () => color);
+      }
+    });
+  }
+  for (final App app in library) {
+    for (final String name in app.categories) {
+      merged.putIfAbsent(name, newColor);
+    }
+  }
+  return merged;
 }
 
 /// One app for Import from URL list to add: a typed URL, or an app that an
@@ -178,12 +311,56 @@ String readableLinkPayload(String payload) {
   }
 
   try {
-    return const JsonEncoder.withIndent(
-      '  ',
-    ).convert(expand(jsonDecode(payload)));
+    return const JsonEncoder.withIndent('  ')
+        .convert(expand(jsonDecode(payload)));
   } catch (_) {
     return payload;
   }
+}
+
+/// The installed version an imported [app] starts with (upstream #3531): the
+/// one on this device, else the exported one for a track-only or
+/// pseudo-versioned app, whose version is the user's mark rather than the
+/// device's. Any other app that isn't installed here has none.
+///
+/// v1.7.5 sync D-02: asks [App.usesStandardVersionDetection], as
+/// `versionDetection` is a string enum here. Upstream's
+/// `getBool('versionDetection')` reads 'auto' and 'standard' as false and would
+/// keep every app's exported version. Saving still runs the install-status
+/// reconciliation, which clears the version again for an app it can verify
+/// isn't installed: only track-only apps it can't verify (a temporary ID, or a
+/// version the user marked) keep theirs.
+String? resolveImportedInstalledVersion(
+  App app,
+  String? deviceInstalledVersion,
+) {
+  if (deviceInstalledVersion != null) return deviceInstalledVersion;
+  if (app.settings.getBool('trackOnly') || !app.usesStandardVersionDetection) {
+    return app.installedVersion;
+  }
+  return null;
+}
+
+/// [app] from a backup, ready to save: its installed version from
+/// [resolveImportedInstalledVersion], and never "the package ID may change"
+/// (upstream #3527). A file could otherwise carry that flag past the check that
+/// stops an update from installing a different package.
+App prepareImportedApp(App app, String? deviceInstalledVersion) => app.copyWith(
+  installedVersion: resolveImportedInstalledVersion(
+    app,
+    deviceInstalledVersion,
+  ),
+  allowIdChange: false,
+);
+
+/// Whether [file], listed in the export folder, is an earlier auto-export that
+/// a new one replaces: a timestamped `-auto.json`, or the fixed [customName]
+/// file. Matched by display name, as a listed file's URI ends in its document
+/// ID (`primary:Backups/name.json`), not its name.
+bool isReplacedAutoExport(saf.DocumentFile file, String? customName) {
+  final String name = file.name ?? file.uri.pathSegments.last.split('/').last;
+  return name.endsWith('-auto.json') ||
+      (customName != null && name == '$customName.json');
 }
 
 /// Import/export of app configurations for [AppsProvider].
@@ -202,6 +379,10 @@ extension AppsProviderImportExport on AppsProvider {
     final folderNamesById = {
       for (final folder in settingsProvider.appFolders) folder.id: folder.name,
     };
+    int shouldExportSettings = settingsProvider.exportSettings;
+    if (overrideExportSettings != null) {
+      shouldExportSettings = overrideExportSettings;
+    }
     final appList = apps.values
         .where(
           (e) =>
@@ -226,15 +407,19 @@ extension AppsProviderImportExport on AppsProvider {
               }
             }
             additionalSettings['folderNames'] = folderNames;
-            appJson['additionalSettings'] = jsonEncode(additionalSettings);
           }
+          // Per-app credentials (an overridden source's token, e.g.
+          // github-creds) live in additionalSettings, not prefs, so an export
+          // without secrets strips them here too (upstream b0356157).
+          if (shouldExportSettings < 2) {
+            additionalSettings.removeWhere(
+              (String key, dynamic _) => isSecretSettingKey(key),
+            );
+          }
+          appJson['additionalSettings'] = jsonEncode(additionalSettings);
           return appJson;
         })
         .toList();
-    int shouldExportSettings = settingsProvider.exportSettings;
-    if (overrideExportSettings != null) {
-      shouldExportSettings = overrideExportSettings;
-    }
     Map<String, dynamic>? settingsMap;
     Map<String, dynamic>? settingsObtainXMap;
     if (shouldExportSettings > 0) {
@@ -264,6 +449,11 @@ extension AppsProviderImportExport on AppsProvider {
       apps: appList,
       settings: settingsMap,
       settingsObtainX: settingsObtainXMap,
+      categoryColors: categoryColorsForExport(
+        settingsExported: shouldExportSettings > 0,
+        colors: settingsProvider.categories,
+        appJsons: appList,
+      ),
     );
     return schema.toJson();
   }
@@ -278,21 +468,35 @@ extension AppsProviderImportExport on AppsProvider {
     if (isAuto && !settingsProvider.autoExportOnChanges) {
       return null;
     }
+    final String? customName = settingsProvider.autoExportFileName;
     var exportDir = await settingsProvider.getExportDir(
       warnIfInaccessible: true,
     );
     if (isAuto) {
       if (exportDir == null) {
+        if (settingsProvider.prefs?.getString('exportDir') != null) {
+          unawaited(
+            logs.add(
+              'Auto-export skipped: export directory permission unavailable',
+            ),
+          );
+        }
         return null;
       }
       final files = await saf
-          .listFiles(exportDir, columns: [saf.DocumentFileColumn.id])
-          .where((f) => f.uri.pathSegments.last.endsWith('-auto.json'))
+          .listFiles(
+            exportDir,
+            columns: [
+              saf.DocumentFileColumn.id,
+              saf.DocumentFileColumn.displayName,
+            ],
+          )
+          .where((f) => isReplacedAutoExport(f, customName))
           .toList();
-      if (files.isNotEmpty) {
-        for (var f in files) {
-          unawaited(saf.delete(f.uri));
-        }
+      for (final f in files) {
+        // Awaited so the old file is gone before its replacement (same custom
+        // name) is created (upstream b0356157).
+        await NativeFeatures.deleteDocument(f.uri);
       }
     }
     if (exportDir == null || pickOnly) {
@@ -311,25 +515,38 @@ extension AppsProviderImportExport on AppsProvider {
         finalExport,
         indent: '    ',
       );
+      // An auto-export with a custom name keeps one fixed file, replaced each
+      // time, instead of a new timestamped file per change.
+      final String displayName = isAuto && customName != null
+          ? '$customName.json'
+          : '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json';
       final result = await saf.createFile(
         exportDir,
-        displayName:
-            '${tr('obtainiumExportHyphenatedLowercase')}-${DateTime.now().toIso8601String().replaceAll(':', '-')}${isAuto ? '-auto' : ''}.json',
+        displayName: displayName,
         mimeType: 'application/json',
         bytes: bytes,
       );
       if (result == null) {
         throw ObtainiumError(tr('unexpectedError'));
       }
+      // Any volume, so an SD card path reads right too (upstream 1d699fd9).
       returnPath = exportDir.pathSegments
           .join('/')
-          .replaceFirst('tree/primary:', '/');
+          .replaceFirst(RegExp(r'^tree/[^:]+:'), '/');
     }
     return returnPath;
   }
 
   /// Parses a backup JSON string into a [BackupContent] object.
-  BackupContent parseBackupContent(String appsJSON) {
+  ///
+  /// [idsAreHints]: the apps' IDs are only hints, as in `obtainium://` links
+  /// and pasted app JSON (Import from URL list), where a missing `id` means
+  /// "infer it from the source". An app with no ID and no listing ID is then
+  /// accepted; any ID that is given must still be safe.
+  BackupContent parseBackupContent(
+    String appsJSON, {
+    bool idsAreHints = false,
+  }) {
     dynamic decodedJSON;
     try {
       decodedJSON = jsonDecode(appsJSON);
@@ -354,6 +571,22 @@ extension AppsProviderImportExport on AppsProvider {
     } catch (e) {
       throw ObtainiumError('${tr('failedToImport')}: ${e.toString()}');
     }
+    // Upstream #3527 (v1.7.5 sync D-01): an ID that names a path outside the
+    // apps folder rejects the whole backup. Checked here, at parse time, so it
+    // runs before a restore resets settings and wipes the library, and so it
+    // covers every reader: file import and restore, the backup picker, and
+    // `obtainium://` links and pasted JSON (Import from URL list).
+    for (final App app in importedApps) {
+      // A link's app with no ID at all: Import from URL list infers it, and
+      // the write guard checks whatever ID it ends up with (Phase C).
+      if (idsAreHints && app.id.isEmpty && app.listingId == null) continue;
+      if (!hasSafeStorageIds(app)) {
+        AppLogger.warn(
+          'Rejected import with unsafe app ID: ${app.id} (${app.listingKey})',
+        );
+        throw ObtainiumError(tr('invalidInput'));
+      }
+    }
     // Resolve settings: shared block plus optional ObtainX overlay.
     final Map<String, dynamic>? sharedSettings = hasSchemaVersion
         ? schema!.settings
@@ -370,8 +603,12 @@ extension AppsProviderImportExport on AppsProvider {
       settingsObtainXOverlay,
     );
     return BackupContent(
-      apps: importedApps,
+      apps: appsWithImportedShizukuBackend(importedApps, settingsMap),
       settingsMap: settingsMap,
+      categoryColors: categoryColorsFromBackup(
+        hexColors: schema?.categoryColors,
+        settingsMap: settingsMap,
+      ),
       schema: schema,
     );
   }
@@ -427,8 +664,9 @@ extension AppsProviderImportExport on AppsProvider {
     for (var i = 0; i < importedApps.length; i++) {
       final a = importedApps[i];
       final installedInfo = await getInstalledInfo(a.id);
-      importedApps[i] = a.copyWith(
-        installedVersion: a.usesVersionCodeAsOsVersion
+      importedApps[i] = prepareImportedApp(
+        a,
+        a.usesVersionCodeAsOsVersion
             ? installedInfo?.versionCode.toString()
             : installedInfo?.versionName,
       );
@@ -438,10 +676,31 @@ extension AppsProviderImportExport on AppsProvider {
     if (importSettings && settingsMap != null) {
       hasSettings = true;
       // 'appFolders' is skipped: already merged/persisted by
-      // _reconcileImportedFolders. Reload settings so the merged folder list
-      // (and everything else) is reflected in memory immediately.
-      _applyImportedSettings(settingsMap, skipKeys: const {'appFolders'});
+      // _reconcileImportedFolders. 'categories' is skipped: it is merged with
+      // the current categories below. Upstream settings ObtainX dropped aren't
+      // written at all. Reload settings so the merged folder list (and
+      // everything else) is reflected in memory immediately.
+      _applyImportedSettings(
+        settingsMap,
+        skipKeys: const {
+          'appFolders',
+          'categories',
+          ...droppedUpstreamSettingKeys,
+        },
+      );
       await settingsProvider.initializeSettings();
+    }
+    final Map<String, int> currentCategories = settingsProvider.categories;
+    final Map<String, int> importedCategories = categoriesAfterImport(
+      current: currentCategories,
+      backupColors: backupContent.categoryColors,
+      settingsImported: hasSettings,
+      importedApps: importedApps,
+      library: apps.values.map((AppInMemory listing) => listing.app),
+      newColor: () => generateRandomLightColor().toARGB32(),
+    );
+    if (!mapEquals(importedCategories, currentCategories)) {
+      settingsProvider.setCategories(importedCategories, appsProvider: this);
     }
     return MapEntry<List<App>, bool>(importedApps, hasSettings);
   }
@@ -601,7 +860,7 @@ extension AppsProviderImportExport on AppsProvider {
 
 const int obtainiumSortColumnCount = 4;
 const String obtainXFolderViewSettingPrefix = 'folderView_';
-const String obtainXSettingsSectionPrefix = 'settingsSection_';
+// obtainXSettingsSectionPrefix lives in settings_provider.dart.
 
 /// Pref keys with no counterpart in upstream Obtainium. They're kept out of
 /// [SplitExportSettings.settings] (so an Obtainium import isn't polluted by keys
@@ -641,6 +900,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'swipeActionEnumVersion',
   'enableVirusTotalScanning',
   'githubValidatedPATFingerprint',
+  'codeberg-validated-token-fingerprint',
   'openAppInfoInAppManager',
   'folderCriteriaMigrationVersion',
   'collapsedGroups',
@@ -736,7 +996,8 @@ SplitExportSettings splitSettingsForExport(Map<String, dynamic> fullSettings) {
 }
 
 /// Merges the shared settings block with the ObtainX overlay on import. The
-/// overlay wins on conflicts (e.g. the real `sortColumn` over the sanitized one).
+/// overlay wins on conflicts (e.g. the real `sortColumn` over the sanitized
+/// one), then [normalizeImportedSettings] maps upstream-only values.
 Map<String, dynamic>? mergeImportedSettingsMaps(
   Map<String, dynamic>? sharedSettings,
   Map<String, dynamic>? settingsObtainX,
@@ -744,10 +1005,33 @@ Map<String, dynamic>? mergeImportedSettingsMaps(
   if (sharedSettings == null) {
     return null;
   }
-  if (settingsObtainX == null || settingsObtainX.isEmpty) {
-    return Map<String, dynamic>.from(sharedSettings);
+  return normalizeImportedSettings(<String, dynamic>{
+    ...sharedSettings,
+    ...?settingsObtainX,
+  });
+}
+
+/// Obtainium's Shizuku backend setting (`shizukuInstallerMode`, #2844) also
+/// applies to apps whose per-app install method is Shizuku, so in Obtainium
+/// those install through Dhizuku when the backend is Dhizuku. ObtainX has
+/// Dhizuku as a mode of its own, so such apps get `installerMode: dhizuku`;
+/// otherwise they'd use real Shizuku and fail on a Dhizuku-only device.
+List<App> appsWithImportedShizukuBackend(
+  List<App> apps,
+  Map<String, dynamic>? settings,
+) {
+  if (settings?['shizukuInstallerMode'] != InstallerMode.dhizuku.name) {
+    return apps;
   }
-  return <String, dynamic>{...sharedSettings, ...settingsObtainX};
+  return apps.map((App app) {
+    if (app.additionalSettings['installerMode'] != InstallerMode.shizuku.name) {
+      return app;
+    }
+    return app.copyWith(
+      additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+        ..['installerMode'] = InstallerMode.dhizuku.name,
+    );
+  }).toList();
 }
 
 /// Obtainium reads `sortColumn` as an unchecked index into its 4-value
@@ -762,9 +1046,44 @@ void sanitizeExportedSettingsForObtainium(Map<String, dynamic> settings) {
       (sortColumn < 0 || sortColumn >= obtainiumSortColumnCount)) {
     settings['sortColumn'] = SortColumnSettings.releaseDate.index;
   }
-  if (settings['installMethod'] == 'dhizuku') {
-    settings['installMethod'] = 'shizuku';
+  // Obtainium has no Dhizuku installer mode: since v1.7 it is a backend of its
+  // Shizuku mode (#2844). Writing both keys makes Obtainium really install
+  // through Dhizuku; ObtainX's own overlay keeps `installMethod: dhizuku`.
+  if (settings['installMethod'] == InstallerMode.dhizuku.name) {
+    settings['installMethod'] = InstallerMode.shizuku.name;
+    settings['shizukuInstallerMode'] = InstallerMode.dhizuku.name;
   }
+}
+
+/// Maps an imported backup's settings onto ObtainX's, before
+/// `droppedUpstreamSettingKeys` are skipped:
+/// - Obtainium's Shizuku sub-backend (`shizukuInstallerMode`, #2844) picks
+///   ObtainX's installer mode: `shizuku` + `dhizuku` → `dhizuku`; `auto` and
+///   `shizuku` stay `shizuku`. The key itself is then dropped.
+/// - `exportDir` is kept only as a `content://` folder: Obtainium's TV
+///   Downloads sentinel `tv-downloads:` (or anything else) has no folder
+///   behind it here, so every auto-export would fail with a toast (SET-H8).
+Map<String, dynamic> normalizeImportedSettings(Map<String, dynamic> settings) {
+  if (settings['installMethod'] == InstallerMode.shizuku.name &&
+      settings['shizukuInstallerMode'] == InstallerMode.dhizuku.name) {
+    settings['installMethod'] = InstallerMode.dhizuku.name;
+  }
+  // An older backup (ObtainX before the v1.7.4 sync, Obtainium before 1.7)
+  // has only the Wi-Fi-only / charging-only switches. Write the guard key it
+  // stands for too: a device that already stores the guard key reads that
+  // first, so an Import would otherwise keep the device's choice (D5).
+  for (final MapEntry<String, String> guard in bgGuardLegacyKeys.entries) {
+    final dynamic legacy = settings[guard.value];
+    if (legacy is bool && !settings.containsKey(guard.key)) {
+      settings[guard.key] = bgGuardModeFromLegacy(legacy).name;
+    }
+  }
+  final dynamic exportDir = settings['exportDir'];
+  if (exportDir != null &&
+      !(exportDir is String && exportDir.startsWith('content://'))) {
+    settings.remove('exportDir');
+  }
+  return settings;
 }
 
 const int currentExportSchemaVersion = 2;
@@ -780,6 +1099,7 @@ class ExportSchema {
   final List<Map<String, dynamic>> apps;
   final Map<String, dynamic>? settings;
   final Map<String, dynamic>? settingsObtainX;
+  final Map<String, String>? categoryColors;
 
   ExportSchema({
     required this.schemaVersion,
@@ -788,6 +1108,7 @@ class ExportSchema {
     required this.apps,
     this.settings,
     this.settingsObtainX,
+    this.categoryColors,
   });
 
   factory ExportSchema.fromJson(Map<String, dynamic> json) {
@@ -814,6 +1135,9 @@ class ExportSchema {
           [],
       settings: json['settings'] as Map<String, dynamic>?,
       settingsObtainX: json['settingsObtainX'] as Map<String, dynamic>?,
+      categoryColors: (json['categoryColors'] as Map?)?.map(
+        (k, v) => MapEntry(k.toString(), v.toString()),
+      ),
     );
   }
 
@@ -827,6 +1151,9 @@ class ExportSchema {
     };
     if (settingsObtainX != null && settingsObtainX!.isNotEmpty) {
       json['settingsObtainX'] = settingsObtainX;
+    }
+    if (categoryColors != null && categoryColors!.isNotEmpty) {
+      json['categoryColors'] = categoryColors;
     }
     return json;
   }

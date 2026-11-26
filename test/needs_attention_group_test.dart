@@ -2,7 +2,7 @@ import 'package:android_package_installer/android_package_installer.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:easy_localization/src/localization.dart';
 import 'package:easy_localization/src/translations.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -59,9 +59,9 @@ void main() {
     settings = SettingsProvider()
       ..prefs = await SharedPreferences.getInstance();
     provider = _Apps();
-    final icon = (await rootBundle.load(
-      'assets/graphics/logo_remember.png',
-    )).buffer.asUint8List();
+    final icon = (await rootBundle.load('assets/graphics/logo_remember.png'))
+        .buffer
+        .asUint8List();
     provider.apps['moved'] = AppInMemory(
       const App(
         id: 'org.example.moved',

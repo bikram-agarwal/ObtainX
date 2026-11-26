@@ -16,37 +16,34 @@ import 'package:obtainium/services/store_lookup_queue.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test(
-    'parallel repository checks share a request and refresh on the next operation',
-    () async {
-      int requests = 0;
-      final gate = Completer<Response>();
-      Future<Response> load() {
-        requests++;
-        return gate.future;
-      }
+  test('parallel repository checks share a request and refresh on the next operation', () async {
+    int requests = 0;
+    final gate = Completer<Response>();
+    Future<Response> load() {
+      requests++;
+      return gate.future;
+    }
 
-      await SourceRequestSession.run(() async {
-        final session = SourceRequestSession.current!;
-        final first = session.repositoryResponse('repo', load);
-        final second = session.repositoryResponse('repo', load);
-        expect(requests, 1);
-        gate.complete(Response('index', 200));
-        expect(identical(await first, await second), isTrue);
-        await SourceRequestSession.run(() async {
-          await SourceRequestSession.current!.repositoryResponse('repo', load);
-        });
-        expect(requests, 1);
-        await session.repositoryResponse('other-repo', load);
-        expect(requests, 2);
-      });
-      expect(SourceRequestSession.current, isNull);
+    await SourceRequestSession.run(() async {
+      final session = SourceRequestSession.current!;
+      final first = session.repositoryResponse('repo', load);
+      final second = session.repositoryResponse('repo', load);
+      expect(requests, 1);
+      gate.complete(Response('index', 200));
+      expect(identical(await first, await second), isTrue);
       await SourceRequestSession.run(() async {
         await SourceRequestSession.current!.repositoryResponse('repo', load);
       });
-      expect(requests, 3);
-    },
-  );
+      expect(requests, 1);
+      await session.repositoryResponse('other-repo', load);
+      expect(requests, 2);
+    });
+    expect(SourceRequestSession.current, isNull);
+    await SourceRequestSession.run(() async {
+      await SourceRequestSession.current!.repositoryResponse('repo', load);
+    });
+    expect(requests, 3);
+  });
 
   test(
     'failed repository responses can be retried within the operation',
@@ -74,6 +71,57 @@ void main() {
           'recovered',
         );
       });
+    },
+  );
+
+  test('a missing repository index stays missing for the operation', () async {
+    int requests = 0;
+    Future<Response> load() async {
+      requests++;
+      return Response('', 404);
+    }
+
+    await SourceRequestSession.run(() async {
+      final session = SourceRequestSession.current!;
+      expect((await session.repositoryResponse('repo', load)).statusCode, 404);
+      expect((await session.repositoryResponse('repo', load)).statusCode, 404);
+    });
+    expect(requests, 1);
+  });
+
+  test(
+    'an index-v2.json parses once per response and other bodies are rejected',
+    () async {
+      final response = Response(
+        jsonEncode({
+          'repo': <String, dynamic>{},
+          'packages': {
+            'org.example.app': {'versions': <String, dynamic>{}},
+          },
+        }),
+        200,
+        request: Request(
+          'GET',
+          Uri.parse('https://repo.example/repo/index-v2.json'),
+        ),
+      );
+      final indexes = await Future.wait([
+        parseRepositoryIndexV2(response),
+        parseRepositoryIndexV2(response),
+      ]);
+      expect(identical(indexes[0], indexes[1]), isTrue);
+      expect(
+        indexes.first!.findApplication('org.example.app')?.releases,
+        isEmpty,
+      );
+      expect(
+        await parseRepositoryIndexV2(Response('<html>Not found</html>', 200)),
+        isNull,
+      );
+      expect(
+        await parseRepositoryIndexV2(Response('{"repo": {}}', 200)),
+        isNull,
+      );
     },
   );
 

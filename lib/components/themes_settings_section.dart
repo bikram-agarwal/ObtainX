@@ -1,6 +1,7 @@
+import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart'
     show buildThemeAccentSettingsCardItems;
 import 'package:obtainium/providers/settings_provider.dart';
@@ -110,6 +111,7 @@ List<Widget> buildThemesSettingsCardItems(
             padding: EdgeInsets.zero,
           ),
           AppSwitch(
+            semanticLabel: tr('settingsProgressiveBlur'),
             value: settings.progressiveBlurEnabled,
             onChanged: settings.reduceVisualEffects
                 ? null
@@ -152,6 +154,7 @@ List<Widget> buildThemesSettingsCardItems(
             padding: EdgeInsets.zero,
           ),
           AppSwitch(
+            semanticLabel: tr('settingsReduceVisualEffects'),
             value: settings.reduceVisualEffects,
             onChanged: (bool value) {
               settings.reduceVisualEffects = value;
@@ -222,25 +225,22 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
                 Expanded(
                   child: Text(
                     tr('settingsShadingIntensity'),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyLarge?.copyWith(color: textColor),
+                    style: Theme.of(context).textTheme.bodyLarge
+                        ?.copyWith(color: textColor),
                   ),
                 ),
                 Text(
                   _shadingIntensityLabel(sliderValue),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelLarge?.copyWith(color: textColor),
+                  style: Theme.of(context).textTheme.labelLarge
+                      ?.copyWith(color: textColor),
                 ),
               ],
             ),
             const SizedBox(height: 2),
             Text(
               tr('settingsShadingIntensitySubtitle'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: colorScheme.onSurfaceVariant),
             ),
             const SizedBox(height: 10),
             TVSliderWrapper(
@@ -259,8 +259,8 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
               child: SliderTheme(
                 data: SliderTheme.of(context).copyWith(
                   trackHeight: 16,
-                  trackShape: const _ShadingGappedTrackShape(),
-                  thumbShape: const _ShadingVerticalBarThumbShape(),
+                  trackShape: const M3eGappedTrackShape(),
+                  thumbShape: const M3eVerticalBarThumbShape(),
                   activeTickMarkColor: colorScheme.onPrimary,
                   inactiveTickMarkColor: colorScheme.primary,
                   disabledActiveTrackColor: colorScheme.onSurface.withValues(
@@ -309,159 +309,4 @@ class _ShadingIntensityTileState extends State<_ShadingIntensityTile> {
 
 String _shadingIntensityLabel(double value) {
   return '${(value * 100).round()}%';
-}
-
-class _ShadingVerticalBarThumbShape extends SliderComponentShape {
-  const _ShadingVerticalBarThumbShape();
-
-  static const double _width = 4;
-  static const double _height = 28;
-  static const double _radius = 2;
-
-  @override
-  Size getPreferredSize(bool isEnabled, bool isDiscrete) {
-    return const Size(_width, _height);
-  }
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset center, {
-    required Animation<double> activationAnimation,
-    required Animation<double> enableAnimation,
-    required bool isDiscrete,
-    required TextPainter labelPainter,
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required TextDirection textDirection,
-    required double value,
-    required double textScaleFactor,
-    required Size sizeWithOverflow,
-  }) {
-    final Rect trackRect = sliderTheme.trackShape!.getPreferredRect(
-      parentBox: parentBox,
-      offset: Offset.zero,
-      sliderTheme: sliderTheme,
-      isEnabled: enableAnimation.value > 0,
-      isDiscrete: isDiscrete,
-    );
-    final double trackHeight = trackRect.height;
-    final double trackWidth = trackRect.width;
-    Offset alignedCenter = center;
-    if (trackWidth > trackHeight) {
-      final double valueRatio = textDirection == TextDirection.rtl
-          ? 1.0 - value
-          : value;
-      final double alignedX =
-          trackRect.left +
-          valueRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-      alignedCenter = Offset(alignedX, center.dy);
-    }
-    final Canvas canvas = context.canvas;
-    final Color thumbColor =
-        ColorTween(
-          begin: sliderTheme.disabledThumbColor,
-          end: sliderTheme.thumbColor,
-        ).evaluate(enableAnimation) ??
-        sliderTheme.thumbColor ??
-        Colors.white;
-    final Paint paint = Paint()
-      ..color = thumbColor
-      ..style = PaintingStyle.fill;
-    final RRect thumb = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: alignedCenter, width: _width, height: _height),
-      const Radius.circular(_radius),
-    );
-    canvas.drawRRect(thumb, paint);
-  }
-}
-
-class _ShadingGappedTrackShape extends SliderTrackShape
-    with BaseSliderTrackShape {
-  const _ShadingGappedTrackShape();
-
-  static const double _gap = 4;
-  static const double _radius = 8;
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required TextDirection textDirection,
-    required Offset thumbCenter,
-    Offset? secondaryOffset,
-    bool isDiscrete = false,
-    bool isEnabled = false,
-    double additionalActiveTrackHeight = 0,
-  }) {
-    final Canvas canvas = context.canvas;
-    final Rect trackRect = getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
-
-    double thumbX = thumbCenter.dx;
-    final double trackHeight = trackRect.height;
-    final double trackWidth = trackRect.width;
-    if (trackWidth > trackHeight) {
-      final double valueRatio = ((thumbCenter.dx - trackRect.left) / trackWidth)
-          .clamp(0.0, 1.0);
-      thumbX =
-          trackRect.left +
-          valueRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-    }
-
-    final Color activeTrackColor =
-        ColorTween(
-          begin: sliderTheme.disabledActiveTrackColor,
-          end: sliderTheme.activeTrackColor,
-        ).evaluate(enableAnimation) ??
-        sliderTheme.activeTrackColor ??
-        Colors.blue;
-    final Color inactiveTrackColor =
-        ColorTween(
-          begin: sliderTheme.disabledInactiveTrackColor,
-          end: sliderTheme.inactiveTrackColor,
-        ).evaluate(enableAnimation) ??
-        sliderTheme.inactiveTrackColor ??
-        Colors.grey;
-    final Paint activePaint = Paint()..color = activeTrackColor;
-    final Paint inactivePaint = Paint()..color = inactiveTrackColor;
-
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-          trackRect.left,
-          trackRect.top,
-          thumbX - _gap,
-          trackRect.bottom,
-        ),
-        topLeft: const Radius.circular(_radius),
-        bottomLeft: const Radius.circular(_radius),
-      ),
-      activePaint,
-    );
-
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-          thumbX + _gap,
-          trackRect.top,
-          trackRect.right,
-          trackRect.bottom,
-        ),
-        topRight: const Radius.circular(_radius),
-        bottomRight: const Radius.circular(_radius),
-      ),
-      inactivePaint,
-    );
-  }
 }

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- The purple of the app icon's glyph (ic_launcher_foreground). -->
+    <color name="shortcut_icon_glyph">#8049BF</color>
 </resources>

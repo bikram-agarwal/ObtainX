@@ -28,19 +28,16 @@ void main() {
     expect(snapUpdateInterval(-1), 0);
   });
 
-  test(
-    'an Obtainium in-between interval is what checks run at and the slider shows',
-    () async {
-      // Obtainium's slider at 5.5 means 240 minutes.
-      final settings = await _settingsWithPrefs({
-        'updateInterval': 240,
-        'updateIntervalSliderVal': 5.5,
-      });
-      addTearDown(settings.dispose);
+  test('an Obtainium in-between interval is what checks run at and the slider shows', () async {
+    // Obtainium's slider at 5.5 means 240 minutes.
+    final settings = await _settingsWithPrefs({
+      'updateInterval': 240,
+      'updateIntervalSliderVal': 5.5,
+    });
+    addTearDown(settings.dispose);
 
-      expect(settings.updateInterval, 180);
-    },
-  );
+    expect(settings.updateInterval, 180);
+  });
 
   test(
     'setting the interval keeps Obtainium\'s slider position in step',

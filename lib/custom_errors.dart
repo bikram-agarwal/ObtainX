@@ -1,12 +1,15 @@
 import 'dart:async';
-import 'dart:io' show SocketException;
+import 'dart:io' show HandshakeException, HttpException, SocketException;
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:android_package_installer/android_package_installer.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' show ClientException;
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart'
+    show hapticHeavyImpact;
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/widgets/app_toast.dart';
@@ -25,6 +28,10 @@ class ObtainiumError {
   /// [toString].
   String? url;
 
+  /// The exception [rethrowOrWrapError] wrapped, so a caller can still tell a
+  /// network failure from a real one.
+  final Object? cause;
+
   ObtainiumError(
     this._message, {
     this.code = 'UNKNOWN',
@@ -32,6 +39,7 @@ class ObtainiumError {
     this.stack,
     this.data = const {},
     this.url,
+    this.cause,
   });
 
   ObtainiumError.withCode(
@@ -41,6 +49,7 @@ class ObtainiumError {
     this.stack,
     this.data = const {},
     this.url,
+    this.cause,
   });
 
   String get message =>
@@ -67,6 +76,15 @@ class ObtainiumError {
       url != null && url!.isNotEmpty ? '$message ($url)' : message;
 }
 
+/// A network failure that can pass on another try (no connection, a TLS
+/// handshake, a timeout, a dropped response), as opposed to a source's answer.
+bool isTransientNetworkError(Object error) =>
+    error is SocketException ||
+    error is HandshakeException ||
+    error is TimeoutException ||
+    error is ClientException ||
+    error is HttpException;
+
 Never rethrowOrWrapError(
   Object error, {
   String? sourceName,
@@ -81,14 +99,10 @@ Never rethrowOrWrapError(
           level: LogLevel.error,
         ),
       );
-      throw ObtainiumError(
-        error.message,
-        code: 'UNEXPECTED',
-        unexpected: true,
-        stack: resolvedStack,
-        data: error.data,
-        url: error.url,
-      );
+      // Rethrow as itself (upstream 8c33f251): re-wrapping lost the subclass,
+      // e.g. a CheckUpdatesException's per-app errors and its empty-message
+      // code, which left the error dialog blank.
+      throw error;
     }
     throw error;
   }
@@ -104,16 +118,48 @@ Never rethrowOrWrapError(
     code: 'UNEXPECTED',
     unexpected: true,
     stack: capturedStack,
+    cause: error,
   );
 }
 
+/// A non-2xx HTTP response during a file download, carrying the status code so
+/// callers can decide whether the failure is retryable (e.g. 429/5xx).
+class HTTPStatusError extends ObtainiumError {
+  final int statusCode;
+  HTTPStatusError(this.statusCode, String message)
+    : super(message, code: 'HTTP_ERROR');
+}
+
+/// A host turned a request away for sending too many.
 class RateLimitError extends ObtainiumError {
-  final int remainingMinutes;
-  RateLimitError(this.remainingMinutes)
+  /// How long the host asked us to wait, or null when it gave no retry time.
+  final int? remainingMinutes;
+
+  /// How long background retries wait when the host gave no retry time. The
+  /// user isn't shown this number: it used to be printed as if the host had
+  /// said it, and itch.io's no-hint 429 doesn't lift after 30 minutes (#344).
+  static const int defaultRetryWaitMinutes = 30;
+
+  RateLimitError(int this.remainingMinutes)
     : super.withCode(
         'RATE_LIMIT',
         data: {'remainingMinutes': remainingMinutes},
       );
+
+  /// The host sent no Retry-After or reset time, so the message says so
+  /// instead of promising a wait.
+  RateLimitError.withoutRetryTime()
+    : remainingMinutes = null,
+      super.withCode('RATE_LIMIT');
+
+  /// A throttle with no retry time, reported under its own [code] and
+  /// message ([BotVerificationError]).
+  RateLimitError._reportedAs(super.code, {required super.data})
+    : remainingMinutes = null,
+      super.withCode();
+
+  /// Minutes to wait before retrying in the background.
+  int get retryWaitMinutes => remainingMinutes ?? defaultRetryWaitMinutes;
 }
 
 class InvalidURLError extends ObtainiumError {
@@ -126,6 +172,18 @@ class CredsNeededError extends ObtainiumError {
     : super.withCode('CREDS_NEEDED', data: {'sourceName': sourceName});
 }
 
+/// The source returned a bot verification / CAPTCHA challenge instead of app
+/// data.
+///
+/// A [RateLimitError], as a Cloudflare challenge is (HttpService.getHttpError):
+/// asking again within seconds meets the same challenge, so background checks
+/// wait [RateLimitError.defaultRetryWaitMinutes] before retrying, and it isn't
+/// counted against update health. The message stays its own.
+class BotVerificationError extends RateLimitError {
+  BotVerificationError(String sourceName)
+    : super._reportedAs('BOT_VERIFICATION', data: {'sourceName': sourceName});
+}
+
 class NoReleasesError extends ObtainiumError {
   NoReleasesError({String? note})
     : super.withCode('NO_RELEASES', data: {'note': note ?? ''});
@@ -133,6 +191,28 @@ class NoReleasesError extends ObtainiumError {
 
 class NoAPKError extends ObtainiumError {
   NoAPKError() : super.withCode('NO_APK');
+}
+
+/// The latest release is younger than the configured minimum update age and
+/// the source cannot provide an older release (#3303). Thrown only when adding
+/// an app; an update check suppresses the young release instead.
+class MinUpdateAgeError extends ObtainiumError {
+  MinUpdateAgeError(DateTime releaseDate, int minAgeDays)
+    : super.withCode(
+        'MIN_UPDATE_AGE',
+        data: {
+          'releaseDate': releaseDate.toIso8601String(),
+          'minAgeDays': minAgeDays,
+        },
+      );
+}
+
+/// RuStore lists some apps only as aggregated cards pulled from an external
+/// source and does not host an APK for them (see #3298). Upstream removed
+/// this error in v1.7.2 (#3422); ObtainX keeps it so such cards fail with a
+/// clear message instead of a generic "no APK" (v1.7.4 sync).
+class RuStoreAggregatedAppError extends ObtainiumError {
+  RuStoreAggregatedAppError() : super.withCode('RUSTORE_AGGREGATED_APP');
 }
 
 class NoVersionError extends ObtainiumError {
@@ -162,11 +242,27 @@ class InstallError extends ObtainiumError {
           'errorCode': code,
           // Strip the enum's 'STATUS_' prefix so messages read
           // 'FAILURE_ABORTED', not 'STATUS_FAILURE_ABORTED' (parity with main).
-          'message': PackageInstallerStatus.byCode(
-            code,
-          ).name.replaceFirst('STATUS_', ''),
+          'message': PackageInstallerStatus.byCode(code).name
+              .replaceFirst('STATUS_', ''),
         },
       );
+}
+
+/// The downloaded APK's signing certificate does not match the expected hash
+/// (user-provided) or the installed app's certificate.
+class SigningCertMismatchError extends ObtainiumError {
+  SigningCertMismatchError({
+    required bool hardBlock,
+    required Set<String> expected,
+    required Set<String> actual,
+  }) : super.withCode(
+         'SIGNING_CERT_MISMATCH',
+         data: {
+           'hardBlock': hardBlock,
+           'expected': expected.toList(),
+           'actual': actual.toList(),
+         },
+       );
 }
 
 class IDChangedError extends ObtainiumError {
@@ -235,12 +331,16 @@ class MultiAppMultiError extends ObtainiumError {
     }
     rawErrors[appId] = error;
     final string = error.toString();
-    var tempIds = idsByErrorString.remove(string);
-    if (tempIds == null) {
-      tempIds = [];
-      idsByErrorString[string] = tempIds;
+    // An app re-added with a different error must leave its old group, or the
+    // dialog lists it twice (upstream 8c33f251).
+    for (final entry in idsByErrorString.entries) {
+      entry.value.remove(appId);
     }
-    tempIds.add(appId);
+    idsByErrorString.removeWhere((k, v) => v.isEmpty);
+    // Into the group's own list: taking an existing group out of the map and
+    // adding to it there lost the group (two apps failing the same way, while
+    // offline say, reported no error at all).
+    (idsByErrorString[string] ??= []).add(appId);
     if (appName != null) {
       appIdNames[appId] = appName;
     }
@@ -256,6 +356,39 @@ class MultiAppMultiError extends ObtainiumError {
   }) =>
       '$errString [${list2FriendlyString(appIds.map((id) => appIdNames.containsKey(id) == true ? '${appIdNames[id]}${includeIdsWithNames ? ' ($id)' : ''}' : id).toList())}]';
 
+  String _notificationErrorSummary(int remaining) => remaining <= 0
+      ? ''
+      : '\n\n${remaining == 1 ? tr('andOneMoreError') : plural('andNMoreErrors', remaining)}';
+
+  /// Joins all error groups for a single notification, capping the body below
+  /// Android's notification text limit and summarizing any surplus groups.
+  String notificationErrorString({int maxChars = 900}) {
+    final entries = idsByErrorString.entries.toList();
+    if (entries.isEmpty) return '';
+    final groupTexts = entries
+        .map((entry) => errorsAppsString(entry.key, entry.value))
+        .toList();
+    final full = groupTexts.join('\n\n');
+    if (full.length <= maxChars) return full;
+
+    const summaryReserve = 80;
+    final contentBudget = maxChars - summaryReserve;
+    var included = '';
+    var includedGroups = 0;
+    for (final text in groupTexts) {
+      final candidate = included.isEmpty ? text : '$included\n\n$text';
+      if (candidate.length > contentBudget) break;
+      included = candidate;
+      includedGroups++;
+    }
+    if (includedGroups == 0) {
+      final cutoff = (contentBudget - 1).clamp(0, groupTexts.first.length);
+      included = '${groupTexts.first.substring(0, cutoff).trimRight()}…';
+      return '$included${_notificationErrorSummary(groupTexts.length - 1)}';
+    }
+    return '$included${_notificationErrorSummary(groupTexts.length - includedGroups)}';
+  }
+
   @override
   String toString() => idsByErrorString.entries
       .map((e) => errorsAppsString(e.key, e.value))
@@ -268,10 +401,10 @@ String localizeErrorCode(String code, Map<String, dynamic>? data) {
       data?['note'] != null && (data!['note'] as String).isNotEmpty
           ? '${tr('noReleaseFound')}\n\n${data['note']}'
           : tr('noReleaseFound'),
-    'RATE_LIMIT' => plural(
-      'tooManyRequestsTryAgainInMinutes',
-      data?['remainingMinutes'] ?? 0,
-    ),
+    'RATE_LIMIT' => switch (data?['remainingMinutes']) {
+      final int minutes => plural('tooManyRequestsTryAgainInMinutes', minutes),
+      _ => tr('tooManyRequestsNoRetryTime'),
+    },
     'INVALID_URL' => tr(
       'invalidURLForSource',
       args: [data?['sourceName'] ?? ''],
@@ -280,12 +413,25 @@ String localizeErrorCode(String code, Map<String, dynamic>? data) {
       'requiresCredentialsInSettings',
       args: [data?['sourceName'] ?? ''],
     ),
+    'BOT_VERIFICATION' => tr(
+      'botVerificationBlocked',
+      args: [data?['sourceName'] ?? ''],
+    ),
     'NO_APK' => tr('noAPKFound'),
+    'MIN_UPDATE_AGE' => tr(
+      'releaseTooYoungForMinAge',
+      args: ['${data?['minAgeDays'] ?? ''}'],
+    ),
+    'RUSTORE_AGGREGATED_APP' => tr('rustoreAggregatedAppNoApk'),
     'NO_VERSION' => tr('noVersionFound'),
     'UNSUPPORTED_URL' => tr('urlMatchesNoSource'),
     'DOWNGRADE' =>
       '${tr('cantInstallOlderVersion')} (versionCode ${data?['currentVersionCode'] ?? '?'} → ${data?['newVersionCode'] ?? '?'})',
     'INSTALL_FAILED' => data?['message']?.toString() ?? tr('installFailed'),
+    'SIGNING_CERT_MISMATCH' =>
+      data?['hardBlock'] == true
+          ? tr('signingCertMismatchHardBlock')
+          : tr('signingCertMismatchMessage'),
     'ID_CHANGED' => '${tr('appIdMismatch')} - ${data?['newId'] ?? ''}',
     'REPO_RENAMED' => tr('repoRenamed'),
     'NOT_IMPLEMENTED' => tr('functionNotImplemented'),
@@ -303,8 +449,6 @@ bool isEnglish() {
   if (_appCurrentLocale != null) return _appCurrentLocale!.languageCode == 'en';
   return false;
 }
-
-String lowerCaseIfEnglish(String str) => isEnglish() ? str.toLowerCase() : str;
 
 String list2FriendlyString(List<String> list) {
   final isUsingEnglish = isEnglish();
@@ -342,6 +486,8 @@ void showMessage(
   bool scaffoldHasBottomBar = false,
 }) {
   final ScaffoldMessengerState? messenger = scaffoldMessengerKey.currentState;
+  // The one error haptic (upstream 06cb4ac8); call sites must not add another.
+  if (isError) hapticHeavyImpact();
   if (e is CancellationException) {
     unawaited(LogsProvider().add(e.toString(), level: LogLevel.info));
     if (messenger != null) {
@@ -367,7 +513,7 @@ void showMessage(
       messenger.showSnackBar(
         buildAppSnackBar(
           messenger.context,
-          e.toString(),
+          e is ObtainiumError ? e.message : e.toString(),
           type: isError ? ToastType.error : ToastType.info,
           theme: theme,
           scaffoldHasBottomBar: scaffoldHasBottomBar,

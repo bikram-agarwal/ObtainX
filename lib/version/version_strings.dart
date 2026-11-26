@@ -14,6 +14,7 @@ library;
 
 import 'package:easy_localization/easy_localization.dart';
 import 'package:obtainium/custom_errors.dart';
+
 import 'version_comparison.dart';
 export 'version_comparison.dart';
 
@@ -125,9 +126,13 @@ class VersionService {
     String? matchGroupString,
     String stringToCheck,
   ) {
-    if (versionExtractionRegEx?.isNotEmpty == true) {
+    // A blank regex (whitespace only, e.g. a cleared field) counts as unset,
+    // as in [extractVersionWithGlobalDefault]: run as a regex it matches
+    // nothing useful and failed the check with NoVersionError (D30 #9).
+    if (versionExtractionRegEx != null &&
+        versionExtractionRegEx.trim().isNotEmpty) {
       String? version = stringToCheck;
-      final match = RegExp(versionExtractionRegEx!).allMatches(version);
+      final match = RegExp(versionExtractionRegEx).allMatches(version);
       if (match.isEmpty) {
         throw NoVersionError();
       }
@@ -351,9 +356,10 @@ String versionShapeForReconciliation(String version) {
 }
 
 List<BigInt> numericVersionTokens(String version) {
-  return RegExp(
-    r'\d+',
-  ).allMatches(version).map((match) => BigInt.parse(match.group(0)!)).toList();
+  return RegExp(r'\d+')
+      .allMatches(version)
+      .map((match) => BigInt.parse(match.group(0)!))
+      .toList();
 }
 
 bool recognizedNumericReleaseVersionsAreComparable(
@@ -377,4 +383,56 @@ bool versionOrderIsUnclear(String installed, String latest) {
   if (installed.trim().isEmpty || latest.trim().isEmpty) return false;
   return compareVersionStrings(installed, latest).relation ==
       VersionRelation.unknown;
+}
+
+/// Delegates to [VersionService.regExValidator].
+String? regExValidator(String? value) => VersionService().regExValidator(value);
+
+/// Delegates to [VersionService.replaceMatchGroupsInString].
+String? replaceMatchGroupsInString(
+  RegExpMatch match,
+  String matchGroupString,
+) => VersionService().replaceMatchGroupsInString(match, matchGroupString);
+
+/// Delegates to [VersionService.extractVersion].
+String? extractVersion(
+  String? versionExtractionRegEx,
+  String? matchGroupString,
+  String stringToCheck,
+) => VersionService().extractVersion(
+  versionExtractionRegEx,
+  matchGroupString,
+  stringToCheck,
+);
+
+/// The app's own version-trimming regex, or the global one when the app has
+/// none (upstream #3368, v1.7.4 sync D9).
+///
+/// The app's regex counts as set only when it isn't blank, so a
+/// whitespace-only value no longer runs as a regex and fails the check. Its
+/// non-match still throws [NoVersionError], as before. The global regex is a
+/// default for every app, so a non-match there keeps the version as it is.
+/// Pass [globalRegEx] as null when the source excludes the per-app key, or
+/// when no valid global regex is set (SettingsProvider validates it).
+String? extractVersionWithGlobalDefault(
+  Map<String, dynamic> additionalSettings,
+  String stringToCheck, {
+  String? globalRegEx,
+  String? globalMatchGroup,
+}) {
+  final String? ownRegEx = additionalSettings['versionExtractionRegEx']
+      ?.toString();
+  if (ownRegEx != null && ownRegEx.trim().isNotEmpty) {
+    return extractVersion(
+      ownRegEx,
+      additionalSettings['matchGroupToUse']?.toString(),
+      stringToCheck,
+    );
+  }
+  if (globalRegEx == null || globalRegEx.trim().isEmpty) return null;
+  try {
+    return extractVersion(globalRegEx, globalMatchGroup, stringToCheck);
+  } on NoVersionError {
+    return null;
+  }
 }

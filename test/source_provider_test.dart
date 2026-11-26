@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:device_info_plus_platform_interface/device_info_plus_platform_interface.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/app_sources/fdroidrepo.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -15,11 +17,13 @@ import 'package:obtainium/app_sources/html.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:http/http.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:obtainium/http/source_request_session.dart';
+import 'package:obtainium/services/repository_index.dart';
 
 class _RealHttpOverrides extends HttpOverrides {}
 
@@ -56,7 +60,7 @@ class _StubAPKMirror extends APKMirror {
     return APKDetails(
       version,
       const <MapEntry<String, String>>[],
-      AppNames('Example', 'example'),
+      const AppNames('Example', 'example'),
       apkSizeBytes: apkSizeFromSource,
     );
   }
@@ -102,7 +106,7 @@ class _StubSource extends AppSource {
     return APKDetails(
       version,
       apkUrls,
-      AppNames('Example Author', 'Readable Name'),
+      const AppNames('Example Author', 'Readable Name'),
       versionCode: versionCode,
       versionCodesByAsset: versionCodesByAsset,
     );
@@ -337,10 +341,8 @@ class _StubGitHub extends GitHub {
             'assets': [
               {
                 'name': 'example-preview.apk',
-                'browser_download_url':
-                    'https://github.com/example/app/releases/download/preview/example-preview.apk',
-                'url':
-                    'https://api.github.com/repos/example/app/releases/assets/2',
+                'browser_download_url': 'https://github.com/example/app/releases/download/preview/example-preview.apk',
+                'url': 'https://api.github.com/repos/example/app/releases/assets/2',
                 'size': 124,
                 'digest': 'sha256:preview123',
               },
@@ -356,10 +358,8 @@ class _StubGitHub extends GitHub {
             'assets': [
               {
                 'name': 'example.apk',
-                'browser_download_url':
-                    'https://github.com/example/app/releases/download/1.0/example.apk',
-                'url':
-                    'https://api.github.com/repos/example/app/releases/assets/1',
+                'browser_download_url': 'https://github.com/example/app/releases/download/1.0/example.apk',
+                'url': 'https://api.github.com/repos/example/app/releases/assets/1',
                 'size': 123,
                 'digest': 'sha256:abc123',
               },
@@ -451,6 +451,71 @@ Response _fdroidRepoResponse(String xml) {
   );
 }
 
+Map<String, dynamic> _fdroidRepoV2Release(
+  int versionCode,
+  String versionName, {
+  String appId = 'org.example.app',
+  List<String> nativecode = const [],
+  List<String> releaseChannels = const [],
+}) {
+  return {
+    'added': 1767225600000 + versionCode,
+    'file': {
+      'name': '/${appId}_$versionCode.apk',
+      'sha256': 'hash$versionCode',
+      'size': versionCode * 10,
+    },
+    'manifest': {
+      'versionName': versionName,
+      'versionCode': versionCode,
+      if (nativecode.isNotEmpty) 'nativecode': nativecode,
+    },
+    if (releaseChannels.isNotEmpty) 'releaseChannels': releaseChannels,
+  };
+}
+
+/// An index-v2 app whose newest build (3.0) is Beta and whose stable 2.0 is
+/// an arch split, one build of which (x86_64, code 22) is also Beta.
+Map<String, dynamic> _fdroidRepoV2Index() {
+  return {
+    'repo': {
+      'name': {'en-US': 'Example Repo'},
+    },
+    'packages': {
+      'org.example.app': {
+        'metadata': {
+          'name': {'en-US': 'Example App'},
+          'summary': {'en-US': 'An example'},
+          'authorName': 'Example Dev',
+          'changelog': 'https://example.org/changes',
+          'icon': {
+            'en-US': {
+              'name': '/org.example.app/en-US/icon.png',
+              'sha256': 'iconhash',
+              'size': 1,
+            },
+          },
+        },
+        'versions': {
+          'hash30': _fdroidRepoV2Release(30, '3.0', releaseChannels: ['Beta']),
+          'hash22': _fdroidRepoV2Release(
+            22,
+            '2.0',
+            nativecode: ['x86_64'],
+            releaseChannels: ['Beta'],
+          ),
+          'hash21': _fdroidRepoV2Release(21, '2.0', nativecode: ['arm64-v8a']),
+          'hash20': _fdroidRepoV2Release(
+            20,
+            '2.0',
+            nativecode: ['armeabi-v7a'],
+          ),
+        },
+      },
+    },
+  };
+}
+
 Response _fdroidVerificationResponse({required bool verified}) {
   return Response(
     jsonEncode({
@@ -532,6 +597,7 @@ class _FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
       'isLowRamDevice': false,
       'physicalRamSize': 1,
       'availableRamSize': 1,
+      'time': 0,
       'systemFeatures': const <String>[],
     });
   }
@@ -545,63 +611,139 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   DeviceInfoPlatform.instance = _FakeAndroidDeviceInfoPlatform();
-  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-      .setMockMethodCallHandler(
-        const MethodChannel('plugins.flutter.io/path_provider'),
-        (MethodCall methodCall) async {
+  const MethodChannel pathProviderChannel = MethodChannel(
+    'plugins.flutter.io/path_provider',
+  );
+  // No cache directory by default, so the F-Droid index cache stays off.
+  void mockPathProvider({String? cacheDirectory}) {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProviderChannel, (
+          MethodCall methodCall,
+        ) async {
           if (methodCall.method == 'getApplicationDocumentsDirectory') {
             return Directory.systemTemp.path;
           }
+          if (methodCall.method == 'getApplicationCacheDirectory') {
+            return cacheDirectory;
+          }
           return null;
-        },
-      );
+        });
+  }
+
+  mockPathProvider();
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test('repository HTTP requests share in-flight work but isolate credentials and refreshes', () async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requests = <String?>[];
+      final ports = <int>[];
+      server.listen((request) async {
+        requests.add(request.headers.value(HttpHeaders.authorizationHeader));
+        ports.add(request.connectionInfo!.remotePort);
+        request.response.write('<repo/>');
+        await request.response.close();
+      });
+      final url = 'http://127.0.0.1:${server.port}/index.xml';
+      final source = _AuthenticatedRepo();
+      await SourceRequestSession.run(() async {
+        final responses = await Future.wait(
+          List.generate(12, (_) {
+            return source.sourceRequest(url, {'auth': 'first'});
+          }),
+        );
+        expect(requests, ['first']);
+        expect(
+          responses.every((response) => identical(response, responses.first)),
+          isTrue,
+        );
+        await source.sourceRequest(url, {'auth': 'second'});
+        await source.sourceRequest(url, {
+          'auth': 'first',
+          'allowInsecure': true,
+        });
+        expect(requests, ['first', 'second', 'first']);
+        // Responses outside the repository cache still reuse the session's socket.
+        await source.sourceRequest('$url?next=1', {'auth': 'first'});
+        expect(ports[0], ports[1]);
+        expect(ports[0], ports[3]);
+      });
+      await SourceRequestSession.run(() async {
+        await source.sourceRequest(url, {'auth': 'first'});
+      });
+      expect(requests.length, 5);
+    }, _RealHttpOverrides());
+  });
+
+  // v1.7.5 sync S4: the index cache sits below the session dedupe, so every
+  // app of a repository shares one response (and one parse) per operation,
+  // and a later operation costs a 304 instead of the whole index.
   test(
-    'repository HTTP requests share in-flight work but isolate credentials and refreshes',
+    'repository indexes revalidate from disk, one request per operation',
     () async {
+      final Directory cacheDirectory = await Directory.systemTemp.createTemp(
+        'obtainx_index_cache',
+      );
+      mockPathProvider(cacheDirectory: cacheDirectory.path);
+      addTearDown(() {
+        mockPathProvider();
+        cacheDirectory.deleteSync(recursive: true);
+      });
+      const String index =
+          '<fdroid><application id="dev.example"><name>Café 名前</name>'
+          '</application></fdroid>';
       await HttpOverrides.runWithHttpOverrides(() async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         addTearDown(() => server.close(force: true));
-        final requests = <String?>[];
-        final ports = <int>[];
+        final conditions = <String?>[];
         server.listen((request) async {
-          requests.add(request.headers.value(HttpHeaders.authorizationHeader));
-          ports.add(request.connectionInfo!.remotePort);
-          request.response.write('<repo/>');
+          final String? ifNoneMatch = request.headers.value(
+            HttpHeaders.ifNoneMatchHeader,
+          );
+          conditions.add(ifNoneMatch);
+          if (ifNoneMatch == '"v1"') {
+            request.response.statusCode = HttpStatus.notModified;
+            request.response.headers.set(HttpHeaders.etagHeader, '"v1"');
+          } else {
+            request.response.headers.set(HttpHeaders.etagHeader, '"v1"');
+            request.response.headers.contentType = ContentType(
+              'application',
+              'xml',
+              charset: 'utf-8',
+            );
+            request.response.add(utf8.encode(index));
+          }
           await request.response.close();
         });
         final url = 'http://127.0.0.1:${server.port}/index.xml';
         final source = _AuthenticatedRepo();
-        await SourceRequestSession.run(() async {
-          final responses = await Future.wait(
-            List.generate(12, (_) {
-              return source.sourceRequest(url, {'auth': 'first'});
-            }),
-          );
-          expect(requests, ['first']);
-          expect(
-            responses.every((response) => identical(response, responses.first)),
-            isTrue,
-          );
-          await source.sourceRequest(url, {'auth': 'second'});
-          await source.sourceRequest(url, {
-            'auth': 'first',
-            'allowInsecure': true,
-          });
-          expect(requests, ['first', 'second', 'first']);
-          // Responses outside the repository cache still reuse the session's socket.
-          await source.sourceRequest('$url?next=1', {'auth': 'first'});
-          expect(ports[0], ports[1]);
-          expect(ports[0], ports[3]);
-        });
-        await SourceRequestSession.run(() async {
-          await source.sourceRequest(url, {'auth': 'first'});
-        });
-        expect(requests.length, 5);
+        Future<List<Response>> operation() => SourceRequestSession.run(
+          () => Future.wait(
+            List.generate(6, (_) => source.sourceRequest(url, {'auth': 'a'})),
+          ),
+        );
+
+        final List<Response> first = await operation();
+        expect(conditions, [null]);
+        expect(first.every((r) => identical(r, first.first)), isTrue);
+        expect(first.first.body, index);
+
+        final List<Response> second = await operation();
+        expect(conditions, [null, '"v1"']);
+        expect(second.every((r) => identical(r, second.first)), isTrue);
+        expect(second.first.statusCode, 200);
+        expect(second.first.bodyBytes, utf8.encode(index));
+        expect(second.first.body, index);
+        // index.xml is decoded with the response's charset, restored from disk.
+        final RepositoryIndex parsed = await parseRepositoryIndex(second.first);
+        expect(
+          parsed.findApplication('dev.example')?.querySelector('name')?.text,
+          'Café 名前',
+        );
       }, _RealHttpOverrides());
     },
   );
@@ -696,7 +838,7 @@ void main() {
     },
   );
 
-  test('GitHub download retries 401 without an authorization header', () {
+  test('GitHub and Codeberg downloads retry 401 without the token', () {
     final Map<String, String> headers = <String, String>{
       HttpHeaders.authorizationHeader: 'Bearer invalid-token',
       HttpHeaders.acceptHeader: 'application/octet-stream',
@@ -727,6 +869,15 @@ void main() {
       ),
       isFalse,
     );
+    // Codeberg's requests go through the GitHub source's code (D15).
+    expect(
+      shouldRetryGitHubDownloadWithoutAuthorization(
+        source: Codeberg(),
+        headers: headers,
+        error: unauthorizedError,
+      ),
+      isTrue,
+    );
     expect(
       shouldRetryGitHubDownloadWithoutAuthorization(
         source: _StubSource(),
@@ -735,6 +886,127 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  // Settings sections start collapsed on every cold start now, so the flags
+  // the page used to persist are dead; startup removes them.
+  test('startup removes the old per-section expanded flags', () async {
+    SharedPreferences.setMockInitialValues({
+      'settingsSection_updates': false,
+      'settingsSection_themes': true,
+      'updateInterval': 1440,
+    });
+    final SettingsProvider settings = SettingsProvider();
+    await settings.initializeSettings();
+    expect(
+      settings.prefs!.getKeys().where(
+        (String key) => key.startsWith(obtainXSettingsSectionPrefix),
+      ),
+      isEmpty,
+    );
+    expect(settings.prefs!.getInt('updateInterval'), 1440);
+  });
+
+  test('a settings import reaches the global filter and haptics', () async {
+    final SettingsProvider settings = SettingsProvider();
+    await settings.initializeSettings();
+    addTearDown(() {
+      settings.globalApkFilterRegEx = null;
+      settings.tactileFeedbackEnabled = true;
+    });
+    // As an import or a restore does: prefs written directly, then the
+    // provider, already initialized, initialized again.
+    await settings.prefs!.setString('globalApkFilterRegEx', 'arm64');
+    await settings.prefs!.setBool('tactileFeedbackEnabled', false);
+    await settings.initializeSettings();
+    expect(activeGlobalApkFilterRegEx, 'arm64');
+
+    final List<MethodCall> haptics = [];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (
+      MethodCall call,
+    ) async {
+      if (call.method == 'HapticFeedback.vibrate') haptics.add(call);
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    hapticSelection();
+    await Future<void>.delayed(Duration.zero);
+    expect(haptics, isEmpty);
+    // The same call does reach the platform with haptics on.
+    settings.tactileFeedbackEnabled = true;
+    hapticSelection();
+    await Future<void>.delayed(Duration.zero);
+    expect(haptics, hasLength(1));
+  });
+
+  test('a settings import reaches the category and folder caches', () async {
+    final SettingsProvider settings = SettingsProvider();
+    await settings.initializeSettings();
+    await settings.prefs!.setString('categories', '{"Old":4294901760}');
+    await settings.prefs!.setString(
+      'folderView_f1',
+      jsonEncode({'pinUpdates': false}),
+    );
+    await settings.initializeSettings();
+    // Read once, so both answers are held in memory.
+    expect(settings.categories, {'Old': 4294901760});
+    expect(settings.folderPinUpdates('f1'), isFalse);
+
+    // As an import does: prefs written directly, then initialized again.
+    await settings.prefs!.setString('categories', '{"New":4278190335}');
+    await settings.prefs!.setString(
+      'folderView_f1',
+      jsonEncode({'pinUpdates': true}),
+    );
+    await settings.initializeSettings();
+    expect(settings.categories, {'New': 4278190335});
+    expect(settings.folderPinUpdates('f1'), isTrue);
+  });
+
+  test('a Codeberg token goes only to its own host', () async {
+    final Codeberg codeberg = Codeberg();
+    const Map<String, dynamic> settings = <String, dynamic>{
+      Codeberg.tokenKey: 'forgejo-token',
+    };
+    final Map<String, String>? own = await codeberg.getRequestHeaders(
+      settings,
+      'https://codeberg.org/owner/repo/releases/download/v1/app.apk',
+      forAPKDownload: true,
+    );
+    expect(own?[HttpHeaders.authorizationHeader], 'Bearer forgejo-token');
+    // A release asset can link to another host, which must not receive it.
+    final Map<String, String>? other = await codeberg.getRequestHeaders(
+      settings,
+      'https://cdn.example.org/app.apk',
+      forAPKDownload: true,
+    );
+    expect(other?[HttpHeaders.authorizationHeader], isNull);
+    expect(other?[HttpHeaders.acceptHeader], 'application/octet-stream');
+  });
+
+  test('a network failure a source wrapped is not persistent (D10)', () {
+    Object wrapped(Object error) {
+      try {
+        rethrowOrWrapError(error);
+      } catch (e) {
+        return e;
+      }
+    }
+
+    // Most sources wrap whatever they catch as an unexpected ObtainiumError.
+    final Object offline = wrapped(const SocketException('Failed host lookup'));
+    expect(offline, isA<ObtainiumError>());
+    expect(checkFailureIsPersistent(offline), isFalse);
+    expect(
+      checkFailureIsPersistent(wrapped(TimeoutException('slow'))),
+      isFalse,
+    );
+    // A source's own bug is still persistent, wrapped or not.
+    expect(checkFailureIsPersistent(wrapped(StateError('bug'))), isTrue);
   });
 
   // ── Size cache key invalidation ─────────────────────────────────────
@@ -829,14 +1101,16 @@ void main() {
     },
   );
 
-  test('APK filters also match the download URL', () async {
+  // 376672ad (HTML display names) and D22 (#353): sources whose APK names
+  // aren't file names, like HTML, match the filter against the URL too.
+  test('HTML-style sources also match the download URL', () async {
     const MapEntry<String, String> ironFoxApk = MapEntry(
       'IronFox-153.0.1.apk',
       'https://example.com/arm64-v8a/ironfox-153.0.1-arm64-v8a.apk',
     );
 
     final App app = await SourceProvider().getApp(
-      _StubSource(apkUrls: const [ironFoxApk]),
+      _StubSource(apkUrls: const [ironFoxApk])..apkFilterMatchesLinkUrl = true,
       'https://example.com/releases',
       <String, dynamic>{'apkFilterRegEx': 'arm64-v8a'},
     );
@@ -998,6 +1272,153 @@ void main() {
       expect(details.reproducibleStatus, reproducibleBuildStatusNoData);
     },
   );
+
+  test(
+    'F-Droid repo index-v2 selects like index.xml and fills the same fields',
+    () async {
+      final index = await parseRepositoryIndexV2(
+        Response(
+          jsonEncode(_fdroidRepoV2Index()),
+          200,
+          request: Request(
+            'GET',
+            Uri.parse('https://repo.example/repo/index-v2.json'),
+          ),
+        ),
+      );
+      expect(index, isNotNull);
+
+      // The suggested version is the newest one with a stable build. Every
+      // build of it counts (even Beta-marked 22), then device ABIs narrow it.
+      final details = await FDroidRepo.apkDetailsFromIndexV2(
+        index!,
+        'org.example.app',
+        <String, dynamic>{},
+        'fallback',
+      );
+      expect(details.version, '2.0');
+      expect(details.apkUrls.map((apk) => apk.value), [
+        'https://repo.example/repo/org.example.app_21.apk',
+      ]);
+      expect(details.versionCode, 21);
+      expect(details.versionCodesByAsset, {'org.example.app_21.apk': 21});
+      expect(details.names.author, 'Example Dev');
+      expect(details.names.name, 'Example App');
+      expect(
+        details.iconUrl,
+        'https://repo.example/repo/org.example.app/en-US/icon.png',
+      );
+      expect(details.changeLog, 'https://example.org/changes');
+      expect(details.apkSizeBytes, 210);
+      expect(
+        details.releaseDate,
+        DateTime.fromMillisecondsSinceEpoch(1767225600021),
+      );
+      expect(details.reproducibleStatus, reproducibleBuildStatusNoData);
+      expect(details.isReproducible, isNull);
+
+      final highest = await FDroidRepo.apkDetailsFromIndexV2(
+        index,
+        'Example App',
+        <String, dynamic>{'pickHighestVersionCode': true},
+        'fallback',
+      );
+      expect(
+        highest.apkUrls.single.value,
+        'https://repo.example/repo/org.example.app_21.apk',
+      );
+
+      final newest = await FDroidRepo.apkDetailsFromIndexV2(
+        index,
+        'org.example.app',
+        <String, dynamic>{'trySelectingSuggestedVersionCode': false},
+        'fallback',
+      );
+      expect(newest.version, '3.0');
+      expect(newest.versionCode, 30);
+    },
+  );
+
+  test('F-Droid repo reads index-v2.json only when no index.xml answers, once per refresh', () async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requests = <String>[];
+      final index = _fdroidRepoV2Index();
+      (index['packages'] as Map<String, dynamic>)['org.example.other'] = {
+        'metadata': {
+          'name': {'en-US': 'Other App'},
+        },
+        'versions': {
+          'hash5': _fdroidRepoV2Release(5, '0.5', appId: 'org.example.other'),
+        },
+      };
+      server.listen((request) async {
+        requests.add(request.uri.path);
+        if (request.uri.path == '/repo/index-v2.json') {
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(index));
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+        await request.response.close();
+      });
+      final repoUrl = 'http://127.0.0.1:${server.port}';
+      await SourceRequestSession.run(() async {
+        final first = await FDroidRepo().getLatestAPKDetails(repoUrl, {
+          'appIdOrName': 'org.example.app',
+        });
+        final second = await FDroidRepo().getLatestAPKDetails(repoUrl, {
+          'appIdOrName': 'org.example.other',
+        });
+        expect(first.version, '2.0');
+        expect(second.version, '0.5');
+        expect(
+          second.apkUrls.single.value,
+          '$repoUrl/repo/org.example.other_5.apk',
+        );
+      });
+      // The session shares the missing URL shapes and the index itself.
+      expect(requests, [
+        '/index.xml',
+        '/repo/index.xml',
+        '/fdroid/repo/index.xml',
+        '/index-v2.json',
+        '/repo/index-v2.json',
+      ]);
+      final results = await FDroidRepo().search(
+        '',
+        querySettings: {'url': repoUrl},
+      );
+      expect(
+        results.keys,
+        unorderedEquals([
+          '$repoUrl/repo?appId=org.example.app',
+          '$repoUrl/repo?appId=org.example.other',
+        ]),
+      );
+    }, _RealHttpOverrides());
+  });
+
+  test('an F-Droid repo URL pasted with its index file standardizes', () {
+    final FDroidRepo source = FDroidRepo();
+    expect(
+      source.sourceSpecificStandardizeURL(
+        'https://example.org/fdroid/repo/index.xml',
+      ),
+      'https://example.org/fdroid/repo',
+    );
+    expect(
+      source.sourceSpecificStandardizeURL(
+        'https://example.org/fdroid/repo/index-v2.json?appId=org.example.app',
+      ),
+      'https://example.org/fdroid/repo?appId=org.example.app',
+    );
+    expect(
+      source.sourceSpecificStandardizeURL('https://example.org/fdroid/repo'),
+      'https://example.org/fdroid/repo',
+    );
+  });
 
   test(
     'F-Droid repo source uses shared parser for valid releases and metadata',
@@ -1372,68 +1793,62 @@ void main() {
     );
   });
 
-  test(
-    'F-Droid does not replace a saved APK with the suggested build when ABI data is missing',
-    () async {
-      final source = _CountingFDroid('', pageStatusCode: 404);
-      source.previouslyCheckedApp = const App(
-        id: 'com.celzero.bravedns',
-        url: 'https://f-droid.org/packages/com.celzero.bravedns',
-        author: 'F-Droid',
-        name: 'Rethink',
-        latestVersion: 'v0.5.7',
-        apkUrls: <MapEntry<String, String>>[
-          MapEntry(
-            'com.celzero.bravedns_693.apk',
-            'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
-          ),
-        ],
-        preferredApkIndex: 0,
-        additionalSettings: <String, dynamic>{},
-        rawLatestVersionFromSource: 'v0.5.7',
-      );
-
-      final details = await source.getAPKUrlsFromFDroidPackagesAPIResponse(
-        _rethinkPackagesResponse(),
-        'https://f-droid.org/repo/com.celzero.bravedns',
-        'https://f-droid.org/packages/com.celzero.bravedns',
-        'F-Droid',
-        additionalSettings: <String, dynamic>{
-          'trySelectingSuggestedVersionCode': true,
-        },
-      );
-
-      expect(
-        details.apkUrls.single.value,
-        'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
-      );
-    },
-  );
-
-  test(
-    'F-Droid keeps every ABI choice when suggested selection has no architecture data',
-    () async {
-      final details = await _CountingFDroid('', pageStatusCode: 404)
-          .getAPKUrlsFromFDroidPackagesAPIResponse(
-            _rethinkPackagesResponse(),
-            'https://f-droid.org/repo/com.celzero.bravedns',
-            'https://f-droid.org/packages/com.celzero.bravedns',
-            'F-Droid',
-            additionalSettings: <String, dynamic>{
-              'trySelectingSuggestedVersionCode': true,
-            },
-          );
-
-      expect(
-        details.apkUrls.map((apk) => apk.value),
-        containsAll(<String>[
-          'https://f-droid.org/repo/com.celzero.bravedns_699.apk',
+  test('F-Droid does not replace a saved APK with the suggested build when ABI data is missing', () async {
+    final source = _CountingFDroid('', pageStatusCode: 404);
+    source.previouslyCheckedApp = const App(
+      id: 'com.celzero.bravedns',
+      url: 'https://f-droid.org/packages/com.celzero.bravedns',
+      author: 'F-Droid',
+      name: 'Rethink',
+      latestVersion: 'v0.5.7',
+      apkUrls: <MapEntry<String, String>>[
+        MapEntry(
+          'com.celzero.bravedns_693.apk',
           'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
-          'https://f-droid.org/repo/com.celzero.bravedns_692.apk',
-        ]),
-      );
-    },
-  );
+        ),
+      ],
+      preferredApkIndex: 0,
+      additionalSettings: <String, dynamic>{},
+      rawLatestVersionFromSource: 'v0.5.7',
+    );
+
+    final details = await source.getAPKUrlsFromFDroidPackagesAPIResponse(
+      _rethinkPackagesResponse(),
+      'https://f-droid.org/repo/com.celzero.bravedns',
+      'https://f-droid.org/packages/com.celzero.bravedns',
+      'F-Droid',
+      additionalSettings: <String, dynamic>{
+        'trySelectingSuggestedVersionCode': true,
+      },
+    );
+
+    expect(
+      details.apkUrls.single.value,
+      'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+    );
+  });
+
+  test('F-Droid keeps every ABI choice when suggested selection has no architecture data', () async {
+    final details = await _CountingFDroid('', pageStatusCode: 404)
+        .getAPKUrlsFromFDroidPackagesAPIResponse(
+          _rethinkPackagesResponse(),
+          'https://f-droid.org/repo/com.celzero.bravedns',
+          'https://f-droid.org/packages/com.celzero.bravedns',
+          'F-Droid',
+          additionalSettings: <String, dynamic>{
+            'trySelectingSuggestedVersionCode': true,
+          },
+        );
+
+    expect(
+      details.apkUrls.map((apk) => apk.value),
+      containsAll(<String>[
+        'https://f-droid.org/repo/com.celzero.bravedns_699.apk',
+        'https://f-droid.org/repo/com.celzero.bravedns_693.apk',
+        'https://f-droid.org/repo/com.celzero.bravedns_692.apk',
+      ]),
+    );
+  });
 
   test('source name replaces stale package-id app name', () async {
     final newApp = await SourceProvider().getApp(
@@ -1491,8 +1906,7 @@ void main() {
               'links': [
                 {
                   'name': 'app.apk',
-                  'url':
-                      'https://gitlab.com/AuroraOSS/AuroraStore/-/releases/4.8.3/downloads/app.apk',
+                  'url': 'https://gitlab.com/AuroraOSS/AuroraStore/-/releases/4.8.3/downloads/app.apk',
                 },
               ],
             },
@@ -1662,35 +2076,38 @@ void main() {
     },
   );
 
-  test(
-    'version-code mode stores the source version code as the latest version',
-    () async {
-      // The installed version in this mode is the device's versionCode, so the
-      // latest version has to be a code too — otherwise the two are unorderable.
-      final source = _StubSource(version: '4.8.3', versionCode: 48300);
-      final app = await SourceProvider()
-          .getApp(source, 'https://example.com/app', <String, dynamic>{
-            'appId': 'org.example.app',
-            'versionDetection': 'versionCode',
-            'useVersionCodeAsOSVersion': true,
-          });
+  test('version-code mode stores the source version code as the latest version', () async {
+    // The installed version in this mode is the device's versionCode, so the
+    // latest version has to be a code too — otherwise the two are unorderable.
+    final source = _StubSource(version: '4.8.3', versionCode: 48300);
+    final app = await SourceProvider().getApp(
+      source,
+      'https://example.com/app',
+      <String, dynamic>{
+        'appId': 'org.example.app',
+        'versionDetection': 'versionCode',
+        'useVersionCodeAsOSVersion': true,
+      },
+    );
 
-      expect(app.latestVersion, '48300');
-      // The source's own string is still kept for the RegEx assist helpers.
-      expect(app.rawLatestVersionFromSource, '4.8.3');
-    },
-  );
+    expect(app.latestVersion, '48300');
+    // The source's own string is still kept for the RegEx assist helpers.
+    expect(app.rawLatestVersionFromSource, '4.8.3');
+  });
 
   test(
     'version-code mode leaves the version string alone without a source code',
     () async {
       final source = _StubSource(version: '4.8.3');
-      final app = await SourceProvider()
-          .getApp(source, 'https://example.com/app', <String, dynamic>{
-            'appId': 'org.example.app',
-            'versionDetection': 'versionCode',
-            'useVersionCodeAsOSVersion': true,
-          });
+      final app = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        <String, dynamic>{
+          'appId': 'org.example.app',
+          'versionDetection': 'versionCode',
+          'useVersionCodeAsOSVersion': true,
+        },
+      );
 
       expect(app.latestVersion, '4.8.3');
     },
@@ -1700,13 +2117,16 @@ void main() {
     'an explicit version-string source outranks version-code mode',
     () async {
       final source = _StubSource(version: '4.8.3', versionCode: 48300);
-      final app = await SourceProvider()
-          .getApp(source, 'https://example.com/app', <String, dynamic>{
-            'appId': 'org.example.app',
-            'versionDetection': 'versionCode',
-            'useVersionCodeAsOSVersion': true,
-            'versionStringSource': versionStringSourceReleaseTitle,
-          });
+      final app = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        <String, dynamic>{
+          'appId': 'org.example.app',
+          'versionDetection': 'versionCode',
+          'useVersionCodeAsOSVersion': true,
+          'versionStringSource': versionStringSourceReleaseTitle,
+        },
+      );
 
       expect(app.latestVersion, '4.8.3');
     },
@@ -1749,15 +2169,13 @@ void main() {
           );
 
       expect(
-        (await fetched(
-          includePrereleases: true,
-        )).additionalSettings['includePrereleases'],
+        (await fetched(includePrereleases: true))
+            .additionalSettings['includePrereleases'],
         true,
       );
       expect(
-        (await fetched(
-          includePrereleases: false,
-        )).additionalSettings['includePrereleases'],
+        (await fetched(includePrereleases: false))
+            .additionalSettings['includePrereleases'],
         false,
       );
       // A source without the option doesn't gain it.
@@ -1782,15 +2200,13 @@ void main() {
     }
 
     expect(
-      (await added(
-        includePrereleases: true,
-      )).additionalSettings['includePrereleases'],
+      (await added(includePrereleases: true))
+          .additionalSettings['includePrereleases'],
       true,
     );
     expect(
-      (await added(
-        includePrereleases: false,
-      )).additionalSettings['includePrereleases'],
+      (await added(includePrereleases: false))
+          .additionalSettings['includePrereleases'],
       false,
     );
   });
@@ -1846,12 +2262,15 @@ void main() {
         ],
         versionCodesByAsset: {'arm.apk': 48301, 'x86.apk': 48302},
       );
-      final app = await SourceProvider()
-          .getApp(source, 'https://example.com/app', {
-            'appId': 'org.example.app',
-            'versionDetection': 'versionCode',
-            'autoApkFilterByArch': false,
-          });
+      final app = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        {
+          'appId': 'org.example.app',
+          'versionDetection': 'versionCode',
+          'autoApkFilterByArch': false,
+        },
+      );
       expect(app.latestVersion, '48302');
       expect(selectedSourceVersionCode(app), 48302);
       final selected = normalizeSelectedSourceVersion(
@@ -1863,13 +2282,16 @@ void main() {
       final restored = App.fromJson(selected.toJson());
       expect(selectedSourceVersionCode(restored), 48301);
       expect(normalizeSelectedSourceVersion(restored), same(restored));
-      final filtered = await SourceProvider()
-          .getApp(source, 'https://example.com/app', {
-            'appId': 'org.example.app',
-            'versionDetection': 'versionCode',
-            'autoApkFilterByArch': false,
-            'apkFilterRegEx': 'arm',
-          });
+      final filtered = await SourceProvider().getApp(
+        source,
+        'https://example.com/app',
+        {
+          'appId': 'org.example.app',
+          'versionDetection': 'versionCode',
+          'autoApkFilterByArch': false,
+          'apkFilterRegEx': 'arm',
+        },
+      );
       expect(filtered.latestVersion, '48301');
       expect(filtered.apkUrls.single.key, 'arm.apk');
       expect(selectedSourceVersionCode(filtered), 48301);
@@ -1958,23 +2380,20 @@ void main() {
     // default (false) would read as "don't scan" - silently disabling scanning
     // for every pre-existing app on upgrade.
     expect(
-      const TypedSettings(
-        <String, dynamic>{},
-      ).getBool(enableVirusTotalScanKey, defaultValue: true),
+      const TypedSettings(<String, dynamic>{})
+          .getBool(enableVirusTotalScanKey, defaultValue: true),
       true,
     );
     expect(
-      const TypedSettings(<String, dynamic>{
-        enableVirusTotalScanKey: false,
-      }).getBool(enableVirusTotalScanKey, defaultValue: true),
+      const TypedSettings(<String, dynamic>{enableVirusTotalScanKey: false})
+          .getBool(enableVirusTotalScanKey, defaultValue: true),
       false,
     );
     // Backups round-trip additionalSettings through JSON, where a bool can come
     // back as a string.
     expect(
-      const TypedSettings(<String, dynamic>{
-        enableVirusTotalScanKey: 'false',
-      }).getBool(enableVirusTotalScanKey, defaultValue: true),
+      const TypedSettings(<String, dynamic>{enableVirusTotalScanKey: 'false'})
+          .getBool(enableVirusTotalScanKey, defaultValue: true),
       false,
     );
   });

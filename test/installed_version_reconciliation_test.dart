@@ -103,9 +103,8 @@ void main() {
     test('install keeps captured release across refresh in $mode', () {
       final downloaded = _app(latest: '107', mode: mode);
       final info = _package('9.18.50');
-      final receipt = InstallReleaseSnapshot.fromApp(
-        downloaded,
-      ).withPackage(info);
+      final receipt = InstallReleaseSnapshot.fromApp(downloaded)
+          .withPackage(info);
       final saved = recordConfirmedInstall(
         downloaded.copyWith(latestVersion: '108'),
         receipt,
@@ -162,9 +161,8 @@ void main() {
     final pending = recordPendingInstall(app, receipt);
     expect(pending.installedVersion, '9.17.0');
     expect(pending.additionalSettings[confirmedInstallReleaseKey], isNull);
-    final restored = App.fromJson(
-      pending.toJson(),
-    ).copyWith(latestVersion: '108');
+    final restored = App.fromJson(pending.toJson())
+        .copyWith(latestVersion: '108');
     final oldDevice = provider.getCorrectedInstallStatusAppIfPossible(
       restored,
       _package('9.17.0', code: 105),
@@ -320,9 +318,8 @@ void main() {
     final oldInfo = _package('9.18.50');
     final first = InstallReleaseSnapshot.fromApp(app).withPackage(oldInfo);
     final newer = app.copyWith(latestVersion: '108');
-    final second = InstallReleaseSnapshot.fromApp(
-      newer,
-    ).withPackage(_package('9.19.0', code: 107));
+    final second = InstallReleaseSnapshot.fromApp(newer)
+        .withPackage(_package('9.19.0', code: 107));
     final late = recordConfirmedInstall(
       recordPendingInstall(newer, second),
       first,

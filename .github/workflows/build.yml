@@ -29,9 +29,10 @@ jobs:
           # Pinned for F-Droid reproducibility: F-Droid rebuilds the fdroid-flavor
           # APK and diffs it byte-for-byte against the signed release asset, so the
           # toolchain must be fixed (a floating `channel: stable` would break it).
-          # Keep this EQUAL to the .flutter submodule commit referenced by the
-          # fdroiddata recipe; bump both together when upgrading Flutter.
-          flutter-version: 3.47.6
+          # The fdroiddata recipe (metadata/dev.bikram.obtainx.yml) reads this
+          # line with sed and checks out the same Flutter version, so this is
+          # the only place to bump. Keep the `flutter-version: X.Y.Z` form.
+          flutter-version: 3.50.1
           cache: true
 
       - name: Cache Gradle packages
@@ -74,6 +75,14 @@ jobs:
         run: |
           VERSION=$(grep -oP "^version: [^\+]+" pubspec.yaml | tail -c +10)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Same name the build gets: previews carry the run number, main/tags
+          # do not. Artifact names reuse it so a symbol bundle can be matched to
+          # the exact build it came from.
+          BUILD_NAME="$VERSION"
+          if [[ "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != refs/heads/main ]]; then
+            BUILD_NAME="${VERSION}-Preview-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
 
       # Normal flavor: gradle-signed, public GitHub download with in-app self-update enabled.
       # F-Droid flavor: must be reproducible and apksigcopier-compatible.
@@ -92,19 +101,25 @@ jobs:
         run: |
           set -e
           APK_DIR=build/app/outputs/flutter-apk
+          # Release AOT flags: keep the Dart symbol table out of the APK
+          # (--split-debug-info), which shrinks libapp.so. No --obfuscate:
+          # class names are persisted (AppSource.sourceIdentifier is
+          # runtimeType.toString(), App.overrideSource stores it), so mangling
+          # them would break tracked apps, backups and cross-flavor installs. Symbols are uploaded below for line-number
+          # symbolication with `flutter symbolize`.
+          AOT_FLAGS="--release --split-debug-info=./debug_symbols/split-per-abi"
           VERSION=${{ steps.extract_version.outputs.version }}
-          BUILD_NAME="$VERSION"
-          if [[ "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != refs/heads/main ]]; then
-            BUILD_NAME="${VERSION}-Preview-${GITHUB_RUN_NUMBER}"
-          fi
+          BUILD_NAME="${{ steps.extract_version.outputs.build_name }}"
 
-          flutter build apk --split-per-abi --flavor normal --build-name="$BUILD_NAME"
+          flutter build apk $AOT_FLAGS --split-per-abi --flavor normal --build-name="$BUILD_NAME"
           for f in "$APK_DIR"/app-*-normal-release.apk; do
             arch=$(basename "$f" | sed -E 's/^app-(.+)-normal-release\.apk$/\1/')
             mv "$f" "$APK_DIR/ObtainX-v${VERSION}-${arch}.apk"
           done
 
           rm -f android/key.properties
+          # The fdroid flavour stays on a plain release build: F-Droid
+          # rebuilds it independently and must reproduce it byte for byte.
           flutter build apk --split-per-abi --flavor fdroid -t lib/main_fdroid.dart --build-name="$BUILD_NAME"
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
           echo "Using apksigner: $APKSIGNER"
@@ -136,6 +151,17 @@ jobs:
           path: |
             build/app/outputs/flutter-apk/ObtainX-*.apk
             build/app/outputs/flutter-apk/ObtainX-*-attestation.json
+
+      # No --obfuscate, so these maps are only needed for line numbers, not to
+      # de-mangle class or member names. They expire after retention-days, so
+      # an older crash can still be read, but not mapped to source lines.
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@v7
+        with:
+          name: obtainx-debug-symbols-${{ steps.extract_version.outputs.build_name }}
+          path: debug_symbols/**/*.symbols
+          retention-days: 90
+          if-no-files-found: error
 
       # - name: Delete Newest Preview Release
       #   shell: bash

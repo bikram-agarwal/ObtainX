@@ -1,7 +1,6 @@
 name: Question / Discussion
 description: Ask a question or start a general discussion (not a bug or feature request).
-title: "[Question]: "
-labels: ["question"]
+type: "Discussion"
 body:
   - type: markdown
     attributes:

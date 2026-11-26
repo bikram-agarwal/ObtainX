@@ -2,44 +2,20 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_localization/easy_localization.dart';
+import 'package:html/dom.dart' show Document, Element;
 import 'package:http/http.dart';
 import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
+import 'package:obtainium/utils/string_compare.dart';
 import 'package:obtainium/version/partial_download_version.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-int compareAlphaNumeric(String a, String b) {
-  final List<String> aParts = _splitAlphaNumeric(a);
-  final List<String> bParts = _splitAlphaNumeric(b);
-
-  for (int i = 0; i < aParts.length && i < bParts.length; i++) {
-    final String aPart = aParts[i];
-    final String bPart = bParts[i];
-
-    final bool aIsNumber = _isDigit(aPart);
-    final bool bIsNumber = _isDigit(bPart);
-
-    if (aIsNumber && bIsNumber) {
-      final int cmp = compareDecimalIdentifiers(aPart, bPart);
-      if (cmp != 0) {
-        return cmp;
-      }
-    } else if (!aIsNumber && !bIsNumber) {
-      final int cmp = aPart.compareTo(bPart);
-      if (cmp != 0) {
-        return cmp;
-      }
-    } else {
-      // Alphanumeric strings come before numeric strings
-      return aIsNumber ? 1 : -1;
-    }
-  }
-
-  return aParts.length.compareTo(bParts.length);
-}
+export 'package:obtainium/utils/string_compare.dart' show compareAlphaNumeric;
 
 final _releaseFileExtension = RegExp(
   r'\.(?:apk|xapk|apks|zip|tar(?:\.gz)?)$',
@@ -74,44 +50,58 @@ List<String> collectAllStringsFromJSONObject(dynamic obj) {
   return extractor(obj);
 }
 
-List<String> _splitAlphaNumeric(String s) {
-  if (s.isEmpty) return [];
-  final List<String> parts = [];
-  final StringBuffer sb = StringBuffer();
+List<MapEntry<String, String>> getLinksInLines(String lines) =>
+    // Quotes, brackets and angle brackets end a URL found in raw text or code,
+    // and trailing punctuation belongs to the text around it (upstream #2816).
+    // Parentheses stay when balanced, as in `app_2.9.0(275).apk` (#3497).
+    RegExp(r'''(?:(?:http|https|ftp)://)[^\s"'<>\[\]{}]+''')
+        .allMatches(lines)
+        .map((match) => trimTrailingUrlPunctuation(match.group(0)!))
+        .where((url) => url.isNotEmpty)
+        .map((url) => MapEntry(url, url.split('/').last))
+        .toList();
 
-  bool isNumeric = _isDigit(s[0]);
-  sb.write(s[0]);
+/// Drops trailing punctuation, and a trailing `)` while the URL has more
+/// closing than opening parentheses (it belongs to the surrounding text).
+String trimTrailingUrlPunctuation(String url) {
+  var result = url;
+  while (true) {
+    result = result.replaceFirst(RegExp(r'[.,;:!?]+$'), '');
+    if (result.endsWith(')') &&
+        '('.allMatches(result).length < ')'.allMatches(result).length) {
+      result = result.substring(0, result.length - 1);
+      continue;
+    }
+    return result;
+  }
+}
 
-  for (int i = 1; i < s.length; i++) {
-    final bool currentIsNumeric = _isDigit(s[i]);
-    if (currentIsNumeric == isNumeric) {
-      sb.write(s[i]);
-    } else {
-      parts.add(sb.toString());
-      sb.clear();
-      sb.write(s[i]);
-      isNumeric = currentIsNumeric;
+/// Collects absolute and root-relative URLs found in element attributes
+/// (e.g. `<script src="/js/app.js">`), resolved against [reqUrl] (#3294).
+List<MapEntry<String, String>> getLinksInHtmlAttributes(
+  Document html,
+  Uri reqUrl,
+) {
+  final links = <MapEntry<String, String>>[];
+  final absoluteUrlPattern = RegExp(r'^(https?|ftp)://', caseSensitive: false);
+  for (final element in html.querySelectorAll('*')) {
+    for (final value in element.attributes.values) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) continue;
+      if (!absoluteUrlPattern.hasMatch(trimmed) && !trimmed.startsWith('/')) {
+        continue;
+      }
+      final resolved = ensureAbsoluteUrl(trimmed, reqUrl);
+      final uri = Uri.tryParse(resolved);
+      if (uri == null ||
+          !['http', 'https', 'ftp'].contains(uri.scheme.toLowerCase())) {
+        continue;
+      }
+      links.add(MapEntry(resolved, resolved.split('/').last));
     }
   }
-
-  parts.add(sb.toString());
-
-  return parts;
+  return links;
 }
-
-bool _isDigit(String s) {
-  if (s.isEmpty) return false;
-  return s.codeUnitAt(0) >= 48 && s.codeUnitAt(0) <= 57;
-}
-
-List<MapEntry<String, String>> getLinksInLines(String lines) =>
-    RegExp(r'(?:(?:http|https|ftp)://)\S+')
-        .allMatches(lines)
-        .map(
-          (match) =>
-              MapEntry(match.group(0)!, match.group(0)?.split('/').last ?? ''),
-        )
-        .toList();
 
 /// Given an HTTP response, grab some links according to the common additional settings
 /// (those that apply to intermediate and final steps)
@@ -119,9 +109,7 @@ Future<List<MapEntry<String, String>>> grabLinksCommonFromRes(
   Response res,
   Map<String, dynamic> additionalSettings,
 ) async {
-  if (res.statusCode != 200) {
-    throw getObtainiumHttpError(res);
-  }
+  ensureHttpSuccess(res);
   final reqUrl = res.request?.url ?? Uri.parse('');
   return grabLinksCommon(res.body, reqUrl, additionalSettings);
 }
@@ -149,28 +137,50 @@ Future<List<MapEntry<String, String>>> grabLinksCommon(
       .map((e) => MapEntry(ensureAbsoluteUrl(e.key, reqUrl), e.value))
       .toList();
   if (allLinks.isEmpty || matchLinksOutsideATags) {
-    // Decode the body if the response is a JSON
-    try {
-      final jsonStrings = collectAllStringsFromJSONObject(jsonDecode(rawBody));
-      allLinks = getLinksInLines(jsonStrings.join('\n'));
-      if (allLinks.isEmpty) {
-        allLinks = getLinksInLines(
-          jsonStrings
-              .map((l) {
-                return ensureAbsoluteUrl(l, reqUrl);
-              })
-              .join('\n'),
-        );
+    // Merge every link source instead of replacing one set with another:
+    // <a> links, URLs in the raw text and URLs in element attributes are all
+    // valid candidates when [matchLinksOutsideATags] is enabled (#2816).
+    final merged = <String, MapEntry<String, String>>{
+      for (final link in allLinks) link.key: link,
+    };
+    void addAll(Iterable<MapEntry<String, String>> links) {
+      for (final link in links) {
+        merged.putIfAbsent(link.key, () => link);
       }
-    } catch (e) {
-      unawaited(
-        LogsProvider().add(
-          'Failed to parse HTML links: ${e.toString()}',
-          level: LogLevel.warning,
-        ),
-      );
-      allLinks = getLinksInLines(rawBody);
     }
+
+    if (allLinks.isEmpty) {
+      // Decode the body if the response is a JSON
+      try {
+        final jsonStrings = collectAllStringsFromJSONObject(
+          jsonDecode(rawBody),
+        );
+        var jsonLinks = getLinksInLines(jsonStrings.join('\n'));
+        if (jsonLinks.isEmpty) {
+          jsonLinks = getLinksInLines(
+            jsonStrings
+                .map((l) {
+                  return ensureAbsoluteUrl(l, reqUrl);
+                })
+                .join('\n'),
+          );
+        }
+        addAll(jsonLinks);
+      } catch (e) {
+        unawaited(
+          LogsProvider().add(
+            'Failed to parse HTML links: ${e.toString()}',
+            level: LogLevel.warning,
+          ),
+        );
+        addAll(getLinksInLines(rawBody));
+      }
+    }
+    if (matchLinksOutsideATags) {
+      addAll(getLinksInLines(rawBody));
+      addAll(getLinksInHtmlAttributes(html, reqUrl));
+    }
+    allLinks = merged.values.toList();
   }
   List<MapEntry<String, String>> links = [];
   final bool skipSort = additionalSettings['skipSort'] == true;
@@ -299,6 +309,141 @@ String resolveHtmlAssetDisplayName({
   return '${downloadUrl.hashCode}-$fallbackName';
 }
 
+DateTime? _parseHtmlReleaseDateText(
+  String? releaseDateRegEx,
+  String? matchGroupString,
+  String? dateFormatString,
+  String stringToCheck,
+) {
+  if (releaseDateRegEx?.isNotEmpty != true) return null;
+  String? extracted;
+  try {
+    extracted = extractVersion(
+      releaseDateRegEx,
+      matchGroupString,
+      stringToCheck,
+    );
+  } on ObtainiumError {
+    return null;
+  } on FormatException {
+    // An invalid saved regex (e.g. from an import): the date is optional.
+    return null;
+  }
+  if (extracted?.isNotEmpty != true) return null;
+  // intl's parser is case-sensitive for AM/PM and expects bare day numbers,
+  // while scraped pages often use lowercase `pm` and ordinal suffixes (`3rd`).
+  final normalized = extracted!
+      .replaceAllMapped(
+        RegExp(r'(\d+)(st|nd|rd|th)\b', caseSensitive: false),
+        (m) => m.group(1)!,
+      )
+      .replaceAllMapped(
+        RegExp(r'(?<=\d)\s*([ap]m)\b', caseSensitive: false),
+        (m) => m.group(1)!.toUpperCase(),
+      );
+  final dateFormat = dateFormatString?.trim();
+  if (dateFormat?.isNotEmpty == true) {
+    try {
+      final parsed = DateFormat(dateFormat, 'en_US').tryParse(normalized);
+      if (parsed != null) return parsed;
+    } catch (e) {
+      unawaited(
+        LogsProvider().add(
+          'Invalid release date format: $e',
+          level: LogLevel.debug,
+        ),
+      );
+    }
+  }
+  return DateTime.tryParse(normalized);
+}
+
+bool _sameHtmlLink(String a, String b) {
+  final uriA = Uri.tryParse(a);
+  final uriB = Uri.tryParse(b);
+  if (uriA == null || uriB == null) return a == b;
+  return uriA.replace(fragment: '').normalizePath().toString() ==
+      uriB.replace(fragment: '').normalizePath().toString();
+}
+
+DateTime? _extractHtmlReleaseDateFromLink(
+  String? releaseDateRegEx,
+  String? matchGroupString,
+  String? dateFormatString,
+  Document document,
+  String selectedLink,
+  Uri baseUri,
+) {
+  for (final anchor in document.querySelectorAll('a')) {
+    final href = anchor.attributes['href']?.trim();
+    if (href == null || href.isEmpty) continue;
+    String resolved;
+    try {
+      resolved = ensureAbsoluteUrl(href, baseUri);
+    } catch (_) {
+      continue;
+    }
+    if (!_sameHtmlLink(resolved, selectedLink)) continue;
+    // The link's own block first, widening up to 4 levels, in the
+    // whole-page format (newlines as a literal `\n`).
+    Element? element = anchor;
+    for (var depth = 0; depth < 4 && element != null; depth++) {
+      final text =
+          '${element.text.trim().replaceAll('\r\n', '\n').replaceAll('\n', '\\n')}\\n';
+      final date = _parseHtmlReleaseDateText(
+        releaseDateRegEx,
+        matchGroupString,
+        dateFormatString,
+        text,
+      );
+      if (date != null) return date;
+      element = element.parent;
+    }
+  }
+  return null;
+}
+
+/// Extracts a release date from a scraped string using [releaseDateRegEx]
+/// (optionally selecting a match group with [matchGroupString], `$N`-style),
+/// upstream #3364. The extracted text is parsed with [dateFormatString] when
+/// set (an `intl` `DateFormat` pattern such as `EEE. MMMM d, yyyy - h:mma`),
+/// then falls back to [DateTime.tryParse]. When [pageDocument] and
+/// [selectedLink] are supplied, the date is first looked up in the selected
+/// link's own HTML block, so pages with one date per APK do not return
+/// another build's date. Returns null when nothing usable is found.
+///
+/// Takes a parsed [Document] rather than upstream's raw HTML: the caller
+/// parses it off the UI isolate ([parseHtmlOffIsolate]), and only when a
+/// release-date regex is set.
+DateTime? extractHtmlReleaseDate(
+  String? releaseDateRegEx,
+  String? matchGroupString,
+  String? dateFormatString,
+  String stringToCheck, {
+  Document? pageDocument,
+  String? selectedLink,
+  Uri? baseUri,
+}) {
+  if (releaseDateRegEx?.isNotEmpty != true) return null;
+  if (pageDocument != null && selectedLink != null) {
+    final scoped = _extractHtmlReleaseDateFromLink(
+      releaseDateRegEx,
+      matchGroupString,
+      dateFormatString,
+      pageDocument,
+      selectedLink,
+      baseUri ?? Uri.parse(selectedLink),
+    );
+    if (scoped != null) return scoped;
+  }
+  return _parseHtmlReleaseDateText(
+    releaseDateRegEx,
+    matchGroupString,
+    dateFormatString,
+    stringToCheck,
+  );
+}
+
 class HTML extends AppSource {
   @override
   List<List<GeneratedFormItem>> get combinedAppSpecificSettingFormItems {
@@ -377,13 +522,21 @@ class HTML extends AppSource {
   HTML() {
     name = 'HTML';
     suppressStandardVersionExtraction = true;
+    // Its APK "names" are display names; filters target hosts and paths (D22).
+    apkFilterMatchesLinkUrl = true;
     // A zip is the only way some hosts can serve a build: GitHub Actions
     // artifacts are auth-walled, so re-hosters like nightly.link hand out
     // `<artifact>.zip`. The download side already unpacks one and installs the
     // APK inside, so only the link filter and these options were missing.
     allowIncludeZips = true;
+    // With a release-date regex set, "Release date" can be the version
+    // (upstream #3364); without one, the pseudo-version stays in use.
+    showReleaseDateAsVersionToggle = true;
   }
 
+  // Upstream's section header rows are left out (v1.7.4 sync D24): the fork
+  // shows every source-owned row in one card. The zip filter comes from
+  // allowIncludeZips, so it isn't declared here.
   @override
   List<List<GeneratedFormItem>>
   get additionalSourceAppSpecificSettingFormItems => [
@@ -396,6 +549,44 @@ class HTML extends AppSource {
     _finalStepFormitems[0],
     ..._commonFormItems,
     ..._finalStepFormitems.sublist(1),
+    // Next to the other version options (upstream 23e9b8ea moved it here).
+    [
+      GeneratedFormDropdown(
+        'defaultPseudoVersioningMethod',
+        [
+          MapEntry('partialAPKHash', tr('partialAPKHash')),
+          MapEntry('APKLinkHash', tr('APKLinkHash')),
+          const MapEntry('ETag', 'ETag'),
+        ],
+        label: tr('defaultPseudoVersioningMethod'),
+        value: 'partialAPKHash',
+      ),
+    ],
+    [
+      GeneratedFormTextField(
+        'releaseDateRegEx',
+        label: tr('releaseDateRegEx'),
+        required: false,
+        hint: r'Last modified: (.*)',
+        additionalValidators: [(value) => regExValidator(value)],
+      ),
+    ],
+    [
+      GeneratedFormTextField(
+        'releaseDateMatchGroup',
+        label: tr('matchGroupToUseForX', args: [tr('releaseDateRegEx')]),
+        required: false,
+        hint: r'$0',
+      ),
+    ],
+    [
+      GeneratedFormTextField(
+        'releaseDateDateFormat',
+        label: tr('releaseDateDateFormat'),
+        required: false,
+        hint: 'EEE. MMMM d, yyyy - h:mma',
+      ),
+    ],
     [
       GeneratedFormSubForm(
         'requestHeader',
@@ -424,22 +615,9 @@ class HTML extends AppSource {
         label: tr('requestHeader'),
         value: [
           {
-            'requestHeader':
-                'User-Agent: Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+            'requestHeader': 'User-Agent: Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
           },
         ],
-      ),
-    ],
-    [
-      GeneratedFormDropdown(
-        'defaultPseudoVersioningMethod',
-        [
-          MapEntry('partialAPKHash', tr('partialAPKHash')),
-          MapEntry('APKLinkHash', tr('APKLinkHash')),
-          const MapEntry('ETag', 'ETag'),
-        ],
-        label: tr('defaultPseudoVersioningMethod'),
-        value: 'partialAPKHash',
       ),
     ],
   ];
@@ -474,6 +652,44 @@ class HTML extends AppSource {
     return url;
   }
 
+  /// The release date per the app's release-date regex (#3364), or null when
+  /// none is set or nothing matched. The page is parsed only then, and off
+  /// the UI isolate, so apps without a date regex pay nothing extra.
+  Future<DateTime?> _releaseDate(
+    Map<String, dynamic> additionalSettings,
+    String wholePageString,
+    Response? pageResponse,
+    String selectedLink,
+    Uri pageUri,
+  ) async {
+    final String? releaseDateRegEx =
+        additionalSettings['releaseDateRegEx'] as String?;
+    if (releaseDateRegEx == null || releaseDateRegEx.isEmpty) return null;
+    Document? pageDocument;
+    if (pageResponse != null) {
+      try {
+        pageDocument = await parseHtmlOffIsolate(pageResponse.body);
+      } catch (e) {
+        unawaited(
+          LogsProvider().add(
+            'Failed to parse HTML for release date: $e',
+            level: LogLevel.debug,
+          ),
+        );
+      }
+    }
+    return extractHtmlReleaseDate(
+      releaseDateRegEx,
+      additionalSettings['releaseDateMatchGroup'] as String?,
+      additionalSettings['releaseDateDateFormat'] as String?,
+      wholePageString,
+      pageDocument: pageDocument,
+      selectedLink: selectedLink,
+      // Links were resolved against the final URL after redirects.
+      baseUri: pageResponse?.request?.url ?? pageUri,
+    );
+  }
+
   @override
   Future<APKDetails> getLatestAPKDetails(
     String standardUrl,
@@ -498,23 +714,27 @@ class HTML extends AppSource {
           await sourceRequest(currentUrl, additionalSettings),
           intermediateLinks[i],
         );
+        // Filter by architecture before the empty check, so filtering away
+        // every link reports no release instead of failing on `.last`.
+        if (intermediateLinks[i]['autoLinkFilterByArch'] == true) {
+          intLinks = await filterApksByArch(intLinks);
+        }
         if (intLinks.isEmpty) {
           throw NoReleasesError(note: currentUrl);
         } else {
-          if (intermediateLinks[i]['autoLinkFilterByArch'] == true) {
-            intLinks = await filterApksByArch(intLinks);
-          }
           currentUrl = intLinks.last.key;
         }
       }
       final uri = Uri.parse(currentUrl);
       List<MapEntry<String, String>> links = [];
       String versionExtractionWholePageString = currentUrl;
+      Response? pageResponse;
       if (additionalSettings['directAPKLink'] != true) {
         final Response res = await sourceRequest(
           currentUrl,
           additionalSettings,
         );
+        pageResponse = res;
         versionExtractionWholePageString = res.body
             .split('\r\n')
             .join('\n')
@@ -525,6 +745,7 @@ class HTML extends AppSource {
           links,
           additionalSettings['apkFilterRegEx'],
           additionalSettings['invertAPKFilter'],
+          matchUrl: apkFilterMatchesLinkUrl,
         );
         if (links.isEmpty) {
           throw NoReleasesError(note: currentUrl);
@@ -558,6 +779,12 @@ class HTML extends AppSource {
         rel,
         forAPKDownload: true,
       );
+      // Read when a probe runs, not before: a page that names its version
+      // needs no settings. Only a stored value is read, so skip
+      // SettingsProvider's one-time init.
+      Future<bool> readCertificatePinning() async =>
+          (SettingsProvider()..prefs = await SharedPreferences.getInstance())
+              .enableCertificatePinning;
       DownloadResponseMetadata? downloadMetadata;
       void captureDownloadMetadata(DownloadResponseMetadata metadata) {
         downloadMetadata ??= metadata;
@@ -569,6 +796,7 @@ class HTML extends AppSource {
           rel,
           headers: apkReqHeaders,
           allowInsecure: additionalSettings['allowInsecure'] == true,
+          certificatePinning: await readCertificatePinning(),
           onResponseMetadata: captureDownloadMetadata,
         );
         if (version == null || version.isEmpty) {
@@ -602,6 +830,7 @@ class HTML extends AppSource {
             lowerLimit: savedSize ?? 128,
             headers: apkReqHeaders,
             allowInsecure: additionalSettings['allowInsecure'] == true,
+            certificatePinning: await readCertificatePinning(),
             onResponseMetadata: captureDownloadMetadata,
           );
           version = resolvePartialDownloadVersion(
@@ -654,6 +883,7 @@ class HTML extends AppSource {
             rel,
             headers: apkReqHeaders,
             allowInsecure: additionalSettings['allowInsecure'] == true,
+            certificatePinning: await readCertificatePinning(),
           );
         } catch (error) {
           unawaited(
@@ -673,9 +903,19 @@ class HTML extends AppSource {
             linkLabel: selectedLink.value,
             responseMetadata: downloadMetadata,
           );
-      return APKDetails(version, [
-        MapEntry(assetDisplayName, rel),
-      ], AppNames(uri.host, tr('app')));
+      final DateTime? releaseDate = await _releaseDate(
+        additionalSettings,
+        versionExtractionWholePageString,
+        pageResponse,
+        rel,
+        uri,
+      );
+      return APKDetails(
+        version,
+        [MapEntry(assetDisplayName, rel)],
+        AppNames(uri.host, tr('app')),
+        releaseDate: releaseDate,
+      );
     } catch (e) {
       rethrowOrWrapError(e);
     }

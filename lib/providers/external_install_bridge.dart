@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:obtainium/providers/apps_provider.dart' show packageManager;
 import 'package:obtainium/providers/logs_provider.dart';
@@ -25,6 +26,10 @@ class InstallerTarget {
 /// Bridge to the two native helpers that have no Flutter-plugin equivalent:
 /// enumerating APK-install-capable activities and turning a downloaded file
 /// into a shareable content:// URI. All handoff orchestration stays in Dart.
+///
+/// Intentional divergence — do not "fix": no `launchInstallIntent` /
+/// `ExternalInstallResult` here. Upstream's result-request handoff (#3091) was
+/// removed from ObtainX (b9228270); see [ExternalInstaller].
 class ExternalInstallerBridge {
   ExternalInstallerBridge._();
 
@@ -34,9 +39,16 @@ class ExternalInstallerBridge {
     'dev.imranr.obtainium/external_install',
   );
 
+  @visibleForTesting
+  static Future<List<InstallerTarget>> Function()?
+  listTargetsOverrideForTesting;
+
   /// Lists installer apps, enriching each native package/activity pair with a
   /// human-readable label and launcher icon fetched via the package manager.
   Future<List<InstallerTarget>> listTargets() async {
+    if (listTargetsOverrideForTesting != null) {
+      return listTargetsOverrideForTesting!();
+    }
     if (!Platform.isAndroid) return const [];
     List<dynamic>? raw;
     try {

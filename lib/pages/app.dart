@@ -8,10 +8,10 @@ import 'package:expressive_refresh/expressive_refresh.dart';
 import 'package:flutter/foundation.dart'
     show Factory, Listenable, listEquals, visibleForTesting;
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
@@ -25,12 +25,15 @@ import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/utils/format_utils.dart';
 import 'package:obtainium/widgets/app_toast.dart';
+import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/pages/settings.dart';
+import 'package:obtainium/pages/update_health.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
@@ -68,11 +71,15 @@ const List<String> _releaseFilterSettingKeys = [
   'tarballedApkFilterRegEx',
 ];
 
-/// Whether the Latest row shows a filtered view of the source.
-bool appHasActiveReleaseFilter(App app) => _releaseFilterSettingKeys.any(
-  (String key) =>
-      app.additionalSettings[key]?.toString().trim().isNotEmpty ?? false,
-);
+/// Whether the Latest row shows a filtered view of the source, including by
+/// the global APK filter standing in for an unset app filter.
+bool appHasActiveReleaseFilter(App app) =>
+    _releaseFilterSettingKeys.any(
+      (String key) =>
+          app.additionalSettings[key]?.toString().trim().isNotEmpty ?? false,
+    ) ||
+    (!appApkFilterRegExIsSet(app.additionalSettings) &&
+        activeGlobalApkFilterRegEx != null);
 
 /// Version meaning shown by the details stripe, independent of Skip or whether
 /// the user has enabled background installation.
@@ -470,9 +477,8 @@ Future<Map<String, String>?> checkAndCacheStoresForListing(
   }
   if (!_trackedUrlIsFromHost(trackedUrl, 'play.google.com') &&
       (storeData['PlayStore'] ?? '').isEmpty) {
-    lookups['PlayStore'] = _checkPlayStoreAvailability(
-      appId,
-    ).then((url) => <String, String?>{appId: url});
+    lookups['PlayStore'] = _checkPlayStoreAvailability(appId)
+        .then((url) => <String, String?>{appId: url});
   }
 
   void logStoreError(String store, Object error) => unawaited(
@@ -651,11 +657,20 @@ int appPageAppsRebuildToken(AppsProvider provider, String appId) {
     packageInfo?.packageName,
     model.iconUrl,
     model.apkSizeBytes,
+    // The update health marker beside the latest version (D8).
+    model.latestVersionChangedAt,
+    model.consecutiveFailedChecks,
+    model.isArchived,
+    model.newerReleasesFilteredOut,
+    model.updateHealthEnabled,
+    model.updateHealthDismissedVersion,
   ]);
 }
 
 int appPageSettingsRebuildToken(SettingsProvider settings) {
   return Object.hash(
+    // The update health marker's thresholds (D8).
+    updateHealthSettingsToken(settings),
     settings.matchAppPageToIconColors,
     settings.blackThemeActive,
     settings.showAppWebpage,
@@ -1488,13 +1503,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       updatedApp = updatedApp.copyWith(allowIdChange: true, id: newId);
       // The same package from a different store is allowed, so only a listing
       // of the new package on *this* listing's store is a conflict.
-      if (sameStoreListingIn(
-            appsProvider.apps,
-            updatedApp,
-            ignoreKey: widget.appId,
-          ) !=
-          null) {
-        _showPageError(ObtainiumError(tr('appAlreadyAdded')));
+      final AppInMemory? sameStoreListing = sameStoreListingIn(
+        appsProvider.apps,
+        updatedApp,
+        ignoreKey: widget.appId,
+      );
+      if (sameStoreListing != null) {
+        _showPageError(appAlreadyAddedError(sameStoreListing));
         return;
       }
     }
@@ -2169,6 +2184,18 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     } else {
       iconChild = GestureDetector(onTap: onTap, child: emptyPlaceholder);
     }
+    if (onTap != null) {
+      // One TalkBack button that says what a tap does (upstream #3398,
+      // 1002b143), instead of an unlabelled tap target.
+      iconChild = Semantics(
+        container: true,
+        button: true,
+        label: tr('openApp', args: [appInMemory?.name ?? '']),
+        excludeSemantics: true,
+        onTap: onTap,
+        child: iconChild,
+      );
+    }
     if (heroTag != null) {
       return Hero(
         tag: heroTag,
@@ -2590,6 +2617,17 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
   /// [SourceProvider.getApp] preserves it across refreshes that don't
   /// change [App.latestVersion] and clears it when the version changes,
   /// so the cache key is effectively `(appId, latestVersion)`.
+  ///
+  /// At most once per release and listing for the whole process (#339, D2):
+  /// [APKMirror.resolveLatestApkSizeBytes] keeps each walk's result, failures
+  /// included, so a reopened page or a refresh that found the same release
+  /// sends nothing. The one exception is a walk the request gate refused
+  /// before sending anything (a page challenge still blocking), which may run
+  /// again once the block is over.
+  ///
+  /// Deliberately not gated on "check for updates on opening an app detail
+  /// page" (upstream #2988, v1.7.4 sync ledger): APKMirror apps have no other
+  /// size source, and no APKMirror feature is paused while #339 is open.
   Future<void> _maybeLazyResolveApkMirrorSize() async {
     if (!mounted) return;
     if (_attemptedApkMirrorSizeResolution) return;
@@ -2614,6 +2652,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       final int? resolvedSize = await source.resolveLatestApkSizeBytes(
         releasePageUrl: currentApp.changeLog,
         additionalSettings: currentApp.additionalSettings,
+        listingKey: currentApp.listingKey,
       );
       if (!mounted || resolvedSize == null) return;
       final App? freshApp = appsProvider.apps[widget.appId]?.app;
@@ -2636,6 +2675,21 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
     } catch (error) {
       _logApkMirrorSizeDebugFromAppPage(
         'lazy resolve error id=${widget.appId} error=${error.toString()}',
+      );
+    }
+  }
+
+  /// Opens this app's options, and checks again when the version settings
+  /// changed.
+  Future<void> _openAdditionalOptions() async {
+    final bool? versionDetectionJustEnabled = await Navigator.push<bool>(
+      context,
+      slideUpPageRoute((_) => AdditionalOptionsPage(appId: widget.appId)),
+    );
+    if (versionDetectionJustEnabled != null && mounted) {
+      await _runCheckUpdate(
+        widget.appId,
+        resetVersion: versionDetectionJustEnabled,
       );
     }
   }
@@ -2865,8 +2919,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       if (additionalListing.id != currentListing.app.id) {
         throw ObtainiumError(tr('appIdMismatch'));
       }
-      if (sameStoreListingIn(appsProvider.apps, additionalListing) != null) {
-        throw ObtainiumError(tr('appAlreadyAdded'));
+      final AppInMemory? sameStoreListing = sameStoreListingIn(
+        appsProvider.apps,
+        additionalListing,
+      );
+      if (sameStoreListing != null) {
+        throw appAlreadyAddedError(sameStoreListing);
       }
 
       additionalListing = additionalListing.copyWith(
@@ -2986,9 +3044,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
         swappableStoreName != null || trackedListingKey != null;
     return Builder(
       builder: (BuildContext iconBuilderContext) {
-        final ColorScheme colorScheme = Theme.of(
-          iconBuilderContext,
-        ).colorScheme;
+        final ColorScheme colorScheme = Theme.of(iconBuilderContext)
+            .colorScheme;
         final Widget picture = assetPath != null
             ? StoreSourceIconImage(
                 assetPath: assetPath,
@@ -3303,20 +3360,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
-    String formatDateTimeToMinute(DateTime dateTime) {
-      final local = dateTime.toLocal();
-      final year = local.year.toString();
-      final month = local.month.toString().padLeft(2, '0');
-      final day = local.day.toString().padLeft(2, '0');
-      final hour = local.hour.toString().padLeft(2, '0');
-      final minute = local.minute.toString().padLeft(2, '0');
-      return '$year-$month-$day $hour:$minute';
-    }
-
-    String formatCheckedAtTimestamp(BuildContext ctx, DateTime dateTime) {
+    // Date in the phone's day/month/year order, time in its 12/24-hour
+    // setting (#355).
+    String formatDeviceDateTime(BuildContext ctx, DateTime dateTime) {
+      watchDeviceDateOrder(ctx);
       final local = dateTime.toLocal();
       final materialLocalizations = MaterialLocalizations.of(ctx);
-      final date = formatDeviceOrderedNumericDate(ctx, local);
+      final date = formatDeviceOrderedNumericDate(local);
       final time = materialLocalizations.formatTimeOfDay(
         TimeOfDay.fromDateTime(local),
         alwaysUse24HourFormat:
@@ -3386,6 +3436,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       bool pseudoVersion = false,
       bool versionCode = false,
       String? osInstalledVersion,
+      Widget? trailing,
     }) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
@@ -3434,6 +3485,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
+                  ?trailing,
                 ],
               ),
             ),
@@ -3447,6 +3499,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       String value, {
       required bool skipActive,
       bool filtered = false,
+      Widget? trailing,
     }) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
@@ -3483,6 +3536,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   ),
                   if (skipActive) versionChip(ctx, tr('latestVersionSkipped')),
                   if (filtered) versionChip(ctx, tr('filtered')),
+                  ?trailing,
                 ],
               ),
             ),
@@ -3533,6 +3587,26 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       );
     }
 
+    // Update health (D8): advisory, so a warning icon after the latest
+    // version, never part of Needs attention, which covers blocking states
+    // only. A tap shows the reasons as a tooltip, which TalkBack reads with
+    // the icon, and then where the thresholds are set.
+    Widget? updateHealthMarker(BuildContext ctx, AppInMemory? listing) {
+      if (listing == null) return null;
+      final List<String> reasons = updateHealthReasonLabelsFor(
+        listing.app,
+        settingsProvider,
+      );
+      if (reasons.isEmpty) return null;
+      return HelpHintIcon(
+        message: [...reasons, tr('updateHealthChangeHint')].join('\n'),
+        icon: Icons.warning_amber_rounded,
+        size: 18,
+        padding: EdgeInsets.zero,
+        color: Theme.of(ctx).colorScheme.error,
+      );
+    }
+
     Widget buildAboutBlock(BuildContext themeContext) {
       if (app?.app.additionalSettings['about'] is! String ||
           (app?.app.additionalSettings['about'] as String).isEmpty) {
@@ -3556,27 +3630,30 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             ),
           );
         },
-        child: Markdown(
-          physics: const NeverScrollableScrollPhysics(),
-          shrinkWrap: true,
-          styleSheet: MarkdownStyleSheet(
-            blockquoteDecoration: BoxDecoration(
-              color: Theme.of(themeContext).cardColor,
+        // flutter_markdown_plus is still on flutter/material.
+        child: LegacyMaterialBridge(
+          child: Markdown(
+            physics: const NeverScrollableScrollPhysics(),
+            shrinkWrap: true,
+            styleSheet: MarkdownStyleSheet(
+              blockquoteDecoration: BoxDecoration(
+                color: Theme.of(themeContext).cardColor,
+              ),
+              textAlign: WrapAlignment.center,
             ),
-            textAlign: WrapAlignment.center,
-          ),
-          data: aboutForMarkdown,
-          onTapLink: (text, href, title) {
-            if (href != null) {
-              launchUrlString(href, mode: LaunchMode.externalApplication);
-            }
-          },
-          extensionSet: md.ExtensionSet(
-            md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-            [
-              md.EmojiSyntax(),
-              ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-            ],
+            data: aboutForMarkdown,
+            onTapLink: (text, href, title) {
+              if (href != null) {
+                launchUrlString(href, mode: LaunchMode.externalApplication);
+              }
+            },
+            extensionSet: md.ExtensionSet(
+              md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+              [
+                md.EmojiSyntax(),
+                ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+              ],
+            ),
           ),
         ),
       );
@@ -3709,10 +3786,15 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               settingsProvider,
             )
           : null;
+      // Added without a check (D10) and not checked successfully since: there
+      // is no APK to install yet.
+      final bool placeholderOnly =
+          !trackOnly && app != null && hasOnlyPlaceholderApks(app.app);
       final bool installActionBlocked =
           actionBlocked ||
           (!trackOnly && areDownloadsRunning) ||
-          buildVerificationBlocked;
+          buildVerificationBlocked ||
+          placeholderOnly;
       final installedVersion = app?.app.installedVersion;
       final bool installedVersionIsNull = installedVersion == null;
       final bool actionableUpdate =
@@ -3743,11 +3825,13 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
       // track-only app just opens the release page, and whatever installs the
       // APK from there decides.
       final bool offersDowngrade = app != null && appOffersDowngrade(app.app);
+      // The installer this app installs with: its own install method, else
+      // the global one (D13, upstream #3457).
       final bool canDowngrade =
           offersDowngrade &&
           (trackOnly ||
               installerCanDowngrade(
-                installerModeKey: settingsProvider.installerMode,
+                installerModeKey: appsProvider.getInstaller(app.app).modeKey,
                 downgradeModuleUsable:
                     settingsProvider.enableDowngradeModules &&
                     _downgradeModuleInstalled,
@@ -4152,6 +4236,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           ? null
           : buildVerificationBlocked
           ? buildVerificationBlockedMessage!
+          : placeholderOnly
+          // Added without a check (D10): the same reason the install
+          // paths give for it, not "no APK found".
+          ? tr('appNotCheckedYet')
           : skipActive
           ? tr('updateDisabledWhileVersionSkipped')
           : offersDowngrade && !canDowngrade
@@ -4208,10 +4296,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
 
       final lastUpdateCheckValue = app?.app.lastUpdateCheck == null
           ? tr('never')
-          : formatCheckedAtTimestamp(
-              pageThemeContext,
-              app!.app.lastUpdateCheck!,
-            );
+          : formatDeviceDateTime(pageThemeContext, app!.app.lastUpdateCheck!);
 
       Future<void> markTrackOnlyAsNotInstalledOnDevice() async {
         if (app == null) return;
@@ -4480,6 +4565,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
             pageThemeContext,
             tr('latest'),
             app?.app.latestVersion ?? '-',
+            trailing: updateHealthMarker(pageThemeContext, app),
           ),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
@@ -4489,7 +4575,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
-                  : formatDateTimeToMinute(app!.app.releaseDate!),
+                  : formatDeviceDateTime(
+                      pageThemeContext,
+                      app!.app.releaseDate!,
+                    ),
               changeLogFn,
             ),
           );
@@ -4547,6 +4636,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                 : latestVerStr,
             skipActive: app != null && isSkipActiveForCurrentLatest(app.app),
             filtered: app != null && appHasActiveReleaseFilter(app.app),
+            trailing: updateHealthMarker(pageThemeContext, app),
           ),
         );
         if (changeLogFn != null || app?.app.releaseDate != null) {
@@ -4556,7 +4646,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               tr('changelog'),
               app?.app.releaseDate == null
                   ? tr('changes')
-                  : formatDateTimeToMinute(app!.app.releaseDate!),
+                  : formatDeviceDateTime(
+                      pageThemeContext,
+                      app!.app.releaseDate!,
+                    ),
               changeLogFn,
             ),
           );
@@ -4683,19 +4776,16 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           reproducibleBuildUnknown
           ? Colors.orange.withValues(alpha: 0.16)
           : reproducibleBuildUsesErrorColors
-          ? Theme.of(
-              pageThemeContext,
-            ).colorScheme.errorContainer.withValues(alpha: 0.55)
-          : Theme.of(
-              pageThemeContext,
-            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.75);
+          ? Theme.of(pageThemeContext).colorScheme.errorContainer
+                .withValues(alpha: 0.55)
+          : Theme.of(pageThemeContext).colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.75);
       final Color reproducibleBuildProblemBorderColor = reproducibleBuildUnknown
           ? Colors.orange.withValues(alpha: 0.55)
           : reproducibleBuildUsesErrorColors
           ? Theme.of(pageThemeContext).colorScheme.error.withValues(alpha: 0.55)
-          : Theme.of(
-              pageThemeContext,
-            ).colorScheme.outline.withValues(alpha: 0.45);
+          : Theme.of(pageThemeContext).colorScheme.outline
+                .withValues(alpha: 0.45);
       final Color reproducibleBuildProblemContentColor =
           reproducibleBuildUnknown
           ? Colors.orange.shade800
@@ -4803,9 +4893,8 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   borderColor: githubAttestationCantCheck
                       ? Colors.orange.withValues(alpha: 0.55)
                       : githubAttestationUnsupported
-                      ? Theme.of(
-                          pageThemeContext,
-                        ).colorScheme.outline.withValues(alpha: 0.45)
+                      ? Theme.of(pageThemeContext).colorScheme.outline
+                            .withValues(alpha: 0.45)
                       : null,
                   contentColor: githubAttestationCantCheck
                       ? Colors.orange.shade800
@@ -4822,16 +4911,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               if (malwareScanHasStatus)
                 statusBadge(
                   backgroundColor: malwareScanFlagged
-                      ? Theme.of(
-                          pageThemeContext,
-                        ).colorScheme.errorContainer.withValues(alpha: 0.55)
+                      ? Theme.of(pageThemeContext).colorScheme.errorContainer
+                            .withValues(alpha: 0.55)
                       : malwareScanError
                       ? Colors.orange.withValues(alpha: 0.16)
                       : Colors.green.withValues(alpha: 0.15),
                   borderColor: malwareScanFlagged
-                      ? Theme.of(
-                          pageThemeContext,
-                        ).colorScheme.error.withValues(alpha: 0.55)
+                      ? Theme.of(pageThemeContext).colorScheme.error
+                            .withValues(alpha: 0.55)
                       : malwareScanError
                       ? Colors.orange.withValues(alpha: 0.55)
                       : Colors.green.withValues(alpha: 0.5),
@@ -4950,14 +5037,14 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
               child: Column(
                 spacing: 4,
                 children: certificateHashes.map((hash) {
+                  void copyHash() => unawaited(copyCertificateHash(hash));
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
-                          onLongPress: () =>
-                              unawaited(copyCertificateHash(hash)),
+                          onLongPress: copyHash,
                           child: LayoutBuilder(
                             builder: (context, constraints) {
                               return Text(
@@ -4975,14 +5062,25 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Tooltip(
-                        message: tr('copyToClipboard'),
-                        child: SizedBox.square(
-                          dimension: 18,
-                          child: InkResponse(
-                            onTap: () => unawaited(copyCertificateHash(hash)),
-                            radius: 10,
-                            child: const Icon(Icons.copy_rounded, size: 14),
+                      Semantics(
+                        container: true,
+                        button: true,
+                        enabled: true,
+                        label: tr('copyToClipboard'),
+                        // Hides the button's own tap and the tooltip from
+                        // TalkBack, so the label is read once; this node
+                        // then needs its own tap.
+                        excludeSemantics: true,
+                        onTap: copyHash,
+                        child: Tooltip(
+                          message: tr('copyToClipboard'),
+                          child: SizedBox.square(
+                            dimension: 18,
+                            child: InkResponse(
+                              onTap: copyHash,
+                              radius: 10,
+                              child: const Icon(Icons.copy_rounded, size: 14),
+                            ),
                           ),
                         ),
                       ),
@@ -5185,9 +5283,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       tr('appType'),
                       style: Theme.of(pageThemeContext).textTheme.bodySmall
                           ?.copyWith(
-                            color: Theme.of(
-                              pageThemeContext,
-                            ).colorScheme.onSurfaceVariant,
+                            color: Theme.of(pageThemeContext)
+                                .colorScheme
+                                .onSurfaceVariant,
                             fontSize: 12,
                           ),
                     ),
@@ -5555,9 +5653,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       Text(
                         tr('byX', args: [app?.author ?? tr('unknown')]),
                         style: bylineStyle?.copyWith(
-                          color: Theme.of(
-                            themeContext,
-                          ).colorScheme.onSurfaceVariant,
+                          color: Theme.of(themeContext)
+                              .colorScheme
+                              .onSurfaceVariant,
                           fontSize:
                               (bylineStyle.fontSize ?? 12) * heroScale * 1.08,
                         ),
@@ -5623,23 +5721,7 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                       iconSize: 24,
                       onPressed: app?.downloadProgress != null || updating
                           ? null
-                          : () async {
-                              final bool? versionDetectionJustEnabled =
-                                  await Navigator.push<bool>(
-                                    context,
-                                    slideUpPageRoute(
-                                      (_) => AdditionalOptionsPage(
-                                        appId: widget.appId,
-                                      ),
-                                    ),
-                                  );
-                              if (versionDetectionJustEnabled != null) {
-                                await _runCheckUpdate(
-                                  widget.appId,
-                                  resetVersion: versionDetectionJustEnabled,
-                                );
-                              }
-                            },
+                          : _openAdditionalOptions,
                       tooltip: actionBarTooltip(tr('appOptions')),
                       icon: const Icon(Icons.tune),
                     ),
@@ -5759,12 +5841,10 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           border: Border(
             top: BorderSide(
               color: Theme.of(themeContext).brightness == Brightness.dark
-                  ? Theme.of(
-                      themeContext,
-                    ).colorScheme.outlineVariant.withAlpha(140)
-                  : Theme.of(
-                      themeContext,
-                    ).colorScheme.outlineVariant.withAlpha(70),
+                  ? Theme.of(themeContext).colorScheme.outlineVariant
+                        .withAlpha(140)
+                  : Theme.of(themeContext).colorScheme.outlineVariant
+                        .withAlpha(70),
             ),
           ),
           boxShadow: [
@@ -5882,6 +5962,12 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                   // morphing shape, same default placement), so refreshing
                   // looks the same on both pages.
                   ExpressiveRefreshIndicator(
+                    // expressive_refresh is still on flutter/material, so it
+                    // can't see this page's material_ui theme: pass the
+                    // colours it would take from there.
+                    color: pageThemeForPage.colorScheme.primary,
+                    backgroundColor:
+                        pageThemeForPage.colorScheme.surfaceContainerHighest,
                     child: Stack(
                       fit: StackFit.expand,
                       children: [

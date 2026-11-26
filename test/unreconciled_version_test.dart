@@ -137,37 +137,33 @@ void main() {
     },
   );
 
-  test(
-    'a comparable source version clears uncertainty and detects the real update',
-    () {
-      final provider = _VersionTestAppsProvider();
-      const installed = _InstalledPackage('9.18.50');
-      var app = provider.getCorrectedInstallStatusAppIfPossible(
-        _trackedApp(),
-        installed,
-      )!;
-      app = app.copyWith(latestVersion: '9.18.51');
-      // An old failed comparison must not apply to different source metadata.
-      expect(appHasActionableUpdate(app), isTrue);
-      app =
-          provider.getCorrectedInstallStatusAppIfPossible(app, installed) ??
-          app;
-      expect(app.installedVersion, '9.18.50');
-      expect(app.versionDetectionMode, VersionDetectionMode.auto);
-      expect(appHasActionableUpdate(app), isTrue);
-      expect(versionOrderUncertainUpdate(app), isFalse);
+  test('a comparable source version clears uncertainty and detects the real update', () {
+    final provider = _VersionTestAppsProvider();
+    const installed = _InstalledPackage('9.18.50');
+    var app = provider.getCorrectedInstallStatusAppIfPossible(
+      _trackedApp(),
+      installed,
+    )!;
+    app = app.copyWith(latestVersion: '9.18.51');
+    // An old failed comparison must not apply to different source metadata.
+    expect(appHasActionableUpdate(app), isTrue);
+    app =
+        provider.getCorrectedInstallStatusAppIfPossible(app, installed) ?? app;
+    expect(app.installedVersion, '9.18.50');
+    expect(app.versionDetectionMode, VersionDetectionMode.auto);
+    expect(appHasActionableUpdate(app), isTrue);
+    expect(versionOrderUncertainUpdate(app), isFalse);
 
-      app =
-          provider.getCorrectedInstallStatusAppIfPossible(
-            app,
-            const _InstalledPackage('9.18.51'),
-          ) ??
-          app;
-      expect(app.installedVersion, '9.18.51');
-      expect(appIsUpToDateForFiltering(app), isTrue);
-      expect(versionOrderUncertainUpdate(app), isFalse);
-    },
-  );
+    app =
+        provider.getCorrectedInstallStatusAppIfPossible(
+          app,
+          const _InstalledPackage('9.18.51'),
+        ) ??
+        app;
+    expect(app.installedVersion, '9.18.51');
+    expect(appIsUpToDateForFiltering(app), isTrue);
+    expect(versionOrderUncertainUpdate(app), isFalse);
+  });
 
   test(
     'skipping an unknown release survives reconciliation until latest changes',

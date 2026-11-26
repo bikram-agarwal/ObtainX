@@ -9,15 +9,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:obtainium/services/store_icon_resolver.dart';
-
-extension Unique<E, Id> on List<E> {
-  List<E> unique([Id Function(E element)? id, bool inplace = true]) {
-    final ids = <dynamic>{};
-    final list = inplace ? this : List<E>.from(this);
-    list.retainWhere((x) => ids.add(id != null ? id(x) : x as Id));
-    return list;
-  }
-}
+import 'package:obtainium/utils/min_update_age.dart';
 
 class APKPure extends AppSource {
   APKPure() {
@@ -28,6 +20,9 @@ class APKPure extends AppSource {
     showReleaseDateAsVersionToggle = true;
     inferAppIdFromUrlPath = true;
   }
+
+  static const String _apiBaseUrl =
+      'https://tapi.pureapk.com/v3/get_app_his_version?package_name';
 
   @override
   List<List<GeneratedFormItem>>
@@ -86,8 +81,10 @@ class APKPure extends AppSource {
             return null;
           }
 
-          List<String> architectures =
-              e['native_code']?.cast<String>() ?? <String>[];
+          final rawArch = e['native_code'];
+          List<String> architectures = rawArch is List
+              ? rawArch.map((a) => a.toString()).toList()
+              : <String>[];
           final String architectureString = architectures.join(',');
           if (architectures.contains('universal') ||
               architectures.contains('unlimited')) {
@@ -126,8 +123,9 @@ class APKPure extends AppSource {
           return MapEntry(apkName, downloadUri);
         })
         .nonNulls
-        .toList()
-        .unique((e) => e.key);
+        .toList();
+    final seenApkKeys = <String>{};
+    apkUrls = apkUrls.where((e) => seenApkKeys.add(e.key)).toList();
 
     if (apkUrls.isEmpty) {
       throw NoAPKError();
@@ -283,7 +281,7 @@ class APKPure extends AppSource {
       }
 
       final res = await sourceRequest(
-        'https://tapi.pureapk.com/v3/get_app_his_version?package_name=$appId&hl=en',
+        '$_apiBaseUrl=$appId&hl=en',
         additionalSettings,
       );
       if (res.statusCode != 200) {
@@ -323,6 +321,32 @@ class APKPure extends AppSource {
         throw NoReleasesError();
       }
 
+      Future<APKDetails> detailsWithIcon(
+        List<Map<String, dynamic>> variants,
+      ) async {
+        final APKDetails details = await getDetailsForVersion(
+          variants,
+          supportedArchs,
+          additionalSettings,
+        );
+        if ((previouslyCheckedApp?.iconUrl ?? '').isEmpty) {
+          details.iconUrl = await _fetchIconUrl(
+            standardUrl,
+            additionalSettings,
+          );
+        }
+        return details;
+      }
+
+      final int minAgeDays = await effectiveMinUpdateAgeDays(
+        additionalSettings,
+      );
+      DateTime? versionUpdateDate(List<Map<String, dynamic>> variants) {
+        final raw = variants.first['update_date'];
+        return raw != null ? DateTime.tryParse(raw.toString()) : null;
+      }
+
+      List<Map<String, dynamic>>? tooYoungVersion;
       for (var i = 0; i < versions.length; i++) {
         final v = versions[i];
         try {
@@ -333,24 +357,22 @@ class APKPure extends AppSource {
             }
             continue;
           }
-          final APKDetails details = await getDetailsForVersion(
-            v,
-            supportedArchs,
-            additionalSettings,
-          );
-          if ((previouslyCheckedApp?.iconUrl ?? '').isEmpty) {
-            details.iconUrl = await _fetchIconUrl(
-              standardUrl,
-              additionalSettings,
-            );
+          if (isReleaseTooYoung(versionUpdateDate(v), minAgeDays)) {
+            tooYoungVersion ??= v;
+            continue;
           }
-          return details;
+          return await detailsWithIcon(v);
         } catch (e) {
           if (additionalSettings['fallbackToOlderReleases'] != true ||
               i == versions.length - 1) {
-            rethrowOrWrapError(e);
+            rethrow;
           }
         }
+      }
+      // No version old enough: use the newest so the provider can suppress
+      // it until it ages.
+      if (tooYoungVersion != null) {
+        return await detailsWithIcon(tooYoungVersion);
       }
       throw NoAPKError();
     } catch (e) {

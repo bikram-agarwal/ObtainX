@@ -17,6 +17,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/fdroid.dart';
 import 'package:obtainium/custom_errors.dart';
+import 'package:obtainium/http/obtainx_user_agent.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
 import 'package:obtainium/app_sources/github.dart';
@@ -42,6 +43,36 @@ class FixtureAPKMirror extends APKMirror {
     }
     return Response('', 404);
   }
+}
+
+/// Serves [feed] as the RSS feed and nothing else.
+class FeedFixtureAPKMirror extends APKMirror {
+  FeedFixtureAPKMirror(this.feed);
+
+  final String feed;
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (url.endsWith('/feed/')) return Response(feed, 200);
+    return Response('', 404);
+  }
+}
+
+/// An APKMirror feed with one item per (version, age) pair, newest first.
+String apkMirrorFeedWithReleases(List<(String, Duration)> releases) {
+  final items = releases.map((release) {
+    final (version, age) = release;
+    return '<item><title>Example $version by Example</title>'
+        '<link>https://www.apkmirror.com/apk/example/example/example-${version.replaceAll('.', '-')}-release/</link>'
+        '<pubDate>${HttpDate.format(DateTime.now().subtract(age))}</pubDate>'
+        '</item>';
+  });
+  return '<rss><channel>${items.join()}</channel></rss>';
 }
 
 class ReleasePageBlockedAPKMirror extends APKMirror {
@@ -133,6 +164,84 @@ class AbiAwareReleaseAPKMirror extends APKMirror {
   }
 }
 
+/// Serves [feed] as the RSS feed and [listing] (if any) as the listing page
+/// at its canonical, slash-terminated URL, recording every request.
+class RecordingAPKMirror extends APKMirror {
+  RecordingAPKMirror(this.feed, {this.listing});
+
+  final String feed;
+  final String? listing;
+  final List<String> requestedUrls = [];
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    requestedUrls.add(url);
+    if (url.endsWith('/feed/')) return Response(feed, 200);
+    if (listing != null &&
+        url == 'https://www.apkmirror.com/apk/example/example/') {
+      return Response(listing!, 200);
+    }
+    return Response('', 404);
+  }
+}
+
+/// One feed item whose `content:encoded` shows [iconUrl], like the live feed.
+String apkMirrorFeedWithIcon(String iconUrl) =>
+    '<rss><channel><item><title>Example 2.0 by Example</title>'
+    '<link>https://www.apkmirror.com/apk/example/example/example-2-0-release/</link>'
+    '<content:encoded><![CDATA[<p><img src="$iconUrl"></p><p>Example 2.0 by Example</p>]]></content:encoded>'
+    '</item></channel></rss>';
+
+/// A release page listing a universal, an arm64-v8a and an armeabi-v7a APK.
+/// [blockReleasePageOnce] makes the first release-page request fail the way
+/// the request gate fails a blocked request: before anything is sent.
+class VariantReleaseAPKMirror extends APKMirror {
+  VariantReleaseAPKMirror({this.blockReleasePageOnce = false});
+
+  bool blockReleasePageOnce;
+  final List<String> requestedUrls = [];
+
+  static const String releasePageUrl =
+      'https://www.apkmirror.com/apk/example/variants/variants-3-0-release/';
+
+  @override
+  Future<Response> sourceRequest(
+    String url,
+    Map<String, dynamic> additionalSettings, {
+    bool followRedirects = true,
+    Object? postBody,
+  }) async {
+    if (url == releasePageUrl) {
+      if (blockReleasePageOnce) {
+        blockReleasePageOnce = false;
+        throw RateLimitError(5);
+      }
+      requestedUrls.add(url);
+      return Response('''
+<div><div>3.0 APK universal nodpi <a href="variants-3-0-1-android-apk-download/">download</a></div></div>
+<div><div>3.0 APK arm64-v8a nodpi <a href="variants-3-0-2-android-apk-download/">download</a></div></div>
+<div><div>3.0 APK armeabi-v7a nodpi <a href="variants-3-0-3-android-apk-download/">download</a></div></div>
+''', 200);
+    }
+    requestedUrls.add(url);
+    if (url.endsWith('/variants-3-0-1-android-apk-download/')) {
+      return Response('Download APK 90.00 MB (94,371,840 bytes)', 200);
+    }
+    if (url.endsWith('/variants-3-0-2-android-apk-download/')) {
+      return Response('Download APK 40.00 MB (41,943,040 bytes)', 200);
+    }
+    if (url.endsWith('/variants-3-0-3-android-apk-download/')) {
+      return Response('Download APK 35.00 MB (36,700,160 bytes)', 200);
+    }
+    return Response('', 404);
+  }
+}
+
 class FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
   @override
   Future<BaseDeviceInfo> deviceInfo() async {
@@ -169,6 +278,7 @@ class FakeAndroidDeviceInfoPlatform extends DeviceInfoPlatform {
       'isLowRamDevice': false,
       'physicalRamSize': 8192,
       'availableRamSize': 4096,
+      'time': 0,
       'systemFeatures': <String>[],
     });
   }
@@ -413,51 +523,48 @@ void main() {
     );
   });
 
-  test(
-    'stable install is not replaced by its latest preview in auto or standard mode',
-    () {
-      for (final String versionDetectionMode in <String>['auto', 'standard']) {
-        final AppsProvider appsProvider = AppsProvider(isBg: true);
-        addTearDown(appsProvider.dispose);
-        final App app = App(
-          id: 'dev.bikram.obtainx',
-          url: 'https://github.com/bikram-agarwal/ObtainX',
-          author: 'Bikram Agarwal',
-          name: 'ObtainX',
-          installedVersion: 'v2.9.8-Preview-245',
-          latestVersion: 'v2.9.8-Preview-245',
-          apkUrls: const <MapEntry<String, String>>[],
-          preferredApkIndex: 0,
-          additionalSettings: <String, dynamic>{
-            'versionDetection': versionDetectionMode,
-          },
-          lastUpdateCheck: DateTime.now(),
-          pinned: false,
-        );
+  test('stable install is not replaced by its latest preview in auto or standard mode', () {
+    for (final String versionDetectionMode in <String>['auto', 'standard']) {
+      final AppsProvider appsProvider = AppsProvider(isBg: true);
+      addTearDown(appsProvider.dispose);
+      final App app = App(
+        id: 'dev.bikram.obtainx',
+        url: 'https://github.com/bikram-agarwal/ObtainX',
+        author: 'Bikram Agarwal',
+        name: 'ObtainX',
+        installedVersion: 'v2.9.8-Preview-245',
+        latestVersion: 'v2.9.8-Preview-245',
+        apkUrls: const <MapEntry<String, String>>[],
+        preferredApkIndex: 0,
+        additionalSettings: <String, dynamic>{
+          'versionDetection': versionDetectionMode,
+        },
+        lastUpdateCheck: DateTime.now(),
+        pinned: false,
+      );
 
-        expect(isVersionPseudo(app), false);
+      expect(isVersionPseudo(app), false);
 
-        final App correctedApp =
-            appsProvider.getCorrectedInstallStatusAppIfPossible(
-              app,
-              const FakePackageInfo(
-                packageName: 'dev.bikram.obtainx',
-                versionName: '2.9.8',
-                versionCode: 3980,
-              ),
-            ) ??
-            app;
+      final App correctedApp =
+          appsProvider.getCorrectedInstallStatusAppIfPossible(
+            app,
+            const FakePackageInfo(
+              packageName: 'dev.bikram.obtainx',
+              versionName: '2.9.8',
+              versionCode: 3980,
+            ),
+          ) ??
+          app;
 
-        expect(
-          correctedApp.additionalSettings['versionDetection'],
-          versionDetectionMode,
-        );
-        expect(correctedApp.installedVersion, '2.9.8');
-        expect(correctedApp.latestVersion, 'v2.9.8-Preview-245');
-        expect(appHasActionableUpdate(correctedApp), false);
-      }
-    },
-  );
+      expect(
+        correctedApp.additionalSettings['versionDetection'],
+        versionDetectionMode,
+      );
+      expect(correctedApp.installedVersion, '2.9.8');
+      expect(correctedApp.latestVersion, 'v2.9.8-Preview-245');
+      expect(appHasActionableUpdate(correctedApp), false);
+    }
+  });
 
   test(
     'auto detection keeps two- and three-segment numeric versions standard',
@@ -495,62 +602,59 @@ void main() {
     },
   );
 
-  test(
-    'auto detection keeps a newer installed preview comparable to an older stable release',
-    () {
-      const String installedVersion = '2.9.8-Preview-241';
-      const String latestVersion = 'v2.9.7';
-      final AppsProvider appsProvider = AppsProvider(isBg: true);
-      addTearDown(appsProvider.dispose);
-      final App app = App(
-        id: 'dev.bikram.obtainx',
-        url: 'https://github.com/bikram-agarwal/ObtainX',
-        author: 'Bikram Agarwal',
-        name: 'ObtainX',
-        installedVersion: installedVersion,
-        latestVersion: latestVersion,
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: <String, dynamic>{'versionDetection': 'auto'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
-      const FakePackageInfo installedInfo = FakePackageInfo(
-        packageName: 'dev.bikram.obtainx',
-        versionName: installedVersion,
-        versionCode: 39803,
-      );
+  test('auto detection keeps a newer installed preview comparable to an older stable release', () {
+    const String installedVersion = '2.9.8-Preview-241';
+    const String latestVersion = 'v2.9.7';
+    final AppsProvider appsProvider = AppsProvider(isBg: true);
+    addTearDown(appsProvider.dispose);
+    final App app = App(
+      id: 'dev.bikram.obtainx',
+      url: 'https://github.com/bikram-agarwal/ObtainX',
+      author: 'Bikram Agarwal',
+      name: 'ObtainX',
+      installedVersion: installedVersion,
+      latestVersion: latestVersion,
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: <String, dynamic>{'versionDetection': 'auto'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+    const FakePackageInfo installedInfo = FakePackageInfo(
+      packageName: 'dev.bikram.obtainx',
+      versionName: installedVersion,
+      versionCode: 39803,
+    );
 
-      expect(
-        recognizedNumericReleaseVersionsAreComparable(
-          installedVersion,
-          latestVersion,
-        ),
-        true,
-      );
-      expect(
-        compareVersionsByNumericSegments(installedVersion, latestVersion),
-        1,
-      );
-      expect(
-        appsProvider.isVersionDetectionPossible(
-          AppInMemory(app, null, installedInfo, null),
-        ),
-        true,
-      );
+    expect(
+      recognizedNumericReleaseVersionsAreComparable(
+        installedVersion,
+        latestVersion,
+      ),
+      true,
+    );
+    expect(
+      compareVersionsByNumericSegments(installedVersion, latestVersion),
+      1,
+    );
+    expect(
+      appsProvider.isVersionDetectionPossible(
+        AppInMemory(app, null, installedInfo, null),
+      ),
+      true,
+    );
 
-      final App effectiveApp =
-          appsProvider.getCorrectedInstallStatusAppIfPossible(
-            app,
-            installedInfo,
-          ) ??
-          app;
+    final App effectiveApp =
+        appsProvider.getCorrectedInstallStatusAppIfPossible(
+          app,
+          installedInfo,
+        ) ??
+        app;
 
-      expect(effectiveApp.additionalSettings['versionDetection'], 'auto');
-      expect(effectiveApp.installedVersion, installedVersion);
-      expect(appHasActionableUpdate(effectiveApp), false);
-    },
-  );
+    expect(effectiveApp.additionalSettings['versionDetection'], 'auto');
+    expect(effectiveApp.installedVersion, installedVersion);
+    expect(appHasActionableUpdate(effectiveApp), false);
+  });
 
   test(
     'release package lookup only includes debug build when requested',
@@ -655,77 +759,68 @@ void main() {
     },
   );
 
-  test(
-    'disabled version detection does not overwrite source tag with manifest version',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.revanced.android.youtube',
-        url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
-        author: 'LovecraftianGodsKiller',
-        name: 'YouTube-Morphe',
-        installedVersion: '106',
-        latestVersion: '107',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {'versionDetection': 'pseudo'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('disabled version detection does not overwrite source tag with manifest version', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.revanced.android.youtube',
+      url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+      author: 'LovecraftianGodsKiller',
+      name: 'YouTube-Morphe',
+      installedVersion: '106',
+      latestVersion: '107',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {'versionDetection': 'pseudo'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.revanced.android.youtube',
-          versionName: '9.18.50',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.revanced.android.youtube',
+        versionName: '9.18.50',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp!.installedVersion, '106');
-      expect(
-        correctedApp.additionalSettings[observedVersionNameKey],
-        '9.18.50',
-      );
-      expect(app.installedVersion, '106');
-      expect(app.latestVersion, '107');
-      expect(app.additionalSettings['versionDetection'], 'pseudo');
-    },
-  );
+    expect(correctedApp!.installedVersion, '106');
+    expect(correctedApp.additionalSettings[observedVersionNameKey], '9.18.50');
+    expect(app.installedVersion, '106');
+    expect(app.latestVersion, '107');
+    expect(app.additionalSettings['versionDetection'], 'pseudo');
+  });
 
-  test(
-    'disabled version detection sets installedVersion to latestVersion when installed version is null',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.revanced.android.youtube',
-        url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
-        author: 'LovecraftianGodsKiller',
-        name: 'YouTube-Morphe',
-        installedVersion: null,
-        latestVersion: '107',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {'versionDetection': 'pseudo'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('disabled version detection sets installedVersion to latestVersion when installed version is null', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.revanced.android.youtube',
+      url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+      author: 'LovecraftianGodsKiller',
+      name: 'YouTube-Morphe',
+      installedVersion: null,
+      latestVersion: '107',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {'versionDetection': 'pseudo'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.revanced.android.youtube',
-          versionName: '9.18.50',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.revanced.android.youtube',
+        versionName: '9.18.50',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, '107');
-      expect(correctedApp.latestVersion, '107');
-      expect(correctedApp.additionalSettings['versionDetection'], 'pseudo');
-    },
-  );
+    expect(correctedApp, isNotNull);
+    expect(correctedApp!.installedVersion, '107');
+    expect(correctedApp.latestVersion, '107');
+    expect(correctedApp.additionalSettings['versionDetection'], 'pseudo');
+  });
 
   test(
     'legacy reset sentinel restores the device version for pseudo detection',
@@ -831,131 +926,116 @@ void main() {
     },
   );
 
-  test(
-    'disabled version detection preserves installed version when system version equals stored version',
-    () {
-      // installed == realInstalledVersion == '9.18.50', but latest == '107' (different format).
-      // Do not silently relabel the device. The changed source identifier stays
-      // visible for manual review without claiming that it is a newer APK.
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.revanced.android.youtube',
-        url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
-        author: 'LovecraftianGodsKiller',
-        name: 'YouTube-Morphe',
-        installedVersion: '9.18.50',
-        latestVersion: '107',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {'versionDetection': 'pseudo'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('disabled version detection preserves installed version when system version equals stored version', () {
+    // installed == realInstalledVersion == '9.18.50', but latest == '107' (different format).
+    // Do not silently relabel the device. The changed source identifier stays
+    // visible for manual review without claiming that it is a newer APK.
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.revanced.android.youtube',
+      url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+      author: 'LovecraftianGodsKiller',
+      name: 'YouTube-Morphe',
+      installedVersion: '9.18.50',
+      latestVersion: '107',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {'versionDetection': 'pseudo'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.revanced.android.youtube',
-          versionName: '9.18.50',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.revanced.android.youtube',
+        versionName: '9.18.50',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp!.installedVersion, '9.18.50');
-      expect(
-        correctedApp.additionalSettings[observedVersionNameKey],
-        '9.18.50',
-      );
-      expect(app.installedVersion, '9.18.50');
-      expect(app.latestVersion, '107');
-      expect(app.additionalSettings['versionDetection'], 'pseudo');
-      expect(appHasActionableUpdate(app), false);
-      expect(
-        versionDecisionForApp(app).relation,
-        VersionRelation.sourceChanged,
-      );
-      expect(
-        appUpdateIsUserVisible(app, includeVersionOrderUncertain: true),
-        true,
-      );
-    },
-  );
+    expect(correctedApp!.installedVersion, '9.18.50');
+    expect(correctedApp.additionalSettings[observedVersionNameKey], '9.18.50');
+    expect(app.installedVersion, '9.18.50');
+    expect(app.latestVersion, '107');
+    expect(app.additionalSettings['versionDetection'], 'pseudo');
+    expect(appHasActionableUpdate(app), false);
+    expect(versionDecisionForApp(app).relation, VersionRelation.sourceChanged);
+    expect(
+      appUpdateIsUserVisible(app, includeVersionOrderUncertain: true),
+      true,
+    );
+  });
 
-  test(
-    'disabled version detection keeps pseudo version when system installed version does not reconcile',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.revanced.android.youtube',
-        url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
-        author: 'LovecraftianGodsKiller',
-        name: 'YouTube-Morphe',
-        installedVersion: '26.06.01-de-vanced',
-        latestVersion: '26.06.01-de-vanced',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {'versionDetection': 'pseudo'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('disabled version detection keeps pseudo version when system installed version does not reconcile', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.revanced.android.youtube',
+      url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+      author: 'LovecraftianGodsKiller',
+      name: 'YouTube-Morphe',
+      installedVersion: '26.06.01-de-vanced',
+      latestVersion: '26.06.01-de-vanced',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {'versionDetection': 'pseudo'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.revanced.android.youtube',
-          versionName: '4.15.0',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.revanced.android.youtube',
+        versionName: '4.15.0',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp!.installedVersion, '26.06.01-de-vanced');
-      expect(correctedApp.additionalSettings[observedVersionNameKey], '4.15.0');
-      expect(app.installedVersion, '26.06.01-de-vanced');
-      expect(app.latestVersion, '26.06.01-de-vanced');
-      expect(app.additionalSettings['versionDetection'], 'pseudo');
-    },
-  );
+    expect(correctedApp!.installedVersion, '26.06.01-de-vanced');
+    expect(correctedApp.additionalSettings[observedVersionNameKey], '4.15.0');
+    expect(app.installedVersion, '26.06.01-de-vanced');
+    expect(app.latestVersion, '26.06.01-de-vanced');
+    expect(app.additionalSettings['versionDetection'], 'pseudo');
+  });
 
-  test(
-    'system installed version that reconciles with latest is adopted (detection stays on) when installedVersion is null',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.revanced.android.youtube',
-        url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
-        author: 'LovecraftianGodsKiller',
-        name: 'YouTube-Morphe',
-        installedVersion: null,
-        latestVersion: '26.06.01-de-vanced',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {'versionDetection': 'auto'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('system installed version that reconciles with latest is adopted (detection stays on) when installedVersion is null', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.revanced.android.youtube',
+      url: 'https://github.com/LovecraftianGodsKiller/YouTube-Morphe',
+      author: 'LovecraftianGodsKiller',
+      name: 'YouTube-Morphe',
+      installedVersion: null,
+      latestVersion: '26.06.01-de-vanced',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {'versionDetection': 'auto'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.revanced.android.youtube',
-          versionName: '4.15.0',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.revanced.android.youtube',
+        versionName: '4.15.0',
+        versionCode: 106,
+      ),
+    );
 
-      // The device version '4.15.0' DOES reconcile with the latest
-      // '26.06.01-de-vanced': the '26.06.01' prefix substring-matches the
-      // X.Y.Z standard format, so reconcileVersionDifferences returns
-      // <false, ...> ("same format, different value" - a normal update), the
-      // same signal a legit '1.2.3 -> 1.2.4-beta' bump gives. Version detection
-      // is therefore possible and is NOT auto-disabled: the previously-null
-      // installedVersion adopts the real device version and detection stays on.
-      expect(correctedApp, isNotNull);
-      expect(correctedApp!.installedVersion, '4.15.0');
-      expect(correctedApp.latestVersion, '26.06.01-de-vanced');
-      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
-    },
-  );
+    // The device version '4.15.0' DOES reconcile with the latest
+    // '26.06.01-de-vanced': the '26.06.01' prefix substring-matches the
+    // X.Y.Z standard format, so reconcileVersionDifferences returns
+    // <false, ...> ("same format, different value" - a normal update), the
+    // same signal a legit '1.2.3 -> 1.2.4-beta' bump gives. Version detection
+    // is therefore possible and is NOT auto-disabled: the previously-null
+    // installedVersion adopts the real device version and detection stays on.
+    expect(correctedApp, isNotNull);
+    expect(correctedApp!.installedVersion, '4.15.0');
+    expect(correctedApp.latestVersion, '26.06.01-de-vanced');
+    expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+  });
 
   test('f-droid regex version filter keeps newest matching release', () async {
     final details = await FDroid().getAPKUrlsFromFDroidPackagesAPIResponse(
@@ -1019,18 +1099,22 @@ void main() {
   // success rate was abysmal. The lazy size resolver now only walks the
   // actual download links found on the release page HTML.
 
-  // APKMirror's Cloudflare rule allowlists HTML pages by a substring match on
-  // `APKUpdater`; a browser-style UA is answered with a 403 challenge, which
-  // silently disables icon/size/changelog/app-id scraping. Pin both the token
-  // and the ObtainX attribution so a future header cleanup can't quietly undo
-  // it.
+  // APKMirror's Cloudflare rule lets HTML pages through on a substring match
+  // on `APKUpdater`; a browser-style UA (and, on pages, the ObtainX UA) is
+  // answered with a 403 challenge, which silently disables size/changelog/
+  // app-id scraping. Pin both the token and the ObtainX attribution on page
+  // requests so a future header cleanup can't quietly undo it, and pin the
+  // feed's ObtainX identity, which APKMirror's admin asked for (#339).
   test('apk mirror user agent carries the allowlisted token', () async {
     expect(apkMirrorAllowlistedUserAgentToken.contains('APKUpdater'), true);
     expect(apkMirrorUserAgent('2.9.9'), contains('APKUpdater'));
     expect(apkMirrorUserAgent('2.9.9'), contains('ObtainX/2.9.9'));
-    // Unknown version: still allowlisted, just without attribution.
-    expect(apkMirrorUserAgent(), apkMirrorAllowlistedUserAgentToken);
-    expect(apkMirrorUserAgent('  '), apkMirrorAllowlistedUserAgentToken);
+    // Unknown version: never bare (#339), the fallback version stands in.
+    const String fallbackUa =
+        '$apkMirrorAllowlistedUserAgentToken '
+        'ObtainX/$obtainXUserAgentFallbackVersion';
+    expect(apkMirrorUserAgent(), fallbackUa);
+    expect(apkMirrorUserAgent('  '), fallbackUa);
     // Whatever the UA ends up being, it must not read as a browser.
     final String ua = apkMirrorUserAgent('2.9.9');
     expect(ua.contains('Mozilla'), false);
@@ -1046,6 +1130,242 @@ void main() {
         .firstWhere((e) => e.key.toLowerCase() == 'user-agent')
         .value;
     expect(sentUserAgent, contains('APKUpdater'));
+
+    // The feed identifies as ObtainX, with the project URL and a version even
+    // when the running one can't be read (the test VM has none).
+    final Map<String, String>? feedHeaders = await APKMirror()
+        .getRequestHeaders(
+          const <String, dynamic>{},
+          'https://www.apkmirror.com/apk/signal-foundation/signal-private-messenger/feed/',
+        );
+    final String feedUserAgent = feedHeaders!['user-agent']!;
+    expect(feedUserAgent, startsWith('ObtainX/'));
+    expect(
+      feedUserAgent,
+      endsWith(' (+https://github.com/bikram-agarwal/ObtainX)'),
+    );
+    expect(feedUserAgent, isNot(startsWith('ObtainX/ ')));
+    expect(feedUserAgent, isNot(contains('APKUpdater')));
+  });
+
+  test('apk mirror requests go through the per-host gate', () {
+    final apkMirror = APKMirror();
+    expect(apkMirror.enableHostRequestGate, isTrue);
+    expect(apkMirror.maxConcurrentRequestsPerHost, 2);
+  });
+
+  test('apk mirror icon urls name the package after the first underscore', () {
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/wp-content/uploads/2024/01/11/65a71d34ecd19_com.android.chrome.png',
+      ),
+      'com.android.chrome',
+    );
+    // Feed icons carry a size suffix (cases from upstream's apkmirror_test).
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/65a71d34ecd19_com.android.chrome-384x384.png',
+      ),
+      'com.android.chrome',
+    );
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/67189d60d72a1_com.google.android.youtube-480x640.png',
+      ),
+      'com.google.android.youtube',
+    );
+    // Upstream takes the last `_` segment, which reads Firefox Beta's icon as
+    // Firefox's package.
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/5f2a1b_org.mozilla.firefox_beta-384x384.png',
+      ),
+      'org.mozilla.firefox_beta',
+    );
+    // Hash-only icons name no package.
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/x/5b466f2e62102-384x384.png',
+      ),
+      isNull,
+    );
+    expect(
+      apkMirrorPackageFromIconUrl(
+        'https://downloadr2.apkmirror.com/wp-content/uploads/2024/01/11/65a71d34ecd19.png',
+      ),
+      isNull,
+    );
+    expect(apkMirrorPackageFromIconUrl(null), isNull);
+    expect(apkMirrorPackageFromIconUrl(''), isNull);
+  });
+
+  test('apk mirror feed carries the app icon', () {
+    const feed = '''
+<rss><channel><item><content:encoded><![CDATA[
+<p><img src="https://downloadr2.apkmirror.com/x/65a_com.android.chrome-384x384.png"></p>
+]]></content:encoded></item></channel></rss>''';
+    expect(
+      apkMirrorIconUrlFromFeedXml(feed),
+      'https://downloadr2.apkmirror.com/x/65a_com.android.chrome-384x384.png',
+    );
+    expect(
+      apkMirrorPackageFromIconUrl(apkMirrorIconUrlFromFeedXml(feed)),
+      'com.android.chrome',
+    );
+    expect(
+      apkMirrorIconUrlFromFeedXml('<item><title>x</title></item>'),
+      isNull,
+    );
+  });
+
+  test('apk mirror takes the icon and package from the feed, without the listing', () async {
+    const iconUrl =
+        'https://downloadr2.apkmirror.com/x/65a71d34ecd19_com.example.app-384x384.png';
+    final apkMirror = RecordingAPKMirror(apkMirrorFeedWithIcon(iconUrl));
+    final details = await apkMirror.getLatestAPKDetails(
+      'https://www.apkmirror.com/apk/example/example',
+      const {},
+    );
+    expect(details.iconUrl, iconUrl);
+    expect(details.appId, 'com.example.app');
+    // One request per check: no listing page for the icon any more (#339).
+    expect(apkMirror.requestedUrls, [
+      'https://www.apkmirror.com/apk/example/example/feed/',
+    ]);
+  });
+
+  test(
+    'apk mirror reads a hash-only icon app id from its listing page',
+    () async {
+      final apkMirror = RecordingAPKMirror(
+        apkMirrorFeedWithIcon(
+          'https://downloadr2.apkmirror.com/x/630d0e65afd4f-384x384.png',
+        ),
+        listing: '<a title="View on Play Store" href="https://play.google.com/store/apps/details?id=com.android.vending"></a>',
+      );
+      final details = await apkMirror.getLatestAPKDetails(
+        'https://www.apkmirror.com/apk/example/example',
+        const {},
+      );
+      expect(details.appId, isNull);
+      expect(
+        await apkMirror.tryInferringAppId(
+          'https://www.apkmirror.com/apk/example/example',
+        ),
+        'com.android.vending',
+      );
+      // The canonical, slash-terminated listing URL: no 301 first.
+      expect(
+        apkMirror.requestedUrls.last,
+        'https://www.apkmirror.com/apk/example/example/',
+      );
+    },
+  );
+
+  test('apk mirror title filter can be inverted', () async {
+    expect(
+      APKMirror().additionalSourceAppSpecificSettingFormItems
+          .expand((row) => row)
+          .map((item) => item.key),
+      contains('invertReleaseTitlesFilter'),
+    );
+    final feed = apkMirrorFeedWithReleases([
+      ('2.0-beta', const Duration(days: 1)),
+      ('1.9', const Duration(days: 2)),
+    ]);
+    const url = 'https://www.apkmirror.com/apk/example/example';
+    const settings = {
+      'filterReleaseTitlesByRegEx': 'beta',
+      'fallbackToOlderReleases': true,
+    };
+    expect(
+      (await FeedFixtureAPKMirror(
+        feed,
+      ).getLatestAPKDetails(url, settings)).changeLog,
+      contains('example-2-0-beta-release'),
+    );
+    expect(
+      (await FeedFixtureAPKMirror(feed).getLatestAPKDetails(url, {
+        ...settings,
+        'invertReleaseTitlesFilter': true,
+      })).changeLog,
+      contains('example-1-9-release'),
+    );
+  });
+
+  test('apk mirror walks a release for its size once per app', () async {
+    final originalDeviceInfoPlatform = DeviceInfoPlatform.instance;
+    DeviceInfoPlatform.instance = FakeAndroidDeviceInfoPlatform();
+    addTearDown(() {
+      DeviceInfoPlatform.instance = originalDeviceInfoPlatform;
+    });
+    final first = VariantReleaseAPKMirror();
+    expect(
+      await first.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'once-per-release',
+      ),
+      94371840,
+    );
+    expect(first.requestedUrls, isNotEmpty);
+    // Reopening the app page (a fresh source, as getSource hands out) reuses
+    // the first walk.
+    final second = VariantReleaseAPKMirror();
+    expect(
+      await second.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'once-per-release',
+      ),
+      94371840,
+    );
+    expect(second.requestedUrls, isEmpty);
+
+    // A walk the gate stopped before sending anything doesn't count.
+    final blocked = VariantReleaseAPKMirror(blockReleasePageOnce: true);
+    expect(
+      await blocked.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'blocked-once',
+      ),
+      isNull,
+    );
+    expect(blocked.requestedUrls, isEmpty);
+    expect(
+      await blocked.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {},
+        listingKey: 'blocked-once',
+      ),
+      94371840,
+    );
+  });
+
+  test('apk mirror size skips universal variants next to the ABI match', () async {
+    final originalDeviceInfoPlatform = DeviceInfoPlatform.instance;
+    DeviceInfoPlatform.instance = FakeAndroidDeviceInfoPlatform();
+    addTearDown(() {
+      DeviceInfoPlatform.instance = originalDeviceInfoPlatform;
+    });
+    final apkMirror = VariantReleaseAPKMirror();
+    expect(
+      await apkMirror.resolveLatestApkSizeBytes(
+        releasePageUrl: VariantReleaseAPKMirror.releasePageUrl,
+        additionalSettings: const {'autoApkFilterByArch': true},
+        listingKey: 'universal-variants',
+      ),
+      41943040,
+    );
+    expect(
+      apkMirror.requestedUrls
+          .where((url) => url.contains('android-apk-download'))
+          .toList(),
+      [
+        '${VariantReleaseAPKMirror.releasePageUrl}variants-3-0-2-android-apk-download/',
+      ],
+    );
   });
 
   test('apk mirror app slug aliases standardize to canonical app slug', () {
@@ -1099,22 +1419,25 @@ $adLink
     expect(APKMirror().inferAppIdEvenWhenTrackOnly, isTrue);
   });
 
-  test('apk mirror release page download urls strip duplicate fragments', () async {
-    expect(
-      await apkMirrorDownloadPageUrlsFromReleasePageHtml(
-        '''
+  test(
+    'apk mirror release page download urls strip duplicate fragments',
+    () async {
+      expect(
+        await apkMirrorDownloadPageUrlsFromReleasePageHtml(
+          '''
 <a href="youtube-21-18-163-3-android-apk-download/">21.18.163 APK</a>
 <a href="youtube-21-18-163-3-android-apk-download/#disqus_thread">comments</a>
 <a href="youtube-21-18-163-android-apk-download/">21.18.163 BUNDLE</a>
 ''',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/',
-      ),
-      [
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-3-android-apk-download/',
-        'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-android-apk-download/',
-      ],
-    );
-  });
+          'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/',
+        ),
+        [
+          'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-3-android-apk-download/',
+          'https://www.apkmirror.com/apk/google-inc/youtube/youtube-21-18-163-release/youtube-21-18-163-android-apk-download/',
+        ],
+      );
+    },
+  );
 
   test('apk mirror release page changelog extracts whats new text', () async {
     expect(
@@ -1173,6 +1496,120 @@ This app description should not be included.
       isNull,
     );
   });
+
+  // Fixtures ported from upstream's apkmirror_test.dart (#3310).
+  test('apk mirror changelog skips page noise and stops at About', () async {
+    final changeLog = await apkMirrorChangeLogFromReleasePageHtml('''
+<html><body>
+<h2><a href="#whatsnew">What's new in App 1.2.3</a></h2>
+<div>
+<p>Thanks for choosing App!</p>
+<p>Fixed bugs.</p>
+<ul><li>Faster startup</li><li>New icon</li></ul>
+</div>
+<p>Verified safe to install (read more)</p>
+<p>Scroll to available downloads</p>
+<h2>About App 1.2.3</h2>
+<p>This text must not be included.</p>
+</body></html>
+''');
+    expect(changeLog, contains('Thanks for choosing App!'));
+    expect(changeLog, contains('Fixed bugs.'));
+    expect(changeLog, contains('- Faster startup'));
+    expect(changeLog, contains('- New icon'));
+    expect(changeLog, isNot(contains('Verified safe')));
+    expect(changeLog, isNot(contains('Scroll to available downloads')));
+    expect(changeLog, isNot(contains('This text must not be included.')));
+  });
+
+  test('apk mirror feed item index resolves that item\'s release url', () {
+    const feed = '''
+<?xml version="1.0"?>
+<rss><channel>
+<item>
+<title>App One 1.0 by A</title>
+<link>https://www.apkmirror.com/apk/dev/app-one/app-one-1-0-release/</link>
+<pubDate>Sun, 13 Sep 2026 01:02:27 +0000</pubDate>
+</item>
+<item>
+<title>App One 1.1 by A</title>
+<link>https://www.apkmirror.com/apk/dev/app-one/app-one-1-1-release/</link>
+<pubDate>Mon, 14 Sep 2026 01:02:27 +0000</pubDate>
+</item>
+</channel></rss>
+''';
+    expect(
+      releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, 0),
+      'https://www.apkmirror.com/apk/dev/app-one/app-one-1-0-release/',
+    );
+    expect(
+      releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, 1),
+      'https://www.apkmirror.com/apk/dev/app-one/app-one-1-1-release/',
+    );
+    expect(releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, 5), isNull);
+    expect(releaseUrlFromApkMirrorFeedBodyForItemIndex(feed, -1), isNull);
+    expect(
+      releaseUrlFromApkMirrorFeedBodyForItemIndex('<item></item>', 0),
+      isNull,
+    );
+  });
+
+  test(
+    'apk mirror file size parses across a line break and in KB/GB',
+    () async {
+      expect(
+        await apkSizeBytesFromApkMirrorReleasePageHtml('File size:\n270.70 MB'),
+        (270.70 * 1024 * 1024).round(),
+      );
+      expect(apkSizeBytesFromApkMirrorSizeText('File size: 12 KB'), 12 * 1024);
+      expect(
+        apkSizeBytesFromApkMirrorSizeText('File size: 1.5 GB'),
+        (1.5 * 1024 * 1024 * 1024).round(),
+      );
+      expect(apkSizeBytesFromApkMirrorSizeText('No size here'), isNull);
+    },
+  );
+
+  test(
+    'apk mirror reports no matching release when the title filter excludes all',
+    () async {
+      await expectLater(
+        FeedFixtureAPKMirror(
+          apkMirrorFeedWithReleases([('2.0', const Duration(days: 1))]),
+        ).getLatestAPKDetails('https://www.apkmirror.com/apk/example/example', {
+          'filterReleaseTitlesByRegEx': 'nothing-matches',
+        }),
+        throwsA(isA<NoReleasesError>()),
+      );
+    },
+  );
+
+  test(
+    'apk mirror skips releases younger than the minimum update age',
+    () async {
+      const url = 'https://www.apkmirror.com/apk/example/example';
+      final details = await FeedFixtureAPKMirror(
+        apkMirrorFeedWithReleases([
+          ('2.0', const Duration(days: 1)),
+          ('1.0', const Duration(days: 10)),
+        ]),
+      ).getLatestAPKDetails(url, {'minimumUpdateAgeDays': '7'});
+      expect(details.version, '1.0');
+      expect(
+        details.changeLog,
+        'https://www.apkmirror.com/apk/example/example/example-1-0-release/',
+      );
+
+      // None old enough: the newest stays, for the provider to suppress.
+      final allTooYoung = await FeedFixtureAPKMirror(
+        apkMirrorFeedWithReleases([
+          ('2.0', const Duration(days: 1)),
+          ('1.0', const Duration(days: 2)),
+        ]),
+      ).getLatestAPKDetails(url, {'minimumUpdateAgeDays': '7'});
+      expect(allTooYoung.version, '2.0');
+    },
+  );
 
   test('app copy preserves known apk size when refreshed size is unknown', () {
     final currentApp = App(
@@ -1383,62 +1820,56 @@ This app description should not be included.
       expect(appHasActionableUpdate(correctedApp), false);
     });
 
-    test(
-      'shorter device version is not rewritten to a longer source tag (ZipXtract)',
-      () {
-        // Device is on 7.1; GitHub latest is v7.1.1. A short shared format
-        // ([0-9]+\\.[0-9]+) used to match the '7.1' prefix inside 'v7.1.1' and
-        // step 3 rewrote installedVersion to the source latest, which then
-        // looked like a pseudo-version and hid the update forever.
-        expect(reconcileVersionDifferences('7.1', 'v7.1.1')?.areEqual, false);
-        expect(versionsEffectivelyEqual('7.1', 'v7.1.1'), false);
+    test('shorter device version is not rewritten to a longer source tag (ZipXtract)', () {
+      // Device is on 7.1; GitHub latest is v7.1.1. A short shared format
+      // ([0-9]+\\.[0-9]+) used to match the '7.1' prefix inside 'v7.1.1' and
+      // step 3 rewrote installedVersion to the source latest, which then
+      // looked like a pseudo-version and hid the update forever.
+      expect(reconcileVersionDifferences('7.1', 'v7.1.1')?.areEqual, false);
+      expect(versionsEffectivelyEqual('7.1', 'v7.1.1'), false);
 
-        final app = issue222App(
-          id: 'com.wirelessalien.zipxtract',
-          url: 'https://github.com/WirelessAlien/ZipXtract',
-          author: 'WirelessAlien',
-          name: 'ZipXtract',
-          installedVersion: null,
-          latestVersion: 'v7.1.1',
-        );
+      final app = issue222App(
+        id: 'com.wirelessalien.zipxtract',
+        url: 'https://github.com/WirelessAlien/ZipXtract',
+        author: 'WirelessAlien',
+        name: 'ZipXtract',
+        installedVersion: null,
+        latestVersion: 'v7.1.1',
+      );
 
-        final correctedApp = correct(
-          app,
-          deviceVersionName: '7.1',
-          deviceVersionCode: 25,
-        );
+      final correctedApp = correct(
+        app,
+        deviceVersionName: '7.1',
+        deviceVersionCode: 25,
+      );
 
-        expect(correctedApp, isNotNull);
-        expect(correctedApp!.installedVersion, '7.1');
-        expect(correctedApp.additionalSettings['versionDetection'], 'auto');
-        expect(appHasActionableUpdate(correctedApp), true);
-      },
-    );
+      expect(correctedApp, isNotNull);
+      expect(correctedApp!.installedVersion, '7.1');
+      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+      expect(appHasActionableUpdate(correctedApp), true);
+    });
 
-    test(
-      'pull-to-refresh heals a ZipXtract install wrongly pinned to source latest',
-      () {
-        final app = issue222App(
-          id: 'com.wirelessalien.zipxtract',
-          url: 'https://github.com/WirelessAlien/ZipXtract',
-          author: 'WirelessAlien',
-          name: 'ZipXtract',
-          installedVersion: 'v7.1.1',
-          latestVersion: 'v7.1.1',
-        );
+    test('pull-to-refresh heals a ZipXtract install wrongly pinned to source latest', () {
+      final app = issue222App(
+        id: 'com.wirelessalien.zipxtract',
+        url: 'https://github.com/WirelessAlien/ZipXtract',
+        author: 'WirelessAlien',
+        name: 'ZipXtract',
+        installedVersion: 'v7.1.1',
+        latestVersion: 'v7.1.1',
+      );
 
-        final correctedApp = correct(
-          app,
-          deviceVersionName: '7.1',
-          deviceVersionCode: 25,
-        );
+      final correctedApp = correct(
+        app,
+        deviceVersionName: '7.1',
+        deviceVersionCode: 25,
+      );
 
-        expect(correctedApp, isNotNull);
-        expect(correctedApp!.installedVersion, '7.1');
-        expect(correctedApp.additionalSettings['versionDetection'], 'auto');
-        expect(appHasActionableUpdate(correctedApp), true);
-      },
-    );
+      expect(correctedApp, isNotNull);
+      expect(correctedApp!.installedVersion, '7.1');
+      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+      expect(appHasActionableUpdate(correctedApp), true);
+    });
 
     test('both sides keeping the full manifest string', () {
       final app = issue222App(
@@ -1577,11 +2008,9 @@ This app description should not be included.
       );
       await Future.wait(<Future<void>>[olderSave, newerSave]);
 
-      final Map<String, dynamic> savedJson =
-          jsonDecode(
-                File('${appsDirectory.path}/$appId.json').readAsStringSync(),
-              )
-              as Map<String, dynamic>;
+      final Map<String, dynamic> savedJson = jsonDecode(
+        File('${appsDirectory.path}/$appId.json').readAsStringSync(),
+      ) as Map<String, dynamic>;
       expect(savedJson['name'], 'Newer');
       expect(
         appsDirectory.listSync().where(
@@ -1653,41 +2082,38 @@ This app description should not be included.
     expect(versionOrderUncertainUpdate(correctedApp), isTrue);
   });
 
-  test(
-    'releaseCommitShaAsVersion setting does not disable version detection even if commit hashes differ',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.example',
-        url: 'https://github.com/example/example',
-        author: 'example',
-        name: 'example',
-        installedVersion: '75094d8',
-        latestVersion: '86094f9',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {
-          'versionDetection': 'auto',
-          'releaseCommitShaAsVersion': true,
-        },
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('releaseCommitShaAsVersion setting does not disable version detection even if commit hashes differ', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.example',
+      url: 'https://github.com/example/example',
+      author: 'example',
+      name: 'example',
+      installedVersion: '75094d8',
+      latestVersion: '86094f9',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {
+        'versionDetection': 'auto',
+        'releaseCommitShaAsVersion': true,
+      },
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.example',
-          versionName: '1.5.3-DEV (75094D8)',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.example',
+        versionName: '1.5.3-DEV (75094D8)',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp!.installedVersion, '1.5.3-DEV (75094D8)');
-      expect(correctedApp.additionalSettings['versionDetection'], 'auto');
-      expect(versionOrderUncertainUpdate(correctedApp), isTrue);
-    },
-  );
+    expect(correctedApp!.installedVersion, '1.5.3-DEV (75094D8)');
+    expect(correctedApp.additionalSettings['versionDetection'], 'auto');
+    expect(versionOrderUncertainUpdate(correctedApp), isTrue);
+  });
 
   test(
     'an omitted source hash does not change the release or stored device label',
@@ -1738,38 +2164,35 @@ This app description should not be included.
     },
   );
 
-  test(
-    'partially sha-like version update from null stored version does not disable version detection',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      final app = App(
-        id: 'app.example',
-        url: 'https://github.com/wxxsfxyzm/InstallerX-Revived',
-        author: 'wxxsfxyzm',
-        name: 'InstallerX-Revived',
-        installedVersion: null,
-        latestVersion: '26.07.1a2b3c4',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: {'versionDetection': 'auto'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
+  test('partially sha-like version update from null stored version does not disable version detection', () {
+    final appsProvider = AppsProvider(isBg: true);
+    final app = App(
+      id: 'app.example',
+      url: 'https://github.com/wxxsfxyzm/InstallerX-Revived',
+      author: 'wxxsfxyzm',
+      name: 'InstallerX-Revived',
+      installedVersion: null,
+      latestVersion: '26.07.1a2b3c4',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: {'versionDetection': 'auto'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
 
-      final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
-        app,
-        const FakePackageInfo(
-          packageName: 'app.example',
-          versionName: '26.06',
-          versionCode: 106,
-        ),
-      );
+    final correctedApp = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      const FakePackageInfo(
+        packageName: 'app.example',
+        versionName: '26.06',
+        versionCode: 106,
+      ),
+    );
 
-      expect(correctedApp, isNotNull);
-      expect(correctedApp!.additionalSettings['versionDetection'], 'auto');
-      expect(correctedApp.installedVersion, '26.06');
-    },
-  );
+    expect(correctedApp, isNotNull);
+    expect(correctedApp!.additionalSettings['versionDetection'], 'auto');
+    expect(correctedApp.installedVersion, '26.06');
+  });
 
   test(
     'publication and installation dates do not resolve unclear version order',
@@ -1879,59 +2302,55 @@ This app description should not be included.
       false,
     );
     expect(
-      normalizeSkippedLatestVersion(
-        activeSkip,
-      ).additionalSettings['skippedLatestVersion'],
+      normalizeSkippedLatestVersion(activeSkip)
+          .additionalSettings['skippedLatestVersion'],
       '2.0',
     );
   });
 
-  test(
-    'background candidate selection excludes skipped, on-demand, and newer apps',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      addTearDown(appsProvider.dispose);
-      final actionable = App(
-        id: 'actionable',
-        url: 'https://github.com/example/actionable',
-        author: 'example',
-        name: 'actionable',
-        installedVersion: '1.0',
-        latestVersion: '2.0',
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: const <String, dynamic>{},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
-      final skipped = actionable.copyWith(
-        id: 'skipped',
-        additionalSettings: const {'skippedLatestVersion': '2.0'},
-      );
-      final onDemand = actionable.copyWith(
-        id: 'on-demand',
-        additionalSettings: const {'onDemandOnly': true},
-      );
-      final installedNewer = actionable.copyWith(
-        id: 'installed-newer',
-        installedVersion: '3.0',
-      );
-      appsProvider.apps.addAll({
-        actionable.id: AppInMemory(actionable, null, null, null),
-        skipped.id: AppInMemory(skipped, null, null, null),
-        onDemand.id: AppInMemory(onDemand, null, null, null),
-        installedNewer.id: AppInMemory(installedNewer, null, null, null),
-      });
+  test('background candidate selection excludes skipped, on-demand, and newer apps', () {
+    final appsProvider = AppsProvider(isBg: true);
+    addTearDown(appsProvider.dispose);
+    final actionable = App(
+      id: 'actionable',
+      url: 'https://github.com/example/actionable',
+      author: 'example',
+      name: 'actionable',
+      installedVersion: '1.0',
+      latestVersion: '2.0',
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: const <String, dynamic>{},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+    final skipped = actionable.copyWith(
+      id: 'skipped',
+      additionalSettings: const {'skippedLatestVersion': '2.0'},
+    );
+    final onDemand = actionable.copyWith(
+      id: 'on-demand',
+      additionalSettings: const {'onDemandOnly': true},
+    );
+    final installedNewer = actionable.copyWith(
+      id: 'installed-newer',
+      installedVersion: '3.0',
+    );
+    appsProvider.apps.addAll({
+      actionable.id: AppInMemory(actionable, null, null, null),
+      skipped.id: AppInMemory(skipped, null, null, null),
+      onDemand.id: AppInMemory(onDemand, null, null, null),
+      installedNewer.id: AppInMemory(installedNewer, null, null, null),
+    });
 
-      expect(
-        appsProvider.findExistingUpdates(
-          installedOnly: true,
-          excludeOnDemandOnly: true,
-        ),
-        <String>['actionable'],
-      );
-    },
-  );
+    expect(
+      appsProvider.findExistingUpdates(
+        installedOnly: true,
+        excludeOnDemandOnly: true,
+      ),
+      <String>['actionable'],
+    );
+  });
 
   test('install status reconciliation converges to a fixed point', () {
     // getCorrectedInstallStatusAppIfPossible is applied on every load and save, so
@@ -2023,53 +2442,52 @@ This app description should not be included.
     expect(google?.areEqual, false);
   });
 
-  test(
-    'auto detection survives non-standard release suffixes instead of going pseudo',
-    () {
-      final appsProvider = AppsProvider(isBg: true);
-      addTearDown(appsProvider.dispose);
-      const installed = '1.0.896819557.release';
-      const latest = '1.0.915254043.release';
-      final app = App(
-        id: 'com.example.release',
-        // A source WITHOUT naiveStandardVersionDetection, so reconciliation is
-        // the only thing keeping version detection alive.
-        url: 'https://github.com/example/release-suffix',
-        author: 'example',
-        name: 'Release Suffix',
-        installedVersion: installed,
-        latestVersion: latest,
-        apkUrls: const <MapEntry<String, String>>[],
-        preferredApkIndex: 0,
-        additionalSettings: <String, dynamic>{'versionDetection': 'auto'},
-        lastUpdateCheck: DateTime.now(),
-        pinned: false,
-      );
-      const info = FakePackageInfo(
-        packageName: 'com.example.release',
-        versionName: installed,
-        versionCode: 896819557,
-      );
+  test('auto detection survives non-standard release suffixes instead of going pseudo', () {
+    final appsProvider = AppsProvider(isBg: true);
+    addTearDown(appsProvider.dispose);
+    const installed = '1.0.896819557.release';
+    const latest = '1.0.915254043.release';
+    final app = App(
+      id: 'com.example.release',
+      // A source WITHOUT naiveStandardVersionDetection, so reconciliation is
+      // the only thing keeping version detection alive.
+      url: 'https://github.com/example/release-suffix',
+      author: 'example',
+      name: 'Release Suffix',
+      installedVersion: installed,
+      latestVersion: latest,
+      apkUrls: const <MapEntry<String, String>>[],
+      preferredApkIndex: 0,
+      additionalSettings: <String, dynamic>{'versionDetection': 'auto'},
+      lastUpdateCheck: DateTime.now(),
+      pinned: false,
+    );
+    const info = FakePackageInfo(
+      packageName: 'com.example.release',
+      versionName: installed,
+      versionCode: 896819557,
+    );
 
-      expect(
-        appsProvider.isVersionDetectionPossible(
-          AppInMemory(app, null, info, null),
-        ),
-        true,
-      );
-      expect(appHasActionableUpdate(app), true);
+    expect(
+      appsProvider.isVersionDetectionPossible(
+        AppInMemory(app, null, info, null),
+      ),
+      true,
+    );
+    expect(appHasActionableUpdate(app), true);
 
-      final App? corrected = appsProvider
-          .getCorrectedInstallStatusAppIfPossible(app, info);
-      final App effective = corrected ?? app;
+    final App? corrected = appsProvider.getCorrectedInstallStatusAppIfPossible(
+      app,
+      info,
+    );
+    final App effective = corrected ?? app;
 
-      // The pending update must survive reconciliation: no flip to pseudo, no
-      // rewriting installedVersion to the release that was never installed.
-      expect(effective.additionalSettings['versionDetection'], 'auto');
-      expect(effective.installedVersion, installed);
-      expect(appHasActionableUpdate(effective), true);
-    },
-  );
+    // The pending update must survive reconciliation: no flip to pseudo, no
+    // rewriting installedVersion to the release that was never installed.
+    expect(effective.additionalSettings['versionDetection'], 'auto');
+    expect(effective.installedVersion, installed);
+    expect(appHasActionableUpdate(effective), true);
+  });
 
   test('version detection mode parses every stored encoding', () {
     expect(VersionDetectionMode.fromStored('auto'), VersionDetectionMode.auto);
@@ -2132,9 +2550,8 @@ This app description should not be included.
       // Out of sync in either direction still means version-code mode, so the
       // displayed version and install-status reconciliation cannot disagree.
       expect(
-        app(const {
-          'versionDetection': 'versionCode',
-        }).usesVersionCodeAsOsVersion,
+        app(const {'versionDetection': 'versionCode'})
+            .usesVersionCodeAsOsVersion,
         true,
       );
       expect(
@@ -2226,49 +2643,52 @@ This app description should not be included.
     },
   );
 
-  test('appUpdateIsUserVisible agrees with the list UI, not with string diffs', () {
-    App app({
-      String? installed = '1.2.3',
-      String latest = '1.2.4',
-      Map<String, dynamic> settings = const <String, dynamic>{},
-    }) => App(
-      id: 'app.example',
-      url: 'https://github.com/example/example',
-      author: 'example',
-      name: 'example',
-      installedVersion: installed,
-      latestVersion: latest,
-      apkUrls: const <MapEntry<String, String>>[],
-      preferredApkIndex: 0,
-      additionalSettings: settings,
-      lastUpdateCheck: DateTime.now(),
-      pinned: false,
-    );
+  test(
+    'appUpdateIsUserVisible agrees with the list UI, not with string diffs',
+    () {
+      App app({
+        String? installed = '1.2.3',
+        String latest = '1.2.4',
+        Map<String, dynamic> settings = const <String, dynamic>{},
+      }) => App(
+        id: 'app.example',
+        url: 'https://github.com/example/example',
+        author: 'example',
+        name: 'example',
+        installedVersion: installed,
+        latestVersion: latest,
+        apkUrls: const <MapEntry<String, String>>[],
+        preferredApkIndex: 0,
+        additionalSettings: settings,
+        lastUpdateCheck: DateTime.now(),
+        pinned: false,
+      );
 
-    // Genuinely behind.
-    expect(appUpdateIsUserVisible(app()), true);
-    // Version string changed but denotes the same build (build-metadata suffix).
-    expect(appUpdateIsUserVisible(app(latest: '1.2.3-2')), false);
-    // Source published something older than what is installed.
-    expect(appUpdateIsUserVisible(app(latest: '1.1.0')), false);
-    // User skipped this exact release.
-    expect(
-      appUpdateIsUserVisible(
-        app(settings: const {'skippedLatestVersion': '1.2.4'}),
-      ),
-      false,
-    );
-    // Never installed: still installable.
-    expect(appUpdateIsUserVisible(app(installed: null)), true);
-    // Ambiguous ordering: notifications surface it, background install must not.
-    final ambiguous = app(installed: '26.06.9df4c85', latest: '26.06.8df31d');
-    expect(versionOrderUncertainUpdate(ambiguous), true);
-    expect(appUpdateIsUserVisible(ambiguous), false);
-    expect(
-      appUpdateIsUserVisible(ambiguous, includeVersionOrderUncertain: true),
-      true,
-    );
-  });
+      // Genuinely behind.
+      expect(appUpdateIsUserVisible(app()), true);
+      // Version string changed but denotes the same build (build-metadata suffix).
+      expect(appUpdateIsUserVisible(app(latest: '1.2.3-2')), false);
+      // Source published something older than what is installed.
+      expect(appUpdateIsUserVisible(app(latest: '1.1.0')), false);
+      // User skipped this exact release.
+      expect(
+        appUpdateIsUserVisible(
+          app(settings: const {'skippedLatestVersion': '1.2.4'}),
+        ),
+        false,
+      );
+      // Never installed: still installable.
+      expect(appUpdateIsUserVisible(app(installed: null)), true);
+      // Ambiguous ordering: notifications surface it, background install must not.
+      final ambiguous = app(installed: '26.06.9df4c85', latest: '26.06.8df31d');
+      expect(versionOrderUncertainUpdate(ambiguous), true);
+      expect(appUpdateIsUserVisible(ambiguous), false);
+      expect(
+        appUpdateIsUserVisible(ambiguous, includeVersionOrderUncertain: true),
+        true,
+      );
+    },
+  );
 
   test('standard version matching and reconciliation ignore case', () {
     expect(

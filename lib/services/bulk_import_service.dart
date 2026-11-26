@@ -12,6 +12,7 @@ import 'package:http/io_client.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/services/host_request_gate.dart';
 import 'package:obtainium/services/html_parse_isolate.dart';
 import 'package:obtainium/services/store_lookup_queue.dart';
 
@@ -145,6 +146,18 @@ class BulkImportService {
   static Future<bool?> uses24HourFormat() async {
     try {
       return await _deviceAppsChannel.invokeMethod<bool>('uses24HourFormat');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Android's day/month/year order for the phone's language and region,
+  /// e.g. "dMy" (#355), or null when the platform can't say.
+  static Future<String?> dateFormatOrder() async {
+    try {
+      return await _deviceAppsChannel.invokeMethod<String>('dateFormatOrder');
     } on MissingPluginException {
       return null;
     } on PlatformException {
@@ -310,6 +323,9 @@ class BulkImportService {
     const batchSize = 100;
     // Authorization header uses APKUpdater credentials to access the API endpoint
     const auth = 'Basic YXBpLWFwa3VwZGF0ZXI6cm01cmNmcnVVakt5MDRzTXB5TVBKWFc4';
+    final String userAgent = apkMirrorUserAgent(
+      await apkMirrorObtainXVersion(),
+    );
 
     for (int i = 0; i < queryCandidates.length; i += batchSize) {
       if (shouldAbort?.call() == true) {
@@ -320,24 +336,34 @@ class BulkImportService {
         min(i + batchSize, queryCandidates.length),
       );
       try {
-        final response = await http
-            .post(
-              Uri.parse(
-                'https://www.apkmirror.com/wp-json/apkm/v1/app_exists/',
-              ),
-              headers: {
-                'Authorization': auth,
-                'Content-Type': 'application/json',
-                // Same Cloudflare allowlist as the HTML pages — see
-                // [apkMirrorAllowlistedUserAgentToken].
-                'User-Agent': apkMirrorUserAgent(),
-              },
-              body: jsonEncode({
-                'pnames': batch,
-                'exclude': ['alpha', 'beta'],
-              }),
-            )
-            .timeout(const Duration(seconds: 30));
+        final Uri apiUri = Uri.parse(
+          'https://www.apkmirror.com/wp-json/apkm/v1/app_exists/',
+        );
+        // Through the APKMirror request gate (#339) for load only: shared
+        // per-host concurrency with the source, and a challenged or
+        // rate-limited API fails fast (caught below: not cached, retried on
+        // the next scan) instead of being asked again at once.
+        final response = await HostRequestGate.instance.runResponse(
+          apiUri,
+          apkMirrorMaxConcurrentRequests,
+          () => http
+              .post(
+                apiUri,
+                headers: {
+                  'Authorization': auth,
+                  'Content-Type': 'application/json',
+                  // The page UA, ObtainX name and version included, so
+                  // APKMirror can tell these calls are ours (#339); see
+                  // [apkMirrorAllowlistedUserAgentToken].
+                  'User-Agent': userAgent,
+                },
+                body: jsonEncode({
+                  'pnames': batch,
+                  'exclude': ['alpha', 'beta'],
+                }),
+              )
+              .timeout(const Duration(seconds: 30)),
+        );
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;

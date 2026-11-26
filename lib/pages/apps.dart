@@ -5,7 +5,8 @@ import 'dart:math' as math;
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
 import 'package:expressive_refresh/expressive_refresh.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/rendering.dart'
     show
         PaintingContext,
@@ -22,8 +23,10 @@ import 'package:flutter/rendering.dart'
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:progress_indicator_m3e/progress_indicator_m3e.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 import 'package:obtainium/app_sources/apkmirror.dart';
 import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/app_sources/gitlab.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_details_container.dart';
@@ -37,7 +40,7 @@ import 'package:obtainium/components/empty_state_illustration.dart';
 import 'package:obtainium/components/rippling_wavy_progress/circular.dart';
 import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/components/ui_widgets.dart'
-    show ActionListTile, AppSwitch, AppSwitchListTile;
+    show ActionListTile, AppSwitch, AppSwitchListTile, TvFocusRing;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/date_time_format.dart';
 import 'package:obtainium/main.dart';
@@ -46,9 +49,11 @@ import 'package:obtainium/pages/page_route_slide_up.dart';
 import 'package:obtainium/pages/app.dart';
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/pages/settings.dart';
+import 'package:obtainium/pages/update_health.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/logs_provider.dart';
+import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/bulk_import_service.dart';
@@ -60,6 +65,8 @@ import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
+import 'package:obtainium/utils/locale_utils.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:provider/provider.dart';
@@ -188,6 +195,16 @@ String visibilityFilterChipLabel(String label, CategoryFilterIntent intent) {
     CategoryFilterIntent.include => '+ $label',
     CategoryFilterIntent.exclude => '- $label',
   };
+}
+
+/// The `obtainium://app/` link that shares [app]'s configuration. It leaves
+/// out the app's own tokens (per-app `*-creds`), as an export without secrets
+/// does: whoever receives the link must not get them.
+String appConfigLink(App app) {
+  final Map<String, dynamic> settings = Map<String, dynamic>.from(
+    app.additionalSettings,
+  )..removeWhere((String key, dynamic _) => isSecretSettingKey(key));
+  return 'obtainium://app/${Uri.encodeComponent(jsonEncode({'id': app.id, 'url': app.url, 'author': app.author, 'name': app.name, 'preferredApkIndex': app.preferredApkIndex, 'additionalSettings': jsonEncode(settings), 'overrideSource': app.overrideSource}))}';
 }
 
 class _AppsGroupHeaderDelegate extends SliverPersistentHeaderDelegate {
@@ -349,8 +366,10 @@ class _RenderZOrderSliverMainAxisGroup extends RenderSliverMainAxisGroup {
   }
 }
 
-typedef _AnimatedAppsGroupItemBuilder =
-    Widget Function(BuildContext context, int index);
+typedef _AnimatedAppsGroupItemBuilder = Widget Function(
+  BuildContext context,
+  int index,
+);
 
 class _AnimatedAppsGroupBody extends StatefulWidget {
   const _AnimatedAppsGroupBody({
@@ -692,6 +711,10 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
     s.rightSwipeAction,
     s.alwaysUsePhoneLayout,
     s.appFolders.length,
+    s.globalApkFilterRegEx,
+    // The rows' update-health marker and the main page's Update health button
+    // (D8) read these.
+    updateHealthSettingsToken(s),
     // Per-view overrides: relevant for real folders and the synthetic
     // On-Demand Only view; a hash-as-zero collapse for the main page.
     viewSettingsId == null
@@ -906,6 +929,11 @@ class _AppListItem extends StatelessWidget {
           source,
           settingsProvider,
         );
+    // Advisory (D8): a marker after the name, never a row state of its own.
+    final List<String> updateHealthReasonLabels =
+        settingsProvider.showUpdateHealthIndicator
+        ? updateHealthReasonLabelsFor(app.app, settingsProvider)
+        : const <String>[];
 
     void onUpdateOrOpenReleasePressed() {
       if (buildVerificationBlocked) {
@@ -932,38 +960,49 @@ class _AppListItem extends StatelessWidget {
       }
     }
 
+    // TV: one focus stop per row (D23). The update buttons are left out of
+    // D-pad traversal (Update all and the app page reach the same action);
+    // the download Stop/Dismiss buttons stay focusable.
+    final bool isTV = context.read<SettingsProvider>().isTV;
+
     Widget buildUpdateButton() {
       final trackOnly = app.app.additionalSettings['trackOnly'] == true;
-      return IconButton(
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-        color: colorScheme.primary,
-        tooltip: buildVerificationBlocked
-            ? buildVerificationBlockedMessage
-            : trackOnly
-            ? tr('openDownloadPage')
-            : tr('update'),
-        onPressed: areDownloadsRunning || buildVerificationBlocked
-            ? null
-            : onUpdateOrOpenReleasePressed,
-        icon: const Icon(Icons.install_mobile),
+      return ExcludeFocus(
+        excluding: isTV,
+        child: IconButton(
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          color: colorScheme.primary,
+          tooltip: buildVerificationBlocked
+              ? buildVerificationBlockedMessage
+              : trackOnly
+              ? tr('openDownloadPage')
+              : tr('update'),
+          onPressed: areDownloadsRunning || buildVerificationBlocked
+              ? null
+              : onUpdateOrOpenReleasePressed,
+          icon: const Icon(Icons.install_mobile),
+        ),
       );
     }
 
     Widget buildUncertainUpdateButton() {
-      return IconButton(
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-        color: colorScheme.primary,
-        tooltip: buildVerificationBlocked
-            ? buildVerificationBlockedMessage
-            : tr('uncertainUpdateTooltip'),
-        onPressed: areDownloadsRunning || buildVerificationBlocked
-            ? null
-            : onUpdateOrOpenReleasePressed,
-        icon: const Icon(Icons.help_outline),
+      return ExcludeFocus(
+        excluding: isTV,
+        child: IconButton(
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          color: colorScheme.primary,
+          tooltip: buildVerificationBlocked
+              ? buildVerificationBlockedMessage
+              : tr('uncertainUpdateTooltip'),
+          onPressed: areDownloadsRunning || buildVerificationBlocked
+              ? null
+              : onUpdateOrOpenReleasePressed,
+          icon: const Icon(Icons.help_outline),
+        ),
       );
     }
 
@@ -983,9 +1022,10 @@ class _AppListItem extends StatelessWidget {
     }
 
     final String versionText = app.app.installedVersion ?? tr('none');
+    watchDeviceDateOrder(context);
     final String changesButtonString = app.app.releaseDate == null
         ? (showChangesFn != null ? tr('changes') : '')
-        : formatDeviceOrderedNumericDate(context, app.app.releaseDate!);
+        : formatDeviceOrderedNumericDate(app.app.releaseDate!);
 
     final bool hasTrailingWidgets =
         skipActive ||
@@ -1007,51 +1047,70 @@ class _AppListItem extends StatelessWidget {
               children: [
                 if (showVersionColumn)
                   Flexible(
-                    child: GestureDetector(
+                    // Its own TalkBack target (upstream #3398, b7e32b00), so
+                    // the row keeps reading the app and opening it, and the
+                    // changelog stays reachable. No label on the row itself:
+                    // that merged the two nodes again (d5d75b8a).
+                    child: Semantics(
+                      container: true,
+                      button: showChangesFn != null,
+                      label: '$versionText $changesButtonString'.trim(),
+                      excludeSemantics: true,
                       onTap: showChangesFn,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          color: highlightTouchTargets && showChangesFn != null
-                              ? (theme.brightness == Brightness.light
-                                        ? theme.primaryColor
-                                        : theme.primaryColorLight)
-                                    .withAlpha(
-                                      theme.brightness == Brightness.light
-                                          ? 20
-                                          : 40,
-                                    )
-                              : null,
-                        ),
-                        padding: highlightTouchTargets
-                            ? const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 0)
-                            : EdgeInsets.zero,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              versionText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
-                              style: isVersionPseudo(app.app)
-                                  ? const TextStyle(fontStyle: FontStyle.italic)
-                                  : null,
-                            ),
-                            Text(
-                              changesButtonString,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
-                              style: TextStyle(
-                                fontStyle: FontStyle.italic,
-                                decoration: showChangesFn != null
-                                    ? TextDecoration.underline
-                                    : TextDecoration.none,
+                      child: GestureDetector(
+                        onTap: showChangesFn,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            color:
+                                highlightTouchTargets && showChangesFn != null
+                                ? (theme.brightness == Brightness.light
+                                          ? theme.primaryColor
+                                          : theme.primaryColorLight)
+                                      .withAlpha(
+                                        theme.brightness == Brightness.light
+                                            ? 20
+                                            : 40,
+                                      )
+                                : null,
+                          ),
+                          padding: highlightTouchTargets
+                              ? const EdgeInsetsDirectional.fromSTEB(
+                                  12,
+                                  0,
+                                  12,
+                                  0,
+                                )
+                              : EdgeInsets.zero,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                versionText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.end,
+                                style: isVersionPseudo(app.app)
+                                    ? const TextStyle(
+                                        fontStyle: FontStyle.italic,
+                                      )
+                                    : null,
                               ),
-                            ),
-                          ],
+                              Text(
+                                changesButtonString,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.end,
+                                style: TextStyle(
+                                  fontStyle: FontStyle.italic,
+                                  decoration: showChangesFn != null
+                                      ? TextDecoration.underline
+                                      : TextDecoration.none,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1304,9 +1363,8 @@ class _AppListItem extends StatelessWidget {
                   children: app.app.categories.map((category) {
                     return Expanded(
                       child: Container(
-                        color: Color(
-                          categoryColors[category] ?? transparent,
-                        ).withAlpha(255),
+                        color: Color(categoryColors[category] ?? transparent)
+                            .withAlpha(255),
                       ),
                     );
                   }).toList(),
@@ -1349,7 +1407,12 @@ class _AppListItem extends StatelessWidget {
                             color: colorScheme.primary,
                           ),
                         ),
-                      Expanded(
+                      Flexible(
+                        // Loose only with the marker, so it sits right after
+                        // the name; without it the row lays out as before.
+                        fit: updateHealthReasonLabels.isEmpty
+                            ? FlexFit.tight
+                            : FlexFit.loose,
                         child: Text(
                           app.name,
                           maxLines: 1,
@@ -1361,6 +1424,20 @@ class _AppListItem extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (updateHealthReasonLabels.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(start: 4),
+                          // The reasons are the tooltip, which TalkBack reads
+                          // with the row.
+                          child: Tooltip(
+                            message: updateHealthReasonLabels.join('\n'),
+                            child: Icon(
+                              Icons.warning_amber_rounded,
+                              size: 16,
+                              color: colorScheme.error,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                   subtitle: showAuthorBadge
@@ -1414,17 +1491,22 @@ class _AppListItem extends StatelessWidget {
       ),
     );
 
+    // TV: the row is the one focus stop, so it shows where focus is (D23).
+    final Widget focusableTile = TvFocusRing(
+      borderRadius: itemBorderRadius ?? const BorderRadius.all(Radius.zero),
+      child: tile,
+    );
     if (itemBorderRadius != null) {
       return RepaintBoundary(
         child: Material(
           color: effectiveFillColor,
           shape: RoundedRectangleBorder(borderRadius: itemBorderRadius!),
           clipBehavior: Clip.antiAlias,
-          child: tile,
+          child: focusableTile,
         ),
       );
     }
-    return RepaintBoundary(child: tile);
+    return RepaintBoundary(child: focusableTile);
   }
 }
 
@@ -1461,6 +1543,17 @@ Future<void> _openAdditionalOptionsModal(
   }
 }
 
+/// Whether [listing] has a page for the swipe action "Open App Source": a URL,
+/// from a source whose URL is a page and not the download itself (Direct APK
+/// Link, whose URL is the APK).
+bool listingHasSourcePage(AppInMemory listing) {
+  if (listing.app.url.trim().isEmpty) return false;
+  final String? sourceType = listing.sourceType;
+  if (sourceType == null) return true;
+  return SourceProvider().sourceTemplateForIdentifier(sourceType)?.urlIsPage ??
+      true;
+}
+
 /// Wraps a list row with horizontal-swipe action hints.
 /// The left/right actions are configurable via [SettingsProvider].
 class _SwipeableListItem extends StatefulWidget {
@@ -1470,6 +1563,7 @@ class _SwipeableListItem extends StatefulWidget {
     required this.hasUpdate,
     required this.isPinned,
     required this.isInstalled,
+    required this.hasSourcePage,
     required this.areDownloadsRunning,
     required this.keepAlive,
     required this.rightAction,
@@ -1483,6 +1577,7 @@ class _SwipeableListItem extends StatefulWidget {
   final bool hasUpdate;
   final bool isPinned;
   final bool isInstalled;
+  final bool hasSourcePage;
   final bool areDownloadsRunning;
   final bool keepAlive;
   final SwipeAction rightAction;
@@ -1496,6 +1591,7 @@ class _SwipeableListItem extends StatefulWidget {
 class _SwipeableListItemState extends State<_SwipeableListItem>
     with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   double _dragOffset = 0;
+  bool _crossedThreshold = false;
 
   // Eases [_dragOffset] back to 0 on release so the revealed action (icon +
   // label) slides and fades out smoothly instead of snapping — mirroring
@@ -1560,6 +1656,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
             !isAwaitingThirdPartyInstall;
       case SwipeAction.open:
         return widget.isInstalled;
+      case SwipeAction.openAppSource:
+        return widget.hasSourcePage;
       case SwipeAction.none:
         return false;
       default:
@@ -1567,16 +1665,18 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     }
   }
 
-  /// Swipe-reveal label reflecting the card's current state: "Update" vs
-  /// "Install" depending on whether the app is installed, and "Pin" vs "Unpin"
-  /// depending on whether it's already pinned. Other actions use their generic
-  /// [SwipeAction] label.
-  String _actionLabel(SwipeAction action) {
+  /// Label for a swipe action. When [compact] is true (the strip revealed
+  /// under a swiped card), [SwipeAction.openAppSource] uses the shorter
+  /// "Source" label; TalkBack custom actions keep the full "Open App Source"
+  /// label for clarity.
+  String _actionLabel(SwipeAction action, {bool compact = false}) {
     switch (action) {
       case SwipeAction.update:
         return widget.isInstalled ? tr('update') : tr('install');
       case SwipeAction.pin:
         return widget.isPinned ? tr('unpin') : tr('pin');
+      case SwipeAction.openAppSource:
+        return compact ? tr('source') : tr('swipeAction_openAppSource');
       default:
         return tr('swipeAction_${action.name}');
     }
@@ -1600,6 +1700,8 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         return (Icons.delete_outline, Colors.red);
       case SwipeAction.open:
         return (Icons.open_in_new, Colors.orange);
+      case SwipeAction.openAppSource:
+        return (Icons.public, cs.tertiary);
       case SwipeAction.appInfo:
         return (Icons.info_outline, Colors.teal);
       case SwipeAction.none:
@@ -1705,6 +1807,25 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
         if (packageId != null) {
           unawaited(packageManager.openApp(packageId));
         }
+      case SwipeAction.openAppSource:
+        final String? sourceUrl = app?.url.trim();
+        if (sourceUrl != null && sourceUrl.isNotEmpty) {
+          unawaited(
+            launchUrlString(
+              sourceUrl,
+              mode: LaunchMode.externalApplication,
+            ).catchError((Object error, StackTrace stackTrace) {
+              unawaited(
+                provider.logs.add(
+                  'Swipe open app source failed for ${widget.appId}: $error\n$stackTrace',
+                  level: LogLevel.error,
+                ),
+              );
+              showError(error);
+              return false;
+            }),
+          );
+        }
       case SwipeAction.appInfo:
         final String? packageId = app?.id;
         if (packageId != null) {
@@ -1752,7 +1873,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       bgIcon = icon;
       bgAlign = Alignment.centerLeft;
       iconColor = color;
-      bgLabel = _actionLabel(widget.rightAction);
+      bgLabel = _actionLabel(widget.rightAction, compact: true);
       bgIconLeading = true;
     } else if (_dragOffset < 0 && canSwipeLeft) {
       final (icon, color) = _actionVisuals(widget.leftAction, context);
@@ -1760,7 +1881,7 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
       bgIcon = icon;
       bgAlign = Alignment.centerRight;
       iconColor = color;
-      bgLabel = _actionLabel(widget.leftAction);
+      bgLabel = _actionLabel(widget.leftAction, compact: true);
       bgIconLeading = false;
     } else {
       bgColor = Colors.transparent;
@@ -1778,19 +1899,26 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
     final TextStyle? labelStyle = Theme.of(context).textTheme.labelLarge
         ?.copyWith(color: iconColor, fontWeight: FontWeight.w600);
 
-    return GestureDetector(
-      onHorizontalDragStart: (_) => _settleController.stop(),
+    final Widget swipeable = GestureDetector(
+      onHorizontalDragStart: (_) {
+        _settleController.stop();
+        _crossedThreshold = false;
+      },
       onHorizontalDragUpdate: (details) {
         _settleController.stop();
-        setState(() {
-          _dragOffset += details.delta.dx;
-          _dragOffset = _dragOffset.clamp(
-            canSwipeLeft ? -maxDrag : 0.0,
-            canSwipeRight ? maxDrag : 0.0,
-          );
-        });
+        final double nextOffset = (_dragOffset + details.delta.dx).clamp(
+          canSwipeLeft ? -maxDrag : 0.0,
+          canSwipeRight ? maxDrag : 0.0,
+        );
+        final bool nowCrossed = nextOffset.abs() > swipeThreshold;
+        if (nowCrossed && !_crossedThreshold) {
+          hapticMediumImpact();
+        }
+        _crossedThreshold = nowCrossed;
+        setState(() => _dragOffset = nextOffset);
       },
       onHorizontalDragEnd: (_) {
+        _crossedThreshold = false;
         if (_dragOffset > swipeThreshold && canSwipeRight) {
           _executeAction(widget.rightAction, context);
           setState(() => _dragOffset = 0);
@@ -1801,7 +1929,10 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           _settleToZero();
         }
       },
-      onHorizontalDragCancel: _settleToZero,
+      onHorizontalDragCancel: () {
+        _crossedThreshold = false;
+        _settleToZero();
+      },
       child: ClipRect(
         child: Stack(
           children: [
@@ -1840,6 +1971,21 @@ class _SwipeableListItemState extends State<_SwipeableListItem>
           ],
         ),
       ),
+    );
+    // TalkBack can't swipe: offer the configured swipe actions as custom
+    // actions on the row instead (D30 #6; upstream's tile did the same for
+    // install/update and remove). No label of its own, so the row's content
+    // stays its only announcement (upstream b7e32b00).
+    return Semantics(
+      customSemanticsActions: <CustomSemanticsAction, VoidCallback>{
+        if (canSwipeRight)
+          CustomSemanticsAction(label: _actionLabel(widget.rightAction)): () =>
+              _executeAction(widget.rightAction, context),
+        if (canSwipeLeft)
+          CustomSemanticsAction(label: _actionLabel(widget.leftAction)): () =>
+              _executeAction(widget.leftAction, context),
+      },
+      child: swipeable,
     );
   }
 }
@@ -2053,6 +2199,53 @@ String resolveChangeLogImageSrc({
   }
 }
 
+/// The repository's file view at its default branch, for the forge that
+/// published [appUri] (`https://github.com/o/r/blob/HEAD`), or null for other
+/// sources. Same repository rule as [resolveChangeLogImageSrc].
+String? _changeLogRepoBlobBase(Uri appUri, AppSource appSource) {
+  final List<String> segments = appUri.pathSegments
+      .where((String segment) => segment.isNotEmpty)
+      .toList();
+  if (segments.length < 2) return null;
+  final String repo = '${appUri.origin}/${segments[0]}/${segments[1]}';
+  if (appSource is GitHub || appUri.host.contains('github.com')) {
+    return '$repo/blob/HEAD';
+  }
+  if (appSource is GitLab || appUri.host.contains('gitlab.com')) {
+    return '$repo/-/blob/HEAD';
+  }
+  if (appSource is Codeberg) return '$repo/src/branch/HEAD';
+  return null;
+}
+
+/// Where a link in [appUrl]'s changelog goes (upstream #3470, D21 B).
+///
+/// A relative link in forge release notes names a file in the repository, so
+/// it resolves against `<repo>/blob/HEAD/`, as [resolveChangeLogImageSrc] does
+/// for images. Upstream resolves it against the release's own tag instead,
+/// from an `App.releaseUrl` the fork doesn't keep (v1.6.17 D14); HEAD is right
+/// for every file that hasn't moved since the release. Root-relative,
+/// protocol-relative and same-page (`#…`, `?…`) links resolve as a browser
+/// would on the app's page, and links with a scheme are kept.
+String resolveChangeLogLink({
+  required String href,
+  required String appUrl,
+  required AppSource appSource,
+}) {
+  final Uri? link = Uri.tryParse(href);
+  final Uri? appUri = Uri.tryParse(appUrl);
+  if (link == null || appUri == null || !appUri.hasAuthority) return href;
+  if (link.hasScheme) return href;
+  if (link.hasAuthority || link.path.isEmpty || link.path.startsWith('/')) {
+    return appUri.resolveUri(link).toString();
+  }
+  final String? repoBlobBase = _changeLogRepoBlobBase(appUri, appSource);
+  if (repoBlobBase == null) return '${appUri.origin}/$href';
+  // Resolved against the root first, so `./` and `../` can't climb out of
+  // the repository.
+  return '$repoBlobBase${Uri(path: '/').resolveUri(link)}';
+}
+
 void showChangeLogDialog(
   BuildContext context,
   App app,
@@ -2137,29 +2330,37 @@ void showChangeLogDialog(
           return Text(tr('notFound'), style: textTheme.bodyMedium);
         }
         return appSource.changeLogIfAnyIsMarkDown
-            ? MarkdownBody(
-                styleSheet: MarkdownStyleSheet(
-                  blockquoteDecoration: BoxDecoration(
-                    color: Theme.of(sheetContext).cardColor,
+            // flutter_markdown_plus is still on flutter/material.
+            ? LegacyMaterialBridge(
+                child: MarkdownBody(
+                  styleSheet: MarkdownStyleSheet(
+                    blockquoteDecoration: BoxDecoration(
+                      color: Theme.of(sheetContext).cardColor,
+                    ),
                   ),
-                ),
-                data: displayChangeLog,
-                onTapLink: (text, href, title) {
-                  if (href != null) {
-                    launchUrlString(
-                      href.startsWith('http://') || href.startsWith('https://')
-                          ? href
-                          : '${Uri.parse(app.url).origin}/$href',
-                      mode: LaunchMode.externalApplication,
-                    );
-                  }
-                },
-                extensionSet: md.ExtensionSet(
-                  md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-                  [
-                    md.EmojiSyntax(),
-                    ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-                  ],
+                  data: displayChangeLog,
+                  // Single newlines are line breaks in release notes (upstream
+                  // #2101, ad1c208e).
+                  softLineBreak: true,
+                  onTapLink: (text, href, title) {
+                    if (href != null) {
+                      launchUrlString(
+                        resolveChangeLogLink(
+                          href: href,
+                          appUrl: app.url,
+                          appSource: appSource,
+                        ),
+                        mode: LaunchMode.externalApplication,
+                      );
+                    }
+                  },
+                  extensionSet: md.ExtensionSet(
+                    md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+                    [
+                      md.EmojiSyntax(),
+                      ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+                    ],
+                  ),
                 ),
               )
             : SelectableText(displayChangeLog, style: textTheme.bodyMedium);
@@ -2702,6 +2903,7 @@ void showAppsViewOptionsSheet(BuildContext context, {String? folderId}) {
                       ),
                       AppSwitch(
                         value: settingsProvider.showFolderedAppsOnMainPage,
+                        semanticLabel: tr('showFolderedAppsOnMainPage'),
                         onChanged: (value) {
                           settingsProvider.showFolderedAppsOnMainPage = value;
                           setSheetState(() {});
@@ -2862,7 +3064,10 @@ class AppsPageState extends State<AppsPage> {
 
   AppsFilter filter = AppsFilter();
   final AppsFilter neutralFilter = AppsFilter();
-  var updatesOnlyFilter = AppsFilter(
+
+  /// Installed apps with an update, as the "Updates available" launcher
+  /// shortcut shows them. A new filter each time: filters are mutable.
+  AppsFilter get updatesOnlyFilter => AppsFilter(
     upToDateFilterIntent: CategoryFilterIntent.exclude,
     installedFilterIntent: CategoryFilterIntent.include,
   );
@@ -2883,6 +3088,58 @@ class AppsPageState extends State<AppsPage> {
 
   void openViewOptionsSheet() {
     showAppsViewOptionsSheet(context, folderId: _viewSettingsId);
+  }
+
+  void showUpdatesOnly() => _showOnly(updatesOnlyFilter);
+
+  /// Shows only the listings of [packageId], one per store it's tracked from.
+  void showPackageListings(String packageId) =>
+      _showOnly(AppsFilter(packageIdFilter: packageId));
+
+  /// Replaces the filter with [shown] and closes search.
+  void _showOnly(AppsFilter shown) {
+    setState(() {
+      filter = shown;
+      _searchExpanded = false;
+      _searchController.clear();
+      _searchFocusNode.unfocus();
+    });
+  }
+
+  void triggerUpdateCheck() {
+    if (!mounted || refreshingSince != null) return;
+    if (_refreshIndicatorKey.currentState != null) {
+      _refreshIndicatorKey.currentState!.show();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && refreshingSince == null) {
+          _refreshIndicatorKey.currentState?.show();
+        }
+      });
+    }
+  }
+
+  /// Set by [_refreshFromTitleTap] for the refresh it starts, so that one runs
+  /// without the pull's haptic: a tap gets none.
+  bool _refreshStartedByTitleTap = false;
+
+  /// A tap on the page title checks the visible apps exactly as a pull does
+  /// (v1.7.5 sync U1: ObtainX's take on upstream #698's refresh button, with
+  /// no setting and pull-to-refresh kept). It goes through the indicator, so
+  /// the same refresh() runs with its animation, the visible IDs and the #360
+  /// foreground service. While any check runs it does nothing: the title
+  /// can't stop one (the notification's Stop does), and it mustn't queue a
+  /// second check behind it.
+  void _refreshFromTitleTap() {
+    final ExpressiveRefreshIndicatorState? indicator =
+        _refreshIndicatorKey.currentState;
+    if (indicator == null ||
+        refreshingSince != null ||
+        context.read<AppsProvider>().refreshProgress != null) {
+      return;
+    }
+    _refreshStartedByTitleTap = true;
+    indicator.show();
   }
 
   void openSelectionActionsSheet() {
@@ -2922,20 +3179,21 @@ class AppsPageState extends State<AppsPage> {
                         heroTag: '${heroScope}_update_all_fab',
                         elevation: 6,
                         highlightElevation: 8,
-                        backgroundColor: Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer,
-                        foregroundColor: Theme.of(
-                          context,
-                        ).colorScheme.onPrimaryContainer,
+                        backgroundColor: Theme.of(context)
+                            .colorScheme
+                            .primaryContainer,
+                        foregroundColor: Theme.of(context)
+                            .colorScheme
+                            .onPrimaryContainer,
                         onPressed: () {
                           hapticSelection();
                           runMassObtain();
                         },
                         tooltip: null,
-                        child: const Icon(
+                        child: Icon(
                           Icons.file_download_outlined,
                           size: 20,
+                          semanticLabel: tr('installUpdateApps'),
                         ),
                       ),
                       if (pageUpdateCount > 0)
@@ -2944,9 +3202,9 @@ class AppsPageState extends State<AppsPage> {
                           bottom: -4,
                           child: Badge(
                             label: Text(pageUpdateCount.toString()),
-                            backgroundColor: Theme.of(
-                              context,
-                            ).colorScheme.error,
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .error,
                             textColor: Theme.of(context).colorScheme.onError,
                           ),
                         ),
@@ -2966,25 +3224,33 @@ class AppsPageState extends State<AppsPage> {
                       openSelectionActionsSheet();
                     },
                     tooltip: null,
-                    child: const Icon(Icons.checklist, size: 20),
+                    child: Icon(
+                      Icons.checklist,
+                      size: 20,
+                      semanticLabel: plural('action', 2),
+                    ),
                   )
                 else
                   FloatingActionButton.small(
                     heroTag: '${heroScope}_view_options_fab',
                     elevation: 6,
                     highlightElevation: 8,
-                    backgroundColor: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    foregroundColor: Theme.of(
-                      context,
-                    ).colorScheme.onSurfaceVariant,
+                    backgroundColor: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest,
+                    foregroundColor: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant,
                     onPressed: () {
                       hapticSelection();
                       openViewOptionsSheet();
                     },
                     tooltip: null,
-                    child: const Icon(Icons.tune, size: 20),
+                    child: Icon(
+                      Icons.tune,
+                      size: 20,
+                      semanticLabel: tr('appsViewOptions'),
+                    ),
                   ),
               ],
             ),
@@ -2994,15 +3260,86 @@ class AppsPageState extends State<AppsPage> {
     );
   }
 
+  /// TV only (D23, #350): a remote has no long-press, so the app bar's Select
+  /// turns this on and a row tap then toggles the row, even with nothing
+  /// selected yet. Close, BACK or clearing the selection turns it off.
+  bool _tvSelectionMode = false;
+
   bool clearSelected() {
-    if (selectedAppIds.isNotEmpty) {
+    if (selectedAppIds.isNotEmpty || _tvSelectionMode) {
       setState(() {
         selectedAppIds.clear();
+        _tvSelectionMode = false;
       });
       _notifyHomeFabChromeIfChanged();
       return true;
     }
     return false;
+  }
+
+  /// TV only (D23, #350): the floating buttons and long-press selection can't
+  /// be reached with a remote, so the app bar carries their actions. Phones
+  /// keep the floating buttons and never see these.
+  List<Widget> _tvAppBarActions() {
+    if (_tvSelectionMode || selectedAppIds.isNotEmpty) {
+      final int selected = selectedAppIds.length;
+      return [
+        IconButton(
+          tooltip: '${plural('action', 2)} ($selected)',
+          onPressed: selected == 0 ? null : openSelectionActionsSheet,
+          icon: Badge(
+            isLabelVisible: selected > 0,
+            label: Text('$selected'),
+            child: const Icon(Icons.checklist),
+          ),
+        ),
+        IconButton(
+          tooltip: tr('selectAll'),
+          icon: const Icon(Icons.select_all),
+          onPressed: () {
+            setState(() {
+              selectedAppIds = {
+                for (final AppInMemory listed in _listedAppsCache)
+                  listed.listingKey,
+              };
+            });
+            _notifyHomeFabChromeIfChanged();
+          },
+        ),
+        IconButton(
+          tooltip: tr('close'),
+          icon: const Icon(Icons.close),
+          onPressed: clearSelected,
+        ),
+      ];
+    }
+    return [
+      IconButton(
+        tooltip: tr('refresh'),
+        icon: const Icon(Icons.refresh),
+        onPressed: () => _refreshIndicatorKey.currentState?.show(),
+      ),
+      if (hasMassObtainOperations)
+        IconButton(
+          tooltip: tr('installUpdateApps'),
+          onPressed: runMassObtain,
+          icon: Badge(
+            isLabelVisible: pageUpdateCount > 0,
+            label: Text('$pageUpdateCount'),
+            child: const Icon(Icons.file_download_outlined),
+          ),
+        ),
+      IconButton(
+        tooltip: tr('appsViewOptions'),
+        icon: const Icon(Icons.tune),
+        onPressed: openViewOptionsSheet,
+      ),
+      IconButton(
+        tooltip: tr('selectX', args: [tr('appsString')]),
+        icon: const Icon(Icons.check_box_outlined),
+        onPressed: () => setState(() => _tvSelectionMode = true),
+      ),
+    ];
   }
 
   /// Called by [_HomePageState] when the system back button is pressed while
@@ -3113,6 +3450,9 @@ class AppsPageState extends State<AppsPage> {
   // [AppsPage] without changing any of these counts.
   int? _lastFolderCountsToken;
   int _onDemandOnlyAppCountCache = 0;
+  // Apps the Update health page lists: flagged, and ignored (D8).
+  int _updateHealthAppCountCache = 0;
+  int _updateHealthFlaggedCountCache = 0;
   Map<String, int> _folderAppCountsCache = const {};
   Map<String, int> _folderUpdateCountsCache = const {};
 
@@ -3483,8 +3823,9 @@ class AppsPageState extends State<AppsPage> {
     final chips = <Widget>[];
 
     // ── Text filters ────────────────────────────────────────────────────────
-    // Author and app-ID have no other on-page indicator (they can only be set
-    // from the filter sheet), so always surface them as chips. The name filter
+    // Author and app ID have no other on-page indicator (author is set from
+    // the filter sheet, app ID by an obtainium://open link), so always surface
+    // them as chips. The name filter
     // normally lives in the search bar, but it can also be set from the sheet —
     // in which case the search bar stays collapsed and shows nothing — so add a
     // name chip only while the search bar is collapsed, to avoid duplicating the
@@ -3504,6 +3845,14 @@ class AppsPageState extends State<AppsPage> {
         _filterChip(
           '${tr('author')}: ${filter.authorFilter.trim()}',
           () => setState(() => filter.authorFilter = ''),
+        ),
+      );
+    }
+    if (filter.packageIdFilter.isNotEmpty) {
+      chips.add(
+        _filterChip(
+          '${tr('appId')}: ${filter.packageIdFilter}',
+          () => setState(() => filter.packageIdFilter = ''),
         ),
       );
     }
@@ -3759,7 +4108,9 @@ class AppsPageState extends State<AppsPage> {
     Future<List<App>> refresh() {
       _storeScanGeneration++;
       _deferredStoreScanTimer?.cancel();
-      hapticLightImpact();
+      // The pull's haptic. A title tap is a tap, and taps don't buzz (U1).
+      if (!_refreshStartedByTitleTap) hapticLightImpact();
+      _refreshStartedByTitleTap = false;
       setState(() {
         refreshingSince = DateTime.now();
         // Note: [_appListIconWarmFutures] is intentionally NOT cleared here.
@@ -3779,14 +4130,29 @@ class AppsPageState extends State<AppsPage> {
       // category, source, state) plus the folder / on-demand boundary applied
       // by the last build. An explicit ID list bypasses the background
       // freshness interval while [checkUpdates] still applies the
-      // installed/track-only preference.
-      final Future<List<App>> refreshFuture = appsProvider.checkUpdates(
-        specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
-      );
+      // installed/track-only preference. The foreground variant keeps the
+      // check running if the user leaves the app mid-refresh (#360).
+      final NotificationsProvider notificationsProvider = context
+          .read<NotificationsProvider>();
+      final Future<List<App>> refreshFuture = appsProvider
+          .checkUpdatesInForeground(
+            specificIds: _listedAppsCache.map((a) => a.listingKey).toList(),
+          );
       return refreshFuture
+          .then((List<App> updates) {
+            // A successful check can leave the update notifications behind
+            // once nothing they announce is pending any more (upstream #3415).
+            // Only after success: a failed check keeps them. The provider
+            // judges the installable and the track-only notification each by
+            // its own apps, as the background task posts them.
+            unawaited(
+              appsProvider.clearStaleUpdateNotifications(notificationsProvider),
+            );
+            return updates;
+          })
           .catchError((e) {
             if (!context.mounted) return <App>[];
-            showError(e is Map ? e['errors'] : e);
+            showError(e is CheckUpdatesException ? e.errors : e);
             return <App>[];
           })
           .whenComplete(() {
@@ -3796,6 +4162,7 @@ class AppsPageState extends State<AppsPage> {
             );
           })
           .whenComplete(() {
+            if (!mounted) return;
             setState(() {
               refreshingSince = null;
             });
@@ -3846,6 +4213,19 @@ class AppsPageState extends State<AppsPage> {
       _notifyHomeFabChromeIfChanged();
     }
 
+    // A deleted category leaves the (in-memory) filter, so the list isn't
+    // stuck on "no apps" (upstream c071bdad).
+    final Set<String> knownCategories = settingsProvider.categories.keys
+        .toSet();
+    if (!knownCategories.containsAll(filter.includedCategoryFilter)) {
+      filter.includedCategoryFilter = filter.includedCategoryFilter
+          .intersection(knownCategories);
+    }
+    if (!knownCategories.containsAll(filter.excludedCategoryFilter)) {
+      filter.excludedCategoryFilter = filter.excludedCategoryFilter
+          .intersection(knownCategories);
+    }
+
     // ── Cached filter / sort / reorder ─────────────────────────────────────
     // filter+sort is O(n log n). We skip the entire pass when nothing that
     // affects list ordering has changed — e.g. tapping to select a row or
@@ -3864,6 +4244,7 @@ class AppsPageState extends State<AppsPage> {
       Object.hashAll(filter.excludedCategoryFilter.toList()..sort()),
       filter.categoryMatchMode.index,
       filter.sourceFilter,
+      filter.packageIdFilter,
       _effectiveSortColumn(settingsProvider).index,
       _effectiveSortOrder(settingsProvider).index,
       _effectiveGroupBy(settingsProvider).index,
@@ -3872,6 +4253,8 @@ class AppsPageState extends State<AppsPage> {
       _effectiveGroupNonInstalledSeparately(settingsProvider),
       _effectiveGroupTrackOnlySeparately(settingsProvider),
       _effectiveGroupUpdatesSeparately(settingsProvider),
+      // Needs attention reads it (D8).
+      settingsProvider.globalApkFilterRegEx,
     ]);
     if (listBuildToken != _lastListBuildToken) {
       final listTiming = PerformanceRecorder.instance.startOperation();
@@ -3915,9 +4298,10 @@ class AppsPageState extends State<AppsPage> {
         // The on-demand page shows all on-demand apps regardless of folder membership.
         workingList = workingList
             .where(
-              (appInMem) => folderIdsForApp(
-                appInMem.app,
-              ).where((id) => existingFolderIds.contains(id)).isEmpty,
+              (appInMem) =>
+                  folderIdsForApp(appInMem.app)
+                      .where((id) => existingFolderIds.contains(id))
+                      .isEmpty,
             )
             .toList();
       }
@@ -3926,6 +4310,10 @@ class AppsPageState extends State<AppsPage> {
       // Reused below to compute cross-folder search matches so the two lists
       // never drift apart.
       bool appMatchesFilters(AppInMemory app) {
+        if (filter.packageIdFilter.isNotEmpty &&
+            app.app.id != filter.packageIdFilter) {
+          return false;
+        }
         if (!appMatchesUpToDateFilter(app.app, filter.upToDateFilterIntent)) {
           return false;
         }
@@ -3980,52 +4368,58 @@ class AppsPageState extends State<AppsPage> {
 
       final sortCol = _effectiveSortColumn(settingsProvider);
       final sortOrd = _effectiveSortOrder(settingsProvider);
-      workingList.sort((a, b) {
-        int result = 0;
-        if (sortCol == SortColumnSettings.authorName) {
-          result = ((a.author + a.name).toLowerCase()).compareTo(
-            (b.author + b.name).toLowerCase(),
-          );
-        } else if (sortCol == SortColumnSettings.nameAuthor) {
-          result = ((a.name + a.author).toLowerCase()).compareTo(
-            (b.name + b.author).toLowerCase(),
-          );
-        } else if (sortCol == SortColumnSettings.releaseDate) {
-          // Handle null dates: apps with unknown release dates go to end.
-          final aDate = a.app.releaseDate;
-          final bDate = b.app.releaseDate;
-          final isDescending = sortOrd == SortOrderSettings.descending;
-          if (aDate == null && bDate == null) {
-            result = ((a.name + a.author).toLowerCase()).compareTo(
-              (b.name + b.author).toLowerCase(),
-            );
-          } else if (aDate == null) {
-            result = isDescending ? -1 : 1;
-          } else if (bDate == null) {
-            result = isDescending ? 1 : -1;
-          } else {
-            result = aDate.compareTo(bDate);
-          }
-        } else if (sortCol == SortColumnSettings.lastUpdateCheck) {
-          final aDate = a.app.lastUpdateCheck;
-          final bDate = b.app.lastUpdateCheck;
-          final isDescending = sortOrd == SortOrderSettings.descending;
-          if (aDate == null && bDate == null) {
-            result = ((a.name + a.author).toLowerCase()).compareTo(
-              (b.name + b.author).toLowerCase(),
-            );
-          } else if (aDate == null) {
-            result = isDescending ? -1 : 1;
-          } else if (bDate == null) {
-            result = isDescending ? 1 : -1;
-          } else {
-            result = aDate.compareTo(bDate);
-          }
-        } else if (sortCol == SortColumnSettings.added) {
-          result = 0;
+      // List.sort isn't stable, so equal keys keep their list order; "added"
+      // is that order and isn't sorted at all (upstream cbd7ca76).
+      if (sortCol != SortColumnSettings.added) {
+        final Map<AppInMemory, int> listOrder = Map.identity();
+        for (var i = 0; i < workingList.length; i++) {
+          listOrder[workingList[i]] = i;
         }
-        return result;
-      });
+        workingList.sort((a, b) {
+          int result = 0;
+          if (sortCol == SortColumnSettings.authorName) {
+            result = ((a.author + a.name).toLowerCase()).compareTo(
+              (b.author + b.name).toLowerCase(),
+            );
+          } else if (sortCol == SortColumnSettings.nameAuthor) {
+            result = ((a.name + a.author).toLowerCase()).compareTo(
+              (b.name + b.author).toLowerCase(),
+            );
+          } else if (sortCol == SortColumnSettings.releaseDate) {
+            // Handle null dates: apps with unknown release dates go to end.
+            final aDate = a.app.releaseDate;
+            final bDate = b.app.releaseDate;
+            final isDescending = sortOrd == SortOrderSettings.descending;
+            if (aDate == null && bDate == null) {
+              result = ((a.name + a.author).toLowerCase()).compareTo(
+                (b.name + b.author).toLowerCase(),
+              );
+            } else if (aDate == null) {
+              result = isDescending ? -1 : 1;
+            } else if (bDate == null) {
+              result = isDescending ? 1 : -1;
+            } else {
+              result = aDate.compareTo(bDate);
+            }
+          } else if (sortCol == SortColumnSettings.lastUpdateCheck) {
+            final aDate = a.app.lastUpdateCheck;
+            final bDate = b.app.lastUpdateCheck;
+            final isDescending = sortOrd == SortOrderSettings.descending;
+            if (aDate == null && bDate == null) {
+              result = ((a.name + a.author).toLowerCase()).compareTo(
+                (b.name + b.author).toLowerCase(),
+              );
+            } else if (aDate == null) {
+              result = isDescending ? -1 : 1;
+            } else if (bDate == null) {
+              result = isDescending ? 1 : -1;
+            } else {
+              result = aDate.compareTo(bDate);
+            }
+          }
+          return result != 0 ? result : listOrder[a]!.compareTo(listOrder[b]!);
+        });
+      }
 
       if (sortOrd == SortOrderSettings.descending) {
         workingList = workingList.reversed.toList();
@@ -4081,16 +4475,17 @@ class AppsPageState extends State<AppsPage> {
       // ── Cross-folder search matches ─────────────────────────────────────
       // On the main page, apps that live inside a folder — or in the On-Demand
       // Only bucket — are hidden from the list, so a plain search would
-      // dead-end on them. When a text search is active we gather those hidden
-      // matches here and render them below the results under per-bucket
-      // headers. In a folder / on-demand view the user deliberately narrowed
+      // dead-end on them. When a text search or a package filter is active we
+      // gather those hidden matches here and render them below the results
+      // under per-bucket headers. In a folder / on-demand view the user deliberately narrowed
       // scope, so search stays scoped there and this stays empty.
       _crossFolderMatchesCache = const [];
       final bool crossFolderSearchActive =
           !widget.onDemandOnlyList &&
           widget.folderId == null &&
           (filter.nameFilter.trim().isNotEmpty ||
-              filter.authorFilter.trim().isNotEmpty);
+              filter.authorFilter.trim().isNotEmpty ||
+              filter.packageIdFilter.isNotEmpty);
       if (crossFolderSearchActive) {
         final Set<String> mainListedIds = {
           for (final a in _listedAppsCache) a.listingKey,
@@ -4115,9 +4510,9 @@ class AppsPageState extends State<AppsPage> {
             onDemandMatches.add(appInMem);
             continue;
           }
-          final List<String> folderIds = folderIdsForApp(
-            appInMem.app,
-          ).where(existingFolderIds.contains).toList();
+          final List<String> folderIds = folderIdsForApp(appInMem.app)
+              .where(existingFolderIds.contains)
+              .toList();
           if (folderIds.isEmpty) continue; // not filed into any live folder
           // Home folder = the earliest one in settings order.
           folderIds.sort(
@@ -4222,15 +4617,23 @@ class AppsPageState extends State<AppsPage> {
     final int folderCountsToken = Object.hash(
       appsToken,
       Object.hashAll(appFolders.map((f) => f.id)),
+      updateHealthSettingsToken(settingsProvider),
     );
     if (folderCountsToken != _lastFolderCountsToken) {
       _lastFolderCountsToken = folderCountsToken;
       int onDemand = 0;
+      int updateHealthFlagged = 0;
+      int updateHealthIgnored = 0;
       final Map<String, int> appCounts = {for (final f in appFolders) f.id: 0};
       final Map<String, int> updateCounts = {
         for (final f in appFolders) f.id: 0,
       };
       for (final a in appsProvider.apps.values) {
+        if (isUpdateHealthIgnored(a.app)) {
+          updateHealthIgnored++;
+        } else if (hasUpdateHealthIssues(a.app, settingsProvider)) {
+          updateHealthFlagged++;
+        }
         if (a.app.additionalSettings['onDemandOnly'] == true) {
           onDemand++;
           continue;
@@ -4245,10 +4648,14 @@ class AppsPageState extends State<AppsPage> {
         }
       }
       _onDemandOnlyAppCountCache = onDemand;
+      _updateHealthFlaggedCountCache = updateHealthFlagged;
+      _updateHealthAppCountCache = updateHealthFlagged + updateHealthIgnored;
       _folderAppCountsCache = appCounts;
       _folderUpdateCountsCache = updateCounts;
     }
     final int onDemandOnlyAppCount = _onDemandOnlyAppCountCache;
+    final int updateHealthAppCount = _updateHealthAppCountCache;
+    final int updateHealthFlaggedCount = _updateHealthFlaggedCountCache;
     final Map<String, int> folderAppCounts = _folderAppCountsCache;
     final Map<String, int> folderUpdateCounts = _folderUpdateCountsCache;
     final String? currentFolderName = widget.folderId != null
@@ -4774,6 +5181,7 @@ class AppsPageState extends State<AppsPage> {
                       footer += 8 + appFolders.length * (btn + 8);
                     }
                     if (onDemandOnlyAppCount > 0) footer += btn + 8;
+                    if (updateHealthAppCount > 0) footer += btn + 8;
                     if (footer > 0) footer += 20; // footer's own top padding
                     final double navClear = isLargeScreen ? 52.0 : 80.0;
                     final double footerReserve =
@@ -4906,6 +5314,7 @@ class AppsPageState extends State<AppsPage> {
         hasUpdate: hasUpdate || hasUncertainUpdate,
         isPinned: app.app.pinned,
         isInstalled: installed != null,
+        hasSourcePage: listingHasSourcePage(app),
         areDownloadsRunning: downloadsRunning,
         keepAlive: false,
         rightAction: settingsProvider.rightSwipeAction,
@@ -4929,7 +5338,7 @@ class AppsPageState extends State<AppsPage> {
           showCategoriesBadge: _effectiveShowCategoriesBadge(settingsProvider),
           showAuthorBadge: _effectiveShowAuthorBadge(settingsProvider),
           showVersionBadge: _effectiveShowVersionBadge(settingsProvider),
-          onTap: selectedAppIds.isNotEmpty
+          onTap: selectedAppIds.isNotEmpty || _tvSelectionMode
               ? () => toggleAppSelected(app)
               : navigateToAppPage,
           onLongPress: () => toggleAppSelected(app),
@@ -5279,17 +5688,7 @@ class AppsPageState extends State<AppsPage> {
           ? null
           : () {
               hapticHeavyImpact();
-              showBulkUpdatePickerSheet(
-                context: context,
-                apps: appsProvider.apps,
-                existingUpdateIds: existingUpdateIdsAllOrSelected,
-                newInstallIds: newInstallIdsAllOrSelected,
-                trackOnlyUpdateIds: trackOnlyUpdateIdsAllOrSelected,
-                initialSelectedIds: selectedAppIds.isNotEmpty
-                    ? selectedAppIds
-                    : null,
-              ).then((Set<String>? selectedIds) {
-                if (selectedIds == null || selectedIds.isEmpty) return;
+              void obtain(Set<String> selectedIds) {
                 unawaited(
                   appsProvider
                       .downloadAndInstallLatestApps(
@@ -5308,6 +5707,35 @@ class AppsPageState extends State<AppsPage> {
                         }
                       }),
                 );
+              }
+
+              final Set<String>? initialSelectedIds = selectedAppIds.isNotEmpty
+                  ? selectedAppIds
+                  : null;
+              // Opt-in skip (upstream #3099): act on exactly what the sheet
+              // would pre-select. When that's nothing, the sheet opens anyway.
+              if (settingsProvider.skipBulkUpdateConfirmation) {
+                final Set<String> defaultSelection = bulkUpdateDefaultSelection(
+                  existingUpdateIds: existingUpdateIdsAllOrSelected,
+                  newInstallIds: newInstallIdsAllOrSelected,
+                  trackOnlyUpdateIds: trackOnlyUpdateIdsAllOrSelected,
+                  initialSelectedIds: initialSelectedIds,
+                );
+                if (defaultSelection.isNotEmpty) {
+                  obtain(defaultSelection);
+                  return;
+                }
+              }
+              showBulkUpdatePickerSheet(
+                context: context,
+                apps: appsProvider.apps,
+                existingUpdateIds: existingUpdateIdsAllOrSelected,
+                newInstallIds: newInstallIdsAllOrSelected,
+                trackOnlyUpdateIds: trackOnlyUpdateIdsAllOrSelected,
+                initialSelectedIds: initialSelectedIds,
+              ).then((Set<String>? selectedIds) {
+                if (selectedIds == null || selectedIds.isEmpty) return;
+                obtain(selectedIds);
               });
             };
     }
@@ -5336,14 +5764,20 @@ class AppsPageState extends State<AppsPage> {
                       appsProvider: appsProvider,
                     );
                   }
+                  // Save against the latest rows, not the snapshot taken when
+                  // the sheet opened, so a finished update check isn't undone.
+                  final liveApps = appsToCategorize
+                      .map((app) => appsProvider.apps[app.listingKey]?.app)
+                      .nonNulls
+                      .toList();
                   final updatedCategoryLists =
                       applyBulkCategoryActionsToCategoryLists(
-                        appsToCategorize.map((app) => app.categories),
+                        liveApps.map((app) => app.categories),
                         actions,
                       );
                   var index = 0;
                   appsProvider.saveApps(
-                    appsToCategorize
+                    liveApps
                         .map(
                           (app) => app.copyWith(
                             categories: updatedCategoryLists[index++],
@@ -5393,8 +5827,14 @@ class AppsPageState extends State<AppsPage> {
               TextButton(
                 onPressed: () {
                   hapticSelection();
+                  // The latest rows, not the snapshot from when this opened.
+                  final liveRows = appsToMark
+                      .map((app) => appsProvider.apps[app.listingKey])
+                      .nonNulls
+                      .toList();
                   appsProvider.saveApps(
-                    appsToMark.map((appToUpdate) {
+                    liveRows.map((row) {
+                      final App appToUpdate = row.app;
                       final bool hasLegacyReset = appToUpdate.additionalSettings
                           .containsKey(installStatusResetKey);
                       // Track-only apps may be marked out of "Not installed",
@@ -5409,9 +5849,7 @@ class AppsPageState extends State<AppsPage> {
                       if ((appToUpdate.installedVersion != null ||
                               hasLegacyReset ||
                               isTrackOnly) &&
-                          !appsProvider.isVersionDetectionPossible(
-                            appsProvider.apps[appToUpdate.id],
-                          )) {
+                          !appsProvider.isVersionDetectionPossible(row)) {
                         appToMark = acknowledgeSourceRelease(appToUpdate);
                         if (isTrackOnly) {
                           appToMark = appToMark.copyWith(
@@ -5449,7 +5887,11 @@ class AppsPageState extends State<AppsPage> {
     }
 
     void pinSelectedApps([Iterable<App>? targetApps]) {
-      final appsToPin = targetApps ?? getSelectedApps();
+      // Pin state and the saved rows both come from the latest data.
+      final appsToPin = (targetApps ?? getSelectedApps())
+          .map((app) => appsProvider.apps[app.listingKey]?.app)
+          .nonNulls
+          .toList();
       final pinStatus = appsToPin.where((element) => element.pinned).isEmpty;
       appsProvider.saveApps(
         appsToPin.map((e) => e.copyWith(pinned: pinStatus)).toList(),
@@ -5489,7 +5931,7 @@ class AppsPageState extends State<AppsPage> {
       String urls = '';
       for (var a in appsToShare) {
         urls +=
-            'https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/${Uri.encodeComponent(jsonEncode({'id': a.id, 'url': a.url, 'author': a.author, 'name': a.name, 'preferredApkIndex': a.preferredApkIndex, 'additionalSettings': jsonEncode(a.additionalSettings), 'overrideSource': a.overrideSource}))}\n\n';
+            'https://apps.obtainium.imranr.dev/redirect?r=${appConfigLink(a)}\n\n';
       }
       SharePlus.instance.share(
         ShareParams(text: urls, subject: 'ObtainX - ${tr('appsString')}'),
@@ -5863,9 +6305,9 @@ class AppsPageState extends State<AppsPage> {
                           tr('visibilityFilterCycleHint'),
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
                               ),
                         ),
                         const SizedBox(height: 8),
@@ -6285,7 +6727,10 @@ class AppsPageState extends State<AppsPage> {
       settingsProvider,
     );
     final bool shouldInterceptBack =
-        selectedAppIds.isNotEmpty || _searchExpanded || isFilterActive;
+        selectedAppIds.isNotEmpty ||
+        _tvSelectionMode ||
+        _searchExpanded ||
+        isFilterActive;
 
     final PreferredSizeWidget? filterChipsBar = _buildFilterChipsRow(
       showFilterSheet,
@@ -6295,7 +6740,7 @@ class AppsPageState extends State<AppsPage> {
       canPop: !shouldInterceptBack,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
-        if (selectedAppIds.isNotEmpty) {
+        if (selectedAppIds.isNotEmpty || _tvSelectionMode) {
           clearSelected();
         } else if (_searchExpanded) {
           setState(() {
@@ -6331,6 +6776,13 @@ class AppsPageState extends State<AppsPage> {
                 child: ExpressiveRefreshIndicator(
                   key: _refreshIndicatorKey,
                   onRefresh: refresh,
+                  // expressive_refresh is still on flutter/material, so it
+                  // can't see the material_ui theme: pass the colours it
+                  // would take from there.
+                  color: Theme.of(context).colorScheme.primary,
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest,
                   child: _ConditionalScrollbar(
                     condition: !isLargeScreen,
                     controller: scrollController,
@@ -6341,9 +6793,9 @@ class AppsPageState extends State<AppsPage> {
                           Positioned.fill(
                             child: DecoratedBox(
                               decoration: BoxDecoration(
-                                gradient: Theme.of(
-                                  context,
-                                ).colorScheme.schemePageBackgroundGradient,
+                                gradient: Theme.of(context)
+                                    .colorScheme
+                                    .schemePageBackgroundGradient,
                               ),
                             ),
                           ),
@@ -6367,9 +6819,8 @@ class AppsPageState extends State<AppsPage> {
                                       icon: const Icon(Icons.arrow_back),
                                       onPressed: () =>
                                           Navigator.of(context).maybePop(),
-                                      tooltip: MaterialLocalizations.of(
-                                        context,
-                                      ).backButtonTooltip,
+                                      tooltip: MaterialLocalizations.of(context)
+                                          .backButtonTooltip,
                                     )
                                   : null,
                               title: _searchExpanded
@@ -6378,6 +6829,12 @@ class AppsPageState extends State<AppsPage> {
                                         ? tr('onDemandOnlyAppsTitle')
                                         : currentFolderName ??
                                               tr('appsString')),
+                              // Not on TV: its app bar has Refresh, and a
+                              // title button would be one more D-pad stop (D23).
+                              onTitleTap: settingsProvider.isTV
+                                  ? null
+                                  : _refreshFromTitleTap,
+                              titleTapSemanticsHint: tr('refresh'),
                               matchGradientBackground:
                                   settingsProvider.useGradientBackground,
                               progressiveBlurOverlayColor: isLargeScreen
@@ -6385,6 +6842,8 @@ class AppsPageState extends State<AppsPage> {
                                         .withValues(alpha: 0.72)
                                   : null,
                               actions: [
+                                if (settingsProvider.isTV && !_searchExpanded)
+                                  ..._tvAppBarActions(),
                                 if (!_searchExpanded)
                                   IconButton(
                                     icon: const Icon(Icons.search),
@@ -6431,9 +6890,8 @@ class AppsPageState extends State<AppsPage> {
                               // and "Apps" title are always on the same toolbar row.
                               searchWidget: _searchExpanded
                                   ? _buildSearchBar(
-                                      colorScheme: Theme.of(
-                                        context,
-                                      ).colorScheme,
+                                      colorScheme: Theme.of(context)
+                                          .colorScheme,
                                       showFilterSheet: showFilterSheet,
                                       neutralFilter: neutralFilter,
                                       settingsProvider: settingsProvider,
@@ -6590,6 +7048,34 @@ class AppsPageState extends State<AppsPage> {
                                                 textAlign: TextAlign.center,
                                               ),
                                             ),
+                                          // Update health (D8), after the
+                                          // lists: it's advisory, so it's
+                                          // here rather than in the app bar,
+                                          // and only while it has apps to
+                                          // show (flagged or ignored).
+                                          if (updateHealthAppCount > 0) ...[
+                                            if (onDemandOnlyAppCount > 0)
+                                              const SizedBox(height: 8),
+                                            FilledButton.tonalIcon(
+                                              onPressed: () {
+                                                Navigator.push(
+                                                  context,
+                                                  slideUpPageRoute(
+                                                    (_) =>
+                                                        const UpdateHealthPage(),
+                                                  ),
+                                                );
+                                              },
+                                              icon: const Icon(
+                                                Icons.warning_amber_rounded,
+                                              ),
+                                              label: Text(
+                                                '${tr('updateHealth')} '
+                                                '($updateHealthFlaggedCount)',
+                                                textAlign: TextAlign.center,
+                                              ),
+                                            ),
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -6654,9 +7140,9 @@ class AppsPageState extends State<AppsPage> {
                 child: settingsProvider.useGradientBackground
                     ? DecoratedBox(
                         decoration: BoxDecoration(
-                          gradient: Theme.of(
-                            context,
-                          ).colorScheme.schemePageBackgroundGradient,
+                          gradient: Theme.of(context)
+                              .colorScheme
+                              .schemePageBackgroundGradient,
                         ),
                       )
                     : ColoredBox(color: Theme.of(context).colorScheme.surface),
@@ -6686,18 +7172,16 @@ class AppsPageState extends State<AppsPage> {
                   VerticalDivider(
                     width: 1,
                     thickness: 1,
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.outlineVariant.withAlpha(50),
+                    color: Theme.of(context).colorScheme.outlineVariant
+                        .withAlpha(50),
                   ),
                   Expanded(
                     flex: 4,
                     child: selectedAppIds.isNotEmpty
                         ? Builder(
                             builder: (BuildContext context) {
-                              final ColorScheme scheme = Theme.of(
-                                context,
-                              ).colorScheme;
+                              final ColorScheme scheme = Theme.of(context)
+                                  .colorScheme;
                               final destructiveButtonStyle =
                                   FilledButton.styleFrom(
                                     minimumSize: const Size.fromHeight(56),
@@ -6714,9 +7198,9 @@ class AppsPageState extends State<AppsPage> {
                                     // Match the ActionListTile rows above:
                                     // bodyLarge (16sp) label + 24dp icon, so the
                                     // Remove action isn't visually smaller.
-                                    textStyle: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge,
+                                    textStyle: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge,
                                     alignment: Alignment.centerLeft,
                                   );
                               return Scaffold(
@@ -6779,12 +7263,10 @@ class AppsPageState extends State<AppsPage> {
                                                             if (selectAll) {
                                                               for (final appInMem
                                                                   in listedApps) {
-                                                                selectedAppIds
-                                                                    .add(
-                                                                      appInMem
-                                                                          .app
-                                                                          .id,
-                                                                    );
+                                                                selectedAppIds.add(
+                                                                  appInMem
+                                                                      .listingKey,
+                                                                );
                                                               }
                                                             } else {
                                                               selectedAppIds
@@ -7097,14 +7579,12 @@ class AppsPageState extends State<AppsPage> {
                                         child: SingleChildScrollView(
                                           padding: const EdgeInsets.all(24),
                                           child: M3eExpressiveSettingsCard(
-                                            colorScheme: Theme.of(
-                                              context,
-                                            ).colorScheme,
+                                            colorScheme: Theme.of(context)
+                                                .colorScheme,
                                             items: [
                                               AboutSectionContent(
-                                                colorScheme: Theme.of(
-                                                  context,
-                                                ).colorScheme,
+                                                colorScheme: Theme.of(context)
+                                                    .colorScheme,
                                               ),
                                             ],
                                           ),
@@ -8614,11 +9094,20 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
     }.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     if (categories.isEmpty) {
-      return Text(
-        tr('noCategories'),
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+      // An icon beside it, like the other empty states (upstream 83b0e73d).
+      final Color emptyColor = Theme.of(context).colorScheme.onSurfaceVariant;
+      return Row(
+        children: [
+          Icon(Icons.label_outline, size: 18, color: emptyColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              tr('noCategories'),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: emptyColor),
+            ),
+          ),
+        ],
       );
     }
 
@@ -8690,9 +9179,8 @@ class _TriStateCategoryFilterSelector extends StatelessWidget {
         const SizedBox(height: 2),
         Text(
           tr('categoryFilterCycleHint'),
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
         const SizedBox(height: 8),
         CategoryActionChipGroup(
@@ -8777,6 +9265,12 @@ class AppsFilter {
   CategoryFilterMatchMode categoryMatchMode;
   String sourceFilter;
 
+  /// Only the listings of this package ID, as an `obtainium://open` link
+  /// (App Info's "App details") shows a package tracked from several stores.
+  /// The filter sheet doesn't set it, and a folder saved from the sheet
+  /// doesn't keep it: folder conditions have no package ID.
+  String packageIdFilter;
+
   AppsFilter({
     this.nameFilter = '',
     this.authorFilter = '',
@@ -8788,6 +9282,7 @@ class AppsFilter {
     Set<String>? excludedCategoryFilter,
     this.categoryMatchMode = CategoryFilterMatchMode.any,
     this.sourceFilter = '',
+    this.packageIdFilter = '',
   }) : includedCategoryFilter = includedCategoryFilter ?? categoryFilter,
        excludedCategoryFilter = excludedCategoryFilter ?? const {};
 
@@ -8937,7 +9432,8 @@ class AppsFilter {
         other.excludedCategoryFilter,
       ) &&
       categoryMatchMode == other.categoryMatchMode &&
-      sourceFilter.trim() == other.sourceFilter.trim();
+      sourceFilter.trim() == other.sourceFilter.trim() &&
+      packageIdFilter == other.packageIdFilter;
 }
 
 class _NoScrollbarBehavior extends MaterialScrollBehavior {
@@ -9034,9 +9530,8 @@ class _CategoryChipsRow extends StatelessWidget {
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: categories.map((category) {
-              final color = Color(
-                categoryColors[category] ?? transparent,
-              ).withAlpha(255);
+              final color = Color(categoryColors[category] ?? transparent)
+                  .withAlpha(255);
               return CategoryActionChip(
                 label: category,
                 color: color,
@@ -9069,9 +9564,8 @@ class _CategoryChipsRow extends StatelessWidget {
         final List<Widget> children = [];
         for (int i = 0; i < bestK; i++) {
           final category = categories[i];
-          final color = Color(
-            categoryColors[category] ?? transparent,
-          ).withAlpha(255);
+          final color = Color(categoryColors[category] ?? transparent)
+              .withAlpha(255);
           children.add(
             CategoryActionChip(
               label: category,

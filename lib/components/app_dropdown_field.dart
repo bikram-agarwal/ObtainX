@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 
 double appDropdownMenuWidth(
@@ -76,6 +76,9 @@ Widget appDropdownField<T>({
               value: fieldState.value,
               isExpanded: true,
               isDense: isDense,
+              // Allow wrapped multi-line labels (narrow screens / large text
+              // scales) to grow beyond kMinInteractiveDimension without clipping.
+              itemHeight: null,
               menuWidth: menuWidth,
               dropdownColor: scheme.surfaceContainerHigh,
               borderRadius: BorderRadius.circular(borderRadius),

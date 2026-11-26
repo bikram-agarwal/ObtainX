@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 
@@ -121,6 +121,71 @@ void main() {
       );
       expect(requestedValue, 'shizuku');
       expect(dropdown.value, 'system');
+    },
+  );
+
+  testWidgets(
+    'multi-line dropdown menu items expand beyond 48px without clipping',
+    (WidgetTester tester) async {
+      const String longOption =
+          'Enforce - verify, show result, and block installation of unverified builds.';
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(320, 800),
+              textScaler: TextScaler.linear(1.4),
+            ),
+            child: Scaffold(
+              body: Builder(
+                builder: (BuildContext context) {
+                  return appDropdownField<String>(
+                    context: context,
+                    value: 'off',
+                    menuWidth: appDropdownMenuWidth(context, const <String>[
+                      'Off',
+                      longOption,
+                    ]),
+                    items: const <DropdownMenuItem<String>>[
+                      DropdownMenuItem<String>(
+                        value: 'off',
+                        child: Text('Off'),
+                      ),
+                      DropdownMenuItem<String>(
+                        value: 'enforce',
+                        child: Text(longOption),
+                      ),
+                    ],
+                    onChanged: (_) {},
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final DropdownButton<String> dropdown = tester.widget(
+        find.byType(DropdownButton<String>),
+      );
+      expect(dropdown.itemHeight, isNull);
+
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+
+      final Finder menuTextFinder = find.text(longOption).last;
+      final Finder menuItemFinder = find
+          .ancestor(
+            of: menuTextFinder,
+            matching: find.byType(DropdownMenuItem<String>),
+          )
+          .last;
+      final Size textSize = tester.getSize(menuTextFinder);
+      final Size itemSize = tester.getSize(menuItemFinder);
+
+      expect(textSize.height, greaterThan(kMinInteractiveDimension));
+      expect(itemSize.height, greaterThanOrEqualTo(textSize.height));
     },
   );
 }

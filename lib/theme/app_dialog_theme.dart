@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Material 3's default [AlertDialog] leaves 24px of pure [actionsPadding]
 /// below the action buttons (on top of their own ~40dp touch height and the

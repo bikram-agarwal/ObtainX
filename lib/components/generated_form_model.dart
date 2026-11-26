@@ -1,6 +1,7 @@
 import 'dart:math';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:obtainium/providers/settings_provider.dart';
 
 enum GeneratedFormItemType { textField, dropdown, switch_, subForm }
 
@@ -193,12 +194,11 @@ abstract class GeneratedFormItem {
 /// Given the current form values, it may push text patches back into the form.
 typedef FormValuesTextPatch = void Function(Map<String, String> patches);
 
-typedef GeneratedFormTextFieldAssist =
-    Future<void> Function(
-      BuildContext context,
-      FormValuesTextPatch patch,
-      Map<String, dynamic> values,
-    );
+typedef GeneratedFormTextFieldAssist = Future<void> Function(
+  BuildContext context,
+  FormValuesTextPatch patch,
+  Map<String, dynamic> values,
+);
 
 class GeneratedFormTextField extends GeneratedFormItem {
   late bool required;
@@ -269,6 +269,13 @@ class GeneratedFormDropdown extends GeneratedFormItem {
   // Fork-only: help icon rendered next to the dropdown label.
   String? labelTooltip;
 
+  /// As [GeneratedFormSlider.globalValue], for a per-app override whose
+  /// [opts] hold a `''` ("use global default") entry: the key of the option
+  /// the global value is. The `''` entry is then labelled with that option's
+  /// label ("Global (Stock)"), and every option stays listed, so an app can be
+  /// pinned to the value the global has now.
+  final String Function(SettingsProvider settings)? globalValue;
+
   GeneratedFormDropdown(
     super.key,
     this.opts, {
@@ -279,6 +286,7 @@ class GeneratedFormDropdown extends GeneratedFormItem {
     this.required = true,
     this.helpUrl,
     this.labelTooltip,
+    this.globalValue,
     List<String? Function(String? value)> super.additionalValidators = const [],
   });
 
@@ -301,6 +309,52 @@ class GeneratedFormDropdown extends GeneratedFormItem {
       required: required,
       helpUrl: helpUrl,
       labelTooltip: labelTooltip,
+      globalValue: globalValue,
+      additionalValidators: List.from(additionalValidators),
+    );
+  }
+}
+
+/// A discrete slider over [opts] (upstream #3251). Each option maps a stored
+/// value to its label; a label that is a plain number is shown as that many
+/// days, anything else is shown as given (already translated).
+class GeneratedFormSlider extends GeneratedFormItem {
+  final List<MapEntry<String, String>>? opts;
+  late bool required;
+
+  /// For a per-app override of a global setting: the [opts] key the global
+  /// value is at. With it, the slider gets a first stop that stores `''`
+  /// ("follow the global value"), labelled `Global (<value>)`, ahead of every
+  /// value in [opts], which holds only the real values. Landing on the global
+  /// value's own stop pins it, so it stays when the global value changes.
+  final String Function(SettingsProvider settings)? globalValue;
+
+  GeneratedFormSlider(
+    super.key,
+    this.opts, {
+    super.label,
+    super.belowWidgets,
+    String super.value = '',
+    this.required = true,
+    this.globalValue,
+    List<String? Function(String? value)> super.additionalValidators = const [],
+  });
+
+  @override
+  String ensureType(val) {
+    return val.toString();
+  }
+
+  @override
+  GeneratedFormSlider clone() {
+    return GeneratedFormSlider(
+      key,
+      opts?.map((e) => MapEntry(e.key, e.value)).toList(),
+      label: label,
+      belowWidgets: belowWidgets,
+      value: value,
+      required: required,
+      globalValue: globalValue,
       additionalValidators: List.from(additionalValidators),
     );
   }

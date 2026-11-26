@@ -4,7 +4,7 @@ import 'dart:ui';
 
 import 'package:app_links/app_links.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/custom_errors.dart';
@@ -16,6 +16,7 @@ import 'package:obtainium/pages/import_from_url_list.dart'
     show importUrlListEntries, urlImportEntriesFromLink;
 import 'package:obtainium/pages/settings.dart';
 import 'package:obtainium/providers/apps_provider.dart';
+import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/services/shared_url_receiver.dart';
@@ -101,6 +102,23 @@ Uri? _importLinkIn(String text) {
     return null;
   }
   return uri;
+}
+
+/// The listings an `obtainium://open` link (App Info's "App details") names.
+///
+/// [targetId] is a package ID, giving every listing of that package, one per
+/// store it's tracked from, or a listing key, giving that one listing. A
+/// package's first listing is keyed by its bare package ID, so the package
+/// match is tried first. Empty when nothing matches.
+List<AppInMemory> openLinkTargets(AppListings apps, String? targetId) {
+  final String id = targetId?.trim() ?? '';
+  if (id.isEmpty) return const [];
+  final List<AppInMemory> packageListings = apps
+      .listingsForPackage(id)
+      .toList();
+  if (packageListings.isNotEmpty) return packageListings;
+  final AppInMemory? listing = apps.containsListingKey(id) ? apps[id] : null;
+  return listing == null ? const [] : [listing];
 }
 
 class HomePage extends StatefulWidget {
@@ -301,7 +319,19 @@ class HomePageState extends State<HomePage> {
   bool prevIsLoading = true;
   late AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
+  static const MethodChannel _shortcutsChannel = MethodChannel(
+    'dev.imranr.obtainium/shortcuts',
+  );
+  Locale? _lastShortcutLocale;
   final SharedUrlReceiver _sharedUrlReceiver = SharedUrlReceiver();
+
+  /// True when a link or share started ObtainX from cold. Back on its Add app
+  /// page then closes ObtainX, returning to the app the link came from, and
+  /// adding the app stays on that page instead of switching to Apps.
+  ///
+  /// A link or share that reaches ObtainX while it is running leaves this
+  /// false. LinkRelayActivity delivers those to the main window (#354), and
+  /// Back there must keep leading to the Apps tab.
   bool isLinkActivity = false;
 
   /// Bumps when [AppsPageState] FAB chrome (badge, mass obtain, selection)
@@ -358,6 +388,60 @@ class HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     initDeepLinks();
+    // Tapping a single-app update notification opens that listing (upstream
+    // #3190). One that launched the app is handed over once this registers.
+    NotificationsProvider.onOpenAppRequested = _openAppFromNotification;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final Locale locale = context.locale;
+    if (_lastShortcutLocale != locale) {
+      _lastShortcutLocale = locale;
+      unawaited(_syncLauncherShortcuts());
+    }
+  }
+
+  Future<void> _syncLauncherShortcuts() async {
+    try {
+      await _shortcutsChannel.invokeMethod<void>(
+        'setLauncherShortcuts',
+        <String, dynamic>{
+          'shortcuts': <Map<String, String>>[
+            <String, String>{
+              'id': 'check_updates',
+              'shortLabel': tr('shortcutCheckUpdatesShort'),
+              'longLabel': tr('shortcutCheckUpdatesLong'),
+              'uri': 'obtainium://shortcut/check_updates',
+            },
+            <String, String>{
+              'id': 'add_app',
+              'shortLabel': tr('addApp'),
+              'longLabel': tr('shortcutAddAppLong'),
+              'uri': 'obtainium://shortcut/add_app',
+            },
+            <String, String>{
+              'id': 'updates_available',
+              'shortLabel': tr('updates'),
+              'longLabel': tr('shortcutUpdatesLong'),
+              'uri': 'obtainium://shortcut/updates',
+            },
+          ],
+        },
+      );
+    } on PlatformException {
+      // Ignore on unsupported platforms.
+    } on MissingPluginException {
+      // Ignore in widget tests / non-Android hosts.
+    }
+  }
+
+  Future<void> _openAppFromNotification(String listingKey) async {
+    final AppsProvider appsProvider = context.read<AppsProvider>();
+    await appsProvider.waitForInitialLoad();
+    if (!mounted || appsProvider.apps[listingKey] == null) return;
+    await switchToAppsTabAndOpenApp(listingKey);
   }
 
   /// Waits for [key.currentState] to become non-null by checking once per
@@ -388,6 +472,8 @@ class HomePageState extends State<HomePage> {
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
     final AppsProvider appsProvider = context.read<AppsProvider>();
+    final NotificationsProvider notificationsProvider = context
+        .read<NotificationsProvider>();
     final NavigatorState navigator = Navigator.of(context);
 
     Future<void> goToAddApp(String data) async {
@@ -396,6 +482,16 @@ class HomePageState extends State<HomePage> {
         pages[1].widget.key as GlobalKey<AddAppPageState>,
       );
       state.linkFn(data);
+    }
+
+    // A package tracked from several stores: the Apps list, showing only its
+    // listings, so the user picks the store.
+    Future<void> goToPackageListings(String packageId) async {
+      unawaited(switchToPage(0));
+      final state = await _waitForState(
+        pages[0].widget.key as GlobalKey<AppsPageState>,
+      );
+      state.showPackageListings(packageId);
     }
 
     Future<void> goToExistingApp(String appId) async {
@@ -430,8 +526,11 @@ class HomePageState extends State<HomePage> {
       }
     }
 
-    Future<void> handleSharedText(String sharedText) async {
-      isLinkActivity = true;
+    Future<void> handleSharedText(
+      String sharedText, {
+      bool startedApp = false,
+    }) async {
+      if (startedApp) isLinkActivity = true;
       final String? sharedUrl = SharedUrlReceiver.extractFirstUrl(sharedText);
       if (sharedUrl == null) {
         showError(UnsupportedURLError());
@@ -446,7 +545,11 @@ class HomePageState extends State<HomePage> {
 
     Future<void> interpretLink(Uri uri) async {
       final action = uri.host;
-      final data = uri.path.length > 1 ? uri.path.substring(1) : '';
+      final data =
+          uri.queryParameters['url'] ??
+          (uri.path.length > 1
+              ? Uri.decodeComponent(uri.path.substring(1))
+              : '');
       try {
         if (action == 'add') {
           await handleAddUrl(data);
@@ -501,6 +604,24 @@ class HomePageState extends State<HomePage> {
               ),
             );
           }
+        } else if (action == 'open') {
+          await appsProvider.waitForInitialLoad();
+          final String? queryId = uri.queryParameters['id']?.trim();
+          final String? targetId = queryId != null && queryId.isNotEmpty
+              ? queryId
+              : (data.trim().isNotEmpty ? data.trim() : null);
+          final List<AppInMemory> targets = openLinkTargets(
+            appsProvider.apps,
+            targetId,
+          );
+          if (targets.isEmpty) {
+            throw ObtainiumError(tr('appNotFound'));
+          }
+          if (targets.length == 1) {
+            await goToExistingApp(targets.single.listingKey);
+          } else {
+            await goToPackageListings(targets.first.app.id);
+          }
         } else {
           throw ObtainiumError(tr('unknown'));
         }
@@ -509,28 +630,101 @@ class HomePageState extends State<HomePage> {
       }
     }
 
+    // obtainium://refresh[?id=…] (upstream #3050) checks every app, or every
+    // listing whose package ID or listing key is the id. It can't change
+    // anything else.
+    Future<void> refreshFromLink(Uri uri) async {
+      try {
+        await appsProvider.waitForInitialLoad();
+        final String? targetId = uri.queryParameters['id']?.trim();
+        if (targetId == null || targetId.isEmpty) {
+          await appsProvider.checkUpdatesInForeground(forceAll: true);
+        } else {
+          final List<String> listingKeys = appsProvider.apps.values
+              .where(
+                (AppInMemory listing) =>
+                    listing.listingKey == targetId ||
+                    listing.app.id == targetId,
+              )
+              .map((AppInMemory listing) => listing.listingKey)
+              .toList();
+          if (listingKeys.isEmpty) {
+            throw ObtainiumError(tr('appNotFound'));
+          }
+          await appsProvider.checkUpdatesInForeground(specificIds: listingKeys);
+        }
+        // As after a pull-to-refresh: a successful check clears the update
+        // notifications nothing pending needs any more (upstream #3415).
+        unawaited(
+          appsProvider.clearStaleUpdateNotifications(notificationsProvider),
+        );
+      } catch (e) {
+        showError(e is CheckUpdatesException ? e.errors : e);
+      }
+    }
+
+    Future<void> handleShortcut(Uri uri) async {
+      switch (uri.path) {
+        case '/check_updates':
+          await switchToPage(0);
+          await appsProvider.waitForInitialLoad();
+          final state = await _waitForState(
+            pages[0].widget.key as GlobalKey<AppsPageState>,
+          );
+          state.triggerUpdateCheck();
+          break;
+        case '/add_app':
+          await switchToPage(1);
+          break;
+        case '/updates':
+          await switchToPage(0);
+          final state = await _waitForState(
+            pages[0].widget.key as GlobalKey<AppsPageState>,
+          );
+          state.showUpdatesOnly();
+          break;
+      }
+    }
+
     // Another app or a browser opened the link, so back returns there. A link
     // pasted into Import from URL list never comes here: that page adds it as
-    // it adds a URL.
-    Future<void> interpretIncomingLink(Uri uri) {
-      isLinkActivity = true;
-      return interpretLink(uri);
+    // it adds a URL. A refresh link only starts a check and leaves the user
+    // where they are, so it doesn't make this a link activity.
+    Future<void> interpretIncomingLink(Uri uri, {bool startedApp = false}) {
+      if (uri.host == 'shortcut') {
+        unawaited(handleShortcut(uri));
+        return Future<void>.value();
+      }
+      if (uri.host == 'refresh') {
+        // Not awaited: a check can take minutes, and the link and share
+        // listeners below must not wait for it (links arriving unheard are
+        // dropped). refreshFromLink shows its own errors.
+        unawaited(refreshFromLink(uri));
+        return Future<void>.value();
+      }
+      if (startedApp) isLinkActivity = true;
+      // interpretLink reads an add link's URL before its own try, as upstream
+      // does, and escapes that aren't UTF-8 throw there. Uncaught, that would
+      // stop a cold start here, before the listeners below are set up.
+      return interpretLink(uri).catchError((Object e) => showError(e));
     }
 
     // Check initial link if app was in cold state (terminated)
     final appLink = await _appLinks.getInitialLink();
     var initLinked = false;
     if (appLink != null) {
-      await interpretIncomingLink(appLink);
+      await interpretIncomingLink(appLink, startedApp: true);
       initLinked = true;
     }
+    if (!mounted) return;
     _sharedUrlReceiver.listen(handleSharedText);
     final String? initialSharedText = await _sharedUrlReceiver
         .getInitialSharedText();
     if (initialSharedText != null) {
-      await handleSharedText(initialSharedText);
+      await handleSharedText(initialSharedText, startedApp: true);
     }
     // Handle link when app is in warm state (front or background)
+    if (!mounted) return;
     _linkSubscription = _appLinks.uriLinkStream.listen((uri) async {
       if (!initLinked) {
         await interpretIncomingLink(uri);
@@ -619,7 +813,11 @@ class HomePageState extends State<HomePage> {
                 state.runMassObtain();
               },
               tooltip: null,
-              child: const Icon(Icons.file_download_outlined, size: 20),
+              child: Icon(
+                Icons.file_download_outlined,
+                size: 20,
+                semanticLabel: tr('installUpdateApps'),
+              ),
             );
 
             leadingFab = Stack(
@@ -651,7 +849,11 @@ class HomePageState extends State<HomePage> {
                 state.openSelectionActionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.checklist, size: 20),
+              child: Icon(
+                Icons.checklist,
+                size: 20,
+                semanticLabel: plural('action', 2),
+              ),
             );
           } else {
             trailingFab = FloatingActionButton.small(
@@ -663,7 +865,11 @@ class HomePageState extends State<HomePage> {
                 state.openViewOptionsSheet();
               },
               tooltip: null,
-              child: const Icon(Icons.tune, size: 20),
+              child: Icon(
+                Icons.tune,
+                size: 20,
+                semanticLabel: tr('appsViewOptions'),
+              ),
             );
           }
         } else if (!_homeFabNullStateRetryScheduled) {
@@ -1105,6 +1311,9 @@ class HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    if (NotificationsProvider.onOpenAppRequested == _openAppFromNotification) {
+      NotificationsProvider.onOpenAppRequested = null;
+    }
     appsTabFabChromeTick.dispose();
     _linkSubscription?.cancel();
     _sharedUrlReceiver.dispose();

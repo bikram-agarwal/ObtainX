@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
 import 'package:obtainium/installers/shizuku_plugin.dart';
@@ -43,24 +43,47 @@ class ShizukuInstaller extends Installer {
     }
   }
 
+  /// The latest [installApk] call, for [releaseStalledInstall].
+  ShizukuPluginCall<int?>? _pendingInstall;
+
   @override
   Future<InstallResult> installApk(
     List<String> apkFilePaths, {
     required String appId,
     Map<String, dynamic> installOptions = const {},
   }) async {
-    final fakeInstallSource =
-        installOptions['shizukuPretendToBeGooglePlay'] == true
-        ? 'com.android.vending'
-        : '';
+    // The installer of record (Google Play or, for Samsung apps, the Galaxy
+    // Store; upstream a652ee08, D14) and update ownership for a first install
+    // (upstream #3445). The backend stays Shizuku: ObtainX has Dhizuku as its
+    // own installer mode, so upstream's `shizukuInstallerMode` sub-backend
+    // (#2844) has no place here (INST-3).
+    final String fakeInstallSource =
+        installOptions['installerPackageName'] as String? ?? '';
+    final bool requestUpdateOwnership =
+        installOptions['requestUpdateOwnership'] as bool? ?? false;
     final uris = apkFilePaths.map((p) => File(p).uri.toString()).toList();
     final ShizukuApkInstaller shizukuInstaller = ShizukuApkInstaller();
-    final int? code = await runExclusiveShizukuPluginCall(() async {
-      await shizukuInstaller.setInstallerMode(InstallerMode.shizuku);
-      return uris.length > 1
-          ? shizukuInstaller.installAABSplits(uris, fakeInstallSource)
-          : shizukuInstaller.installAPK(uris.first, fakeInstallSource);
-    });
-    return InstallResult.fromPlatformCode(code);
+    final ShizukuPluginCall<int?> install = startExclusiveShizukuPluginCall(
+      () async {
+        await shizukuInstaller.setInstallerMode(InstallerMode.shizuku);
+        return uris.length > 1
+            ? shizukuInstaller.installAABSplits(
+                uris,
+                fakeInstallSource,
+                requestUpdateOwnership: requestUpdateOwnership,
+              )
+            : shizukuInstaller.installAPK(
+                uris.first,
+                fakeInstallSource,
+                requestUpdateOwnership: requestUpdateOwnership,
+              );
+      },
+    );
+    _pendingInstall = install;
+    return InstallResult.fromPlatformCode(await install.result);
   }
+
+  @override
+  Future<void> releaseStalledInstall() async =>
+      _pendingInstall?.releaseIfStalled();
 }

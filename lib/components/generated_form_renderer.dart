@@ -1,21 +1,23 @@
 import 'dart:async';
-import 'dart:math';
 
-import 'package:hsluv/hsluv.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
 import 'package:obtainium/components/category_action_chip.dart';
 import 'package:obtainium/components/generated_form_model.dart';
+import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:obtainium/components/theme_accent_settings_section.dart';
+import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/components/ui_widgets.dart' show AppSwitch;
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/theme/app_form_field_styles.dart';
 import 'package:obtainium/theme/app_page_icon_colors.dart';
+import 'package:obtainium/utils/color_utils.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:provider/provider.dart';
@@ -23,25 +25,11 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 export 'generated_form_model.dart';
 
-// Generates a color in the HSLuv (Pastel) color space
-// https://pub.dev/documentation/hsluv/latest/hsluv/Hsluv/hpluvToRgb.html
-Color generateRandomLightColor() {
-  final randomSeed = Random().nextInt(120);
-  // https://en.wikipedia.org/wiki/Golden_angle
-  final goldenAngle = 180 * (3 - sqrt(5));
-  // Generate next golden angle hue
-  final double hue = randomSeed * goldenAngle;
-  // Map from HPLuv color space to RGB, use constant saturation=100, lightness=55
-  final List<double> rgbValuesDbl = Hsluv.hpluvToRgb([hue, 100, 55]);
-  // Map RBG values from 0-1 to 0-255:
-  final List<int> rgbValues = rgbValuesDbl
-      .map((rgb) => (rgb * 255).clamp(0, 255).toInt())
-      .toList();
-  return Color.fromARGB(255, rgbValues[0], rgbValues[1], rgbValues[2]);
-}
-
-typedef OnValueChanges =
-    void Function(Map<String, dynamic> values, bool valid, bool isBuilding);
+typedef OnValueChanges = void Function(
+  Map<String, dynamic> values,
+  bool valid,
+  bool isBuilding,
+);
 
 /// Copy tag map so form state is not the same instance as [GeneratedFormTagInput.value].
 Map<String, MapEntry<int, bool>> cloneCategoryTagInputValueMap(
@@ -598,6 +586,33 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   final dynamic value;
   final void Function(dynamic newValue) onChanged;
 
+  /// [GeneratedFormDropdown.opts] as listed. With a
+  /// [GeneratedFormDropdown.globalValue], the '' entry is labelled with the
+  /// global value's current label ("Global (Stock)"). Every value keeps its
+  /// own entry, so an app can be pinned to the value the global has now and
+  /// keep it when the global value later changes.
+  List<MapEntry<String, String>> _shownOpts(BuildContext context) {
+    final List<MapEntry<String, String>> opts = formItem.opts ?? const [];
+    final String Function(SettingsProvider)? globalValue = formItem.globalValue;
+    if (globalValue == null || !opts.any((o) => o.key.isEmpty)) return opts;
+    // Watched, not read once: Add app stays alive beside Settings, so the
+    // global value can change while this form is open.
+    final String globalKey = context.select<SettingsProvider, String>(
+      globalValue,
+    );
+    final String? globalLabel = opts
+        .where((o) => o.key.isNotEmpty && o.key == globalKey)
+        .firstOrNull
+        ?.value;
+    if (globalLabel == null) return opts;
+    return [
+      for (final MapEntry<String, String> option in opts)
+        option.key.isEmpty
+            ? MapEntry('', tr('xGlobal', args: [globalLabel]))
+            : option,
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -615,15 +630,14 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
     final TextStyle? dropdownTextStyle = theme.textTheme.bodyLarge?.copyWith(
       color: scheme.onSurface,
     );
+    final List<MapEntry<String, String>> opts = _shownOpts(context);
     final Widget field = appDropdownField<dynamic>(
       context: context,
       value: value,
       labelText: formItem.label,
       menuWidth: appDropdownMenuWidth(
         context,
-        (formItem.opts ?? const []).map(
-          (MapEntry<String, String> option) => option.value,
-        ),
+        opts.map((MapEntry<String, String> option) => option.value),
         style: dropdownTextStyle,
       ),
       borderRadius: outlinedFieldBorderRadius,
@@ -634,7 +648,7 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         externalLabels: showExternalFieldLabels,
         borderRadius: outlinedFieldBorderRadius,
       ),
-      items: formItem.opts!.map((MapEntry<String, String> option) {
+      items: opts.map((MapEntry<String, String> option) {
         final bool enabled =
             formItem.disabledOptKeys?.contains(option.key) != true;
         return DropdownMenuItem<dynamic>(
@@ -691,17 +705,36 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
   }
 }
 
-class _TVTextFieldFocus extends StatefulWidget {
+/// TV: keeps a text field out of the remote's way until SELECT activates it.
+///
+/// A focused text field takes the arrow keys for its caret, so a remote that
+/// lands in one can't leave it. This puts a focusable frame around the field
+/// instead; SELECT (or Enter) hands focus to the field, and when the field
+/// loses focus (Done, BACK) the frame takes it back. Everything inside the
+/// field, suffix buttons included, stays out of D-pad traversal until then,
+/// so a button the remote must reach belongs beside the field.
+///
+/// The frame's ring follows the field's corners ([borderRadius], the radius
+/// the field's own decoration uses) and is painted over the field: ObtainX's
+/// fields are filled, so a ring behind one would be hidden by its fill except
+/// at the corners (v1.7.5 sync U2, upstream #3491).
+class TvTextFieldFocus extends StatefulWidget {
   final Widget child;
   final FocusNode textFocusNode;
+  final double borderRadius;
 
-  const _TVTextFieldFocus({required this.child, required this.textFocusNode});
+  const TvTextFieldFocus({
+    super.key,
+    required this.child,
+    required this.textFocusNode,
+    this.borderRadius = 4,
+  });
 
   @override
-  State<_TVTextFieldFocus> createState() => _TVTextFieldFocusState();
+  State<TvTextFieldFocus> createState() => _TvTextFieldFocusState();
 }
 
-class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
+class _TvTextFieldFocusState extends State<TvTextFieldFocus> {
   final FocusNode _outerFocus = FocusNode();
   bool _activated = false;
 
@@ -709,6 +742,15 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
   void initState() {
     super.initState();
     widget.textFocusNode.addListener(_onTextFocusChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant TvTextFieldFocus oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.textFocusNode != oldWidget.textFocusNode) {
+      oldWidget.textFocusNode.removeListener(_onTextFocusChange);
+      widget.textFocusNode.addListener(_onTextFocusChange);
+    }
   }
 
   void _onTextFocusChange() {
@@ -727,6 +769,15 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
 
   @override
   Widget build(BuildContext context) {
+    // Off TV the field is tapped and typed into directly; the frame would
+    // only get in the way (and keep the field from taking focus).
+    bool isTV;
+    try {
+      isTV = context.select<SettingsProvider, bool>((s) => s.isTV);
+    } on ProviderNotFoundException {
+      isTV = false;
+    }
+    if (!isTV) return widget.child;
     return Focus(
       focusNode: _outerFocus,
       onKeyEvent: (node, event) {
@@ -744,18 +795,158 @@ class _TVTextFieldFocusState extends State<_TVTextFieldFocus> {
       child: ListenableBuilder(
         listenable: _outerFocus,
         builder: (context, child) => Container(
-          decoration: _outerFocus.hasFocus && !_activated
+          foregroundDecoration: _outerFocus.hasFocus && !_activated
               ? BoxDecoration(
                   border: Border.all(
                     color: Theme.of(context).colorScheme.primary,
                     width: 2,
                   ),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(widget.borderRadius),
                 )
               : null,
           child: ExcludeFocus(excluding: !_activated, child: widget.child),
         ),
       ),
+    );
+  }
+}
+
+/// A discrete-value slider backed by a [GeneratedFormSlider] (upstream #3251).
+/// Its own [StatefulWidget], so dragging only rebuilds the slider; the chosen
+/// value is committed to the form when the drag ends (or per step on TV, where
+/// a slider can't be dragged).
+class _SliderFormItem extends StatefulWidget {
+  const _SliderFormItem({
+    super.key,
+    required this.formItem,
+    required this.initialValue,
+    required this.onCommit,
+  });
+
+  final GeneratedFormSlider formItem;
+  final dynamic initialValue;
+  final ValueChanged<String> onCommit;
+
+  @override
+  State<_SliderFormItem> createState() => _SliderFormItemState();
+}
+
+class _SliderFormItemState extends State<_SliderFormItem> {
+  // The slider's stops. With GeneratedFormSlider.globalValue, the first stop
+  // stores '' (follows the global value, labelled "Global (<value>)") and
+  // every value follows it, so an app can be pinned to the value the global
+  // has now and keep it when the global value later changes.
+  late final List<MapEntry<String, String>> stops;
+  late double sliderVal;
+  // As on the settings page: on TV the wrapper is the one focus stop, so the
+  // slider itself must not take focus.
+  late final FocusNode _sliderFocusNode;
+
+  int get _index => sliderVal.round().clamp(0, stops.length - 1);
+
+  String _optLabel(MapEntry<String, String> opt) {
+    final int? days = int.tryParse(opt.value);
+    return days != null ? plural('day', days) : opt.value;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    stops = [
+      if (widget.formItem.globalValue != null) const MapEntry('', ''),
+      ...?widget.formItem.opts,
+    ];
+    final int index = stops.indexWhere((e) => e.key == widget.initialValue);
+    // A value that isn't a stop shows as the first stop: following the global
+    // value where there is one, as '' does.
+    sliderVal = (index >= 0 ? index : 0).toDouble();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _commit() {
+    widget.onCommit(stops[_index].key);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.formItem.opts?.isEmpty ?? true) {
+      return Text(tr('dropdownNoOptsError'));
+    }
+    final String Function(SettingsProvider)? globalValue =
+        widget.formItem.globalValue;
+    String? globalLabel;
+    if (globalValue != null) {
+      // Watched, not read once: Add app stays alive beside Settings, so the
+      // global value can change while this form is open.
+      final String globalKey = context.select<SettingsProvider, String>(
+        globalValue,
+      );
+      final MapEntry<String, String>? globalOpt = stops
+          .where((e) => e.key.isNotEmpty && e.key == globalKey)
+          .firstOrNull;
+      globalLabel = globalOpt != null
+          ? tr('xGlobal', args: [_optLabel(globalOpt)])
+          : tr('useGlobalDefault');
+    }
+    final MapEntry<String, String> stop = stops[_index];
+    final String label = stop.key.isEmpty && globalLabel != null
+        ? globalLabel
+        : _optLabel(stop);
+    final double max = (stops.length - 1).toDouble();
+    final int? divisions = stops.length > 1 ? stops.length - 1 : null;
+    void onChanged(double value) {
+      setState(() => sliderVal = value);
+    }
+
+    // Built exactly like the settings page's sliders (the M3E track and
+    // vertical-bar thumb from m3eSliderTheme, title left and value right):
+    // on TV the wrapper is one focus stop that steps with the D-pad,
+    // clamping quietly at either end.
+    final bool isTV = context.read<SettingsProvider>().isTV;
+    final Widget control = TVSliderWrapper(
+      value: sliderVal,
+      min: 0,
+      max: max,
+      divisions: divisions,
+      onChanged: onChanged,
+      onChangeEnd: (double value) => _commit(),
+      child: SliderTheme(
+        data: m3eSliderTheme(context),
+        child: Slider(
+          focusNode: isTV ? _sliderFocusNode : null,
+          value: sliderVal.clamp(0, max),
+          max: max,
+          divisions: divisions,
+          label: label,
+          onChanged: onChanged,
+          onChangeEnd: (double value) => _commit(),
+        ),
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: DefaultTextStyle.merge(
+            style: m3eSliderTitleStyle(context),
+            child: Row(
+              children: [
+                Expanded(child: Text(widget.formItem.label)),
+                Text(label),
+              ],
+            ),
+          ),
+        ),
+        control,
+      ],
     );
   }
 }
@@ -959,8 +1150,10 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 },
               );
               if (context.read<SettingsProvider>().isTV) {
-                return _TVTextFieldFocus(
+                return TvTextFieldFocus(
                   textFocusNode: focusNode,
+                  // The filled field's corners; an underlined one has none.
+                  borderRadius: widget.outlinedInputFields ? outlinedRadius : 4,
                   child: textField,
                 );
               }
@@ -1155,6 +1348,8 @@ class _GeneratedFormState extends State<GeneratedForm> {
                       else
                         const SizedBox(width: 8),
                       AppSwitch(
+                        // The label is a sibling Text, not merged in.
+                        semanticLabel: switchItem.label,
                         value: values[fieldKey],
                         onChanged: switchItem.disabled
                             ? null
@@ -1188,6 +1383,20 @@ class _GeneratedFormState extends State<GeneratedForm> {
               );
             },
           );
+        } else if (widget.items[r][e] is GeneratedFormSlider) {
+          final GeneratedFormSlider sliderItem =
+              widget.items[r][e] as GeneratedFormSlider;
+          formInputs[r][e] = _SliderFormItem(
+            key: ValueKey<String>('slider_$fieldKey'),
+            formItem: sliderItem,
+            initialValue: values[fieldKey],
+            onCommit: (String value) {
+              setState(() {
+                values[fieldKey] = value;
+                someValueChanged();
+              });
+            },
+          );
         } else if (widget.items[r][e] is GeneratedFormTagInput) {
           // Capture the form item here so that closures defined below don't
           // close over the for-loop variables r and e, which have stale
@@ -1203,7 +1412,10 @@ class _GeneratedFormState extends State<GeneratedForm> {
             if (!mounted || result == null) return;
             var temp = values[fieldKey] as Map<String, MapEntry<int, bool>>?;
             temp ??= {};
-            if (temp.containsKey(result.name)) return;
+            if (temp.containsKey(result.name)) {
+              showMessage(tr('categoryAlreadyExists'));
+              return;
+            }
             final singleSelect = tagInput.singleSelect;
             final someSelected = temp.values.any((v) => v.value);
             setState(() {
@@ -1322,6 +1534,13 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                   initialName: oldEntry.key,
                                 );
                                 if (!mounted || result == null) return;
+                                // Renaming onto another category would merge
+                                // the two (upstream 1b53f2c6).
+                                if (result.name != oldEntry.key &&
+                                    temp.containsKey(result.name)) {
+                                  showMessage(tr('categoryAlreadyExists'));
+                                  return;
+                                }
                                 setState(() {
                                   if (result.name != oldEntry.key) {
                                     temp.remove(oldEntry.key);
@@ -1373,9 +1592,9 @@ class _GeneratedFormState extends State<GeneratedForm> {
                                         title: message.key,
                                         message: message.value,
                                         items: const [],
-                                        primaryActionColour: Theme.of(
-                                          ctx,
-                                        ).colorScheme.error,
+                                        primaryActionColour: Theme.of(ctx)
+                                            .colorScheme
+                                            .error,
                                       );
                                     },
                                   ).then((value) {

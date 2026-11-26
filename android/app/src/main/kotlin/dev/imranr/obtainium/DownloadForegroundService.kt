@@ -1,10 +1,7 @@
 package dev.imranr.obtainium
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.ActivityOptions
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -12,22 +9,43 @@ import android.os.Build
 import android.os.IBinder
 
 class DownloadForegroundService : Service() {
+    // Whether a startForeground on this instance succeeded. Concurrent
+    // downloads share the service, so a later download's refused start must
+    // not stop the service an earlier one is still running under.
+    private var inForeground = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildNotification(intent)
         val notificationId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, DEFAULT_NOTIFICATION_ID)
             ?: DEFAULT_NOTIFICATION_ID
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                notificationId,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
-        } else {
-            startForeground(notificationId, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    notificationId,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(notificationId, notification)
+            }
+            inForeground = true
+        } catch (_: Exception) {
+            // Android refused (e.g. ForegroundServiceStartNotAllowedException
+            // once Android 15's daily dataSync allowance is used up). Thrown
+            // here, it would crash the app; the download carries on
+            // unprotected, and its progress notification is still posted.
+            if (!inForeground) stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    /// Android 15+ stops dataSync services after their daily time allowance,
+    /// and crashes an app whose service is still running a few seconds later.
+    /// Running downloads carry on unprotected.
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
     }
 
     private fun buildNotification(intent: Intent?): Notification {
@@ -37,18 +55,9 @@ class DownloadForegroundService : Service() {
         val notificationId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, DEFAULT_NOTIFICATION_ID)
             ?: DEFAULT_NOTIFICATION_ID
         val appId = intent?.getStringExtra(EXTRA_APP_ID)
-        ensureChannel(channelCode, channelName, channelDescription)
+        ensureMinImportanceChannel(this, channelCode, channelName, channelDescription)
 
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, MainActivity::class.java)
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val contentIntent = PendingIntent.getActivity(
-            this,
-            notificationId,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            activityLaunchOptions(),
-        )
+        val contentIntent = openAppPendingIntent(this, notificationId)
         val cancelIntent = if (!appId.isNullOrBlank()) {
             PendingIntent.getBroadcast(
                 this,
@@ -80,36 +89,6 @@ class DownloadForegroundService : Service() {
             )
         }
         return builder.build()
-    }
-
-    private fun activityLaunchOptions(): android.os.Bundle? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
-            return null
-        }
-        return ActivityOptions.makeBasic()
-            .setPendingIntentCreatorBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE,
-            )
-            .toBundle()
-    }
-
-    private fun ensureChannel(
-        channelCode: String,
-        channelName: String,
-        channelDescription: String,
-    ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        if (notificationManager.getNotificationChannel(channelCode) != null) return
-        notificationManager.createNotificationChannel(
-            NotificationChannel(
-                channelCode,
-                channelName,
-                NotificationManager.IMPORTANCE_MIN,
-            ).apply {
-                description = channelDescription
-            },
-        )
     }
 
     companion object {

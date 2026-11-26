@@ -2,12 +2,19 @@ import 'dart:async' show unawaited;
 import 'dart:io' show File;
 import 'dart:ui' show PlatformDispatcher, PointerDeviceKind;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
 import 'package:obtainium/app_ui_scaling.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
+import 'package:obtainium/components/ui_widgets.dart' show TvPopupFocusObserver;
 import 'package:obtainium/pages/home.dart';
 import 'package:obtainium/custom_errors.dart' show setAppLocale;
+import 'package:obtainium/date_time_format.dart'
+    show DeviceDateOrderScope, setSystemDateOrder;
+import 'package:obtainium/services/app_language.dart';
+import 'package:obtainium/services/bulk_import_service.dart'
+    show BulkImportService;
 import 'package:obtainium/theme/app_dialog_theme.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_text_button_theme.dart';
@@ -19,21 +26,23 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/notifications_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/dynamic_color_utils.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:easy_localization/easy_localization.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/easy_localization_controller.dart';
-// ignore: implementation_imports
-import 'package:easy_localization/src/localization.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+
+/// Esperanto, carried as en-EO (an easy_localization workaround:
+/// https://github.com/aissat/easy_localization/issues/220#issuecomment-846035493).
+/// Android's per-app language setting can't offer it (AppLanguage).
+const Locale esperantoLocale = Locale('en', 'EO');
 
 List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('en'), 'English'),
+  MapEntry(Locale('bn'), 'বাংলা'),
   MapEntry(
     Locale.fromSubtags(
       languageCode: 'zh',
@@ -47,6 +56,7 @@ List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('ja'), '日本語'),
   MapEntry(Locale('hu'), 'Magyar'),
   MapEntry(Locale('de'), 'Deutsch'),
+  MapEntry(Locale('el'), 'Ελληνικά'),
   MapEntry(Locale('fa'), 'فارسی'),
   MapEntry(Locale('fr'), 'Français'),
   MapEntry(Locale('es'), 'Español'),
@@ -62,10 +72,7 @@ List<MapEntry<Locale, String>> supportedLocales = const [
   MapEntry(Locale('tr'), 'Türkçe'),
   MapEntry(Locale('uk'), 'Українська'),
   MapEntry(Locale('da'), 'Dansk'),
-  MapEntry(
-    Locale('en', 'EO'),
-    'Esperanto',
-  ), // https://github.com/aissat/easy_localization/issues/220#issuecomment-846035493
+  MapEntry(esperantoLocale, 'Esperanto'),
   MapEntry(Locale('in'), 'Bahasa Indonesia'),
   MapEntry(Locale('ko'), '한국어'),
   MapEntry(Locale('ca'), 'Català'),
@@ -149,33 +156,6 @@ String _diagnosticErrorMessage(
   return buffer.toString().trimRight();
 }
 
-Future<void> loadTranslations() async {
-  // See easy_localization/issues/210
-  await EasyLocalizationController.initEasyLocation();
-  final s = SettingsProvider();
-  await s.initializeSettings();
-  final forceLocale = s.forcedLocale;
-  final controller = EasyLocalizationController(
-    saveLocale: true,
-    forceLocale: forceLocale,
-    fallbackLocale: fallbackLocale,
-    supportedLocales: supportedLocales.map((e) => e.key).toList(),
-    assetLoader: const RootBundleAssetLoader(),
-    useOnlyLangCode: false,
-    useFallbackTranslations: true,
-    path: localeDir,
-    onLoadError: (FlutterError e) {
-      throw e;
-    },
-  );
-  await controller.loadTranslations();
-  Localization.load(
-    controller.locale,
-    translations: controller.translations,
-    fallbackTranslations: controller.fallbackTranslations,
-  );
-}
-
 /// Unique task name used by WorkManager for periodic background update checks.
 const _workManagerTaskName = 'obtainiumBgUpdateCheck';
 
@@ -253,7 +233,16 @@ void main() async {
     settingsProvider.initializeSettings(),
     np.initialize(),
     Workmanager().initialize(callbackDispatcher),
+    // Before the first frame, so no date is drawn in the wrong order (#355).
+    BulkImportService.dateFormatOrder().then(setSystemDateOrder),
+    AppLanguage.init(),
   ]);
+  // Before the first frame, so a language picked in the in-app list shows
+  // the same after Android's setting takes it over.
+  await AppLanguage.moveInAppChoiceToSystem(
+    settingsProvider,
+    WidgetsBinding.instance.platformDispatcher.locale,
+  );
   if ((await androidInfoFuture).version.sdkInt >= 29) {
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(systemNavigationBarColor: Colors.transparent),
@@ -301,6 +290,13 @@ class Obtainium extends StatefulWidget {
 
 class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
   var existingUpdateInterval = -1;
+
+  /// TV: focuses the first control of each dialog or sheet that opens
+  /// without one (D23). One instance: [MaterialApp.navigatorObservers] is
+  /// rebuilt with the app, and an observer belongs to one Navigator.
+  late final TvPopupFocusObserver _tvPopupFocusObserver = TvPopupFocusObserver(
+    () => mounted && context.read<SettingsProvider>().isTV,
+  );
 
   /// Registration currently applied to the periodic task, so [build] does not
   /// re-register it on every rebuild. Charging and unmetered network are part
@@ -365,6 +361,22 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     });
   }
 
+  /// The phone's language or region, or ObtainX's language in Android's
+  /// settings, changed while ObtainX was alive (the activity handles locale
+  /// changes itself, so it isn't recreated): re-read the date order, which
+  /// dates on screen redraw with through [DeviceDateOrderScope], and switch
+  /// to the new language unless one is picked in ObtainX.
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    super.didChangeLocales(locales);
+    unawaited(BulkImportService.dateFormatOrder().then(setSystemDateOrder));
+    final SettingsProvider settings = context.read<SettingsProvider>();
+    AppLanguage.onSystemLocaleChanged(settings);
+    if (settings.forcedLocale == null) {
+      unawaited(settings.resetLocaleSafe(context));
+    }
+  }
+
   @override
   void didChangePlatformBrightness() {
     super.didChangePlatformBrightness();
@@ -380,8 +392,9 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     // Every [_backgroundWakePeriod], not the update interval: 2.20 woke only
     // once per interval, and then anything that missed its moment waited a
     // whole interval for the next try (#317). Android still decides when within
-    // the period to run. Charging and Wi-Fi limits are constraints on the wake,
-    // so while unplugged or off Wi-Fi it doesn't run at all.
+    // the period to run. Charging and Wi-Fi guards set to Nothing are
+    // constraints on the wake, so while unplugged or off Wi-Fi it doesn't run
+    // at all.
     final int intervalMinutes = _backgroundWakePeriod.inMinutes;
     if (_desiredIntervalMinutes == intervalMinutes &&
         _desiredRequiresCharging == requiresCharging &&
@@ -792,8 +805,8 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
       (s) => Object.hash(
         s.updateInterval,
         s.useFGService,
-        s.bgUpdatesWhileChargingOnly,
-        s.bgUpdatesOnWiFiOnly,
+        s.bgGuardWhileCharging,
+        s.bgGuardOnWiFi,
         s.prefs == null,
         s.forcedLocale,
         s.appAccentColorSource,
@@ -852,10 +865,16 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
         startForegroundService(false);
       } else {
         stopForegroundService();
+        // Only a guard set to Nothing becomes a job constraint (the job
+        // doesn't run at all). Check only must still let the job run off
+        // Wi-Fi / unplugged; the task itself then holds back installs
+        // (`evaluateBgGuards`). Upstream schedules with no constraint.
         unawaited(
           _scheduleWorkManager(
-            requiresCharging: settingsProvider.bgUpdatesWhileChargingOnly,
-            unmeteredNetworkOnly: settingsProvider.bgUpdatesOnWiFiOnly,
+            requiresCharging:
+                settingsProvider.bgGuardWhileCharging == BgGuardMode.nothing,
+            unmeteredNetworkOnly:
+                settingsProvider.bgGuardOnWiFi == BgGuardMode.nothing,
           ),
         );
       }
@@ -915,7 +934,10 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
     });
 
     return WithForegroundTask(
-      child: DynamicColorBuilder(
+      // Upstream #3322: builds every Material You role from the OS tonal
+      // palettes; dynamic_color 1.x seeds the newer surface roles from the
+      // primary colour instead. The fork's scheme resolution below is unchanged.
+      child: ObtainiumDynamicColorBuilder(
         builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
           final ({ColorScheme light, ColorScheme dark}) schemes =
               _resolveThemeSchemes(settingsProvider, lightDynamic, darkDynamic);
@@ -976,10 +998,17 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
           return MaterialApp(
             title: 'ObtainX',
             scrollBehavior: const AppScrollBehavior(),
-            localizationsDelegates: context.localizationDelegates,
+            // easy_localization's delegates carry the framework Material
+            // localizations (for the packages still on flutter/material);
+            // material_ui's widgets read material_ui's own (upstream #3258).
+            localizationsDelegates: [
+              ...context.localizationDelegates,
+              ...GlobalMaterialLocalizations.delegates,
+            ],
             supportedLocales: context.supportedLocales,
             locale: renderableLocale,
             navigatorKey: globalNavigatorKey,
+            navigatorObservers: [_tvPopupFocusObserver],
             scaffoldMessengerKey: scaffoldMessengerKey,
             debugShowCheckedModeBanner: false,
             themeAnimationDuration: Duration.zero,
@@ -987,7 +1016,7 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // system text scaler. This keeps text, controls, icons, spacing,
             // overlays, and touch targets at the same user-selected scale.
             //
-            // Nothing else belongs in this builder. It used to also install
+            // No Overlay belongs in this builder. It used to also install
             // FToastBuilder's app-wide Overlay around this MediaQuery, and an
             // Overlay consumes [Overlay.initialEntries] exactly once in
             // initState — so the entry kept serving the child instance it was
@@ -995,10 +1024,20 @@ class _ObtainiumState extends State<Obtainium> with WidgetsBindingObserver {
             // That froze MediaQuery at the launch size and pinned the
             // phone/tablet layout to whichever one the app started in. The
             // toast host now lives under [home] instead; see [AppToastHost].
+            //
+            // The one other wrapper, [LegacyMaterialBridge], is a plain Theme
+            // (no Overlay, no Localizations): the app-wide fallback that gives
+            // any package still on flutter/material the app theme.
             builder: (BuildContext context, Widget? child) {
-              return AppUiScaler(
-                scale: settingsProvider.appUiScale,
-                child: child ?? const SizedBox.shrink(),
+              // Above the navigator, so every route's dates can follow a
+              // language or region change.
+              return DeviceDateOrderScope(
+                child: LegacyMaterialBridge(
+                  child: AppUiScaler(
+                    scale: settingsProvider.appUiScale,
+                    child: child ?? const SizedBox.shrink(),
+                  ),
+                ),
               );
             },
             // Best-of-both M3E theme, built and memoized by

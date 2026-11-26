@@ -27,6 +27,9 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -40,6 +43,20 @@
                     android:name="com.android_package_installer.content.SESSION_API_PACKAGE_INSTALLED"
                     android:exported="false" />
             </intent-filter>
+            <!-- The obtainium://, share, APP_MARKET and SHOW_APP_INFO filters
+                 are on LinkRelayActivity, not here (unlike upstream), so that
+                 none of them can open a second MainActivity (#354). -->
+        </activity>
+        <!-- Hands links, text shares, app-store launches and App Info's
+             "App details" to the existing MainActivity window.
+             LinkRelayActivity.kt explains why. Keep these filters here when
+             syncing with upstream. -->
+        <activity
+            android:name=".LinkRelayActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -47,9 +64,18 @@
                 <data android:scheme="obtainium" />
             </intent-filter>
             <intent-filter>
+                <action android:name="android.intent.action.SHOW_APP_INFO" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.APP_MARKET"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
@@ -84,6 +110,14 @@
             android:name=".DownloadForegroundService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+        <!-- Keeps a user-started update check alive in the background (#360).
+             stopWithTask: the check runs on the activity's Dart isolate, so
+             once the task is swiped away there is nothing left to keep alive. -->
+        <service
+            android:name=".UpdateCheckForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="true"
+            android:exported="false" />
         <!-- Foreground-service background-update mode (useFGService). The
              flutter_foreground_task plugin AAR ships this class but does NOT
              declare the component, and lib/main.dart starts it directly, so it
@@ -94,6 +128,10 @@
             android:exported="false" />
         <receiver
             android:name=".DownloadActionReceiver"
+            android:exported="false" />
+        <!-- The Stop action on UpdateCheckForegroundService's notification. -->
+        <receiver
+            android:name=".UpdateCheckActionReceiver"
             android:exported="false" />
         <meta-data
             android:name="dev.imranr.obtainium.service.NOTIFICATION_ICON"

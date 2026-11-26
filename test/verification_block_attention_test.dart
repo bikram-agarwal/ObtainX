@@ -1,9 +1,11 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/utils/signing_cert_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _Provider implements AppsProvider {
@@ -26,6 +28,9 @@ App _blocked(
   String? malwareScanStatus,
   String? reproducibleStatus,
   String? attestationStatus,
+  // Null for a record kept without a release, as Android's own install
+  // conflicts are.
+  String? detail = 'v2.0',
 }) {
   return App(
     id: 'org.example.app',
@@ -41,7 +46,7 @@ App _blocked(
     additionalSettings: {
       ...settings,
       needsAttentionCodeKey: code,
-      needsAttentionDetailKey: 'v2.0',
+      needsAttentionDetailKey: ?detail,
     },
   );
 }
@@ -233,10 +238,28 @@ void main() {
       expect(provider.verificationWouldBlockAgain(noAttestation), isTrue);
     });
 
+    test('skips a release the signing check blocked while a check is on', () {
+      // The pre-install signing check records its conflict against the
+      // release (D5); the installed-signer comparison is on by default.
+      final App conflict = _blocked(needsAttentionInstallConflict);
+      expect(provider.verificationWouldBlockAgain(conflict), isTrue);
+
+      provider.settingsProvider.verifySigningCertHashes = false;
+      expect(provider.verificationWouldBlockAgain(conflict), isFalse);
+      // An app's own expected hashes block whatever the global switch says.
+      expect(
+        provider.verificationWouldBlockAgain(
+          _withSettings(conflict, {'allowedSigningCertHashes': 'a' * 64}),
+        ),
+        isTrue,
+      );
+    });
+
     test('still tries anything else', () {
       expect(
         provider.verificationWouldBlockAgain(
-          _blocked(needsAttentionInstallConflict),
+          // Android's own conflict: trying again can work once it's resolved.
+          _blocked(needsAttentionInstallConflict, detail: null),
         ),
         isFalse,
       );
@@ -252,6 +275,36 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  test('the installed signer is read with its certificates (D5)', () async {
+    final Uint8List certificate = Uint8List.fromList([1, 2, 3, 4]);
+    const MethodChannel channel = MethodChannel(
+      'dev.imranr.obtainium/device_apps',
+    );
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (MethodCall call) async {
+      if (call.method != 'getInstalledPackageInfo') return null;
+      final Map<Object?, Object?> arguments =
+          call.arguments as Map<Object?, Object?>;
+      return <String, Object?>{
+        'packageName': arguments['packageName'],
+        // As MainActivity answers: signing info only when asked for.
+        if (arguments['includeSigningCertificates'] == true)
+          'signingInfo': <String, Object?>{
+            'signingCertificateHistory': [certificate],
+            'hasMultipleSigners': false,
+          },
+      };
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    // What loaded apps hold: the light read, without certificates.
+    expect((await getInstalledInfo('org.example.app'))?.signingInfo, isNull);
+    expect(await installedSigningCertHashes('org.example.app'), {
+      formatCertHash(certificate),
     });
   });
 }

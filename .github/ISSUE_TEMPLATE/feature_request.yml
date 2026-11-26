@@ -1,6 +1,6 @@
 name: "Feature request"
-description: "Suggest a new Source, setting, or other feature."
-labels: ["enhancement", "to check"]
+description: "A request, idea, or new functionality"
+type: "Feature Request"
 body:
   - type: textarea
     id: feature-description

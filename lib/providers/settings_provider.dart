@@ -6,15 +6,17 @@ import 'dart:math' show log;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/locale_resolution.dart';
 import 'package:obtainium/main.dart';
 import 'package:obtainium/providers/apps_provider.dart';
 import 'package:obtainium/folders/app_folder.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/theme/app_theme_accent.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -31,6 +33,35 @@ Color obtainiumThemeColor = const Color(0xFF6438B5);
 // cached flag instead of requiring a SettingsProvider instance at every call site.
 // Kept in sync by SettingsProvider.initializeSettings and the setter.
 bool _tactileFeedbackEnabled = true;
+
+// Cached mirror of [SettingsProvider.globalApkFilterRegEx], for the release-
+// filter checks (Needs attention, the "Filtered" chip) that run without a
+// SettingsProvider instance. Kept in sync by initializeSettings and the setter.
+String? _globalApkFilterRegExMirror;
+
+/// [regEx] if it is set and compiles, else null. A stored global filter that
+/// doesn't compile is ignored, rather than failing every update check.
+String? usableApkFilterRegEx(String? regEx) {
+  if (regEx == null || regEx.trim().isEmpty) return null;
+  try {
+    RegExp(regEx);
+  } on FormatException {
+    return null;
+  }
+  return regEx;
+}
+
+/// The global APK filter as the release-filter checks see it: set, and valid.
+String? get activeGlobalApkFilterRegEx =>
+    usableApkFilterRegEx(_globalApkFilterRegExMirror);
+
+/// Whether the app's own APK filter is set. A blank value counts as unset:
+/// saved apps always carry the key, so a plain null check would never let
+/// the global filter apply.
+bool appApkFilterRegExIsSet(Map<String, dynamic> additionalSettings) {
+  final dynamic value = additionalSettings['apkFilterRegEx'];
+  return value is String && value.trim().isNotEmpty;
+}
 
 void hapticSelection() {
   if (_tactileFeedbackEnabled) HapticFeedback.selectionClick();
@@ -71,7 +102,21 @@ enum SortOrderSettings { ascending, descending }
 
 enum AppsListGroupBy { none, category, source, appType, updateStatus }
 
-enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
+// Append-only: legacy int prefs (`rightSwipeAction` / `leftSwipeAction`) map
+// stored indexes onto this order, so new values go after `none`. Dropdowns
+// sort alphabetically by localized label with `none` pinned last
+// ([swipeActionsSortedByLocalizedLabel]).
+enum SwipeAction {
+  update,
+  pin,
+  appOptions,
+  delete,
+  open,
+  appInfo,
+  edit,
+  none,
+  openAppSource,
+}
 
 // Installer selection, converged with upstream Obtainium: same pref key
 // (`installMethod`) and same values (these names). ObtainX drives it through the
@@ -80,7 +125,33 @@ enum SwipeAction { update, pin, appOptions, delete, open, appInfo, edit, none }
 // upstream's `groupBy` key (its none/category/source names match upstream), with
 // `appType` and `updateStatus` as ObtainX-only extras that Obtainium safely
 // ignores.
-enum InstallerMode { system, shizuku, external, dhizuku }
+// Append-only: the legacy int migration maps stored indexes onto this order, so
+// `root` (upstream #3277) is index 4 even though upstream's enum puts it at 3.
+// Values persist by name, so Obtainium backups carrying 'root' still match.
+enum InstallerMode { system, shizuku, external, dhizuku, root }
+
+/// What background work may run while a guard's condition (on Wi-Fi, on
+/// charge) is unmet (upstream #3370). When the condition is met, the mode
+/// doesn't matter.
+///
+/// ObtainX mapping of the old switches (v1.7.4 sync, D5): the old "Wi-Fi
+/// only" / "charging only" switch ON meant *no background check at all*
+/// (an Android WorkManager constraint), so a stored legacy `true` maps to
+/// [nothing], not to upstream's [checksOnly]. OFF maps to [checksAndUpdates].
+/// Only [nothing] is enforced through Android's job constraints.
+enum BgGuardMode { nothing, checksOnly, checksAndUpdates }
+
+/// Each guard's pref key and the old switch it replaced. The old switch is
+/// still read when the guard key is absent, and mapped on import
+/// (`normalizeImportedSettings`).
+const Map<String, String> bgGuardLegacyKeys = {
+  'bgGuardOnWiFi': 'bgUpdatesOnWiFiOnly',
+  'bgGuardWhileCharging': 'bgUpdatesWhileChargingOnly',
+};
+
+/// The [BgGuardMode] an old Wi-Fi-only / charging-only switch stands for.
+BgGuardMode bgGuardModeFromLegacy(bool legacyOn) =>
+    legacyOn ? BgGuardMode.nothing : BgGuardMode.checksAndUpdates;
 
 enum ColourSchemeMode { standard, vibrant, expressive, materialYou }
 
@@ -113,6 +184,54 @@ int snapUpdateInterval(int minutes) {
   }
   return nearest;
 }
+
+/// The [minimumUpdateAgeOptions] entry nearest [days]. A stored value that
+/// isn't one (an imported one) is applied as the slider shows it.
+int snapMinimumUpdateAgeDays(int days) =>
+    snapToOption(days, minimumUpdateAgeOptions);
+
+/// The entry of [options] (ascending, starting at 0) nearest [value]; 0 for
+/// anything at or below 0.
+int snapToOption(int value, List<int> options) {
+  if (value <= 0) return 0;
+  int nearest = options.first;
+  for (final int option in options) {
+    if ((option - value).abs() < (nearest - value).abs()) nearest = option;
+  }
+  return nearest;
+}
+
+/// Prefix of the per-section expanded flags the Settings page persisted until
+/// 2026-11-20. No longer written; purged on start, and still classed as
+/// ObtainX-only in backups so an older backup's keys stay out of the
+/// Obtainium-compatible settings.
+const String obtainXSettingsSectionPrefix = 'settingsSection_';
+
+/// Upstream Obtainium settings ObtainX doesn't adopt. They're purged from
+/// prefs on start and skipped on import, so they can't ride along in a backup
+/// either way.
+const Set<String> droppedUpstreamSettingKeys = {
+  'disableSwipeActions',
+  'showActionBannerForUpdateOnly',
+  'actionBannerMode',
+  'hideDowngrades',
+  'collapseGroupsOnStartup',
+  'appListDensity',
+  'exportInstalledOnly',
+  // v1.7.4 sync: category "skip update checks" (D7), Cronet's Android
+  // certificate store and its DCL warning (D1), and upstream's Shizuku
+  // sub-backend (ObtainX has Dhizuku as its own mode; backups map it on
+  // import before this skip applies).
+  'categoriesExcludedFromChecks',
+  'useAndroidCertStore',
+  'dclWarningShown',
+  'shizukuInstallerMode',
+  // v1.7.5 sync: the opt-in refresh button (ObtainX refreshes on a tap of the
+  // page title, always on) and the system-disabled-apps check (skipped:
+  // on-demand apps cover it per app).
+  'useRefreshButton',
+  'checkSystemDisabledApps',
+};
 
 class SettingsProvider with ChangeNotifier {
   SharedPreferences? prefs;
@@ -159,6 +278,16 @@ class SettingsProvider with ChangeNotifier {
     if (_settingsInitialized) {
       // Already fully initialized on this instance — the migrations and native
       // lookups below are one-time work. Just notify so late listeners rebuild.
+      // An import writes prefs directly and then calls this, so the
+      // top-level mirrors (the global APK filter, haptics) are re-read here
+      // too, and the decoded caches are dropped: kept, they would go on
+      // answering with the settings from before the import.
+      _categoriesMemory = null;
+      _appFoldersMemory = null;
+      _folderViewCache.clear();
+      _globalApkFilterRegExMirror = globalApkFilterRegEx;
+      _tactileFeedbackEnabled = tactileFeedbackEnabled;
+      HttpService.setDefaultCertificatePinning(enableCertificatePinning);
       notifyListeners();
       return;
     }
@@ -166,6 +295,7 @@ class SettingsProvider with ChangeNotifier {
     _appFoldersMemory = null;
     _folderViewCache.clear();
     _removeUnusedUpstreamSettings();
+    _removeLegacySettingsSectionState();
     _migrateProgressiveBlurDefaultForExistingUsers();
     defaultAppDir = (await getAppStorageDir()).path;
     _migrateInstallMethodSetting();
@@ -179,6 +309,8 @@ class SettingsProvider with ChangeNotifier {
         info.systemFeatures.contains('android.hardware.type.television') ||
         info.systemFeatures.contains('android.software.leanback');
     _tactileFeedbackEnabled = prefs?.getBool('tactileFeedbackEnabled') ?? true;
+    _globalApkFilterRegExMirror = globalApkFilterRegEx;
+    HttpService.setDefaultCertificatePinning(enableCertificatePinning);
     _settingsInitialized = true;
     notifyListeners();
   }
@@ -198,10 +330,29 @@ class SettingsProvider with ChangeNotifier {
     await initializeSettings();
   }
 
+  /// Settings used to persist each section's expanded flag
+  /// (`settingsSection_<key>`). That state is in-memory only now (see
+  /// `SettingsPageState`), so leftover keys are removed and can't ride along
+  /// in later backups. The scan reads the prefs' in-memory key set; a remove
+  /// (a platform write) happens only when a key is found.
+  void _removeLegacySettingsSectionState() {
+    if (prefs == null) return;
+    final List<String> stale = prefs!
+        .getKeys()
+        .where((String key) => key.startsWith(obtainXSettingsSectionPrefix))
+        .toList();
+    for (final String key in stale) {
+      prefs!.remove(key);
+    }
+  }
+
   void _removeUnusedUpstreamSettings() {
     if (prefs == null) return;
-    prefs!.remove('disableSwipeActions');
-    prefs!.remove('showActionBannerForUpdateOnly');
+    // containsKey first: every fresh SettingsProvider runs this, and a remove
+    // is a platform write even when there's nothing to remove.
+    for (final String key in droppedUpstreamSettingKeys) {
+      if (prefs!.containsKey(key)) prefs!.remove(key);
+    }
   }
 
   bool get tactileFeedbackEnabled =>
@@ -537,8 +688,11 @@ class SettingsProvider with ChangeNotifier {
   }
 
   ThemeSettings get theme {
-    return ThemeSettings.values[prefs?.getInt('theme') ??
-        ThemeSettings.system.index];
+    final stored = prefs?.getInt('theme');
+    if (stored == null || stored < 0 || stored >= ThemeSettings.values.length) {
+      return ThemeSettings.system;
+    }
+    return ThemeSettings.values[stored];
   }
 
   set theme(ThemeSettings t) {
@@ -980,8 +1134,13 @@ class SettingsProvider with ChangeNotifier {
   }
 
   SortOrderSettings get sortOrder {
-    return SortOrderSettings.values[prefs?.getInt('sortOrder') ??
-        SortOrderSettings.ascending.index];
+    final stored = prefs?.getInt('sortOrder');
+    if (stored == null ||
+        stored < 0 ||
+        stored >= SortOrderSettings.values.length) {
+      return SortOrderSettings.ascending;
+    }
+    return SortOrderSettings.values[stored];
   }
 
   set sortOrder(SortOrderSettings s) {
@@ -1422,7 +1581,10 @@ class SettingsProvider with ChangeNotifier {
 
   Future<void> resetLocaleSafe(BuildContext context) async {
     final Locale bestMatch = resolveBestSupportedLocale(
-      deviceLocale: context.deviceLocale,
+      // The platform's locale now, not easy_localization's deviceLocale: that
+      // is read once at startup, so a language changed in Android's settings
+      // while ObtainX runs wouldn't show until a restart.
+      deviceLocale: WidgetsBinding.instance.platformDispatcher.locale,
       supportedLocales: context.supportedLocales,
       fallbackLocale: context.fallbackLocale ?? fallbackLocale,
     );
@@ -1481,23 +1643,36 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  bool get bgUpdatesOnWiFiOnly {
-    return prefs?.getBool('bgUpdatesOnWiFiOnly') ?? false;
+  BgGuardMode _bgGuardMode(String key) {
+    final Object? stored = prefs?.get(key);
+    if (stored is String) {
+      for (final BgGuardMode mode in BgGuardMode.values) {
+        if (mode.name == stored) return mode;
+      }
+    }
+    final Object? legacy = prefs?.get(bgGuardLegacyKeys[key]!);
+    if (legacy is bool) {
+      // See [BgGuardMode]: the old ON meant no checks at all.
+      return bgGuardModeFromLegacy(legacy);
+    }
+    return BgGuardMode.checksAndUpdates;
   }
 
-  set bgUpdatesOnWiFiOnly(bool val) {
-    prefs?.setBool('bgUpdatesOnWiFiOnly', val);
+  void _setBgGuardMode(String key, BgGuardMode mode) {
+    prefs?.setString(key, mode.name);
     notifyListeners();
   }
 
-  bool get bgUpdatesWhileChargingOnly {
-    return prefs?.getBool('bgUpdatesWhileChargingOnly') ?? false;
-  }
+  /// What background work may run while not on Wi-Fi (an unmetered network).
+  BgGuardMode get bgGuardOnWiFi => _bgGuardMode('bgGuardOnWiFi');
 
-  set bgUpdatesWhileChargingOnly(bool val) {
-    prefs?.setBool('bgUpdatesWhileChargingOnly', val);
-    notifyListeners();
-  }
+  set bgGuardOnWiFi(BgGuardMode mode) => _setBgGuardMode('bgGuardOnWiFi', mode);
+
+  /// What background work may run while not charging.
+  BgGuardMode get bgGuardWhileCharging => _bgGuardMode('bgGuardWhileCharging');
+
+  set bgGuardWhileCharging(BgGuardMode mode) =>
+      _setBgGuardMode('bgGuardWhileCharging', mode);
 
   DateTime get lastCompletedBGCheckTime {
     final int? temp = prefs?.getInt('lastCompletedBGCheckTime');
@@ -1561,6 +1736,21 @@ class SettingsProvider with ChangeNotifier {
     return uri;
   }
 
+  /// The folder picker, starting at [previousUriString]; null when cancelled.
+  /// A device with no picker at all gets a toast saying so (upstream #3227).
+  Future<Uri?> _pickDocumentTree(String? previousUriString) async {
+    try {
+      return await NativeFeatures.openPersistedDocumentTree(
+        initialUri: previousUriString == null
+            ? null
+            : Uri.parse(previousUriString),
+      );
+    } on ObtainiumError catch (e) {
+      showAppToast(e.toString(), type: ToastType.error);
+      return null;
+    }
+  }
+
   /// Lets the user pick a folder for exports. Cancelling the system picker
   /// leaves the previous folder and persisted URI permission unchanged.
   /// Only the replaced export URI is released when the user picks a new tree.
@@ -1578,11 +1768,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousExportDirString = prefs?.getString('exportDir');
-    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
-      initialUri: previousExportDirString == null
-          ? null
-          : Uri.parse(previousExportDirString),
-    );
+    final Uri? newUri = await _pickDocumentTree(previousExportDirString);
 
     if (newUri == null) {
       return;
@@ -1652,11 +1838,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousApkSaveDirString = prefs?.getString('apkSaveDir');
-    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
-      initialUri: previousApkSaveDirString == null
-          ? null
-          : Uri.parse(previousApkSaveDirString),
-    );
+    final Uri? newUri = await _pickDocumentTree(previousApkSaveDirString);
 
     if (newUri == null) {
       return;
@@ -1725,11 +1907,7 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? previousIconsDirString = prefs?.getString('iconsDir');
-    final Uri? newUri = await NativeFeatures.openPersistedDocumentTree(
-      initialUri: previousIconsDirString == null
-          ? null
-          : Uri.parse(previousIconsDirString),
-    );
+    final Uri? newUri = await _pickDocumentTree(previousIconsDirString);
 
     if (newUri == null) {
       return;
@@ -1834,6 +2012,8 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // Intentional: ObtainX defaults this ON for new installs (OOTB defaults,
+  // 911aca75). Upstream's default is false; don't "fix" it back.
   bool get onlyCheckInstalledOrTrackOnlyApps {
     return prefs?.getBool('onlyCheckInstalledOrTrackOnlyApps') ?? true;
   }
@@ -1843,10 +2023,198 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Fixed file name (without `.json`) for auto-exports, overwritten each time
+  /// so sync tools see one file (upstream #2343). Null keeps the timestamped
+  /// `-auto.json` names. Sanitised on read too, as an imported value never
+  /// went through the setter.
+  String? get autoExportFileName =>
+      _sanitizedExportFileName(prefs?.getString('autoExportFileName'));
+
+  set autoExportFileName(String? val) {
+    final String? cleaned = _sanitizedExportFileName(val);
+    if (cleaned == null) {
+      prefs?.remove('autoExportFileName');
+    } else {
+      prefs?.setString('autoExportFileName', cleaned);
+    }
+    notifyListeners();
+  }
+
+  static String? _sanitizedExportFileName(String? raw) {
+    final String? cleaned = raw
+        ?.replaceAll(RegExp(r'[/\\:*?"<>|]'), '')
+        .replaceFirst(RegExp(r'\.json$', caseSensitive: false), '')
+        .trim();
+    return cleaned == null || cleaned.isEmpty ? null : cleaned;
+  }
+
+  /// Supply-chain delay (upstream #3004): releases younger than this many days
+  /// are held back. 0 disables it; apps can override it per app.
+  int get minimumUpdateAgeDays {
+    return snapMinimumUpdateAgeDays(prefs?.getInt('minimumUpdateAgeDays') ?? 0);
+  }
+
+  set minimumUpdateAgeDays(int val) {
+    prefs?.setInt('minimumUpdateAgeDays', snapMinimumUpdateAgeDays(val));
+    notifyListeners();
+  }
+
+  /// APK filter applied to apps that have no APK filter of their own
+  /// (upstream #2979). Null when unset.
+  String? get globalApkFilterRegEx {
+    final String? value = prefs?.getString('globalApkFilterRegEx')?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  set globalApkFilterRegEx(String? val) {
+    final cleaned = val?.trim();
+    if (cleaned == null || cleaned.isEmpty) {
+      prefs?.remove('globalApkFilterRegEx');
+      _globalApkFilterRegExMirror = null;
+    } else {
+      prefs?.setString('globalApkFilterRegEx', cleaned);
+      _globalApkFilterRegExMirror = cleaned;
+    }
+    notifyListeners();
+  }
+
+  /// Version-trimming regex applied to apps without their own (upstream
+  /// #3368). Null when unset, blank, or not a valid regex (an invalid one
+  /// imported from a backup is ignored rather than failing every check).
+  String? get globalVersionExtractionRegEx {
+    final String? value = prefs
+        ?.getString('globalVersionExtractionRegEx')
+        ?.trim();
+    if (value == null || value.isEmpty) return null;
+    try {
+      RegExp(value);
+    } on FormatException {
+      return null;
+    }
+    return value;
+  }
+
+  set globalVersionExtractionRegEx(String? val) {
+    final cleaned = val?.trim();
+    if (cleaned == null || cleaned.isEmpty) {
+      prefs?.remove('globalVersionExtractionRegEx');
+    } else {
+      prefs?.setString('globalVersionExtractionRegEx', cleaned);
+    }
+    notifyListeners();
+  }
+
+  /// Match group of [globalVersionExtractionRegEx] to keep; null = `$0`.
+  String? get globalMatchGroupToUse {
+    final String? value = prefs?.getString('globalMatchGroupToUse')?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  set globalMatchGroupToUse(String? val) {
+    final cleaned = val?.trim();
+    if (cleaned == null || cleaned.isEmpty) {
+      prefs?.remove('globalMatchGroupToUse');
+    } else {
+      prefs?.setString('globalMatchGroupToUse', cleaned);
+    }
+    notifyListeners();
+  }
+
+  /// Opt-in (upstream #3345): when the check during add fails unexpectedly,
+  /// offer to add the app anyway with placeholder details.
+  bool get allowAddingAppsWithoutCheck {
+    return prefs?.getBool('allowAddingAppsWithoutCheck') ?? false;
+  }
+
+  set allowAddingAppsWithoutCheck(bool val) {
+    prefs?.setBool('allowAddingAppsWithoutCheck', val);
+    notifyListeners();
+  }
+
+  // Update health (upstream #1753). Upstream's defaults, kept on purpose
+  // (v1.7.4 sync, D8). 0 turns a heuristic off. Stored values are snapped to
+  // the slider options, so an odd imported value can't break the sliders.
+  int get updateHealthStaleReleaseDays => snapToOption(
+    prefs?.getInt('updateHealthStaleReleaseDays') ?? 180,
+    updateHealthDayOptions,
+  );
+
+  set updateHealthStaleReleaseDays(int val) {
+    prefs?.setInt(
+      'updateHealthStaleReleaseDays',
+      snapToOption(val, updateHealthDayOptions),
+    );
+    notifyListeners();
+  }
+
+  int get updateHealthStaleVersionDays => snapToOption(
+    prefs?.getInt('updateHealthStaleVersionDays') ?? 180,
+    updateHealthDayOptions,
+  );
+
+  set updateHealthStaleVersionDays(int val) {
+    prefs?.setInt(
+      'updateHealthStaleVersionDays',
+      snapToOption(val, updateHealthDayOptions),
+    );
+    notifyListeners();
+  }
+
+  int get updateHealthFailedChecksCount => snapToOption(
+    prefs?.getInt('updateHealthFailedChecksCount') ?? 5,
+    updateHealthFailedChecksOptions,
+  );
+
+  set updateHealthFailedChecksCount(int val) {
+    prefs?.setInt(
+      'updateHealthFailedChecksCount',
+      snapToOption(val, updateHealthFailedChecksOptions),
+    );
+    notifyListeners();
+  }
+
+  bool get updateHealthArchivedEnabled {
+    return prefs?.getBool('updateHealthArchivedEnabled') ?? true;
+  }
+
+  set updateHealthArchivedEnabled(bool val) {
+    prefs?.setBool('updateHealthArchivedEnabled', val);
+    notifyListeners();
+  }
+
+  int get updateHealthFilteredReleasesCount => snapToOption(
+    prefs?.getInt('updateHealthFilteredReleasesCount') ?? 5,
+    updateHealthFilteredReleasesOptions,
+  );
+
+  set updateHealthFilteredReleasesCount(int val) {
+    prefs?.setInt(
+      'updateHealthFilteredReleasesCount',
+      snapToOption(val, updateHealthFilteredReleasesOptions),
+    );
+    notifyListeners();
+  }
+
+  /// Show the update-health marker in the app list. Lives in Settings > Update
+  /// health with the rest of the feature, as upstream has it.
+  bool get showUpdateHealthIndicator {
+    return prefs?.getBool('showUpdateHealthIndicator') ?? true;
+  }
+
+  set showUpdateHealthIndicator(bool val) {
+    prefs?.setBool('showUpdateHealthIndicator', val);
+    notifyListeners();
+  }
+
   int get exportSettings {
     try {
-      return prefs?.getInt('exportSettings') ??
-          1; // 0 for no, 1 for yes but no secrets, 2 for everything
+      // 0 for no, 1 for yes but no secrets, 2 for everything. Clamped like
+      // the setter: an imported backup writes the pref directly, and an
+      // out-of-range value (say 3) would otherwise read as "everything" in
+      // the `>= 2` checks and auto-export secrets without the warning.
+      final int? stored = prefs?.getInt('exportSettings');
+      if (stored == null || stored < 0 || stored > 2) return 1;
+      return stored;
     } catch (e) {
       final val = prefs?.getBool('exportSettings') == true ? 1 : 0;
       prefs?.setInt('exportSettings', val);
@@ -1868,9 +2236,14 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Search profiles left out of a search. Keyed by profile id: a source
+  /// with one profile uses its name, so lists saved before search profiles
+  /// (v1.7.4 sync, D20) still apply.
   List<String> get searchDeselected {
     return prefs?.getStringList('searchDeselected') ??
-        SourceProvider().sourceTemplates.map((s) => s.name).toList();
+        SourceProvider().sourceTemplates
+            .expand((s) => s.searchProfiles.map((profile) => profile.id))
+            .toList();
   }
 
   set searchDeselected(List<String> list) {
@@ -1893,6 +2266,40 @@ class SettingsProvider with ChangeNotifier {
 
   set enableVirusTotalScanning(bool val) {
     prefs?.setBool('enableVirusTotalScanning', val);
+    notifyListeners();
+  }
+
+  /// Opt-in: the update-all action skips the bulk update sheet and acts on
+  /// what it would pre-select ([bulkUpdateDefaultSelection]).
+  bool get skipBulkUpdateConfirmation {
+    return prefs?.getBool('skipBulkUpdateConfirmation') ?? false;
+  }
+
+  set skipBulkUpdateConfirmation(bool val) {
+    prefs?.setBool('skipBulkUpdateConfirmation', val);
+    notifyListeners();
+  }
+
+  /// Before installing, compare the APK's signing certificate with the
+  /// installed app's (upstream #2922). On by default.
+  bool get verifySigningCertHashes {
+    return prefs?.getBool('verifySigningCertHashes') ?? true;
+  }
+
+  set verifySigningCertHashes(bool val) {
+    prefs?.setBool('verifySigningCertHashes', val);
+    notifyListeners();
+  }
+
+  /// Opt-in: requests to GitHub, Codeberg, GitLab and RuStore (and their
+  /// subdomains) only trust the bundled CA roots in `assets/ca-certs/`.
+  bool get enableCertificatePinning {
+    return prefs?.getBool('enableCertificatePinning') ?? false;
+  }
+
+  set enableCertificatePinning(bool val) {
+    prefs?.setBool('enableCertificatePinning', val);
+    HttpService.setDefaultCertificatePinning(val);
     notifyListeners();
   }
 

@@ -16,6 +16,11 @@ class DirectAPKLink extends AppSource {
 
   DirectAPKLink() {
     versionDetectionDisallowed = true;
+    // The link is the APK; a filter can only mean its URL (D22).
+    apkFilterMatchesLinkUrl = true;
+    // ...and not a page: opening it in a browser would download the APK
+    // outside ObtainX's install flow.
+    urlIsPage = false;
     excludeCommonSettingKeys = [
       'versionExtractionRegEx',
       'matchGroupToUse',
@@ -44,6 +49,15 @@ class DirectAPKLink extends AppSource {
         value: 'partialAPKHash',
       ),
     ],
+    [
+      // Which APK to install from a directly linked zip (upstream #3278).
+      GeneratedFormTextField(
+        'zippedApkFilterRegEx',
+        label: tr('zippedApkFilterRegEx'),
+        required: false,
+        additionalValidators: [(value) => regExValidator(value)],
+      ),
+    ],
   ];
 
   @override
@@ -51,12 +65,18 @@ class DirectAPKLink extends AppSource {
     if (!forSelection) {
       return Uri.tryParse(url)?.toString() ?? url;
     }
-    final RegExp standardUrlRegExA = RegExp('.+\\.apk\$', caseSensitive: false);
-    final match = standardUrlRegExA.firstMatch(url);
-    if (match == null) {
+    // A link to an APK or any container (XAPK/APKS/APKM, zip, tarball),
+    // judged by its path so a query string doesn't hide it (upstream #3208).
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        !AppSource.isApkOrContainerFile(
+          uri.path,
+          includeArchives: true,
+          includeTarballs: true,
+        )) {
       throw InvalidURLError(name);
     }
-    return match.group(0)!;
+    return url;
   }
 
   @override

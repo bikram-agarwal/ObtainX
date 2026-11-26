@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:crypto/crypto.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/gradle_app_id.dart';
 import 'package:obtainium/app_sources/html.dart';
@@ -12,6 +13,8 @@ import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/min_update_age.dart';
+import 'package:obtainium/utils/update_health.dart';
 import 'package:obtainium/version/app_version.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
@@ -28,6 +31,50 @@ Map<String, dynamic>? _jsonObjectFromResponseBody(String responseBody) {
   }
   return null;
 }
+
+/// The newest upload date among [release]'s APK assets, or among all its
+/// assets when the APK filter left none (upstream #3339), so a track-only
+/// release that carries only a source archive still gets a date.
+DateTime? newestAssetDateFromRelease(dynamic release) {
+  if (release is! Map) return null;
+  final allAssets = release['assets'] as List<dynamic>?;
+  final filteredAssets = release['filteredAssets'] as List<dynamic>?;
+  final assets = filteredAssets?.isNotEmpty == true
+      ? filteredAssets
+      : allAssets;
+  final dates = assets
+      ?.map((asset) {
+        // GitHub assets carry both timestamps; Forgejo/Gitea assets (Codeberg,
+        // which reuses this code) expose only `created_at` — verified against
+        // codeberg.org/api/v1 on 2026-08-18. Without the fallback this
+        // returned null for every Forgejo asset, so "Use latest asset upload
+        // as release date" silently did nothing there and left the release
+        // date unset.
+        final updated = asset?['updated_at'] ?? asset?['created_at'];
+        return updated is String ? DateTime.tryParse(updated) : null;
+      })
+      .whereType<DateTime>()
+      .toList();
+  if (dates == null || dates.isEmpty) return null;
+  dates.sort((a, b) => b.compareTo(a));
+  return dates.first;
+}
+
+/// Whether [release] is passed over as a prerelease or a draft (#3447).
+/// Drafts are visible only with a token that has write access to the repo.
+bool isReleaseExcluded(
+  dynamic release, {
+  required bool includePrereleases,
+  required bool includeDrafts,
+}) =>
+    (!includePrereleases && release['prerelease'] == true) ||
+    (!includeDrafts && release['draft'] == true);
+
+/// Hidden per-app setting: when a check last read the repository's archived
+/// flag (milliseconds since the epoch), so later checks can reuse
+/// [App.isArchived] instead of spending another API request (v1.7.4 sync D8).
+/// Written by [GitHub.postProcessApp]; Codeberg and Forgejo share it.
+const String repoArchivedCheckedAtKey = 'repoArchivedCheckedAt';
 
 class GitHub extends AppSource {
   @override
@@ -214,16 +261,15 @@ class GitHub extends AppSource {
       label: tr('githubPATLabel'),
       password: true,
       required: false,
-      helpUrl:
-          'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token',
+      helpUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token',
       assistIcon: Icons.verified_user_outlined,
       assistTooltip: tr('validateGitHubPAT'),
-      assistAction: _validatePATFromSettingsForm,
+      assistAction: _validatePATFromSourceConfigForm,
     ),
     GeneratedFormTextField(
       'GHReqPrefix',
       label: tr('GHReqPrefix'),
-      hint: 'gh-proxy.org',
+      hint: 'gh-proxy.com',
       required: false,
       additionalValidators: [
         (value) {
@@ -268,11 +314,21 @@ class GitHub extends AppSource {
         turnsOffKeys: const ['verifyLatestTag'],
       ),
     ],
+    // Paired with verifyLatestTag like includePrereleases: that check puts
+    // the latest published release on top, so a draft could never win.
+    [
+      GeneratedFormSwitch(
+        'includeDrafts',
+        label: tr('includeDrafts'),
+        value: false,
+        turnsOffKeys: const ['verifyLatestTag'],
+      ),
+    ],
     [
       GeneratedFormSwitch(
         'verifyLatestTag',
         label: tr('verifyLatestTag'),
-        turnsOffKeys: const ['includePrereleases'],
+        turnsOffKeys: const ['includePrereleases', 'includeDrafts'],
       ),
     ],
     AppSource.fallbackToOlderReleasesFormItem,
@@ -289,6 +345,13 @@ class GitHub extends AppSource {
       ),
     ],
     [
+      GeneratedFormSwitch(
+        'invertReleaseTitlesFilter',
+        label: '${tr('invertRegEx')} (${tr('filterReleaseTitlesByRegEx')})',
+        value: false,
+      ),
+    ],
+    [
       GeneratedFormTextField(
         'filterReleaseNotesByRegEx',
         label: tr('filterReleaseNotesByRegEx'),
@@ -298,6 +361,13 @@ class GitHub extends AppSource {
             return regExValidator(value);
           },
         ],
+      ),
+    ],
+    [
+      GeneratedFormSwitch(
+        'invertReleaseNotesFilter',
+        label: '${tr('invertRegEx')} (${tr('filterReleaseNotesByRegEx')})',
+        value: false,
       ),
     ],
     [
@@ -416,7 +486,11 @@ class GitHub extends AppSource {
     String url, {
     bool forAPKDownload = false,
   }) async {
-    final token = await getTokenIfAny(additionalSettings);
+    // A request with skipAuth is the retry without the configured token, after
+    // GitHub rejected it for this repository (see [sourceRequest], #3211).
+    final token = additionalSettings[_skipAuthKey] == true
+        ? null
+        : await getTokenIfAny(additionalSettings);
     final headers = <String, String>{};
     if (token != null && token.isNotEmpty) {
       headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
@@ -444,12 +518,18 @@ class GitHub extends AppSource {
       followRedirects: followRedirects,
       postBody: postBody,
     );
+    if (additionalSettings[_skipAuthKey] == true) return res;
     final String? token = await getTokenIfAny(additionalSettings);
-    if (res.statusCode == 401 && token != null && token.isNotEmpty) {
+    // The one retry layer for every API call: a rejected token (401, or a 403
+    // whose message blames the token) must not block a public repository.
+    // The retry carries skipAuth on a copy: blanking github-creds no longer
+    // works, as a blank per-app value now falls back to the global token.
+    if ((res.statusCode == 401 || _isAuthRejection(res)) &&
+        token != null &&
+        token.isNotEmpty) {
       final Map<String, dynamic> unauthSettings = Map<String, dynamic>.from(
         additionalSettings,
-      );
-      unauthSettings[githubCredsKey] = '';
+      )..[_skipAuthKey] = true;
       final Response retryRes = await super.sourceRequest(
         url,
         unauthSettings,
@@ -466,6 +546,23 @@ class GitHub extends AppSource {
       }
     }
     return res;
+  }
+
+  /// Request-local flag (never persisted): send the request without the token.
+  static const String _skipAuthKey = 'skipAuth';
+
+  /// Whether [res] is a 401/403 whose JSON body says the configured token is
+  /// the problem (e.g. "Resource not accessible by personal access token").
+  static bool _isAuthRejection(Response res) {
+    if (res.statusCode != 401 && res.statusCode != 403) return false;
+    try {
+      final message = (jsonDecode(res.body)['message'] as String? ?? '')
+          .toLowerCase();
+      return message.contains('access token') ||
+          message.contains('bad credentials');
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String?> getTokenIfAny(Map<String, dynamic> additionalSettings) async {
@@ -550,14 +647,24 @@ class GitHub extends AppSource {
     settingsProvider.setSettingString(validatedPATFingerprintKey, fingerprint);
   }
 
-  static Future<String?> validatePAT(String creds) async {
+  /// The GET that [validatePAT] sends; tests replace it.
+  @visibleForTesting
+  static Future<Response> Function(Uri url, {Map<String, String>? headers})
+  patValidationGet = get;
+
+  /// Checks [creds] against `GET <apiHost>/user`. [apiHost] is the API host
+  /// the token is for ([getAPIHost]); github.com's by default.
+  static Future<String?> validatePAT(
+    String creds, {
+    String apiHost = 'https://api.github.com',
+  }) async {
     final String? token = tokenFromCreds(creds);
     if (token == null) {
       return tr('githubPATRequiredForDefaultVerification');
     }
     try {
-      final Response response = await get(
-        Uri.parse('https://api.github.com/user'),
+      final Response response = await patValidationGet(
+        Uri.parse('$apiHost/user'),
         headers: <String, String>{
           HttpHeaders.authorizationHeader: 'Bearer $token',
           HttpHeaders.acceptHeader: 'application/vnd.github+json',
@@ -579,19 +686,47 @@ class GitHub extends AppSource {
     }
   }
 
-  static Future<void> _validatePATFromSettingsForm(
+  /// Validates the token typed into this source's own config field and
+  /// returns the error to show, or null when it is valid.
+  ///
+  /// The token is checked against this source's own API host. For a custom
+  /// host (GitHub Enterprise), the global token's validated fingerprint is
+  /// left alone: that fingerprint is github.com's, and storing or clearing it
+  /// here changed build verification for every github.com app (v1.7.5 sync,
+  /// plan §6 Q3). A github.com token keeps the old behaviour: validating it
+  /// records it as the validated token, which is what lets build verification
+  /// use it (Phase C). Settings validates the global token with its own
+  /// control.
+  Future<String?> validatePATFromSourceConfig(
+    String creds,
+    SettingsProvider settingsProvider,
+  ) async {
+    final String apiHost = await getAPIHost(const {});
+    final String? error = await validatePAT(creds, apiHost: apiHost);
+    if (apiHost != 'https://api.github.com') return error;
+    if (error == null) {
+      storePATValidation(creds, settingsProvider);
+    } else {
+      clearPATValidation(settingsProvider);
+    }
+    return error;
+  }
+
+  Future<void> _validatePATFromSourceConfigForm(
     BuildContext context,
     FormValuesTextPatch patch,
     Map<String, dynamic> values,
   ) async {
     final String creds = values[githubCredsKey]?.toString() ?? '';
     final SettingsProvider settingsProvider = context.read<SettingsProvider>();
-    final String? error = await validatePAT(creds);
+    final String? error = await validatePATFromSourceConfig(
+      creds,
+      settingsProvider,
+    );
     if (!context.mounted) {
       return;
     }
     if (error == null) {
-      storePATValidation(creds, settingsProvider);
       ScaffoldMessenger.of(context).showSnackBar(
         buildAppSnackBar(
           context,
@@ -600,7 +735,6 @@ class GitHub extends AppSource {
         ),
       );
     } else {
-      clearPATValidation(settingsProvider);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(buildAppSnackBar(context, error, type: ToastType.error));
@@ -735,8 +869,25 @@ class GitHub extends AppSource {
     return reqUrl;
   }
 
-  Future<String> getAPIHost(Map<String, dynamic> additionalSettings) async =>
-      'https://api.${hosts[0]}';
+  /// github.com's API lives on api.github.com; a custom host (GitHub
+  /// Enterprise Server) serves it under `/api/v3` on the same host
+  /// (upstream #3500).
+  ///
+  /// GitHub Enterprise Cloud with data residency (`<subdomain>.ghe.com`) is
+  /// the exception: its API is `https://api.<subdomain>.ghe.com`, as GitHub
+  /// documents, which is what ObtainX built for every custom host before
+  /// v1.7.5. Upstream's `/api/v3` alone would break those hosts (v1.7.5 sync
+  /// Phase C).
+  Future<String> getAPIHost(Map<String, dynamic> additionalSettings) async {
+    final host = hosts.isNotEmpty ? hosts[0] : 'github.com';
+    if (host == 'github.com' || host == 'www.github.com') {
+      return 'https://api.github.com';
+    }
+    if (host.toLowerCase().endsWith('.ghe.com')) {
+      return 'https://api.$host';
+    }
+    return 'https://$host/api/v3';
+  }
 
   Future<String> convertStandardUrlToAPIUrl(
     String standardUrl,
@@ -751,20 +902,22 @@ class GitHub extends AppSource {
   /// from the GitHub API for a repository endpoint definitively indicates that
   /// the repository has been renamed or transferred to a different owner.
   ///
-  /// Throws [RepositoryRenamedError] if a redirect is detected.
-  Future<void> checkForRepositoryRename(
+  /// Throws [RepositoryRenamedError] if a redirect is detected. Returns the
+  /// repository JSON when the request succeeds, so the archived check (D8)
+  /// can reuse it instead of sending a second request.
+  Future<Map<String, dynamic>?> checkForRepositoryRename(
     String standardUrl,
     Map<String, dynamic> additionalSettings,
     Map<String, String> sourceConfigSettingValues,
   ) async {
     if (sourceConfigSettingValues['checkRepoRename'] != 'true') {
-      return;
+      return null;
     }
     final uri = Uri.tryParse(standardUrl);
     final host = uri?.host.toLowerCase() ?? '';
     // Guard against non-GitHub URLs
     if (host != hosts[0] && host != 'www.${hosts[0]}') {
-      return;
+      return null;
     }
     final apiUrl = await convertStandardUrlToAPIUrl(
       standardUrl,
@@ -798,7 +951,100 @@ class GitHub extends AppSource {
           throw RepositoryRenamedError(standardUrl, newUrl);
         }
       }
+      return null;
     }
+    return res.statusCode == 200 ? _jsonObjectFromResponseBody(res.body) : null;
+  }
+
+  /// The repository JSON from [repoApiUrl], or null on any failure: the
+  /// archived flag is advisory and must never fail an update check. Goes
+  /// through [sourceRequest], the one token-rejection retry layer.
+  Future<Map<String, dynamic>?> _fetchRepoInfoQuietly(
+    String repoApiUrl,
+    Map<String, dynamic> additionalSettings,
+  ) async {
+    try {
+      final Response res = await sourceRequest(repoApiUrl, additionalSettings);
+      return res.statusCode == 200
+          ? _jsonObjectFromResponseBody(res.body)
+          : null;
+    } catch (e) {
+      unawaited(LogsProvider().add('Failed to fetch repo info: $e'));
+      return null;
+    }
+  }
+
+  static bool _repoIsArchived(Map<String, dynamic> repoInfo) =>
+      repoInfo['archived'] == true || repoInfo['disabled'] == true;
+
+  /// How long a read archived flag is trusted before it may be fetched again.
+  static const Duration _archivedStatusMaxAge = Duration(days: 7);
+
+  /// The release age past which a repository is worth probing for its
+  /// archived flag when the stale-release heuristic itself is off.
+  static const int _fallbackStaleReleaseDays = 180;
+
+  /// Set when this check read the repository's archived flag;
+  /// [postProcessApp] records it on the app ([repoArchivedCheckedAtKey]).
+  /// Safe as instance state: every check gets its own source instance.
+  DateTime? _repoArchivedCheckedAt;
+
+  /// The repository's archived flag for update health (#1753, D8), or null to
+  /// keep the stored [App.isArchived]. Upstream asks for `/repos/{o}/{r}` on
+  /// every check, which doubles GitHub API use (60 requests an hour without a
+  /// token). ObtainX reads it only when it costs nothing ([repoInfo], already
+  /// fetched by the rename check) or when it can matter: the archive check is
+  /// on, the stored flag is older than [_archivedStatusMaxAge], and the
+  /// selected release already looks stale (an archived repository can't
+  /// publish new releases) or the app was flagged archived before (so an
+  /// unarchived repository gets cleared).
+  Future<bool?> _resolveArchivedStatus({
+    required Map<String, dynamic>? repoInfo,
+    required String? repoApiUrl,
+    required DateTime? releaseDate,
+    required Map<String, dynamic> additionalSettings,
+    required SettingsProvider settingsProvider,
+  }) async {
+    final DateTime now = DateTime.now();
+    if (repoInfo != null) {
+      _repoArchivedCheckedAt = now;
+      return _repoIsArchived(repoInfo);
+    }
+    if (repoApiUrl == null) return null;
+    final UpdateHealthConfig config = resolveUpdateHealthConfig(
+      additionalSettings,
+      settingsProvider,
+    );
+    if (!config.archivedEnabled) return null;
+    final Object? checkedAt = additionalSettings[repoArchivedCheckedAtKey];
+    if (checkedAt is int &&
+        now.difference(DateTime.fromMillisecondsSinceEpoch(checkedAt)) <
+            _archivedStatusMaxAge) {
+      return null;
+    }
+    final int staleDays = config.staleReleaseDays ?? _fallbackStaleReleaseDays;
+    final bool releaseLooksStale =
+        releaseDate != null && now.difference(releaseDate).inDays >= staleDays;
+    if (!releaseLooksStale && previouslyCheckedApp?.isArchived != true) {
+      return null;
+    }
+    final Map<String, dynamic>? info = await _fetchRepoInfoQuietly(
+      repoApiUrl,
+      additionalSettings,
+    );
+    if (info == null) return null;
+    _repoArchivedCheckedAt = now;
+    return _repoIsArchived(info);
+  }
+
+  @override
+  App postProcessApp(App app) {
+    final DateTime? checkedAt = _repoArchivedCheckedAt;
+    if (checkedAt == null) return app;
+    return app.copyWith(
+      additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
+        ..[repoArchivedCheckedAtKey] = checkedAt.millisecondsSinceEpoch,
+    );
   }
 
   @override
@@ -837,28 +1083,8 @@ class GitHub extends AppSource {
     return null;
   }
 
-  DateTime? _getNewestAssetDateFromRelease(dynamic rel) {
-    final allAssets = rel['assets'] as List<dynamic>?;
-    final filteredAssets = rel['filteredAssets'] as List<dynamic>?;
-    final t = (filteredAssets ?? allAssets)
-        ?.map((e) {
-          // GitHub assets carry both timestamps; Forgejo/Gitea assets (Codeberg,
-          // which reuses this code) expose only `created_at` — verified against
-          // codeberg.org/api/v1 on 2026-08-18. Without the fallback this
-          // returned null for every Forgejo asset, so "Use latest asset upload
-          // as release date" silently did nothing there and left the release
-          // date unset.
-          final updated = e?['updated_at'] ?? e?['created_at'];
-          return updated is String ? DateTime.tryParse(updated) : null;
-        })
-        .where((e) => e != null)
-        .toList();
-    t?.sort((a, b) => b!.compareTo(a!));
-    if (t?.isNotEmpty == true) {
-      return t!.first;
-    }
-    return null;
-  }
+  DateTime? _getNewestAssetDateFromRelease(dynamic rel) =>
+      newestAssetDateFromRelease(rel);
 
   DateTime? _getReleaseDateFromRelease(dynamic rel, bool useAssetDate) =>
       !useAssetDate
@@ -1028,31 +1254,69 @@ class GitHub extends AppSource {
     required String? regexNotesFilter,
     required bool includeZips,
     required bool includeTarballs,
+    required bool useLatestAssetDateAsReleaseDate,
+    required int minAgeDays,
     required Map<String, dynamic> additionalSettings,
     required Map<String, String> sourceConfigSettingValues,
   }) {
-    var prereleaseSkipped = 0;
+    // Releases passed over for being a prerelease, a draft or too young, so
+    // that "don't fall back to older releases" still reaches the first
+    // release that qualifies (upstream: drafts used to end the search).
+    var releaseSkipped = 0;
+    // Newer releases the user's title, notes or APK filters rejected, for
+    // update health (#1753). Counted per call, so each min-age pass of the
+    // caller reports the count in front of the release it returns.
+    var userFilteredOut = 0;
+    final titleRegex = regexFilter != null ? RegExp(regexFilter) : null;
+    final notesRegex = regexNotesFilter != null
+        ? RegExp(regexNotesFilter)
+        : null;
+    final bool invertTitleFilter =
+        additionalSettings['invertReleaseTitlesFilter'] == true;
+    final bool invertNotesFilter =
+        additionalSettings['invertReleaseNotesFilter'] == true;
+    final bool includeDrafts = additionalSettings['includeDrafts'] == true;
     for (int i = 0; i < releases.length; i++) {
-      if (!fallbackToOlderReleases && i > prereleaseSkipped) break;
-      if (!includePrereleases && releases[i]['prerelease'] == true) {
-        prereleaseSkipped++;
-        continue;
-      }
-      if (releases[i]['draft'] == true) {
+      if (!fallbackToOlderReleases && i > releaseSkipped) break;
+      if (isReleaseExcluded(
+        releases[i],
+        includePrereleases: includePrereleases,
+        includeDrafts: includeDrafts,
+      )) {
+        releaseSkipped++;
         continue;
       }
       var nameToFilter = releases[i]['name'] as String?;
       if (nameToFilter == null || nameToFilter.trim().isEmpty) {
         nameToFilter = releases[i]['tag_name']?.toString() ?? '';
       }
-      if (regexFilter != null &&
-          !RegExp(regexFilter).hasMatch(nameToFilter.trim())) {
+      if (titleRegex != null &&
+          !passesRegExFilter(
+            titleRegex,
+            nameToFilter.trim(),
+            invert: invertTitleFilter,
+          )) {
+        userFilteredOut++;
         continue;
       }
-      if (regexNotesFilter != null &&
-          !RegExp(
-            regexNotesFilter,
-          ).hasMatch(((releases[i]['body'] as String?) ?? '').trim())) {
+      if (notesRegex != null &&
+          !passesRegExFilter(
+            notesRegex,
+            ((releases[i]['body'] as String?) ?? '').trim(),
+            invert: invertNotesFilter,
+          )) {
+        userFilteredOut++;
+        continue;
+      }
+      // Minimum update age (#3303): pass over releases still too young.
+      if (isReleaseTooYoung(
+        _getReleaseDateFromRelease(
+          releases[i],
+          useLatestAssetDateAsReleaseDate,
+        ),
+        minAgeDays,
+      )) {
+        releaseSkipped++;
         continue;
       }
       final allAssetsWithUrls = _findReleaseAssetUrls(
@@ -1093,6 +1357,7 @@ class GitHub extends AppSource {
           .toList();
 
       if (filteredApks.isEmpty && additionalSettings['trackOnly'] != true) {
+        userFilteredOut++;
         continue;
       }
       final targetRelease = releases[i];
@@ -1138,6 +1403,7 @@ class GitHub extends AppSource {
         );
       }
       targetRelease['allAssetUrls'] = allAssetUrls;
+      targetRelease['newerReleasesFilteredOut'] = userFilteredOut;
       return targetRelease;
     }
     return null;
@@ -1145,11 +1411,19 @@ class GitHub extends AppSource {
 
   /// Fetches and parses GitHub releases, applying sort/filter/prelease settings,
   /// then resolves the best matching release to an [APKDetails] result.
+  ///
+  /// [repoApiUrl] is the repository's API URL (`/repos/{o}/{r}`) for the
+  /// archived check, or null where there is none to ask.
+  ///
+  /// [releaseListLoader], when set, loads the release list for [requestUrl]
+  /// instead of the single request (Forgejo's pages, upstream #3533).
   Future<APKDetails> _fetchReleaseDetails(
     String requestUrl,
     String standardUrl,
     Map<String, dynamic> additionalSettings, {
     Function(Response)? onHttpErrorCode,
+    String? repoApiUrl,
+    Future<List<dynamic>> Function(String requestUrl)? releaseListLoader,
   }) async {
     final SettingsProvider settingsProvider = SettingsProvider();
     await settingsProvider.initializeSettings();
@@ -1157,7 +1431,7 @@ class GitHub extends AppSource {
       additionalSettings,
       settingsProvider,
     );
-    await checkForRepositoryRename(
+    final Map<String, dynamic>? repoInfo = await checkForRepositoryRename(
       standardUrl,
       additionalSettings,
       sourceConfigSettingValues,
@@ -1178,14 +1452,22 @@ class GitHub extends AppSource {
             true
         ? additionalSettings['filterReleaseNotesByRegEx']
         : null;
+    // Including prereleases or drafts wins over verifyLatestTag (the form
+    // pairs them with turnsOffKeys; this covers settings saved before that).
     final bool verifyLatestTag =
-        additionalSettings['verifyLatestTag'] == true && !includePrereleases;
+        additionalSettings['verifyLatestTag'] == true &&
+        !includePrereleases &&
+        additionalSettings['includeDrafts'] != true;
     final bool useLatestAssetDateAsReleaseDate =
         additionalSettings['useLatestAssetDateAsReleaseDate'] == true;
     final String sortMethod =
         additionalSettings['sortMethodChoice'] ?? 'smartname-datefallback';
     final bool includeZips = additionalSettings['includeZips'] == true;
     final bool includeTarballs = additionalSettings['includeTarballs'] == true;
+    final int minAgeDays = await effectiveMinUpdateAgeDays(
+      additionalSettings,
+      settingsProvider: settingsProvider,
+    );
     dynamic latestRelease;
     if (verifyLatestTag) {
       final uri = Uri.parse(requestUrl);
@@ -1202,199 +1484,270 @@ class GitHub extends AppSource {
       }
       latestRelease = jsonDecode(res.body);
     }
-    final Response res = await sourceRequest(requestUrl, additionalSettings);
-    if (res.statusCode == 200) {
-      final decoded = jsonDecode(res.body);
-      if (decoded is! List) {
+    final List<dynamic> decoded;
+    if (releaseListLoader != null) {
+      // A source that pages its releases (Forgejo, upstream #3533) hands over
+      // the joined list; its loader throws on an HTTP error.
+      decoded = await releaseListLoader(requestUrl);
+    } else {
+      final Response res = await sourceRequest(requestUrl, additionalSettings);
+      if (res.statusCode != 200) {
+        if (onHttpErrorCode != null) {
+          onHttpErrorCode(res);
+        }
+        throw getObtainiumHttpError(res);
+      }
+      final body = jsonDecode(res.body);
+      if (body is! List) {
         throw NoReleasesError();
       }
-      var releases = decoded;
-      if (latestRelease != null) {
-        final latestTag = latestRelease['tag_name'] ?? latestRelease['name'];
-        if (releases
-            .where(
-              (element) =>
-                  (element['tag_name'] ?? element['name']) == latestTag,
-            )
-            .isEmpty) {
-          releases = [latestRelease, ...releases];
-        }
+      decoded = body;
+    }
+    var releases = decoded;
+    if (latestRelease != null) {
+      final latestTag = latestRelease['tag_name'] ?? latestRelease['name'];
+      if (releases
+          .where(
+            (element) => (element['tag_name'] ?? element['name']) == latestTag,
+          )
+          .isEmpty) {
+        releases = [latestRelease, ...releases];
       }
+    }
 
-      if (sortMethod == 'none') {
-        releases = releases.reversed.toList();
-      } else {
-        sortGitHubReleases(
-          releases,
-          sortMethod,
-          useLatestAssetDateAsReleaseDate,
-        );
-      }
-      _positionLatestRelease(releases, latestRelease);
+    if (sortMethod == 'none') {
       releases = releases.reversed.toList();
-      final targetRelease = _selectGitHubTargetRelease(
-        releases: releases,
-        fallbackToOlderReleases: fallbackToOlderReleases,
-        includePrereleases: includePrereleases,
-        regexFilter: regexFilter,
-        regexNotesFilter: regexNotesFilter,
-        includeZips: includeZips,
-        includeTarballs: includeTarballs,
-        additionalSettings: additionalSettings,
-        sourceConfigSettingValues: sourceConfigSettingValues,
-      );
-      if (targetRelease == null) {
-        throw NoReleasesError();
-      }
-      // Resolve commit-SHA-as-version here: it needs an async ref/tag API
-      // lookup and standardUrl, so it can't run inside the sync release
-      // selector. Overrides the tag-based version chosen there.
-      if (additionalSettings['releaseCommitShaAsVersion'] == true) {
-        final String? commitSha = await getReleaseCommitSha(
-          targetRelease,
-          standardUrl,
-          additionalSettings,
+    } else {
+      sortGitHubReleases(releases, sortMethod, useLatestAssetDateAsReleaseDate);
+    }
+    _positionLatestRelease(releases, latestRelease);
+    releases = releases.reversed.toList();
+    // Prefer a release old enough for the minimum update age; if none is,
+    // fall back to the newest so the update check can hold it back until it
+    // ages.
+    dynamic selectTargetRelease(List<dynamic> candidates) {
+      for (final int age in minAgeDays > 0 ? [minAgeDays, 0] : [0]) {
+        final dynamic selected = _selectGitHubTargetRelease(
+          releases: candidates,
+          fallbackToOlderReleases: fallbackToOlderReleases,
+          includePrereleases: includePrereleases,
+          regexFilter: regexFilter,
+          regexNotesFilter: regexNotesFilter,
+          includeZips: includeZips,
+          includeTarballs: includeTarballs,
+          useLatestAssetDateAsReleaseDate: useLatestAssetDateAsReleaseDate,
+          minAgeDays: age,
+          additionalSettings: additionalSettings,
+          sourceConfigSettingValues: sourceConfigSettingValues,
         );
-        if (commitSha == null) {
-          throw NoVersionError();
-        }
-        targetRelease['version'] = commitSha;
+        if (selected != null) return selected;
       }
-      final String? version = targetRelease['version'];
-      final DateTime? releaseDate = _getReleaseDateFromRelease(
-        targetRelease,
-        useLatestAssetDateAsReleaseDate,
+      return null;
+    }
+
+    dynamic targetRelease = selectTargetRelease(releases);
+    // Fork PR #375 (thejaustin), folded into the v1.7.4 sync: GitHub reads
+    // only the first page (100 releases), and Codeberg/Forgejo at most 10
+    // pages of 50 (upstream #3533), so a repo that ships many prereleases
+    // can push its latest stable release out of reach. In that case ask for
+    // /releases/latest and run it through the same filters and min-age
+    // passes. Only when the list holds no published stable release at all:
+    // otherwise /latest is already on it and the filters turned it down.
+    // Forgejo serves /releases/latest too, so Codeberg shares this.
+    dynamic latestFallbackRelease;
+    if (targetRelease == null &&
+        !includePrereleases &&
+        latestRelease == null &&
+        releases.isNotEmpty &&
+        releases.every(
+          (release) =>
+              release is Map &&
+              (release['prerelease'] == true || release['draft'] == true),
+        ) &&
+        Uri.parse(requestUrl).path.endsWith('/releases')) {
+      final uri = Uri.parse(requestUrl);
+      final Response latestRes = await sourceRequest(
+        uri.replace(query: null, path: '${uri.path}/latest').toString(),
+        additionalSettings,
       );
-      if (version == null || version.isEmpty) {
+      if (latestRes.statusCode == 200) {
+        final dynamic latest = jsonDecode(latestRes.body);
+        if (latest is Map<String, dynamic>) {
+          targetRelease = selectTargetRelease([latest]);
+          if (targetRelease != null) latestFallbackRelease = latest;
+        }
+      } else if (latestRes.statusCode != 404) {
+        // A 404 means no published release; anything else (a rate limit)
+        // is an error of its own, not "no releases".
+        if (onHttpErrorCode != null) {
+          onHttpErrorCode(latestRes);
+        }
+        throw getObtainiumHttpError(latestRes);
+      }
+    }
+    if (targetRelease == null) {
+      throw NoReleasesError();
+    }
+    // Resolve commit-SHA-as-version here: it needs an async ref/tag API
+    // lookup and standardUrl, so it can't run inside the sync release
+    // selector. Overrides the tag-based version chosen there.
+    if (additionalSettings['releaseCommitShaAsVersion'] == true) {
+      final String? commitSha = await getReleaseCommitSha(
+        targetRelease,
+        standardUrl,
+        additionalSettings,
+      );
+      if (commitSha == null) {
         throw NoVersionError();
       }
-      final changeLog = (targetRelease['body'] ?? '').toString();
-      final apkUrls =
-          targetRelease['apkUrls'] as List<MapEntry<String, String>>;
+      targetRelease['version'] = commitSha;
+    }
+    final String? version = targetRelease['version'];
+    final DateTime? releaseDate = _getReleaseDateFromRelease(
+      targetRelease,
+      useLatestAssetDateAsReleaseDate,
+    );
+    if (version == null || version.isEmpty) {
+      throw NoVersionError();
+    }
+    final changeLog = (targetRelease['body'] ?? '').toString();
+    final apkUrls = targetRelease['apkUrls'] as List<MapEntry<String, String>>;
 
-      // Advance download size for the preferred APK, read from the GitHub API's
-      // per-asset `size` field (no extra network request) — parity with fork
-      // main (v2.9.3). This is what shows the update size on the update button;
-      // dropping it in the sync is why GitHub (and Codeberg, which delegates
-      // here) apps stopped showing a size.
-      int? apkSizeBytes;
+    // Advance download size for the preferred APK, read from the GitHub API's
+    // per-asset `size` field (no extra network request) — parity with fork
+    // main (v2.9.3). This is what shows the update size on the update button;
+    // dropping it in the sync is why GitHub (and Codeberg, which delegates
+    // here) apps stopped showing a size.
+    int? apkSizeBytes;
+    if (apkUrls.isNotEmpty) {
+      final sizeAssets =
+          (targetRelease['filteredAssets'] as List<dynamic>?) ?? [];
+      for (final asset in sizeAssets.whereType<Map<String, dynamic>>()) {
+        final assetName =
+            (asset['final_url'] as MapEntry<String, String>?)?.key;
+        if (assetName == apkUrls.last.key) {
+          final rawSize = asset['size'];
+          if (rawSize is num) apkSizeBytes = rawSize.toInt();
+          break;
+        }
+      }
+    }
+
+    // ── GitHub build-attestation status (fork feature) ──────────────────
+    // Compute the attestation verdict at CHECK time from the preferred
+    // asset's API-provided sha256 `digest`, so the app page can show
+    // Verified / Unsupported / Can't-Check immediately — without waiting for
+    // the APK to be downloaded (the /attestations lookup only needs the
+    // digest, not the bytes). This is what drives the "Security" badge on the
+    // update card; dropping it leaves latestAttestationStatus null, which the
+    // UI renders as "Can't Check". Do NOT remove — attestation is only
+    // otherwise recomputed at install time.
+    final bool shouldCheckAttestation = shouldVerifyAttestations(
+      additionalSettings,
+      settingsProvider,
+    );
+    String? attestationStatus;
+    if (shouldCheckAttestation) {
+      final filteredAssets =
+          (targetRelease['filteredAssets'] as List<dynamic>?) ?? [];
+      Map<String, dynamic>? preferredAsset;
       if (apkUrls.isNotEmpty) {
-        final sizeAssets =
-            (targetRelease['filteredAssets'] as List<dynamic>?) ?? [];
-        for (final asset in sizeAssets.whereType<Map<String, dynamic>>()) {
+        for (final asset in filteredAssets.whereType<Map<String, dynamic>>()) {
           final assetName =
               (asset['final_url'] as MapEntry<String, String>?)?.key;
           if (assetName == apkUrls.last.key) {
-            final rawSize = asset['size'];
-            if (rawSize is num) apkSizeBytes = rawSize.toInt();
+            preferredAsset = asset;
             break;
           }
         }
       }
-
-      // ── GitHub build-attestation status (fork feature) ──────────────────
-      // Compute the attestation verdict at CHECK time from the preferred
-      // asset's API-provided sha256 `digest`, so the app page can show
-      // Verified / Unsupported / Can't-Check immediately — without waiting for
-      // the APK to be downloaded (the /attestations lookup only needs the
-      // digest, not the bytes). This is what drives the "Security" badge on the
-      // update card; dropping it leaves latestAttestationStatus null, which the
-      // UI renders as "Can't Check". Do NOT remove — attestation is only
-      // otherwise recomputed at install time.
-      final bool shouldCheckAttestation = shouldVerifyAttestations(
-        additionalSettings,
-        settingsProvider,
-      );
-      String? attestationStatus;
-      if (shouldCheckAttestation) {
-        final filteredAssets =
-            (targetRelease['filteredAssets'] as List<dynamic>?) ?? [];
-        Map<String, dynamic>? preferredAsset;
-        if (apkUrls.isNotEmpty) {
-          for (final asset
-              in filteredAssets.whereType<Map<String, dynamic>>()) {
-            final assetName =
-                (asset['final_url'] as MapEntry<String, String>?)?.key;
-            if (assetName == apkUrls.last.key) {
-              preferredAsset = asset;
-              break;
-            }
-          }
-        }
-        final String? preferredAssetDigest =
-            preferredAsset?['digest'] as String?;
-        // Skip the attestation API round-trip when the upstream release is
-        // unchanged and we hold a CONCLUSIVE cached verdict. A GitHub
-        // attestation is produced inside the release workflow run that builds
-        // the asset and bound to its digest, so for an unchanged release both
-        // 'verified' and 'unsupported' (no attestation for this digest) are
-        // stable. Only a cached 'error' is re-checked, since that is a
-        // transient lookup failure, not a real verdict.
-        final App? prevApp = previouslyCheckedApp;
-        final bool canReuseCachedAttestation =
-            prevApp != null &&
-            prevApp.rawLatestVersionFromSource != null &&
-            prevApp.rawLatestVersionFromSource == version &&
-            prevApp.latestAttestationStatus != null &&
-            prevApp.latestAttestationStatus != githubAttestationStatusError;
-        attestationStatus = canReuseCachedAttestation
-            ? prevApp.latestAttestationStatus
-            : preferredAssetDigest != null
-            ? await getAttestationStatusForSha256Digest(
-                standardUrl,
-                preferredAssetDigest,
-                additionalSettings,
-              )
-            : githubAttestationStatusError;
-      }
-
-      final List<String> rawReleaseTitleCandidates = <String>[];
-      for (final rel in releases) {
-        if (rel is Map<String, dynamic>) {
-          final String? title =
-              (rel['name'] as String?)?.trim().isNotEmpty == true
-              ? (rel['name'] as String).trim()
-              : (rel['tag_name'] as String?)?.trim();
-          if (title != null &&
-              title.isNotEmpty &&
-              !rawReleaseTitleCandidates.contains(title)) {
-            rawReleaseTitleCandidates.add(title);
-          }
-        }
-      }
-
-      return APKDetails(
-        version,
-        apkUrls,
-        getAppNames(standardUrl),
-        releaseDate: releaseDate,
-        changeLog: changeLog.isEmpty ? null : changeLog,
-        allAssetUrls:
-            targetRelease['allAssetUrls'] as List<MapEntry<String, String>>,
-        rawReleaseTitleCandidates: rawReleaseTitleCandidates,
-        apkSizeBytes: apkSizeBytes,
-        attestationStatus: attestationStatus,
-      );
-    } else {
-      if (onHttpErrorCode != null) {
-        onHttpErrorCode(res);
-      }
-      throw getObtainiumHttpError(res);
+      final String? preferredAssetDigest = preferredAsset?['digest'] as String?;
+      // Skip the attestation API round-trip when the upstream release is
+      // unchanged and we hold a CONCLUSIVE cached verdict. A GitHub
+      // attestation is produced inside the release workflow run that builds
+      // the asset and bound to its digest, so for an unchanged release both
+      // 'verified' and 'unsupported' (no attestation for this digest) are
+      // stable. Only a cached 'error' is re-checked, since that is a
+      // transient lookup failure, not a real verdict.
+      final App? prevApp = previouslyCheckedApp;
+      final bool canReuseCachedAttestation =
+          prevApp != null &&
+          prevApp.rawLatestVersionFromSource != null &&
+          prevApp.rawLatestVersionFromSource == version &&
+          prevApp.latestAttestationStatus != null &&
+          prevApp.latestAttestationStatus != githubAttestationStatusError;
+      attestationStatus = canReuseCachedAttestation
+          ? prevApp.latestAttestationStatus
+          : preferredAssetDigest != null
+          ? await getAttestationStatusForSha256Digest(
+              standardUrl,
+              preferredAssetDigest,
+              additionalSettings,
+            )
+          : githubAttestationStatusError;
     }
+
+    final List<String> rawReleaseTitleCandidates = <String>[];
+    // The /latest fallback release is the oldest one seen, so it goes last.
+    for (final rel in [...releases, ?latestFallbackRelease]) {
+      if (rel is Map<String, dynamic>) {
+        final String? title =
+            (rel['name'] as String?)?.trim().isNotEmpty == true
+            ? (rel['name'] as String).trim()
+            : (rel['tag_name'] as String?)?.trim();
+        if (title != null &&
+            title.isNotEmpty &&
+            !rawReleaseTitleCandidates.contains(title)) {
+          rawReleaseTitleCandidates.add(title);
+        }
+      }
+    }
+
+    final bool? isArchived = await _resolveArchivedStatus(
+      repoInfo: repoInfo,
+      repoApiUrl: repoApiUrl,
+      releaseDate: releaseDate,
+      additionalSettings: additionalSettings,
+      settingsProvider: settingsProvider,
+    );
+
+    // No `releaseUrl` (upstream ad1c208e): ObtainX resolves relative
+    // changelog links against the repository instead (v1.7.4 sync D21).
+    return APKDetails(
+      version,
+      apkUrls,
+      getAppNames(standardUrl),
+      releaseDate: releaseDate,
+      changeLog: changeLog.isEmpty ? null : changeLog,
+      allAssetUrls:
+          targetRelease['allAssetUrls'] as List<MapEntry<String, String>>,
+      rawReleaseTitleCandidates: rawReleaseTitleCandidates,
+      apkSizeBytes: apkSizeBytes,
+      attestationStatus: attestationStatus,
+      isArchived: isArchived,
+      newerReleasesFilteredOut:
+          targetRelease['newerReleasesFilteredOut'] as int?,
+    );
   }
 
+  /// [repoApiUrl], [releaseListLoader]: see [_fetchReleaseDetails]. The tags
+  /// fallback uses the same loader.
   Future<APKDetails> fetchReleaseDetailsWithTagFallback(
     String standardUrl,
     Map<String, dynamic> additionalSettings,
     Future<String> Function(bool) reqUrlGenerator,
-    dynamic Function(Response)? onHttpErrorCode,
-  ) async {
+    dynamic Function(Response)? onHttpErrorCode, {
+    String? repoApiUrl,
+    Future<List<dynamic>> Function(String requestUrl)? releaseListLoader,
+  }) async {
     try {
       return await _fetchReleaseDetails(
         await reqUrlGenerator(false),
         standardUrl,
         additionalSettings,
         onHttpErrorCode: onHttpErrorCode,
+        repoApiUrl: repoApiUrl,
+        releaseListLoader: releaseListLoader,
       );
     } catch (err) {
       if (err is NoReleasesError && additionalSettings['trackOnly'] == true) {
@@ -1403,6 +1756,8 @@ class GitHub extends AppSource {
           standardUrl,
           additionalSettings,
           onHttpErrorCode: onHttpErrorCode,
+          repoApiUrl: repoApiUrl,
+          releaseListLoader: releaseListLoader,
         );
       } else {
         rethrowOrWrapError(err);
@@ -1416,15 +1771,22 @@ class GitHub extends AppSource {
     Map<String, dynamic> additionalSettings,
   ) async {
     try {
+      final String apiUrl = await convertStandardUrlToAPIUrl(
+        standardUrl,
+        additionalSettings,
+      );
       return await fetchReleaseDetailsWithTagFallback(
         standardUrl,
         additionalSettings,
         (bool useTagUrl) async {
-          return '${await convertStandardUrlToAPIUrl(standardUrl, additionalSettings)}/${useTagUrl ? 'tags' : 'releases'}?per_page=100';
+          return '$apiUrl/${useTagUrl ? 'tags' : 'releases'}?per_page=100';
         },
         (Response res) {
-          rateLimitErrorCheck(res);
+          githubErrorCheck(res);
         },
+        // No archived probe for an overridden host (GitHub Enterprise), as
+        // upstream, which still skips it when the host changed.
+        repoApiUrl: hostChanged ? null : apiUrl,
       );
     } catch (e) {
       rethrowOrWrapError(e);
@@ -1440,38 +1802,65 @@ class GitHub extends AppSource {
     return AppNames(names[0], names.sublist(1).join('/'));
   }
 
-  Future<Map<String, List<String>>> searchCommon(
+  /// Runs a repository search and preserves star counts in [SearchResultDetails].
+  Future<Map<String, SearchResultDetails>> searchCommonWithDetails(
     String query,
     String requestUrl,
     String rootProp, {
     Function(Response)? onHttpErrorCode,
     Map<String, dynamic> querySettings = const {},
+    Map<String, dynamic> additionalSettings = const {},
   }) async {
-    final Response res = await sourceRequest(requestUrl, {});
+    final Response res = await sourceRequest(requestUrl, additionalSettings);
     if (res.statusCode == 200) {
       final int minStarCount =
           int.tryParse(querySettings['minStarCount']?.toString() ?? '') ?? 0;
-      final Map<String, List<String>> urlsWithDescriptions = {};
-      for (var e in (jsonDecode(res.body)[rootProp] as List<dynamic>)) {
-        if ((e['stargazers_count'] ?? e['stars_count'] ?? 0) >= minStarCount) {
-          urlsWithDescriptions.addAll({
-            e['html_url'] as String: [
-              e['full_name'] as String,
-              ((e['archived'] == true ? '[ARCHIVED] ' : '') +
-                  (e['description'] != null
-                      ? e['description'] as String
+      final Map<String, SearchResultDetails> resultsByUrl = {};
+      for (final dynamic repoItem
+          in (jsonDecode(res.body)[rootProp] as List<dynamic>)) {
+        final int? starCount = AppSource.parseSearchStarCount(
+          repoItem['stargazers_count'] ?? repoItem['stars_count'],
+        );
+        if ((starCount ?? 0) >= minStarCount) {
+          resultsByUrl[repoItem['html_url'] as String] = SearchResultDetails(
+            subtitleLines: [
+              repoItem['full_name'] as String,
+              ((repoItem['archived'] == true ? '[ARCHIVED] ' : '') +
+                  (repoItem['description'] != null
+                      ? repoItem['description'] as String
                       : tr('noDescription'))),
             ],
-          });
+            starCount: starCount,
+          );
         }
       }
-      return urlsWithDescriptions;
+      return resultsByUrl;
     } else {
       if (onHttpErrorCode != null) {
         onHttpErrorCode(res);
       }
       throw getObtainiumHttpError(res);
     }
+  }
+
+  Future<Map<String, List<String>>> searchCommon(
+    String query,
+    String requestUrl,
+    String rootProp, {
+    Function(Response)? onHttpErrorCode,
+    Map<String, dynamic> querySettings = const {},
+    Map<String, dynamic> additionalSettings = const {},
+  }) async {
+    final Map<String, SearchResultDetails> detailedResults =
+        await searchCommonWithDetails(
+          query,
+          requestUrl,
+          rootProp,
+          onHttpErrorCode: onHttpErrorCode,
+          querySettings: querySettings,
+          additionalSettings: additionalSettings,
+        );
+    return AppSource.subtitleLinesByUrl(detailedResults);
   }
 
   String undoGHProxyMod(
@@ -1485,66 +1874,78 @@ class GitHub extends AppSource {
   }
 
   @override
-  Future<Map<String, List<String>>> search(
+  Future<Map<String, SearchResultDetails>> searchWithDetails(
     String query, {
     Map<String, dynamic> querySettings = const {},
   }) async {
-    final sp = SettingsProvider();
-    await sp.initializeSettings();
-    final sourceConfigSettingValues = await getSourceConfigValues({}, sp);
-    final results = await searchCommon(
+    final SettingsProvider settingsProvider = SettingsProvider();
+    await settingsProvider.initializeSettings();
+    final Map<String, String> sourceConfigSettingValues =
+        await getSourceConfigValues({}, settingsProvider);
+    final Map<String, SearchResultDetails>
+    results = await searchCommonWithDetails(
       query,
       '${await getAPIHost({})}/search/repositories?q=${Uri.encodeQueryComponent(query)}&per_page=100',
       'items',
       onHttpErrorCode: (Response res) {
-        rateLimitErrorCheck(res);
+        githubErrorCheck(res);
       },
       querySettings: querySettings,
     );
     if ((sourceConfigSettingValues['GHReqPrefix'] ?? '').isNotEmpty) {
-      final Map<String, List<String>> results2 = {};
-      results.forEach((k, v) {
-        results2[undoGHProxyMod(k, sourceConfigSettingValues)] = v;
-      });
-      return results2;
-    } else {
-      return results;
+      return {
+        for (final MapEntry<String, SearchResultDetails> entry
+            in results.entries)
+          undoGHProxyMod(entry.key, sourceConfigSettingValues): entry.value,
+      };
     }
+    return results;
   }
 
+  @override
+  Future<Map<String, List<String>>> search(
+    String query, {
+    Map<String, dynamic> querySettings = const {},
+  }) async {
+    final Map<String, SearchResultDetails> detailedResults =
+        await searchWithDetails(query, querySettings: querySettings);
+    return AppSource.subtitleLinesByUrl(detailedResults);
+  }
+
+  /// Throws a [RateLimitError] when the failed response [res] says GitHub is
+  /// rate limiting, by the rule every source uses ([HttpService.getHttpError]):
+  /// a 429, a 403 with a spent quota or a retry time, or "rate limit" or "too
+  /// many requests" in the reply. A plain 403 is a refusal and is left to the
+  /// caller's error (#344). A rate limit without a retry time says so, rather
+  /// than naming a wait GitHub never gave; background checks still wait
+  /// [RateLimitError.defaultRetryWaitMinutes].
   void rateLimitErrorCheck(Response res) {
-    final reasonLower = res.reasonPhrase?.toLowerCase() ?? '';
-    final bodySample = res.body.length > 1000
-        ? res.body.substring(0, 1000).toLowerCase()
-        : res.body.toLowerCase();
-    final isRateLimit =
-        res.headers['x-ratelimit-remaining'] == '0' ||
-        res.statusCode == 429 ||
-        res.statusCode == 403 ||
-        reasonLower.contains('rate limit') ||
-        reasonLower.contains('too many requests') ||
-        bodySample.contains('rate limit') ||
-        bodySample.contains('too many requests');
+    final ObtainiumError error = getObtainiumHttpError(res);
+    if (error is RateLimitError) throw error;
+  }
 
-    if (isRateLimit) {
-      final now = DateTime.now();
-      final retryAfter = res.headers['retry-after'];
-      final retryAfterSecs = retryAfter != null
-          ? int.tryParse(retryAfter)
-          : null;
-
-      final resetEpochSeconds =
-          int.tryParse(res.headers['x-ratelimit-reset'] ?? '') ??
-          (retryAfterSecs != null
-              ? (now.millisecondsSinceEpoch ~/ 1000 + retryAfterSecs)
-              : (now.millisecondsSinceEpoch ~/ 1000 +
-                    1800)); // Default to 30 minutes (1800 seconds)
-
-      final nowSeconds = now.millisecondsSinceEpoch ~/ 1000;
-      final remainingMinutes = ((resetEpochSeconds - nowSeconds) / 60)
-          .ceil()
-          .clamp(1, 9999);
-      throw RateLimitError(remainingMinutes);
+  /// Throws GitHub's real error for a failed API response (#3211). A 401/403
+  /// carrying a message (e.g. "Resource not accessible by personal access
+  /// token") is that error, not a rate limit, unless the response says it is
+  /// one (remaining quota 0, a retry-after, a 429, or "rate limit" in the
+  /// message). Everything else goes to [rateLimitErrorCheck].
+  void githubErrorCheck(Response res) {
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      String? message;
+      try {
+        message = (jsonDecode(res.body)['message'] as String?)?.trim();
+      } catch (_) {
+        // Not a JSON error body; fall through to the generic handler.
+        message = null;
+      }
+      final bool rateLimited =
+          res.headers['x-ratelimit-remaining'] == '0' ||
+          res.headers['retry-after'] != null ||
+          (message?.toLowerCase().contains('rate limit') ?? false);
+      if (message != null && message.isNotEmpty && !rateLimited) {
+        throw ObtainiumError(message);
+      }
     }
+    rateLimitErrorCheck(res);
   }
 }

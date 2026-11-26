@@ -3,13 +3,13 @@ import 'dart:async';
 import 'package:android_package_installer/android_package_installer.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/installer.dart';
 import 'package:obtainium/providers/apps_provider.dart';
-import 'package:obtainium/providers/logs_provider.dart';
-import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/core/logging/app_logger.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/string_utils.dart';
 
 const int _androidApiLevelS = 31;
 
@@ -24,58 +24,44 @@ class StockInstaller extends Installer {
 
   @override
   Future<bool> canInstallSilently(App app) async {
-    if (app.id == obtainiumId ||
-        app.id == '$obtainiumId.fdroid' ||
-        app.id == '$obtainiumId.debug') {
-      unawaited(
-        LogsProvider().add(
-          'App will not be installed silently: Obtainium cannot silently install itself: ${app.id}',
-        ),
+    if (isObtainiumVariant(app.id)) {
+      AppLogger.info(
+        'App will not be installed silently: Obtainium cannot silently install itself: ${app.id}',
       );
       return false;
     }
     final osInfo = await DeviceInfoPlugin().androidInfo;
     final installedInfo = await getInstalledInfo(app.id);
     if (installedInfo == null) {
-      unawaited(
-        LogsProvider().add(
-          'App will not be installed silently: target package is not installed: ${app.id}',
-        ),
+      AppLogger.info(
+        'App will not be installed silently: target package is not installed: ${app.id}',
       );
       return false;
     }
     String? installerPackageName;
     try {
       installerPackageName = osInfo.version.sdkInt >= 30
-          ? (await packageManager.getInstallSourceInfo(
-              packageName: app.id,
-            ))?.installingPackageName
+          ? (await packageManager.getInstallSourceInfo(packageName: app.id))
+                ?.installingPackageName
           : (await packageManager.getInstallerPackageName(packageName: app.id));
     } catch (e) {
-      unawaited(
-        LogsProvider().add(
-          'App will not be installed silently: failed to get installed package details: ${app.id} (${e.toString()})',
-        ),
+      AppLogger.info(
+        'App will not be installed silently: failed to get installed package details: ${app.id} (${e.toString()})',
       );
       return false;
     }
-    if (installerPackageName != obtainiumId &&
-        installerPackageName != '$obtainiumId.fdroid' &&
-        installerPackageName != '$obtainiumId.debug') {
+    if (installerPackageName == null ||
+        !isObtainiumVariant(installerPackageName)) {
       // If we did not install the app, silent install is not possible
-      unawaited(
-        LogsProvider().add(
-          'App will not be installed silently: Obtainium is not the installing package (current installer: ${installerPackageName ?? 'unknown'}): ${app.id}',
-        ),
+      AppLogger.info(
+        'App will not be installed silently: Obtainium is not the installing package (current installer: ${installerPackageName ?? 'unknown'}): ${app.id}',
       );
       return false;
     }
     if (osInfo.version.sdkInt < _androidApiLevelS) {
       // The OS must also be new enough
-      unawaited(
-        LogsProvider().add(
-          'App will not be installed silently: Android SDK ${osInfo.version.sdkInt} is too old (requires $_androidApiLevelS+): ${app.id}',
-        ),
+      AppLogger.info(
+        'App will not be installed silently: Android SDK ${osInfo.version.sdkInt} is too old (requires $_androidApiLevelS+): ${app.id}',
       );
       return false;
     }
@@ -85,10 +71,8 @@ class StockInstaller extends Installer {
     final int? targetSDK = installedInfo.applicationInfo?.targetSdkVersion;
     final int requiredSDK = osInfo.version.sdkInt - 3;
     if (!(targetSDK != null && targetSDK >= requiredSDK)) {
-      unawaited(
-        LogsProvider().add(
-          'App will not be installed silently: currently targets API $targetSDK which is too low (requires API $requiredSDK): ${app.id}',
-        ),
+      AppLogger.info(
+        'App will not be installed silently: currently targets API $targetSDK which is too low (requires API $requiredSDK): ${app.id}',
       );
       return false;
     }

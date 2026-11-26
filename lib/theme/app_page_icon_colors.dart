@@ -1,7 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:obtainium/providers/settings_provider.dart';
+import 'package:obtainium/theme.dart';
 import 'package:obtainium/theme/app_segmented_button_theme.dart';
 import 'package:obtainium/theme/app_switch_theme.dart';
 import 'package:provider/provider.dart';
@@ -111,6 +112,9 @@ ThemeData buildAppPageThemedData(
     ),
     segmentedButtonTheme: appSegmentedButtonTheme(pageColorScheme),
     switchTheme: appSwitchTheme(pageColorScheme),
+    // Rebuilt like the switch theme: the parent's carries the app-wide colours
+    // (the additional options page's sliders were in them).
+    sliderTheme: appSliderTheme(pageColorScheme),
     // Dropdown menus and other overlays sometimes fall back to canvasColor.
     canvasColor: pageColorScheme.surfaceContainerHigh,
     focusColor: pageColorScheme.primary.withValues(alpha: 0.12),

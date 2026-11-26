@@ -8,21 +8,24 @@ import 'package:android_package_manager/android_package_manager.dart'
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_localization/easy_localization.dart' hide TextDirection;
 import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:obtainium/app_distribution.dart';
+import 'package:obtainium/app_sources/codeberg.dart';
+import 'package:obtainium/installers/root_installer.dart';
 import 'package:obtainium/layout_breakpoints.dart';
 import 'package:obtainium/widgets/help_hint_icon.dart';
+import 'package:obtainium/components/m3e_slider_theme.dart';
 import 'package:obtainium/components/app_bottom_sheet.dart';
 import 'package:obtainium/components/app_dropdown_field.dart';
+import 'package:obtainium/components/app_page_section_title.dart';
 import 'package:obtainium/components/custom_app_bar.dart';
 import 'package:obtainium/components/performance_recording_control.dart';
 import 'package:obtainium/components/themes_settings_section.dart';
 import 'package:obtainium/components/generated_form_renderer.dart';
 import 'package:obtainium/components/tv_slider_wrapper.dart';
 import 'package:obtainium/components/ui_widgets.dart'
-    show AppSwitch, AppSwitchListTile, ExplainedWhenOff;
+    show AppSwitch, AppSwitchListTile, ExplainedWhenOff, copyToClipboard;
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/installers/shizuku_plugin.dart';
 import 'package:obtainium/main.dart';
@@ -34,6 +37,7 @@ import 'package:obtainium/providers/logs_provider.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/providers/virustotal_provider.dart';
+import 'package:obtainium/services/app_language.dart';
 import 'package:obtainium/services/diagnostic_snapshot.dart';
 import 'package:obtainium/services/performance_recorder.dart';
 import 'package:obtainium/theme.dart';
@@ -43,11 +47,25 @@ import 'package:obtainium/theme/app_theme_accent.dart';
 import 'package:obtainium/theme/m3e_expressive_list.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:obtainium/services/pick_file.dart';
+import 'package:obtainium/pages/page_route_slide_up.dart';
+import 'package:obtainium/pages/update_health.dart'
+    show UpdateHealthPage, updateHealthSettingsToken;
+import 'package:obtainium/utils/update_health.dart'
+    show
+        hasUpdateHealthIssues,
+        isUpdateHealthIgnored,
+        updateHealthDayOptions,
+        updateHealthDaysLabel,
+        updateHealthFailedChecksLabel,
+        updateHealthFailedChecksOptions,
+        updateHealthFilteredReleasesLabel,
+        updateHealthFilteredReleasesOptions;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shizuku_apk_installer/shizuku_apk_installer.dart' as shizuku;
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:obtainium/components/legacy_material_bridge.dart';
 
 IconData _swipeActionIcon(SwipeAction action) => switch (action) {
   SwipeAction.update => Icons.system_update_alt_rounded,
@@ -55,6 +73,7 @@ IconData _swipeActionIcon(SwipeAction action) => switch (action) {
   SwipeAction.appOptions => Icons.tune_rounded,
   SwipeAction.delete => Icons.delete_rounded,
   SwipeAction.open => Icons.open_in_new_rounded,
+  SwipeAction.openAppSource => Icons.public_rounded,
   SwipeAction.appInfo => Icons.info_rounded,
   SwipeAction.edit => Icons.edit_rounded,
   SwipeAction.none => Icons.block_rounded,
@@ -97,9 +116,13 @@ class SettingsPageState extends State<SettingsPage> {
       GlobalKey<_IntegrationsSectionState>();
   late final Future<AndroidDeviceInfo> _androidInfo =
       DeviceInfoPlugin().androidInfo;
-  final ValueNotifier<Map<String, bool>> _expandedSettingsSections =
+  // Which sections are expanded (phone layout). Deliberately in memory only,
+  // for the life of the process: a cold start opens Settings with every
+  // section collapsed, and while the app keeps running, coming back to
+  // Settings (including a rebuild that recreates this State) shows them as the
+  // user left them. Static so it outlives this State; never disposed.
+  static final ValueNotifier<Map<String, bool>> _expandedSettingsSections =
       ValueNotifier<Map<String, bool>>(<String, bool>{});
-  bool _expandedSettingsSectionsLoaded = false;
 
   String? _selectedCategory;
 
@@ -118,6 +141,7 @@ class SettingsPageState extends State<SettingsPage> {
 
   static const List<String> _settingsSectionKeys = [
     'updates',
+    'updateHealth',
     'integrations',
     'warnings',
     'sourceSpecific',
@@ -127,19 +151,14 @@ class SettingsPageState extends State<SettingsPage> {
     'categories',
   ];
 
-  @override
-  void dispose() {
-    _expandedSettingsSections.dispose();
-    super.dispose();
-  }
-
   Future<bool> confirmDiscardUnsavedChanges() async {
     final sourceSpecificState = _sourceSpecificKey.currentState;
     final integrationsState = _integrationsKey.currentState;
     final bool hasUnsavedChanges =
         (sourceSpecificState != null &&
             (sourceSpecificState.isGithubDirty ||
-                sourceSpecificState.isGitlabDirty)) ||
+                sourceSpecificState.isGitlabDirty ||
+                sourceSpecificState.isCodebergDirty)) ||
         (integrationsState?.isVirusTotalApiKeyDirty ?? false);
     if (hasUnsavedChanges) {
       final bool? discard = await showDialog<bool>(
@@ -176,17 +195,8 @@ class SettingsPageState extends State<SettingsPage> {
     return true;
   }
 
-  void _loadExpandedSettingsSections(SettingsProvider sp) {
-    if (_expandedSettingsSectionsLoaded || sp.prefs == null) return;
-    _expandedSettingsSections.value = <String, bool>{
-      for (final key in _settingsSectionKeys)
-        key: sp.prefs?.getBool('settingsSection_$key') ?? true,
-    };
-    _expandedSettingsSectionsLoaded = true;
-  }
-
   static bool _sectionExpanded(Map<String, bool> expandedState, String key) {
-    return expandedState[key] ?? true;
+    return expandedState[key] ?? false;
   }
 
   @override
@@ -202,10 +212,8 @@ class SettingsPageState extends State<SettingsPage> {
 
     // One-time initialization guard.
     if (sp.prefs == null) sp.initializeSettings();
-    _loadExpandedSettingsSections(sp);
 
     void setSectionExpanded(String key, bool value) {
-      sp.prefs?.setBool('settingsSection_$key', value);
       _expandedSettingsSections.value = <String, bool>{
         ..._expandedSettingsSections.value,
         key: value,
@@ -213,9 +221,6 @@ class SettingsPageState extends State<SettingsPage> {
     }
 
     void setAllSettingsSectionsExpanded(bool value) {
-      for (final sectionKey in _settingsSectionKeys) {
-        sp.prefs?.setBool('settingsSection_$sectionKey', value);
-      }
       _expandedSettingsSections.value = <String, bool>{
         for (final sectionKey in _settingsSectionKeys) sectionKey: value,
       };
@@ -223,6 +228,7 @@ class SettingsPageState extends State<SettingsPage> {
 
     final List<String> visibleSettingsSectionKeys = [
       'updates',
+      'updateHealth',
       'integrations',
       'warnings',
       if (sourceProvider.sourceTemplates.any(
@@ -375,9 +381,10 @@ class SettingsPageState extends State<SettingsPage> {
                                   duration: headerTransitionDuration,
                                   curve: headerTransitionCurve,
                                   style: TextStyle(
-                                    fontFamily: Theme.of(
-                                      context,
-                                    ).textTheme.bodyLarge?.fontFamily,
+                                    fontFamily: Theme.of(context)
+                                        .textTheme
+                                        .bodyLarge
+                                        ?.fontFamily,
                                     fontWeight: expanded
                                         ? FontWeight.w600
                                         : FontWeight.w700,
@@ -447,9 +454,10 @@ class SettingsPageState extends State<SettingsPage> {
                   child: Text(
                     tr('about'),
                     style: TextStyle(
-                      fontFamily: Theme.of(
-                        context,
-                      ).textTheme.bodyLarge?.fontFamily,
+                      fontFamily: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.fontFamily,
                       fontWeight: FontWeight.w600,
                       color: cs.primary,
                       fontSize: 13,
@@ -488,6 +496,12 @@ class SettingsPageState extends State<SettingsPage> {
         title: tr('updates'),
         icon: Icons.update_rounded,
         widget: _UpdatesSection(cs: cs, androidInfo: _androidInfo),
+      ),
+      _SettingsCategory(
+        key: 'updateHealth',
+        title: tr('updateHealth'),
+        icon: Icons.monitor_heart_rounded,
+        widget: _UpdateHealthSection(cs: cs),
       ),
       _SettingsCategory(
         key: 'integrations',
@@ -603,9 +617,10 @@ class SettingsPageState extends State<SettingsPage> {
                         child: Text(
                           title,
                           style: TextStyle(
-                            fontFamily: Theme.of(
-                              context,
-                            ).textTheme.bodyLarge?.fontFamily,
+                            fontFamily: Theme.of(context)
+                                .textTheme
+                                .bodyLarge
+                                ?.fontFamily,
                             fontWeight: selected
                                 ? FontWeight.w600
                                 : FontWeight.w500,
@@ -891,6 +906,16 @@ class SettingsPageState extends State<SettingsPage> {
                                   androidInfo: _androidInfo,
                                 ),
                               ),
+                              // ── Update health ─────────────────────────────
+                              sectionHeader(
+                                tr('updateHealth'),
+                                Icons.monitor_heart_rounded,
+                                'updateHealth',
+                              ),
+                              collapsibleCard(
+                                'updateHealth',
+                                _UpdateHealthSection(cs: cs),
+                              ),
                               // ── Integrations ─────────────────────────────
                               sectionHeader(
                                 tr('integrations'),
@@ -1044,14 +1069,18 @@ class _UpdatesSection extends StatelessWidget {
     sp.updateInterval,
     sp.useFGService,
     sp.enableBackgroundUpdates,
-    sp.bgUpdatesOnWiFiOnly,
-    sp.bgUpdatesWhileChargingOnly,
+    sp.bgGuardOnWiFi,
+    sp.bgGuardWhileCharging,
     sp.checkOnStart,
     sp.checkUpdateOnDetailPage,
     sp.onlyCheckInstalledOrTrackOnlyApps,
     sp.removeOnExternalUninstall,
     sp.parallelDownloads,
     sp.includePrereleasesByDefault,
+    sp.allowAddingAppsWithoutCheck,
+    sp.skipBulkUpdateConfirmation,
+    // The background rows below depend on the installer.
+    sp.installerMode,
   );
 
   @override
@@ -1060,37 +1089,64 @@ class _UpdatesSection extends StatelessWidget {
     context.select<SettingsProvider, int>(_updateSettingsHash);
     final SettingsProvider sp = context.read<SettingsProvider>();
 
+    // Grouped under upstream's labels (Background checks / Update checks /
+    // Filtering & versions / Installation, v1.7.4 sync D26). Each group is its
+    // own card: the M3E card has no label row.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        // First item in the Updates section, deliberately NOT inside the
-        // settings card: a manual trigger for the full background update
-        // worker (check → download → install-if-enabled → notify, across all
-        // eligible apps), as opposed to pull-to-refresh's foreground check of
-        // only the currently visible list.
+        _settingsGroupLabel(context, tr('backgroundChecks'), first: true),
+        // Deliberately NOT inside the settings card: a manual trigger for the
+        // background update worker's check (all eligible apps, then notify),
+        // as opposed to pull-to-refresh's foreground check of only the
+        // currently visible list. A manual run only checks: it never installs
+        // (upstream 1b0b45e9, UPD-8).
         const _RunBgUpdateCheckNowButton(),
         FutureBuilder<AndroidDeviceInfo>(
           future: androidInfo,
           builder: (context, snapshot) {
-            return _buildSettingsCardContent(context, sp, cs, snapshot);
+            return M3eExpressiveSettingsCard(
+              colorScheme: cs,
+              items: _backgroundCheckRows(context, sp, snapshot),
+            );
           },
+        ),
+        _settingsGroupLabel(context, tr('updateChecks')),
+        M3eExpressiveSettingsCard(colorScheme: cs, items: _updateCheckRows(sp)),
+        _settingsGroupLabel(context, tr('filteringAndVersions')),
+        M3eExpressiveSettingsCard(
+          colorScheme: cs,
+          items: _filteringRows(sp, cs),
+        ),
+        _settingsGroupLabel(context, tr('installation')),
+        M3eExpressiveSettingsCard(
+          colorScheme: cs,
+          items: <Widget>[
+            AppSwitchListTile(
+              key: const ValueKey<String>('parallel_downloads'),
+              title: Text(tr('parallelDownloads')),
+              value: sp.parallelDownloads,
+              onChanged: (bool value) => sp.parallelDownloads = value,
+            ),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildSettingsCardContent(
+  List<Widget> _backgroundCheckRows(
     BuildContext context,
     SettingsProvider sp,
-    ColorScheme cs,
     AsyncSnapshot<AndroidDeviceInfo> snapshot,
   ) {
-    final List<Widget> rows = <Widget>[_UpdateIntervalSlider(cs: cs)];
+    final List<Widget> rows = <Widget>[const _UpdateIntervalSlider()];
+    // Root installs silently on any Android version, like Shizuku and Dhizuku.
     final bool showBgControls =
         (sp.updateInterval > 0) &&
         (((snapshot.data?.version.sdkInt ?? 0) >= 30) ||
             sp.useShizuku ||
-            sp.useDhizuku);
+            sp.useDhizuku ||
+            sp.installerMode == InstallerMode.root.name);
     if (showBgControls) {
       rows
         ..add(
@@ -1105,6 +1161,7 @@ class _UpdatesSection extends StatelessWidget {
                   padding: EdgeInsets.zero,
                 ),
                 AppSwitch(
+                  semanticLabel: tr('foregroundServiceForUpdateChecking'),
                   value: sp.useFGService,
                   onChanged: (bool value) => sp.useFGService = value,
                 ),
@@ -1126,6 +1183,7 @@ class _UpdatesSection extends StatelessWidget {
                   padding: EdgeInsets.zero,
                 ),
                 AppSwitch(
+                  semanticLabel: tr('enableBackgroundUpdates'),
                   value: sp.enableBackgroundUpdates,
                   onChanged: (bool value) => sp.enableBackgroundUpdates = value,
                 ),
@@ -1135,27 +1193,37 @@ class _UpdatesSection extends StatelessWidget {
                 sp.enableBackgroundUpdates = !sp.enableBackgroundUpdates,
           ),
         );
-      if (sp.enableBackgroundUpdates) {
-        rows
-          ..add(
-            AppSwitchListTile(
-              key: const ValueKey<String>('background_install_wifi_only'),
-              title: Text(tr('bgUpdatesOnWiFiOnly')),
-              value: sp.bgUpdatesOnWiFiOnly,
-              onChanged: (bool value) => sp.bgUpdatesOnWiFiOnly = value,
-            ),
-          )
-          ..add(
-            AppSwitchListTile(
-              key: const ValueKey<String>('background_install_charging_only'),
-              title: Text(tr('bgUpdatesWhileChargingOnly')),
-              value: sp.bgUpdatesWhileChargingOnly,
-              onChanged: (bool value) => sp.bgUpdatesWhileChargingOnly = value,
-            ),
-          );
-      }
     }
-    rows.addAll(<Widget>[
+    // The Wi-Fi and charging guards can hold back every background check,
+    // not just installs, so they show whenever checks run (upstream #3070).
+    // Tri-state since the v1.7.4 sync (upstream #3370, D5); the old switch ON
+    // is "Nothing" (see [BgGuardMode]).
+    if (sp.updateInterval > 0) {
+      rows
+        ..add(
+          _bgGuardRow(
+            context,
+            rowKey: 'background_guard_on_wifi',
+            label: tr('whenNotOnWiFi'),
+            value: sp.bgGuardOnWiFi,
+            onChanged: (BgGuardMode mode) => sp.bgGuardOnWiFi = mode,
+          ),
+        )
+        ..add(
+          _bgGuardRow(
+            context,
+            rowKey: 'background_guard_while_charging',
+            label: tr('whenNotCharging'),
+            value: sp.bgGuardWhileCharging,
+            onChanged: (BgGuardMode mode) => sp.bgGuardWhileCharging = mode,
+          ),
+        );
+    }
+    return rows;
+  }
+
+  List<Widget> _updateCheckRows(SettingsProvider sp) {
+    return <Widget>[
       AppSwitchListTile(
         key: const ValueKey<String>('check_updates_on_start'),
         title: Text(tr('checkOnStart')),
@@ -1168,11 +1236,26 @@ class _UpdatesSection extends StatelessWidget {
         value: sp.checkUpdateOnDetailPage,
         onChanged: (bool value) => sp.checkUpdateOnDetailPage = value,
       ),
-      AppSwitchListTile(
-        key: const ValueKey<String>('include_prereleases_by_default'),
-        title: Text(tr('includePrereleasesByDefault')),
-        value: sp.includePrereleasesByDefault,
-        onChanged: (bool value) => sp.includePrereleasesByDefault = value,
+      // Opt-in "Add anyway" when the check during add fails (upstream #3345).
+      ListTile(
+        key: const ValueKey<String>('allow_adding_apps_without_check'),
+        title: Text(tr('allowAddingAppsWithoutCheck')),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            HelpHintIcon(
+              message: tr('allowAddingAppsWithoutCheckHelp'),
+              padding: EdgeInsets.zero,
+            ),
+            AppSwitch(
+              semanticLabel: tr('allowAddingAppsWithoutCheck'),
+              value: sp.allowAddingAppsWithoutCheck,
+              onChanged: (bool value) => sp.allowAddingAppsWithoutCheck = value,
+            ),
+          ],
+        ),
+        onTap: () =>
+            sp.allowAddingAppsWithoutCheck = !sp.allowAddingAppsWithoutCheck,
       ),
       AppSwitchListTile(
         key: const ValueKey<String>('only_check_installed_or_track_only_apps'),
@@ -1180,6 +1263,13 @@ class _UpdatesSection extends StatelessWidget {
         value: sp.onlyCheckInstalledOrTrackOnlyApps,
         onChanged: (bool value) => sp.onlyCheckInstalledOrTrackOnlyApps = value,
       ),
+    ];
+  }
+
+  List<Widget> _filteringRows(SettingsProvider sp, ColorScheme cs) {
+    return <Widget>[
+      const _GlobalApkFilterField(),
+      const _GlobalVersionRegExFields(),
       AppSwitchListTile(
         key: const ValueKey<String>('remove_on_external_uninstall'),
         title: Text(tr('removeOnExternalUninstall')),
@@ -1187,13 +1277,81 @@ class _UpdatesSection extends StatelessWidget {
         onChanged: (bool value) => sp.removeOnExternalUninstall = value,
       ),
       AppSwitchListTile(
-        key: const ValueKey<String>('parallel_downloads'),
-        title: Text(tr('parallelDownloads')),
-        value: sp.parallelDownloads,
-        onChanged: (bool value) => sp.parallelDownloads = value,
+        key: const ValueKey<String>('include_prereleases_by_default'),
+        title: Text(tr('includePrereleasesByDefault')),
+        value: sp.includePrereleasesByDefault,
+        onChanged: (bool value) => sp.includePrereleasesByDefault = value,
       ),
-    ]);
-    return M3eExpressiveSettingsCard(colorScheme: cs, items: rows);
+      AppSwitchListTile(
+        key: const ValueKey<String>('skip_bulk_update_confirmation'),
+        title: Text(tr('skipBulkUpdateConfirmation')),
+        value: sp.skipBulkUpdateConfirmation,
+        onChanged: (bool value) => sp.skipBulkUpdateConfirmation = value,
+      ),
+      _MinimumUpdateAgeSlider(cs: cs),
+    ];
+  }
+
+  /// A group label inside the Updates section (above a card).
+  Widget _settingsGroupLabel(
+    BuildContext context,
+    String label, {
+    bool first = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        first ? 4 : 20,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
+      child: appPageCardSectionHeaderLabel(context, label),
+    );
+  }
+
+  Widget _bgGuardRow(
+    BuildContext context, {
+    required String rowKey,
+    required String label,
+    required BgGuardMode value,
+    required ValueChanged<BgGuardMode> onChanged,
+  }) {
+    String modeLabel(BgGuardMode mode) => switch (mode) {
+      BgGuardMode.nothing => tr('bgGuardNothing'),
+      BgGuardMode.checksOnly => tr('bgGuardChecksOnly'),
+      BgGuardMode.checksAndUpdates => tr('bgGuardChecksAndUpdates'),
+    };
+    return Padding(
+      key: ValueKey<String>(rowKey),
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        12,
+        kM3eSettingsCardHorizontalInset,
+        12,
+      ),
+      child: appDropdownField<BgGuardMode>(
+        // Keyed by value so an import that changes the mode re-seeds it.
+        key: ValueKey<String>('${rowKey}_${value.name}'),
+        context: context,
+        value: value,
+        labelText: label,
+        menuWidth: appDropdownMenuWidth(
+          context,
+          BgGuardMode.values.map(modeLabel),
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
+        items: <DropdownMenuItem<BgGuardMode>>[
+          for (final BgGuardMode mode in BgGuardMode.values)
+            DropdownMenuItem<BgGuardMode>(
+              value: mode,
+              child: Text(modeLabel(mode)),
+            ),
+        ],
+        onChanged: (BgGuardMode? mode) {
+          if (mode != null) onChanged(mode);
+        },
+      ),
+    );
   }
 }
 
@@ -1264,7 +1422,9 @@ class _RunBgUpdateCheckNowButtonState
               ? const SizedBox(
                   width: 20,
                   height: 20,
-                  child: ExpressiveLoadingIndicator(),
+                  child: LegacyMaterialBridge(
+                    child: ExpressiveLoadingIndicator(),
+                  ),
                 )
               : Text(tr('runBgCheckNow')),
         ),
@@ -1278,9 +1438,7 @@ class _RunBgUpdateCheckNowButtonState
 /// (onChangeEnd), avoiding a notifyListeners → full-page rebuild on every
 /// slider tick during drag.
 class _UpdateIntervalSlider extends StatefulWidget {
-  const _UpdateIntervalSlider({required this.cs});
-
-  final ColorScheme cs;
+  const _UpdateIntervalSlider();
 
   @override
   State<_UpdateIntervalSlider> createState() => _UpdateIntervalSliderState();
@@ -1340,29 +1498,33 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
         );
     final String label = _labelForVal(sliderVal);
     final isTV = context.read<SettingsProvider>().isTV;
+    // No leading icon. As in [_IntOptionSlider], the outer inset is 8 less
+    // than the card's and the title row adds those 8 back, so the title lines
+    // up with the card's other rows and with the slider track.
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-        kM3eSettingsCardHorizontalInset,
+        kM3eSettingsCardHorizontalInset - 8,
         8,
-        kM3eSettingsCardHorizontalInset,
+        kM3eSettingsCardHorizontalInset - 8,
         8,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(Icons.update_rounded, color: widget.cs.onSurfaceVariant),
-          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('bgUpdateCheckInterval'))),
-                      Text(label),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('bgUpdateCheckInterval'))),
+                        Text(label),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -1379,18 +1541,7 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
                     setState(() => _dragValue = null);
                   },
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.onPrimary,
-                      inactiveTickMarkColor: Theme.of(
-                        context,
-                      ).colorScheme.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       value: sliderVal.clamp(0, _stops.length.toDouble()),
@@ -1417,6 +1568,563 @@ class _UpdateIntervalSliderState extends State<_UpdateIntervalSlider> {
   }
 }
 
+/// Global minimum update age (upstream #3004): a release is offered once it's
+/// this many days old; an app can set its own. Like [_UpdateIntervalSlider],
+/// a drag stays local and the setting is written when the finger lifts.
+class _MinimumUpdateAgeSlider extends StatefulWidget {
+  const _MinimumUpdateAgeSlider({required this.cs});
+
+  final ColorScheme cs;
+
+  @override
+  State<_MinimumUpdateAgeSlider> createState() =>
+      _MinimumUpdateAgeSliderState();
+}
+
+class _MinimumUpdateAgeSliderState extends State<_MinimumUpdateAgeSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  static const List<int> _options = minimumUpdateAgeOptions;
+
+  int _daysForVal(double val) =>
+      _options[val.round().clamp(0, _options.length - 1)];
+
+  /// The stored value is always an option ([snapMinimumUpdateAgeDays]).
+  double _valForDays(int days) => _options.indexOf(days).toDouble();
+
+  String _labelForVal(double val) {
+    final int days = _daysForVal(val);
+    return days == 0 ? tr('none') : plural('day', days);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double sliderVal =
+        _dragValue ??
+        _valForDays(
+          context.select<SettingsProvider, int>((s) => s.minimumUpdateAgeDays),
+        );
+    final String label = _labelForVal(sliderVal);
+    final bool isTV = context.read<SettingsProvider>().isTV;
+    final double max = (_options.length - 1).toDouble();
+    void save(double value) {
+      context.read<SettingsProvider>().minimumUpdateAgeDays = _daysForVal(
+        value,
+      );
+      setState(() => _dragValue = null);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        8,
+        kM3eSettingsCardHorizontalInset,
+        8,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.hourglass_bottom_rounded,
+            color: widget.cs.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('minimumUpdateAgeDays'))),
+                        Text(label),
+                      ],
+                    ),
+                  ),
+                ),
+                TVSliderWrapper(
+                  value: sliderVal,
+                  min: 0,
+                  max: max,
+                  divisions: _options.length - 1,
+                  onChanged: (double value) {
+                    setState(() => _dragValue = value);
+                  },
+                  onChangeEnd: save,
+                  child: SliderTheme(
+                    data: m3eSliderTheme(context),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      value: sliderVal.clamp(0, max),
+                      max: max,
+                      divisions: _options.length - 1,
+                      label: label,
+                      onChanged: (double value) {
+                        setState(() => _dragValue = value);
+                      },
+                      onChangeEnd: save,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Global APK filter (upstream #2979), used by apps without an APK filter of
+/// their own. Saved as typed while it's a valid regex or empty.
+class _GlobalApkFilterField extends StatefulWidget {
+  const _GlobalApkFilterField();
+
+  @override
+  State<_GlobalApkFilterField> createState() => _GlobalApkFilterFieldState();
+}
+
+class _GlobalApkFilterFieldState extends State<_GlobalApkFilterField> {
+  late final TextEditingController _controller;
+  String? _stored;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _stored = context.read<SettingsProvider>().globalApkFilterRegEx;
+    _controller = TextEditingController(text: _stored ?? '');
+  }
+
+  // An import can rewrite the pref while this stays mounted; see
+  // [_SourceSpecificSectionState.didChangeDependencies].
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String? stored = context
+        .read<SettingsProvider>()
+        .globalApkFilterRegEx;
+    if (stored != _stored) {
+      _stored = stored;
+      if (_controller.text.trim() != (stored ?? '')) {
+        _controller.text = stored ?? '';
+        _error = null;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String value) {
+    final String trimmed = value.trim();
+    final String? error = trimmed.isEmpty ? null : regExValidator(trimmed);
+    setState(() => _error = error);
+    if (error != null) return;
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    sp.globalApkFilterRegEx = trimmed;
+    _stored = sp.globalApkFilterRegEx;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Registers the dependency [didChangeDependencies] syncs from.
+    context.select<SettingsProvider, String?>((s) => s.globalApkFilterRegEx);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        12,
+        kM3eSettingsCardHorizontalInset,
+        12,
+      ),
+      child: TextField(
+        controller: _controller,
+        decoration: appPageOutlinedInputDecoration(
+          context,
+          labelText: tr('globalApkFilterRegEx'),
+          isDense: true,
+        ).copyWith(errorText: _error),
+        onChanged: _onChanged,
+      ),
+    );
+  }
+}
+
+/// Global version-trimming regex and its match group (upstream #3368), used
+/// by apps without a version regex of their own. Like [_GlobalApkFilterField],
+/// the regex is saved as typed while it's valid or empty.
+class _GlobalVersionRegExFields extends StatefulWidget {
+  const _GlobalVersionRegExFields();
+
+  @override
+  State<_GlobalVersionRegExFields> createState() =>
+      _GlobalVersionRegExFieldsState();
+}
+
+class _GlobalVersionRegExFieldsState extends State<_GlobalVersionRegExFields> {
+  late final TextEditingController _regExController;
+  late final TextEditingController _matchGroupController;
+  String? _storedRegEx;
+  String? _storedMatchGroup;
+  String? _regExError;
+
+  @override
+  void initState() {
+    super.initState();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    _storedRegEx = sp.globalVersionExtractionRegEx;
+    _storedMatchGroup = sp.globalMatchGroupToUse;
+    _regExController = TextEditingController(text: _storedRegEx ?? '');
+    _matchGroupController = TextEditingController(
+      text: _storedMatchGroup ?? '',
+    );
+  }
+
+  // An import can rewrite the prefs while this stays mounted, as for
+  // [_GlobalApkFilterFieldState.didChangeDependencies].
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String? regEx = sp.globalVersionExtractionRegEx;
+    if (regEx != _storedRegEx) {
+      _storedRegEx = regEx;
+      if (_regExController.text.trim() != (regEx ?? '')) {
+        _regExController.text = regEx ?? '';
+        _regExError = null;
+      }
+    }
+    final String? matchGroup = sp.globalMatchGroupToUse;
+    if (matchGroup != _storedMatchGroup) {
+      _storedMatchGroup = matchGroup;
+      if (_matchGroupController.text.trim() != (matchGroup ?? '')) {
+        _matchGroupController.text = matchGroup ?? '';
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _regExController.dispose();
+    _matchGroupController.dispose();
+    super.dispose();
+  }
+
+  void _onRegExChanged(String value) {
+    final String trimmed = value.trim();
+    final String? error = trimmed.isEmpty ? null : regExValidator(trimmed);
+    setState(() => _regExError = error);
+    if (error != null) return;
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    sp.globalVersionExtractionRegEx = trimmed;
+    _storedRegEx = sp.globalVersionExtractionRegEx;
+  }
+
+  void _onMatchGroupChanged(String value) {
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    sp.globalMatchGroupToUse = value;
+    _storedMatchGroup = sp.globalMatchGroupToUse;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Registers the dependency [didChangeDependencies] syncs from.
+    context.select<SettingsProvider, int>(
+      (s) =>
+          Object.hash(s.globalVersionExtractionRegEx, s.globalMatchGroupToUse),
+    );
+    final String regExLabel = tr('globalVersionExtractionRegEx');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset,
+        12,
+        kM3eSettingsCardHorizontalInset,
+        12,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _regExController,
+            decoration:
+                appPageOutlinedInputDecoration(
+                  context,
+                  labelText: regExLabel,
+                  isDense: true,
+                ).copyWith(
+                  errorText: _regExError,
+                  // Warns that pseudo-version apps change version once.
+                  suffixIcon: HelpHintIcon(
+                    message: tr('globalVersionExtractionRegExHelp'),
+                    padding: const EdgeInsets.only(right: 8),
+                  ),
+                ),
+            onChanged: _onRegExChanged,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _matchGroupController,
+            decoration: appPageOutlinedInputDecoration(
+              context,
+              labelText: tr('matchGroupToUseForX', args: [regExLabel]),
+              isDense: true,
+            ).copyWith(hintText: '\$0'),
+            onChanged: _onMatchGroupChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The Update health section (upstream #1753, v1.7.4 sync D8): its own
+/// section, as upstream has it. The global thresholds (each app can override
+/// them on its options page; 0, "Disabled", turns a heuristic off), the list
+/// marker toggle, and last a row opening the list of flagged apps.
+class _UpdateHealthSection extends StatelessWidget {
+  const _UpdateHealthSection({required this.cs});
+
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    // The sliders select their own values.
+    final bool archivedEnabled = context.select<SettingsProvider, bool>(
+      (s) => s.updateHealthArchivedEnabled,
+    );
+    final bool showIndicator = context.select<SettingsProvider, bool>(
+      (s) => s.showUpdateHealthIndicator,
+    );
+    // The count below re-runs only when AppsProvider notifies; a threshold or
+    // switch change notifies SettingsProvider, so depend on those too (as the
+    // apps list does).
+    context.select<SettingsProvider, int>(updateHealthSettingsToken);
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    // Rebuilds when an app's state or a threshold changes.
+    final int flaggedCount = context.select<AppsProvider, int>(
+      (AppsProvider ap) => ap.apps.values
+          .where(
+            (a) =>
+                !isUpdateHealthIgnored(a.app) &&
+                hasUpdateHealthIssues(a.app, sp),
+          )
+          .length,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        M3eExpressiveSettingsCard(
+          colorScheme: cs,
+          items: [
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_stale_release'),
+              title: tr('updateHealthStaleReleaseCheck'),
+              options: updateHealthDayOptions,
+              read: (SettingsProvider s) => s.updateHealthStaleReleaseDays,
+              write: (SettingsProvider s, int days) =>
+                  s.updateHealthStaleReleaseDays = days,
+              labelFor: updateHealthDaysLabel,
+            ),
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_stale_version'),
+              title: tr('updateHealthStaleVersionCheck'),
+              options: updateHealthDayOptions,
+              read: (SettingsProvider s) => s.updateHealthStaleVersionDays,
+              write: (SettingsProvider s, int days) =>
+                  s.updateHealthStaleVersionDays = days,
+              labelFor: updateHealthDaysLabel,
+            ),
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_failed_checks'),
+              title: tr('updateHealthFailedChecksCheck'),
+              options: updateHealthFailedChecksOptions,
+              read: (SettingsProvider s) => s.updateHealthFailedChecksCount,
+              write: (SettingsProvider s, int count) =>
+                  s.updateHealthFailedChecksCount = count,
+              labelFor: updateHealthFailedChecksLabel,
+            ),
+            _IntOptionSlider(
+              key: const ValueKey<String>('update_health_filtered_releases'),
+              title: tr('updateHealthFilteredReleasesCheck'),
+              options: updateHealthFilteredReleasesOptions,
+              read: (SettingsProvider s) => s.updateHealthFilteredReleasesCount,
+              write: (SettingsProvider s, int count) =>
+                  s.updateHealthFilteredReleasesCount = count,
+              labelFor: updateHealthFilteredReleasesLabel,
+            ),
+            AppSwitchListTile(
+              key: const ValueKey<String>('update_health_archived'),
+              title: Text(tr('updateHealthArchivedCheck')),
+              value: archivedEnabled,
+              onChanged: (bool value) => sp.updateHealthArchivedEnabled = value,
+            ),
+            AppSwitchListTile(
+              key: const ValueKey<String>('show_update_health_indicator'),
+              title: Text(tr('showUpdateHealthIndicator')),
+              value: showIndicator,
+              onChanged: (bool value) => sp.showUpdateHealthIndicator = value,
+            ),
+            ListTile(
+              key: const ValueKey<String>('update_health_detected_issues'),
+              title: Text(tr('updateHealthDetectedIssues')),
+              subtitle: flaggedCount > 0
+                  ? Text(plural('apps', flaggedCount))
+                  : null,
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.push(
+                context,
+                slideUpPageRoute((_) => const UpdateHealthPage()),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// A settings slider over a fixed list of int [options], shaped like
+/// [_MinimumUpdateAgeSlider]: a drag stays local and [write] runs when the
+/// finger lifts. [read] must return one of [options] (the getters snap).
+class _IntOptionSlider extends StatefulWidget {
+  const _IntOptionSlider({
+    super.key,
+    required this.title,
+    required this.options,
+    required this.read,
+    required this.write,
+    required this.labelFor,
+  });
+
+  final String title;
+  final List<int> options;
+  final int Function(SettingsProvider settings) read;
+  final void Function(SettingsProvider settings, int value) write;
+  final String Function(int value) labelFor;
+
+  @override
+  State<_IntOptionSlider> createState() => _IntOptionSliderState();
+}
+
+class _IntOptionSliderState extends State<_IntOptionSlider> {
+  double? _dragValue;
+  late final FocusNode _sliderFocusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _sliderFocusNode = FocusNode(canRequestFocus: false, skipTraversal: true);
+  }
+
+  @override
+  void dispose() {
+    _sliderFocusNode.dispose();
+    super.dispose();
+  }
+
+  int _valueForVal(double val) =>
+      widget.options[val.round().clamp(0, widget.options.length - 1)];
+
+  double _valForValue(int value) {
+    final int index = widget.options.indexOf(value);
+    return (index < 0 ? 0 : index).toDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double sliderVal =
+        _dragValue ??
+        _valForValue(context.select<SettingsProvider, int>(widget.read));
+    final String label = widget.labelFor(_valueForVal(sliderVal));
+    final bool isTV = context.read<SettingsProvider>().isTV;
+    final double max = (widget.options.length - 1).toDouble();
+    void save(double value) {
+      widget.write(context.read<SettingsProvider>(), _valueForVal(value));
+      setState(() => _dragValue = null);
+    }
+
+    // No leading icon (the section title has one). The outer inset is 8 less
+    // than the card's, and the title row adds those 8 back, so the title
+    // lines up with the card's other rows and with the slider track.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        kM3eSettingsCardHorizontalInset - 8,
+        8,
+        kM3eSettingsCardHorizontalInset - 8,
+        8,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(widget.title)),
+                        const SizedBox(width: 8),
+                        Text(label),
+                      ],
+                    ),
+                  ),
+                ),
+                TVSliderWrapper(
+                  value: sliderVal,
+                  min: 0,
+                  max: max,
+                  divisions: widget.options.length - 1,
+                  onChanged: (double value) {
+                    setState(() => _dragValue = value);
+                  },
+                  onChangeEnd: save,
+                  child: SliderTheme(
+                    data: m3eSliderTheme(context),
+                    child: Slider(
+                      focusNode: isTV ? _sliderFocusNode : null,
+                      value: sliderVal.clamp(0, max),
+                      max: max,
+                      divisions: widget.options.length - 1,
+                      label: label,
+                      onChanged: (double value) {
+                        setState(() => _dragValue = value);
+                      },
+                      onChangeEnd: save,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Source-specific settings section — reads/writes generic source config.
 class _SourceSpecificSection extends StatefulWidget {
   const _SourceSpecificSection({super.key});
@@ -1429,14 +2137,17 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
   late final TextEditingController _githubPatController;
   late final TextEditingController _hubProxyController;
   late final TextEditingController _gitlabPatController;
+  late final TextEditingController _codebergTokenController;
   // Stored pref values as of the last sync, so [didChangeDependencies] can tell
   // an external write (a backup import rewrites these keys with no user
   // involvement) apart from the user's own unsaved typing.
   String _storedGithubPat = '';
   String _storedHubProxy = '';
   String _storedGitlabPat = '';
+  String _storedCodebergToken = '';
   bool _githubChecking = false;
   bool _gitlabChecking = false;
+  bool _codebergChecking = false;
 
   bool get isGithubDirty {
     final String currentText = _githubPatController.text.trim();
@@ -1452,12 +2163,21 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     return currentText != savedText;
   }
 
+  bool get isCodebergDirty {
+    final String currentText = _codebergTokenController.text.trim();
+    final SettingsProvider sp = context.read<SettingsProvider>();
+    final String savedText = sp.getSettingString(Codeberg.tokenKey) ?? '';
+    return currentText != savedText;
+  }
+
   void discardChanges() {
     final SettingsProvider sp = context.read<SettingsProvider>();
     _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
     _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _storedCodebergToken = sp.getSettingString(Codeberg.tokenKey) ?? '';
     _githubPatController.text = _storedGithubPat;
     _gitlabPatController.text = _storedGitlabPat;
+    _codebergTokenController.text = _storedCodebergToken;
     setState(() {});
   }
 
@@ -1468,9 +2188,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     _storedGithubPat = sp.getSettingString(GitHub.githubCredsKey) ?? '';
     _storedHubProxy = sp.getSettingString(GitHub.githubReqPrefixKey) ?? '';
     _storedGitlabPat = sp.getSettingString('gitlab-creds') ?? '';
+    _storedCodebergToken = sp.getSettingString(Codeberg.tokenKey) ?? '';
     _githubPatController = TextEditingController(text: _storedGithubPat);
     _hubProxyController = TextEditingController(text: _storedHubProxy);
     _gitlabPatController = TextEditingController(text: _storedGitlabPat);
+    _codebergTokenController = TextEditingController(
+      text: _storedCodebergToken,
+    );
   }
 
   // Home keeps every tab mounted, so this section - and the controllers seeded
@@ -1511,6 +2235,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
         _gitlabPatController.text = storedGitlabPat;
       }
     }
+    final String storedCodebergToken =
+        sp.getSettingString(Codeberg.tokenKey) ?? '';
+    if (storedCodebergToken != _storedCodebergToken) {
+      _storedCodebergToken = storedCodebergToken;
+      if (_codebergTokenController.text != storedCodebergToken) {
+        _codebergTokenController.text = storedCodebergToken;
+      }
+    }
   }
 
   @override
@@ -1518,6 +2250,7 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     _githubPatController.dispose();
     _hubProxyController.dispose();
     _gitlabPatController.dispose();
+    _codebergTokenController.dispose();
     super.dispose();
   }
 
@@ -1529,6 +2262,28 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
     return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
+        // Opt-in pinning for GitHub, Codeberg, GitLab and RuStore requests
+        // (upstream #3065, requested in #2916).
+        ListTile(
+          title: Text(tr('enableCertificatePinning')),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              HelpHintIcon(
+                message: tr('enableCertificatePinningHelp'),
+                size: 20,
+                padding: EdgeInsets.zero,
+              ),
+              AppSwitch(
+                semanticLabel: tr('enableCertificatePinning'),
+                value: sp.enableCertificatePinning,
+                onChanged: (bool value) => sp.enableCertificatePinning = value,
+              ),
+            ],
+          ),
+          onTap: () =>
+              sp.enableCertificatePinning = !sp.enableCertificatePinning,
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
             kM3eSettingsCardHorizontalInset,
@@ -1543,9 +2298,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                 children: [
                   Text(
                     tr('personalAccessTokenPAT'),
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context).textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   HelpHintIcon(
                     message: tr('patExplanationTooltip'),
@@ -1569,9 +2323,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                           ).copyWith(
                             suffixIcon: IconButton(
                               icon: const Icon(Icons.open_in_new_rounded),
-                              onPressed: () => launchUrlString(
+                              onPressed: () => _openExternalUrl(
                                 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
-                                mode: LaunchMode.externalApplication,
                               ),
                               tooltip: tr('about'),
                             ),
@@ -1642,14 +2395,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                     '',
                                                   );
                                                   GitHub.clearPATValidation(sp);
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    buildAppSnackBar(
-                                                      context,
-                                                      tr('dismiss'),
-                                                    ),
-                                                  );
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                        buildAppSnackBar(
+                                                          context,
+                                                          tr('dismiss'),
+                                                        ),
+                                                      );
                                                   setState(() {});
                                                   return;
                                                 }
@@ -1683,15 +2435,14 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                     ),
                                                   );
                                                 } else {
-                                                  ScaffoldMessenger.of(
-                                                    context,
-                                                  ).showSnackBar(
-                                                    buildAppSnackBar(
-                                                      context,
-                                                      error,
-                                                      type: ToastType.error,
-                                                    ),
-                                                  );
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                        buildAppSnackBar(
+                                                          context,
+                                                          error,
+                                                          type: ToastType.error,
+                                                        ),
+                                                      );
                                                 }
                                               }
                                             : null,
@@ -1723,9 +2474,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                 ).copyWith(
                   suffixIcon: IconButton(
                     icon: const Icon(Icons.open_in_new_rounded),
-                    onPressed: () => launchUrlString(
+                    onPressed: () => _openExternalUrl(
                       'https://github.com/sky22333/hubproxy',
-                      mode: LaunchMode.externalApplication,
                     ),
                     tooltip: tr('about'),
                   ),
@@ -1770,9 +2520,8 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                       ).copyWith(
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.open_in_new_rounded),
-                          onPressed: () => launchUrlString(
+                          onPressed: () => _openExternalUrl(
                             'https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html#create-a-personal-access-token',
-                            mode: LaunchMode.externalApplication,
                           ),
                           tooltip: tr('about'),
                         ),
@@ -1834,14 +2583,13 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                 '',
                                               );
                                               GitLab.clearPATValidation(sp);
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  tr('dismiss'),
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('dismiss'),
+                                                    ),
+                                                  );
                                               setState(() {});
                                               return;
                                             }
@@ -1865,25 +2613,172 @@ class _SourceSpecificSectionState extends State<_SourceSpecificSection> {
                                                 enteredText,
                                                 sp,
                                               );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('gitlabPATValidated'),
+                                                      type: ToastType.success,
+                                                    ),
+                                                  );
+                                            } else {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
+                                                    ),
+                                                  );
+                                            }
+                                          }
+                                        : null,
+                                  )),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        // codeberg.org only: a Forgejo instance's token is set per app, so
+        // this one never goes to another host (D15). Saved and validated like
+        // the GitLab PAT above.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            kM3eSettingsCardHorizontalInset,
+            12,
+            kM3eSettingsCardTrailingInset,
+            12,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _codebergTokenController,
+                  obscureText: true,
+                  decoration:
+                      appPageOutlinedInputDecoration(
+                        context,
+                        labelText: tr('codebergTokenLabel'),
+                        isDense: true,
+                      ).copyWith(
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.open_in_new_rounded),
+                          onPressed: () =>
+                              _openExternalUrl(Codeberg.tokenHelpUrl),
+                          tooltip: tr('about'),
+                        ),
+                      ),
+                  onChanged: (val) {
+                    setState(() {});
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Builder(
+                builder: (context) {
+                  final String enteredText = _codebergTokenController.text
+                      .trim();
+                  final String savedText =
+                      sp.getSettingString(Codeberg.tokenKey) ?? '';
+                  final bool isDirty = enteredText != savedText;
+                  final bool isValidated = Codeberg.hasValidatedToken(
+                    enteredText,
+                    sp,
+                  );
+                  final bool buttonIsEnabled =
+                      isDirty || (enteredText.isNotEmpty && !isValidated);
+
+                  return SizedBox(
+                    width: 48,
+                    height: 56,
+                    child: Center(
+                      child: _codebergChecking
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: ExpressiveLoadingIndicator(
+                                color: cs.primary,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 20,
+                                  height: 20,
+                                ),
+                              ),
+                            )
+                          // Shield only when validated AND saved (see the GitHub
+                          // field above for why fingerprint-alone is wrong).
+                          : (isValidated && !isDirty
+                                ? Tooltip(
+                                    message: tr('codebergTokenValidated'),
+                                    child: Icon(
+                                      Icons.verified_user,
+                                      color: cs.primary,
+                                    ),
+                                  )
+                                : IconButton.filledTonal(
+                                    icon: const Icon(Icons.save_rounded),
+                                    onPressed: buttonIsEnabled
+                                        ? () async {
+                                            FocusManager.instance.primaryFocus
+                                                ?.unfocus();
+                                            if (enteredText.isEmpty) {
+                                              _storedCodebergToken = '';
+                                              sp.setSettingString(
+                                                Codeberg.tokenKey,
+                                                '',
+                                              );
+                                              Codeberg.clearTokenValidation(sp);
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      tr('dismiss'),
+                                                    ),
+                                                  );
+                                              setState(() {});
+                                              return;
+                                            }
+                                            setState(() {
+                                              _codebergChecking = true;
+                                            });
+                                            final String? error =
+                                                await Codeberg.validateToken(
+                                                  enteredText,
+                                                );
+                                            if (!context.mounted) return;
+                                            setState(() {
+                                              _codebergChecking = false;
+                                            });
+                                            if (error == null) {
+                                              _storedCodebergToken =
+                                                  enteredText;
+                                              sp.setSettingString(
+                                                Codeberg.tokenKey,
+                                                enteredText,
+                                              );
+                                              Codeberg.storeTokenValidation(
+                                                enteredText,
+                                                sp,
+                                              );
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
                                                 buildAppSnackBar(
                                                   context,
-                                                  tr('gitlabPATValidated'),
+                                                  tr('codebergTokenValidated'),
                                                   type: ToastType.success,
                                                 ),
                                               );
                                             } else {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  error,
-                                                  type: ToastType.error,
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
+                                                    ),
+                                                  );
                                             }
                                           }
                                         : null,
@@ -1941,15 +2836,18 @@ class _AppearanceSection extends StatelessWidget {
     return M3eExpressiveSettingsCard(
       colorScheme: cs,
       items: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            kM3eSettingsCardHorizontalInset,
-            12,
-            kM3eSettingsCardHorizontalInset,
-            4,
+        if (AppLanguage.usesSystemSetting)
+          const _SystemLanguageTile()
+        else
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              kM3eSettingsCardHorizontalInset,
+              12,
+              kM3eSettingsCardHorizontalInset,
+              4,
+            ),
+            child: _LocaleMenu(sp: sp),
           ),
-          child: _LocaleMenu(sp: sp),
-        ),
         _CustomFontTile(sp: sp),
         const _UiScaleSlider(),
         const _CardCornerScaleSlider(),
@@ -2241,6 +3139,30 @@ class _LocaleMenu extends StatelessWidget {
   }
 }
 
+/// Where Android's per-app language screen replaces the in-app list
+/// ([AppLanguage]): the language ObtainX shows, opening that screen.
+class _SystemLanguageTile extends StatelessWidget {
+  const _SystemLanguageTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final Locale shown = context.locale;
+    final String name =
+        supportedLocales
+            .where((MapEntry<Locale, String> e) => e.key == shown)
+            .firstOrNull
+            ?.value ??
+        shown.toLanguageTag();
+    return ListTile(
+      leading: const Icon(Icons.language_rounded),
+      title: Text(tr('language')),
+      subtitle: Text(name),
+      trailing: const Icon(Icons.open_in_new_rounded),
+      onTap: () => unawaited(AppLanguage.openSystemSettings()),
+    );
+  }
+}
+
 class _UiScaleSlider extends StatefulWidget {
   const _UiScaleSlider();
 
@@ -2289,11 +3211,14 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('uiScale'))),
-                      Text('${(value * 100).round()}%'),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('uiScale'))),
+                        Text('${(value * 100).round()}%'),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -2313,14 +3238,7 @@ class _UiScaleSliderState extends State<_UiScaleSlider> {
                     setState(() => _dragValue = null);
                   },
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: cs.onPrimary,
-                      inactiveTickMarkColor: cs.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       min: SettingsProvider.appUiScaleMin,
@@ -2402,11 +3320,14 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Expanded(child: Text(tr('cardCorners'))),
-                      Text('${(value * 100).round()}%'),
-                    ],
+                  child: DefaultTextStyle.merge(
+                    style: m3eSliderTitleStyle(context),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(tr('cardCorners'))),
+                        Text('${(value * 100).round()}%'),
+                      ],
+                    ),
                   ),
                 ),
                 TVSliderWrapper(
@@ -2426,14 +3347,7 @@ class _CardCornerScaleSliderState extends State<_CardCornerScaleSlider> {
                     setState(() => _dragValue = null);
                   },
                   child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 16,
-                      trackShape: const _GappedTrackShape(),
-                      thumbShape: const _VerticalBarThumbShape(),
-                      activeTickMarkColor: cs.onPrimary,
-                      inactiveTickMarkColor: cs.primary,
-                      overlayShape: SliderComponentShape.noOverlay,
-                    ),
+                    data: m3eSliderTheme(context),
                     child: Slider(
                       focusNode: isTV ? _sliderFocusNode : null,
                       min: SettingsProvider.cardCornerScaleMin,
@@ -2478,6 +3392,7 @@ class _WarningsSection extends StatelessWidget {
     sp.hideBatteryOptimizationWarning,
     sp.hideTrackOnlyWarning,
     sp.hideAPKOriginWarning,
+    sp.verifySigningCertHashes,
     sp.showAppDowngradeError,
   );
 
@@ -2505,6 +3420,28 @@ class _WarningsSection extends StatelessWidget {
           title: Text(tr('showAPKOriginWarnings')),
           value: !sp.hideAPKOriginWarning,
           onChanged: (value) => sp.hideAPKOriginWarning = !value,
+        ),
+        // Upstream #2922. A warning, so it lives here, not in Integrations
+        // (no third-party tool involved). An app's own expected hashes block
+        // regardless of this toggle.
+        ListTile(
+          title: Text(tr('verifySigningCertHashes')),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              HelpHintIcon(
+                message: tr('verifySigningCertHashesHelp'),
+                size: 20,
+                padding: EdgeInsets.zero,
+              ),
+              AppSwitch(
+                semanticLabel: tr('verifySigningCertHashes'),
+                value: sp.verifySigningCertHashes,
+                onChanged: (bool value) => sp.verifySigningCertHashes = value,
+              ),
+            ],
+          ),
+          onTap: () => sp.verifySigningCertHashes = !sp.verifySigningCertHashes,
         ),
         AppSwitchListTile(
           title: Text(tr('showAppDowngradeError')),
@@ -2746,10 +3683,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 IconButton(
                   tooltip: tr('about'),
                   onPressed: () {
-                    launchUrlString(
-                      tr('aboutAppManagerUrl'),
-                      mode: LaunchMode.externalApplication,
-                    );
+                    _openExternalUrl(tr('aboutAppManagerUrl'));
                   },
                   style: IconButton.styleFrom(
                     foregroundColor: cs.onSurfaceVariant,
@@ -2762,6 +3696,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   icon: const Icon(Icons.open_in_new_rounded),
                 ),
                 AppSwitch(
+                  semanticLabel: tr('openAppInfoInAppManager'),
                   value:
                       !_loading &&
                       _appManagerInstalled &&
@@ -2790,6 +3725,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                 padding: EdgeInsets.zero,
               ),
               AppSwitch(
+                semanticLabel: tr('beforeNewInstallsShareToAppVerifier'),
                 value: !_loading && sp.beforeNewInstallsShareToAppVerifier,
                 onChanged: !_loading
                     ? (bool value) =>
@@ -2823,6 +3759,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                   padding: EdgeInsets.zero,
                 ),
                 AppSwitch(
+                  semanticLabel: tr('enableDowngradeModules'),
                   value:
                       !_loading &&
                       _downgradeModuleInstalled &&
@@ -2863,6 +3800,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                       padding: EdgeInsets.zero,
                     ),
                     AppSwitch(
+                      semanticLabel: tr('enableVirusTotalScanning'),
                       value: hasValidatedKey && sp.enableVirusTotalScanning,
                       onChanged: hasValidatedKey
                           ? (bool value) => sp.enableVirusTotalScanning = value
@@ -2895,9 +3833,8 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                       ).copyWith(
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.open_in_new_rounded),
-                          onPressed: () => launchUrlString(
+                          onPressed: () => _openExternalUrl(
                             'https://www.virustotal.com/gui/my-apikey',
-                            mode: LaunchMode.externalApplication,
                           ),
                           tooltip: tr('about'),
                         ),
@@ -2993,15 +3930,14 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                                               setState(() {});
                                             } else {
                                               clearApiKeyValidation(sp);
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                buildAppSnackBar(
-                                                  context,
-                                                  error,
-                                                  type: ToastType.error,
-                                                ),
-                                              );
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                    buildAppSnackBar(
+                                                      context,
+                                                      error,
+                                                      type: ToastType.error,
+                                                    ),
+                                                  );
                                             }
                                           }
                                         : null,
@@ -3047,6 +3983,10 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                     value: 'external',
                     child: Text(tr('installerModeThirdParty')),
                   ),
+                  DropdownMenuItem<String>(
+                    value: 'root',
+                    child: Text(tr('installMethodRoot')),
+                  ),
                 ],
                 onChanged: (String? mode) async {
                   if (mode == null) return;
@@ -3082,12 +4022,23 @@ class _IntegrationsSectionState extends State<_IntegrationsSection>
                           showError(ObtainiumError(tr('cancelled')));
                       }
                     }
+                  } else if (mode == 'root') {
+                    // Switches only once su grants it; a denial keeps the
+                    // current installer (upstream #3277 fell back to stock).
+                    final bool granted = await RootInstaller(sp)
+                        .checkPermission();
+                    if (!context.mounted) return;
+                    if (granted) {
+                      sp.installerMode = mode;
+                    } else {
+                      showError(ObtainiumError(tr('rootNotGranted')));
+                    }
                   } else {
                     sp.installerMode = mode;
                   }
                 },
               ),
-              if (sp.installerMode == 'shizuku')
+              if (sp.installerMode == 'shizuku' || sp.installerMode == 'root')
                 AppSwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(tr('shizukuPretendToBeGooglePlay')),
@@ -3257,7 +4208,7 @@ class AboutSectionContent extends StatelessWidget {
                     assetPath: 'assets/graphics/me_600.webp',
                     borderRadius: 18,
                     semanticLabel: tr('aboutAuthorProfile'),
-                    onTap: () => _openAboutUrl(_aboutAuthorUrl),
+                    onTap: () => _openExternalUrl(_aboutAuthorUrl),
                     onLongPress: () => _copyAboutUrl(_aboutAuthorUrl),
                   ),
                 ],
@@ -3277,7 +4228,7 @@ class AboutSectionContent extends StatelessWidget {
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () => _openAboutUrl(sp.sourceUrl),
+                    onPressed: () => _openExternalUrl(sp.sourceUrl),
                     onLongPress: () => _copyAboutUrl(sp.sourceUrl),
                     icon: _GitHubMarkIcon(color: colorScheme.onPrimary),
                     label: Text(tr('aboutStarOnGithub')),
@@ -3292,7 +4243,7 @@ class AboutSectionContent extends StatelessWidget {
                     Expanded(
                       child: FilledButton.tonalIcon(
                         style: _aboutSecondaryButtonStyle(colorScheme),
-                        onPressed: () => _openAboutUrl(_aboutWikiUrl),
+                        onPressed: () => _openExternalUrl(_aboutWikiUrl),
                         onLongPress: () => _copyAboutUrl(_aboutWikiUrl),
                         icon: const Icon(Icons.open_in_new_rounded),
                         label: Text(tr('aboutOpenWiki')),
@@ -3537,7 +4488,7 @@ class _AboutAppPromo extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () =>
-            appId != null ? _openPromoApp(appId!, url) : _openAboutUrl(url),
+            appId != null ? _openPromoApp(appId!, url) : _openExternalUrl(url),
         onLongPress: () => _copyAboutUrl(url),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -3643,7 +4594,7 @@ class _AboutTextLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TextButton(
-      onPressed: () => _openAboutUrl(url),
+      onPressed: () => _openExternalUrl(url),
       onLongPress: () => _copyAboutUrl(url),
       style: TextButton.styleFrom(
         foregroundColor: colorScheme.primary,
@@ -3666,8 +4617,14 @@ class _AboutLinkSeparator extends StatelessWidget {
   }
 }
 
-Future<void> _openAboutUrl(String url) async {
-  await launchUrlString(url, mode: LaunchMode.externalApplication);
+/// Opens [url] in another app. A failure (a bad link, nothing to open it)
+/// shows an error instead of vanishing (upstream 553f49b6).
+Future<void> _openExternalUrl(String url) async {
+  try {
+    await launchUrlString(url, mode: LaunchMode.externalApplication);
+  } catch (e) {
+    showError(e);
+  }
 }
 
 Future<void> _openPromoApp(String appId, String webUrl) async {
@@ -3679,13 +4636,13 @@ Future<void> _openPromoApp(String appId, String webUrl) async {
         mode: LaunchMode.externalNonBrowserApplication,
       );
       if (!launched) {
-        await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+        await _openExternalUrl(webUrl);
       }
     } catch (_) {
-      await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+      await _openExternalUrl(webUrl);
     }
   } else {
-    await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
+    await _openExternalUrl(webUrl);
   }
 }
 
@@ -3806,6 +4763,17 @@ class _LogsSheetState extends State<LogsSheet> {
       );
     }
 
+    // Copies the logs with their diagnostics header: the TV action (TV has no
+    // share sheet), and the fallback when sharing fails (upstream 696551ed).
+    Future<void> copyLogs() async {
+      final String logs = logString ?? '';
+      final String diagnostics = await getDiagnosticsText(logs);
+      if (!context.mounted) return;
+      await copyToClipboard(context, '$diagnostics$logs');
+    }
+
+    final bool isTV = context.read<SettingsProvider>().isTV;
+
     return AppSheetScaffold(
       expand: true,
       header: Row(
@@ -3813,9 +4781,8 @@ class _LogsSheetState extends State<LogsSheet> {
           Expanded(
             child: Text(
               tr('appLogs'),
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
           HelpHintIcon(
@@ -3879,7 +4846,9 @@ class _LogsSheetState extends State<LogsSheet> {
         if (isLoading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
-            child: Center(child: ExpressiveLoadingIndicator()),
+            child: Center(
+              child: LegacyMaterialBridge(child: ExpressiveLoadingIndicator()),
+            ),
           )
         else
           SelectableText(logString ?? ''),
@@ -3896,13 +4865,13 @@ class _LogsSheetState extends State<LogsSheet> {
                     context: context,
                     builder: (BuildContext modalContext) {
                       return GeneratedFormModal(
-                        title: tr('appLogs'),
+                        title: tr('clearLogs'),
                         items: const [],
                         initValid: true,
-                        message: tr('removeFromObtainX'),
-                        primaryActionColour: Theme.of(
-                          modalContext,
-                        ).colorScheme.error,
+                        message: tr('clearLogsWarning'),
+                        primaryActionColour: Theme.of(modalContext)
+                            .colorScheme
+                            .error,
                       );
                     },
                   )) !=
@@ -3912,6 +4881,7 @@ class _LogsSheetState extends State<LogsSheet> {
                 unawaited(logsProvider.clear());
                 if (!context.mounted) return;
                 Navigator.of(context).pop();
+                showMessage(tr('logsCleared'));
               }
             },
             style: TextButton.styleFrom(
@@ -3923,49 +4893,71 @@ class _LogsSheetState extends State<LogsSheet> {
             onPressed: () => Navigator.of(context).pop(),
             child: Text(tr('close')),
           ),
-          TextButton(
-            onPressed: () async {
-              final String logs = logString ?? '';
-              const int maxLogChars = 100000;
-              final String safeLogs = logs.length > maxLogChars
-                  ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
-                  : logs;
-              final String diagnostics = await getDiagnosticsText(safeLogs);
-              unawaited(
-                SharePlus.instance.share(
-                  ShareParams(
-                    text: '$diagnostics$safeLogs',
-                    subject: tr('appLogs'),
-                  ),
-                ),
-              );
-            },
-            child: Text(tr('share')),
-          ),
-          TextButton(
-            onPressed: () async {
-              final String logs = logString ?? '';
-              final String diagnostics = await getDiagnosticsText(logs);
-              final String timestampForFilename = DateTime.now()
-                  .toIso8601String()
-                  .replaceAll(':', '-');
-              final String logFileName =
-                  'obtainx-logs-$timestampForFilename.txt';
-              final XFile logFile = XFile.fromData(
-                Uint8List.fromList(utf8.encode('$diagnostics$logs')),
-                mimeType: 'text/plain',
-                name: logFileName,
-              );
-              await SharePlus.instance.share(
-                ShareParams(
-                  files: [logFile],
-                  fileNameOverrides: [logFileName],
-                  subject: tr('appLogs'),
-                ),
-              );
-            },
-            child: Text(tr('shareAsFile')),
-          ),
+          if (isTV)
+            TextButton(onPressed: copyLogs, child: Text(tr('copyToClipboard')))
+          else ...[
+            TextButton(
+              onPressed: () async {
+                final String logs = logString ?? '';
+                const int maxLogChars = 100000;
+                final String safeLogs = logs.length > maxLogChars
+                    ? '[... Truncated ${logs.length - maxLogChars} characters. Use "Share as file" for full logs ...]\n\n${logs.substring(logs.length - maxLogChars)}'
+                    : logs;
+                final String diagnostics = await getDiagnosticsText(safeLogs);
+                try {
+                  await SharePlus.instance.share(
+                    ShareParams(
+                      text: '$diagnostics$safeLogs',
+                      subject: tr('appLogs'),
+                    ),
+                  );
+                } catch (e) {
+                  unawaited(
+                    logsProvider.add(
+                      'Failed to share logs: $e',
+                      level: LogLevel.error,
+                    ),
+                  );
+                  await copyLogs();
+                }
+              },
+              child: Text(tr('share')),
+            ),
+            TextButton(
+              onPressed: () async {
+                final String logs = logString ?? '';
+                final String diagnostics = await getDiagnosticsText(logs);
+                final String timestampForFilename = DateTime.now()
+                    .toIso8601String()
+                    .replaceAll(':', '-');
+                final String logFileName =
+                    'obtainx-logs-$timestampForFilename.txt';
+                final XFile logFile = XFile.fromData(
+                  Uint8List.fromList(utf8.encode('$diagnostics$logs')),
+                  mimeType: 'text/plain',
+                  name: logFileName,
+                );
+                try {
+                  await SharePlus.instance.share(
+                    ShareParams(
+                      files: [logFile],
+                      fileNameOverrides: [logFileName],
+                      subject: tr('appLogs'),
+                    ),
+                  );
+                } catch (e) {
+                  unawaited(
+                    logsProvider.add(
+                      'Failed to share logs: $e',
+                      level: LogLevel.error,
+                    ),
+                  );
+                  await copyLogs();
+                }
+              },
+              child: Text(tr('shareAsFile')),
+            ),
+          ],
         ],
       ),
     );
@@ -4221,9 +5213,8 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                             onTap: () {
                               final entry = entries[index];
                               if (entry.value.length == 1) {
-                                Navigator.of(
-                                  sheetContext,
-                                ).pop(entry.value.first);
+                                Navigator.of(sheetContext)
+                                    .pop(entry.value.first);
                               } else {
                                 setSheetState(() {
                                   expandedIndex = expandedIndex == index
@@ -4238,15 +5229,15 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                             ),
                             title: Text(
                               entries[index].value.first.label,
-                              style: Theme.of(
-                                builderContext,
-                              ).textTheme.titleSmall,
+                              style: Theme.of(builderContext)
+                                  .textTheme
+                                  .titleSmall,
                             ),
                             subtitle: Text(
                               entries[index].key,
-                              style: Theme.of(
-                                builderContext,
-                              ).textTheme.bodySmall,
+                              style: Theme.of(builderContext)
+                                  .textTheme
+                                  .bodySmall,
                             ),
                             trailing: entries[index].value.length > 1
                                 ? AnimatedRotation(
@@ -4270,9 +5261,9 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                                                 context: builderContext,
                                                 target: target,
                                                 siblings: entries[index].value,
-                                                onTap: () => Navigator.of(
-                                                  sheetContext,
-                                                ).pop(target),
+                                                onTap: () =>
+                                                    Navigator.of(sheetContext)
+                                                        .pop(target),
                                               ),
                                         )
                                         .toList(),
@@ -4386,7 +5377,9 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
                 contentPadding: EdgeInsets.symmetric(horizontal: 8),
                 leading: SizedBox.square(
                   dimension: 24,
-                  child: ExpressiveLoadingIndicator(),
+                  child: LegacyMaterialBridge(
+                    child: ExpressiveLoadingIndicator(),
+                  ),
                 ),
               );
             }
@@ -4422,161 +5415,6 @@ class _ExternalInstallerTileState extends State<_ExternalInstallerTile> {
               onTap: () => _choose(targets, settingsProvider),
             );
           },
-    );
-  }
-}
-
-class _VerticalBarThumbShape extends SliderComponentShape {
-  const _VerticalBarThumbShape();
-
-  static const double _width = 4;
-  static const double _height = 28;
-  static const double _radius = 2;
-
-  @override
-  Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
-      const Size(_width, _height);
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset center, {
-    required Animation<double> activationAnimation,
-    required Animation<double> enableAnimation,
-    required bool isDiscrete,
-    required TextPainter labelPainter,
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required TextDirection textDirection,
-    required double value,
-    required double textScaleFactor,
-    required Size sizeWithOverflow,
-  }) {
-    // Flutter's slider computes the framework-provided [center.dx] using
-    // the FULL trackRect width:
-    //   thumbX = trackRect.left + value * trackRect.width
-    // ...but tick marks are inset on each side by trackHeight/2:
-    //   tickX  = trackRect.left + value * (trackRect.width - trackHeight)
-    //                           + trackHeight/2
-    // The two only coincide at value == 0.5. Everywhere else the thumb
-    // drifts off the tick proportionally to (value - 0.5) * trackHeight.
-    // For a default 4dp track this drift is sub-pixel and unnoticeable;
-    // for our M3E 16dp track it's a visible 8dp at the endpoints.
-    //
-    // Re-project the framework-provided center onto the tick-aligned
-    // x-axis so the vertical bar thumb lands exactly on each dot.
-    final Rect trackRect = sliderTheme.trackShape!.getPreferredRect(
-      parentBox: parentBox,
-      offset: Offset.zero,
-      sliderTheme: sliderTheme,
-      isEnabled: enableAnimation.value > 0,
-      isDiscrete: isDiscrete,
-    );
-    final double trackHeight = trackRect.height;
-    final double trackWidth = trackRect.width;
-    Offset alignedCenter = center;
-    if (trackWidth > trackHeight) {
-      final double valueRatio = textDirection == TextDirection.rtl
-          ? 1.0 - value
-          : value;
-      final double alignedX =
-          trackRect.left +
-          valueRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-      alignedCenter = Offset(alignedX, center.dy);
-    }
-    final canvas = context.canvas;
-    final paint = Paint()
-      ..color = sliderTheme.thumbColor ?? Colors.white
-      ..style = PaintingStyle.fill;
-    final rrect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: alignedCenter, width: _width, height: _height),
-      const Radius.circular(_radius),
-    );
-    canvas.drawRRect(rrect, paint);
-  }
-}
-
-class _GappedTrackShape extends SliderTrackShape with BaseSliderTrackShape {
-  const _GappedTrackShape();
-
-  static const double _gap = 4;
-  static const double _radius = 8;
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required TextDirection textDirection,
-    required Offset thumbCenter,
-    Offset? secondaryOffset,
-    bool isDiscrete = false,
-    bool isEnabled = false,
-    double additionalActiveTrackHeight = 0,
-  }) {
-    final canvas = context.canvas;
-    final trackRect = getPreferredRect(
-      parentBox: parentBox,
-      offset: offset,
-      sliderTheme: sliderTheme,
-      isEnabled: isEnabled,
-      isDiscrete: isDiscrete,
-    );
-
-    // Re-project thumbCenter.dx onto the tick-aligned axis so the split
-    // between active and inactive lanes coincides with the rendered
-    // thumb position. See the long comment in [_VerticalBarThumbShape]
-    // for why this re-projection is needed (Flutter's tick range is
-    // inset by trackHeight/2 on each side; the framework-provided
-    // thumbCenter is on the un-inset full-track axis).
-    double thumbX = thumbCenter.dx;
-    final double trackHeight = trackRect.height;
-    final double trackWidth = trackRect.width;
-    if (trackWidth > trackHeight) {
-      final double valueRatio = ((thumbCenter.dx - trackRect.left) / trackWidth)
-          .clamp(0.0, 1.0);
-      thumbX =
-          trackRect.left +
-          valueRatio * (trackWidth - trackHeight) +
-          trackHeight / 2;
-    }
-
-    final activePaint = Paint()
-      ..color = (sliderTheme.activeTrackColor ?? Colors.blue);
-    final inactivePaint = Paint()
-      ..color = (sliderTheme.inactiveTrackColor ?? Colors.grey);
-
-    // Active (left) track — up to thumb minus gap
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-          trackRect.left,
-          trackRect.top,
-          thumbX - _gap,
-          trackRect.bottom,
-        ),
-        topLeft: const Radius.circular(_radius),
-        bottomLeft: const Radius.circular(_radius),
-      ),
-      activePaint,
-    );
-
-    // Inactive (right) track — from thumb plus gap
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-          thumbX + _gap,
-          trackRect.top,
-          trackRect.right,
-          trackRect.bottom,
-        ),
-        topRight: const Radius.circular(_radius),
-        bottomRight: const Radius.circular(_radius),
-      ),
-      inactivePaint,
     );
   }
 }

@@ -36,4 +36,19 @@ void main() {
       'F-Droid/1.0 (+https://f-droid.org)',
     );
   });
+
+  test('the identifying user agent always names a version and the project', () {
+    const project = 'https://github.com/bikram-agarwal/ObtainX';
+    expect(
+      obtainXIdentifyingUserAgent('2.22.0', project),
+      'ObtainX/2.22.0 (+$project)',
+    );
+    for (final unknown in [null, '', '  ']) {
+      expect(
+        obtainXIdentifyingUserAgent(unknown, project),
+        'ObtainX/$obtainXUserAgentFallbackVersion (+$project)',
+        reason: '$unknown',
+      );
+    }
+  });
 }

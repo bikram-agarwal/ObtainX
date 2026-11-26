@@ -99,7 +99,7 @@ These narrow **which APK file** ObtainX picks when several builds exist (split A
 
 ---
 
-## Network, background & automation
+## Advanced
 
 | Option | What it does | Example |
 |--------|----------------|---------|
