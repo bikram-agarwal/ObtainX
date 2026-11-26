@@ -151,6 +151,13 @@ kotlin {
 // GitHub builds are never downgraded. The fdroiddata recipe reproduces these codes
 // for auto-update via a VercodeOperation list (%c*10+1 / +2 / +3) — one entry per
 // ABI — so F-Droid auto-detects and builds all three on each release.
+//
+// The base is the pubspec build number (flutterVersionCode), NOT variant.versionCode.
+// Since Flutter 3.50 (flutter/flutter ecd1ab06865) the Flutter Gradle plugin gives
+// each split APK its own ABI*1000 + base first, and variant.versionCode returns the
+// first APK's already-offset value. CI's all-ABI build (first APK armeabi-v7a) then
+// shipped 2.25.0 as 23500*10+N = 23500x instead of 22500x, and F-Droid's one-ABI-
+// per-run builds would have got a different offset again (e.g. arm64 245003).
 val abiCodes = mapOf("x86_64" to 1, "armeabi-v7a" to 2, "arm64-v8a" to 3)
 
 android.applicationVariants.configureEach {
@@ -158,7 +165,7 @@ android.applicationVariants.configureEach {
     variant.outputs.forEach { output ->
         val abiVersionCode = abiCodes[output.filters.find { it.filterType == "ABI" }?.identifier]
         if (abiVersionCode != null) {
-            (output as ApkVariantOutputImpl).versionCodeOverride = variant.versionCode * 10 + abiVersionCode
+            (output as ApkVariantOutputImpl).versionCodeOverride = flutterVersionCode.toInt() * 10 + abiVersionCode
         }
     }
 }
