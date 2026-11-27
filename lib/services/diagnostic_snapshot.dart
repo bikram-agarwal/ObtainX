@@ -273,7 +273,8 @@ Future<String> buildObtainxDiagnosticLog({
     'Update checks',
     'background ${settings.enableBackgroundUpdates}, every ${settings.updateInterval} min, '
         'on start ${settings.checkOnStart}, installed/track-only only ${settings.onlyCheckInstalledOrTrackOnlyApps}, '
-        'prereleases ${settings.includePrereleasesByDefault}',
+        'prereleases ${settings.includePrereleasesByDefault}, '
+        'new asset as update ${settings.treatNewAssetSameVersionAsUpdate}',
   );
   // The Wi-Fi and charging guards apply to every background check. Each is
   // what may still run off Wi-Fi / unplugged ([BgGuardMode] name).

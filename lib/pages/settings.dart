@@ -1077,6 +1077,7 @@ class _UpdatesSection extends StatelessWidget {
     sp.removeOnExternalUninstall,
     sp.parallelDownloads,
     sp.includePrereleasesByDefault,
+    sp.treatNewAssetSameVersionAsUpdate,
     sp.allowAddingAppsWithoutCheck,
     sp.skipBulkUpdateConfirmation,
     // The background rows below depend on the installer.
@@ -1281,6 +1282,12 @@ class _UpdatesSection extends StatelessWidget {
         title: Text(tr('includePrereleasesByDefault')),
         value: sp.includePrereleasesByDefault,
         onChanged: (bool value) => sp.includePrereleasesByDefault = value,
+      ),
+      AppSwitchListTile(
+        key: const ValueKey<String>('treat_new_asset_same_version_as_update'),
+        title: Text(tr('treatNewAssetSameVersionAsUpdate')),
+        value: sp.treatNewAssetSameVersionAsUpdate,
+        onChanged: (bool value) => sp.treatNewAssetSameVersionAsUpdate = value,
       ),
       AppSwitchListTile(
         key: const ValueKey<String>('skip_bulk_update_confirmation'),

@@ -449,6 +449,21 @@ abstract class AppSource {
       ),
     ],
     [
+      GeneratedFormDropdown(
+        treatNewAssetSameVersionAsUpdateKey,
+        [
+          MapEntry('', tr('useGlobalDefault')),
+          MapEntry('off', tr('disabled')),
+          MapEntry('on', tr('enabled')),
+        ],
+        label: tr('treatNewAssetSameVersionAsUpdate'),
+        value: '',
+        required: false,
+        globalValue: (settingsProvider) =>
+            settingsProvider.treatNewAssetSameVersionAsUpdate ? 'on' : 'off',
+      ),
+    ],
+    [
       GeneratedFormSectionHeader(
         '__formSectionApk',
         label: tr('additionalOptionsSectionApk'),

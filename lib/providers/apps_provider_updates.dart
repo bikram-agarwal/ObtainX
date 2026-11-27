@@ -53,11 +53,20 @@ bool versionCodeModeCannotCompare(App app) {
 
 bool isSkipActiveForCurrentLatest(App app) {
   final skipped = app.additionalSettings['skippedLatestVersion'];
-  return skipped is String &&
+  final bool versionMatches =
+      skipped is String &&
       skipped.isNotEmpty &&
       (skipped == app.latestVersion ||
           compareVersionStrings(skipped, app.latestVersion).relation ==
               VersionRelation.same);
+  if (!versionMatches) return false;
+  if (effectiveTreatNewAssetSameVersionAsUpdate(app.additionalSettings)) {
+    final Object? skippedAsset = app.additionalSettings[skippedLatestAssetKey];
+    if (skippedAsset is String && skippedAsset.isNotEmpty) {
+      return skippedAsset == selectedPreferredAssetIdentity(app);
+    }
+  }
+  return true;
 }
 
 bool appIsUpToDateForFiltering(App app) {
@@ -80,7 +89,8 @@ App normalizeSkippedLatestVersion(App app) {
   }
   return app.copyWith(
     additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
-      ..remove('skippedLatestVersion'),
+      ..remove('skippedLatestVersion')
+      ..remove(skippedLatestAssetKey),
   );
 }
 
@@ -160,9 +170,14 @@ App recordLatestVersionChange(App currentApp, App newApp, {DateTime? now}) {
   // An app added without a check (D10) carries a placeholder version, which
   // was never seen at the source: its first real check is a first
   // observation, so it doesn't date the release it finds.
-  final bool versionChanged =
-      newApp.latestVersion != currentApp.latestVersion &&
+  final bool assetChangedWithOption =
+      effectiveTreatNewAssetSameVersionAsUpdate(newApp.additionalSettings) &&
+      !samePreferredAssetAs(currentApp, newApp) &&
       !hasOnlyPlaceholderApks(currentApp);
+  final bool versionChanged =
+      (newApp.latestVersion != currentApp.latestVersion &&
+          !hasOnlyPlaceholderApks(currentApp)) ||
+      assetChangedWithOption;
   final bool firstObservation = currentApp.latestVersionChangedAt == null;
   final DateTime? changedAt = versionChanged || firstObservation
       ? (now ?? DateTime.now())
@@ -265,15 +280,21 @@ App? mergeFetchedUpdateWithLiveState({
     fetchedApp,
   );
   final bool malwareScanStillMatchesRelease =
-      liveApp.latestVersion == fetchedApp.latestVersion;
+      liveApp.latestVersion == fetchedApp.latestVersion &&
+      samePreferredAssetAs(liveApp, fetchedApp);
   final settings = Map<String, dynamic>.from(liveApp.additionalSettings)
     ..remove(sourceVersionCodesKey)
+    ..remove(sourceAssetMetadataKey)
     // This answer found a release.
     ..remove(noMatchingReleaseKey);
   clearNeedsAttentionCode(settings, needsAttentionVersionFilter);
   if (fetchedApp.additionalSettings[sourceVersionCodesKey] != null) {
     settings[sourceVersionCodesKey] =
         fetchedApp.additionalSettings[sourceVersionCodesKey];
+  }
+  if (fetchedApp.additionalSettings[sourceAssetMetadataKey] != null) {
+    settings[sourceAssetMetadataKey] =
+        fetchedApp.additionalSettings[sourceAssetMetadataKey];
   }
   settings.remove(sourceBuildComparisonKey);
   if (fetchedApp.additionalSettings[sourceBuildComparisonKey] != null) {
@@ -832,14 +853,28 @@ extension AppsProviderUpdates on AppsProvider {
   /// fetched, or when the app has no matching release now: there is no current
   /// release to fall back to.
   Future<bool> _minAgeHoldsReleaseBack(App currentApp, App fetchedApp) async {
-    if (fetchedApp.latestVersion == currentApp.latestVersion) return false;
+    final bool sameVersionAssetRebuild =
+        fetchedApp.latestVersion == currentApp.latestVersion &&
+        effectiveTreatNewAssetSameVersionAsUpdate(
+          currentApp.additionalSettings,
+        ) &&
+        !samePreferredAssetAs(currentApp, fetchedApp) &&
+        versionDecisionForApp(fetchedApp).reason == 'rebuiltAsset';
+    if (fetchedApp.latestVersion == currentApp.latestVersion &&
+        !sameVersionAssetRebuild) {
+      return false;
+    }
     if (appHasNoMatchingRelease(currentApp)) return false;
     final int minAgeDays = await effectiveMinUpdateAgeDays(
       currentApp.additionalSettings,
       settingsProvider: settingsProvider,
     );
     if (minAgeDays <= 0) return false;
-    if (isReleaseTooYoung(fetchedApp.releaseDate, minAgeDays)) return true;
+    final DateTime? candidateReleaseDate = sameVersionAssetRebuild
+        ? (DateTime.tryParse(selectedSourceAssetUploadedAt(fetchedApp) ?? '') ??
+              fetchedApp.releaseDate)
+        : fetchedApp.releaseDate;
+    if (isReleaseTooYoung(candidateReleaseDate, minAgeDays)) return true;
     return versionDecisionForApp(fetchedApp).relation ==
             VersionRelation.newer &&
         versionDecisionForApp(currentApp).relation != VersionRelation.newer;

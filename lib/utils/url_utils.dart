@@ -39,3 +39,33 @@ String preStandardizeUrl(String url) {
   url = mainPart + (trailingSlash ? '/' : '') + rest;
   return url;
 }
+
+/// Strips volatile query parameters and fragments from HTTP(S) asset URLs so
+/// rotating CDN tokens do not masquerade as a newly uploaded release asset,
+/// while preserving path changes such as `/releases/assets/<id>` or tag paths.
+String normalizeAssetUrlForComparison(String rawUrl) {
+  String normalizeSingle(String urlPart) {
+    final String trimmed = urlPart.trim();
+    final Uri? parsedUri = Uri.tryParse(trimmed);
+    if (parsedUri == null ||
+        (parsedUri.scheme != 'http' && parsedUri.scheme != 'https') ||
+        parsedUri.host.isEmpty) {
+      return trimmed;
+    }
+    String cleanUrl = parsedUri.toString();
+    final int queryIndex = cleanUrl.indexOf('?');
+    if (queryIndex >= 0) {
+      cleanUrl = cleanUrl.substring(0, queryIndex);
+    }
+    final int fragmentIndex = cleanUrl.indexOf('#');
+    if (fragmentIndex >= 0) {
+      cleanUrl = cleanUrl.substring(0, fragmentIndex);
+    }
+    return cleanUrl;
+  }
+
+  if (rawUrl.contains('\n')) {
+    return rawUrl.split('\n').map(normalizeSingle).join('\n');
+  }
+  return normalizeSingle(rawUrl);
+}

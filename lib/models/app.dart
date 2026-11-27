@@ -37,6 +37,11 @@ class APKDetails {
 
   /// Version codes by asset name, retained through filtering and variant choice.
   final Map<String, int> versionCodesByAsset;
+
+  /// Optional SHA-256 digests (`sha256:...`) and upload timestamps (ISO-8601)
+  /// keyed by asset name, retained across APK filtering and preferred-APK choice.
+  final Map<String, String> assetDigestsByName;
+  final Map<String, String> assetUploadedAtByName;
   List<MapEntry<String, String>> apkUrls;
 
   /// Not final: [AppNames] is immutable, so sources that refine a name after
@@ -75,6 +80,8 @@ class APKDetails {
     this.names, {
     this.versionCode,
     this.versionCodesByAsset = const {},
+    this.assetDigestsByName = const {},
+    this.assetUploadedAtByName = const {},
     this.releaseDate,
     this.changeLog,
     this.allAssetUrls = const [],
@@ -99,6 +106,8 @@ class APKDetails {
     AppNames? names,
     Object? versionCode = _sentinel,
     Map<String, int>? versionCodesByAsset,
+    Map<String, String>? assetDigestsByName,
+    Map<String, String>? assetUploadedAtByName,
     Object? releaseDate = _sentinel,
     Object? changeLog = _sentinel,
     List<MapEntry<String, String>>? allAssetUrls,
@@ -121,6 +130,9 @@ class APKDetails {
           ? this.versionCode
           : versionCode as int?,
       versionCodesByAsset: versionCodesByAsset ?? this.versionCodesByAsset,
+      assetDigestsByName: assetDigestsByName ?? this.assetDigestsByName,
+      assetUploadedAtByName:
+          assetUploadedAtByName ?? this.assetUploadedAtByName,
       releaseDate: releaseDate == _sentinel
           ? this.releaseDate
           : releaseDate as DateTime?,

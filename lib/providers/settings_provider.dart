@@ -39,6 +39,33 @@ bool _tactileFeedbackEnabled = true;
 // SettingsProvider instance. Kept in sync by initializeSettings and the setter.
 String? _globalApkFilterRegExMirror;
 
+// Cached mirror of [SettingsProvider.treatNewAssetSameVersionAsUpdate], read by
+// pure version-decision helpers without a SettingsProvider instance.
+bool _treatNewAssetSameVersionAsUpdateMirror = false;
+
+const String treatNewAssetSameVersionAsUpdateKey =
+    'treatNewAssetSameVersionAsUpdate';
+
+bool get activeGlobalTreatNewAssetSameVersionAsUpdate =>
+    _treatNewAssetSameVersionAsUpdateMirror;
+
+@visibleForTesting
+void setGlobalTreatNewAssetSameVersionAsUpdateForTesting(bool value) {
+  _treatNewAssetSameVersionAsUpdateMirror = value;
+}
+
+/// Effective per-app setting: `'on'`/`true` enables, `'off'`/`false` disables,
+/// and `''`/unset inherits [activeGlobalTreatNewAssetSameVersionAsUpdate].
+bool effectiveTreatNewAssetSameVersionAsUpdate(
+  Map<String, dynamic> additionalSettings, {
+  bool? globalOverride,
+}) {
+  final dynamic raw = additionalSettings[treatNewAssetSameVersionAsUpdateKey];
+  if (raw == true || raw == 'on') return true;
+  if (raw == false || raw == 'off') return false;
+  return globalOverride ?? _treatNewAssetSameVersionAsUpdateMirror;
+}
+
 /// [regEx] if it is set and compiles, else null. A stored global filter that
 /// doesn't compile is ignored, rather than failing every update check.
 String? usableApkFilterRegEx(String? regEx) {
@@ -286,6 +313,8 @@ class SettingsProvider with ChangeNotifier {
       _appFoldersMemory = null;
       _folderViewCache.clear();
       _globalApkFilterRegExMirror = globalApkFilterRegEx;
+      _treatNewAssetSameVersionAsUpdateMirror =
+          treatNewAssetSameVersionAsUpdate;
       _tactileFeedbackEnabled = tactileFeedbackEnabled;
       HttpService.setDefaultCertificatePinning(enableCertificatePinning);
       notifyListeners();
@@ -310,6 +339,7 @@ class SettingsProvider with ChangeNotifier {
         info.systemFeatures.contains('android.software.leanback');
     _tactileFeedbackEnabled = prefs?.getBool('tactileFeedbackEnabled') ?? true;
     _globalApkFilterRegExMirror = globalApkFilterRegEx;
+    _treatNewAssetSameVersionAsUpdateMirror = treatNewAssetSameVersionAsUpdate;
     HttpService.setDefaultCertificatePinning(enableCertificatePinning);
     _settingsInitialized = true;
     notifyListeners();
@@ -369,6 +399,15 @@ class SettingsProvider with ChangeNotifier {
 
   set includePrereleasesByDefault(bool val) {
     prefs?.setBool('includePrereleasesByDefault', val);
+    notifyListeners();
+  }
+
+  bool get treatNewAssetSameVersionAsUpdate =>
+      prefs?.getBool(treatNewAssetSameVersionAsUpdateKey) ?? false;
+
+  set treatNewAssetSameVersionAsUpdate(bool val) {
+    prefs?.setBool(treatNewAssetSameVersionAsUpdateKey, val);
+    _treatNewAssetSameVersionAsUpdateMirror = val;
     notifyListeners();
   }
 

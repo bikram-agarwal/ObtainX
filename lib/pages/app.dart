@@ -117,6 +117,7 @@ String versionDecisionDetailKey(VersionDecision decision) {
   return switch (decision.reason) {
     'differentVariants' => 'version_variant_differs_detail',
     'sourceCommitAncestry' => 'version_commit_ancestry_detail',
+    'rebuiltAsset' => 'version_rebuilt_asset_detail',
     _ => 'versionOrderUnclearSubtitle',
   };
 }
@@ -682,6 +683,7 @@ int appPageSettingsRebuildToken(SettingsProvider settings) {
     // Whether the Downgrade action can run.
     settings.installerMode,
     settings.enableDowngradeModules,
+    settings.treatNewAssetSameVersionAsUpdate,
     Object.hashAll(
       settings.categories.entries.map((e) => '${e.key}=${e.value}'),
     ),
@@ -3870,9 +3872,16 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
           final App copy = app.app.deepCopy();
           if (isSkipActiveForCurrentLatest(copy)) {
             copy.additionalSettings.remove('skippedLatestVersion');
+            copy.additionalSettings.remove(skippedLatestAssetKey);
           } else {
             copy.additionalSettings['skippedLatestVersion'] =
                 copy.latestVersion;
+            final String? assetIdentity = selectedPreferredAssetIdentity(copy);
+            if (assetIdentity != null) {
+              copy.additionalSettings[skippedLatestAssetKey] = assetIdentity;
+            } else {
+              copy.additionalSettings.remove(skippedLatestAssetKey);
+            }
           }
           await appsProvider.saveApps([copy], updateInstalledInfo: false);
           if (mounted) {
@@ -4513,7 +4522,9 @@ class _AppPageState extends State<AppPage> with WidgetsBindingObserver {
                           (versionVerdict ==
                                   AppVersionDisplayVerdict.uncertain ||
                               versionDecisionForApp(app.app).reason ==
-                                  'sourceCommitAncestry'))
+                                  'sourceCommitAncestry' ||
+                              versionDecisionForApp(app.app).reason ==
+                                  'rebuiltAsset'))
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(

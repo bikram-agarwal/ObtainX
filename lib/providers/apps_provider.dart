@@ -1559,6 +1559,7 @@ class AppsProvider with ChangeNotifier {
   Stream<FGBGType>? foregroundStream;
   StreamSubscription<FGBGType>? foregroundSubscription;
   late final SettingsProvider settingsProvider;
+  bool _lastTreatNewAssetSameVersionAsUpdate = false;
   Directory? _apkDir;
   Directory? _iconsCacheDir;
   Directory? _userAppIconsDir;
@@ -1822,6 +1823,9 @@ class AppsProvider with ChangeNotifier {
   }) {
     _isBg = isBg;
     this.settingsProvider = settingsProvider ?? SettingsProvider();
+    _lastTreatNewAssetSameVersionAsUpdate =
+        this.settingsProvider.treatNewAssetSameVersionAsUpdate;
+    this.settingsProvider.addListener(_onSettingsProviderChanged);
     logs = logsProvider ?? LogsProvider();
     // Subscribe to changes in the app foreground status
     foregroundStream = FGBGEvents.instance.stream.asBroadcastStream();
@@ -1870,6 +1874,8 @@ class AppsProvider with ChangeNotifier {
     }
     () async {
       await this.settingsProvider.initializeSettings();
+      _lastTreatNewAssetSameVersionAsUpdate =
+          this.settingsProvider.treatNewAssetSameVersionAsUpdate;
       Directory? cacheRoot;
       try {
         cacheRoot = selectPrimaryExternalCache(
@@ -1935,8 +1941,19 @@ class AppsProvider with ChangeNotifier {
     if (!_initialLoadDone.isCompleted) _initialLoadDone.complete();
   }
 
+  void _onSettingsProviderChanged() {
+    if (_disposed) return;
+    final bool currentFlag = settingsProvider.treatNewAssetSameVersionAsUpdate;
+    if (currentFlag != _lastTreatNewAssetSameVersionAsUpdate) {
+      _lastTreatNewAssetSameVersionAsUpdate = currentFlag;
+      markAppsChanged();
+      notify();
+    }
+  }
+
   @override
   void dispose() {
+    settingsProvider.removeListener(_onSettingsProviderChanged);
     // Unhook the static notification callbacks only while they still point at
     // this instance, and stop its in-flight downloads (upstream 8c33f251).
     if (NotificationsProvider.onDownloadCancelRequested == cancelDownload) {

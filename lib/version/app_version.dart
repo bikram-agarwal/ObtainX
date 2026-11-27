@@ -7,6 +7,7 @@ import 'package:obtainium/app_sources/github.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
+import 'package:obtainium/utils/url_utils.dart';
 
 const observedVersionNameKey = 'observedVersionName';
 const observedVersionCodeKey = 'observedVersionCode';
@@ -14,8 +15,10 @@ const observedPackageIdKey = 'observedPackageId';
 const confirmedInstallReleaseKey = 'confirmedInstallRelease';
 const pendingInstallReleaseKey = 'pendingInstallRelease';
 const sourceVersionCodesKey = 'sourceVersionCodes';
+const sourceAssetMetadataKey = 'sourceAssetMetadata';
 const sourceBuildComparisonKey = 'sourceBuildComparison';
 const acknowledgedSourceReleaseKey = 'acknowledgedSourceRelease';
+const skippedLatestAssetKey = 'skippedLatestAsset';
 const trackedDeviceStateVersionKey = 'trackedDeviceStateVersion';
 
 /// Set while the source's last answer had no release or APK matching the app's
@@ -235,6 +238,7 @@ App appWithNoMatchingRelease(App app, DateTime checkedAt) {
     latestMalwareScanReportUrl: null,
     additionalSettings: Map<String, dynamic>.from(app.additionalSettings)
       ..remove(sourceVersionCodesKey)
+      ..remove(sourceAssetMetadataKey)
       ..remove(sourceBuildComparisonKey)
       ..[noMatchingReleaseKey] = true,
   );
@@ -293,6 +297,8 @@ App acknowledgeSourceRelease(App app) {
   final asset = app.apkUrls.isEmpty
       ? null
       : app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  final String? digest = selectedSourceAssetDigest(app);
+  final String? uploadedAt = selectedSourceAssetUploadedAt(app);
   return app.copyWith(
     installedVersion:
         app.usesStandardVersionDetection && app.installedVersion != null
@@ -305,8 +311,11 @@ App acknowledgeSourceRelease(App app) {
         'version': app.latestVersion,
         'assetName': asset?.key,
         'assetUrl': asset?.value,
+        'assetDigest': ?digest,
+        'assetUploadedAt': ?uploadedAt,
       }
-      ..remove('skippedLatestVersion'),
+      ..remove('skippedLatestVersion')
+      ..remove(skippedLatestAssetKey),
   );
 }
 
@@ -365,6 +374,8 @@ class InstallReleaseSnapshot {
   final String version;
   final String assetName;
   final String assetUrl;
+  final String? assetDigest;
+  final String? assetUploadedAt;
   final String? versionName;
   final int? versionCode;
   final String versionSettings;
@@ -376,6 +387,8 @@ class InstallReleaseSnapshot {
     required this.version,
     required this.assetName,
     required this.assetUrl,
+    this.assetDigest,
+    this.assetUploadedAt,
     this.versionName,
     this.versionCode,
     required this.versionSettings,
@@ -393,6 +406,8 @@ class InstallReleaseSnapshot {
       version: app.latestVersion,
       assetName: asset?.key ?? '',
       assetUrl: asset?.value ?? '',
+      assetDigest: selectedSourceAssetDigest(app),
+      assetUploadedAt: selectedSourceAssetUploadedAt(app),
       versionSettings: _versionSettingsIdentity(app),
     );
   }
@@ -405,6 +420,8 @@ class InstallReleaseSnapshot {
       version: version,
       assetName: assetName,
       assetUrl: assetUrl,
+      assetDigest: assetDigest,
+      assetUploadedAt: assetUploadedAt,
       versionName: info.versionName,
       versionCode: info.versionCode,
       versionSettings: versionSettings,
@@ -441,6 +458,8 @@ class InstallReleaseSnapshot {
       'version': version,
       'assetName': assetName,
       'assetUrl': assetUrl,
+      if (assetDigest != null) 'assetDigest': assetDigest,
+      if (assetUploadedAt != null) 'assetUploadedAt': assetUploadedAt,
       'versionName': versionName,
       'versionCode': versionCode,
       'versionSettings': versionSettings,
@@ -457,6 +476,9 @@ class InstallReleaseSnapshot {
         value['versionSettings'] is! String ||
         (value['overrideSource'] != null &&
             value['overrideSource'] is! String) ||
+        (value['assetDigest'] != null && value['assetDigest'] is! String) ||
+        (value['assetUploadedAt'] != null &&
+            value['assetUploadedAt'] is! String) ||
         (value['versionName'] != null && value['versionName'] is! String)) {
       return null;
     }
@@ -467,6 +489,8 @@ class InstallReleaseSnapshot {
       version: value['version'],
       assetName: value['assetName'],
       assetUrl: value['assetUrl'],
+      assetDigest: value['assetDigest'] as String?,
+      assetUploadedAt: value['assetUploadedAt'] as String?,
       versionName: value['versionName'] as String?,
       versionCode: int.tryParse(value['versionCode']?.toString() ?? ''),
       versionSettings: value['versionSettings'],
@@ -486,10 +510,179 @@ String downloadReleaseCacheKey(InstallReleaseSnapshot release) {
             release.assetName,
             release.assetUrl,
             release.versionSettings,
+            if (release.assetDigest != null) release.assetDigest,
+            if (release.assetUploadedAt != null) release.assetUploadedAt,
           ]),
         ),
       )
       .toString();
+}
+
+Map<dynamic, dynamic>? _validatedSourceAssetMetadata(
+  App app,
+  MapEntry<String, String> asset,
+) {
+  final Object? metadata = app.additionalSettings[sourceAssetMetadataKey];
+  if (metadata is! Map ||
+      metadata['sourceUrl'] != app.url ||
+      metadata['overrideSource'] != app.overrideSource ||
+      metadata['version'] != app.latestVersion ||
+      metadata['assetUrls'] is! Map ||
+      (metadata['assetUrls'] as Map)[asset.key] != asset.value) {
+    return null;
+  }
+  return metadata;
+}
+
+String? selectedSourceAssetDigest(App app) {
+  if (app.apkUrls.isEmpty) return null;
+  final MapEntry<String, String> asset =
+      app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  final Map<dynamic, dynamic>? metadata = _validatedSourceAssetMetadata(
+    app,
+    asset,
+  );
+  final Object? digests = metadata?['digests'];
+  if (digests is! Map) return null;
+  final String? digest = digests[asset.key]?.toString().trim();
+  return digest != null && digest.isNotEmpty ? digest : null;
+}
+
+String? selectedSourceAssetUploadedAt(App app) {
+  if (app.apkUrls.isEmpty) return null;
+  final MapEntry<String, String> asset =
+      app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  final Map<dynamic, dynamic>? metadata = _validatedSourceAssetMetadata(
+    app,
+    asset,
+  );
+  final Object? uploads = metadata?['uploadedAt'];
+  if (uploads is! Map) return null;
+  final String? uploadedAt = uploads[asset.key]?.toString().trim();
+  return uploadedAt != null && uploadedAt.isNotEmpty ? uploadedAt : null;
+}
+
+/// Canonical fingerprint of [app]'s currently selected release asset, used to
+/// scope "Skip this version" to the skipped asset when rebuilt assets count as
+/// updates.
+String? selectedPreferredAssetIdentity(App app) {
+  if (app.apkUrls.isEmpty) return null;
+  final MapEntry<String, String> asset =
+      app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  final String? digest = selectedSourceAssetDigest(app);
+  if (digest != null) {
+    return 'digest:$digest';
+  }
+  final String normalizedUrl = normalizeAssetUrlForComparison(asset.value);
+  final String uploadedAt = selectedSourceAssetUploadedAt(app) ?? '';
+  return 'asset:${asset.key}\n$normalizedUrl\n$uploadedAt';
+}
+
+/// Whether [previousApp] and [nextApp] point at the same preferred APK asset.
+bool samePreferredAssetAs(App previousApp, App nextApp) {
+  if (previousApp.apkUrls.isEmpty || nextApp.apkUrls.isEmpty) {
+    return previousApp.apkUrls.isEmpty && nextApp.apkUrls.isEmpty;
+  }
+  final MapEntry<String, String> previousAsset =
+      previousApp.apkUrls[previousApp.preferredApkIndex.clamp(
+        0,
+        previousApp.apkUrls.length - 1,
+      )];
+  final MapEntry<String, String> nextAsset = nextApp
+      .apkUrls[nextApp.preferredApkIndex.clamp(0, nextApp.apkUrls.length - 1)];
+  final String? previousDigest = selectedSourceAssetDigest(previousApp);
+  final String? nextDigest = selectedSourceAssetDigest(nextApp);
+  if (previousDigest != null && nextDigest != null) {
+    return previousDigest == nextDigest;
+  }
+  if (previousAsset.key != nextAsset.key ||
+      normalizeAssetUrlForComparison(previousAsset.value) !=
+          normalizeAssetUrlForComparison(nextAsset.value)) {
+    return false;
+  }
+  final String? previousUploadedAt = selectedSourceAssetUploadedAt(previousApp);
+  final String? nextUploadedAt = selectedSourceAssetUploadedAt(nextApp);
+  if (previousUploadedAt != null && nextUploadedAt != null) {
+    return previousUploadedAt == nextUploadedAt;
+  }
+  return true;
+}
+
+bool _selectedAssetDiffersFromBaseline(
+  App app, {
+  required String? baselineAssetName,
+  required String? baselineAssetUrl,
+  required String? baselineDigest,
+  required String? baselineUploadedAt,
+}) {
+  if (app.apkUrls.isEmpty ||
+      baselineAssetName == null ||
+      baselineAssetUrl == null ||
+      baselineAssetUrl.isEmpty) {
+    return false;
+  }
+  final MapEntry<String, String> liveAsset =
+      app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
+  if (liveAsset.value.isEmpty) return false;
+  final String? liveDigest = selectedSourceAssetDigest(app);
+  if (baselineDigest != null &&
+      baselineDigest.isNotEmpty &&
+      liveDigest != null &&
+      liveDigest.isNotEmpty) {
+    return baselineDigest != liveDigest;
+  }
+  if (liveAsset.key != baselineAssetName ||
+      normalizeAssetUrlForComparison(liveAsset.value) !=
+          normalizeAssetUrlForComparison(baselineAssetUrl)) {
+    return true;
+  }
+  final String? liveUploadedAt = selectedSourceAssetUploadedAt(app);
+  if (baselineUploadedAt != null &&
+      baselineUploadedAt.isNotEmpty &&
+      liveUploadedAt != null &&
+      liveUploadedAt.isNotEmpty) {
+    return baselineUploadedAt != liveUploadedAt;
+  }
+  return false;
+}
+
+bool _hasChangedAssetFromInstalledBaseline(App app) {
+  final String? installed = app.installedVersion;
+  if (installed == null || app.apkUrls.isEmpty) return false;
+  final bool observationMatches =
+      app.additionalSettings[observedPackageIdKey] == app.id &&
+      installed ==
+          (app.usesVersionCodeAsOsVersion
+              ? app.additionalSettings[observedVersionCodeKey]?.toString()
+              : app.additionalSettings[observedVersionNameKey]);
+  final InstallReleaseSnapshot? receipt = InstallReleaseSnapshot.fromJson(
+    app.additionalSettings[confirmedInstallReleaseKey],
+  );
+  final bool receiptMatchesInstalled =
+      receipt != null &&
+      receipt.matchesObservation(app) &&
+      (observationMatches ||
+          (!app.usesStandardVersionDetection && installed == receipt.version));
+  if (receiptMatchesInstalled) {
+    return _selectedAssetDiffersFromBaseline(
+      app,
+      baselineAssetName: receipt.assetName,
+      baselineAssetUrl: receipt.assetUrl,
+      baselineDigest: receipt.assetDigest,
+      baselineUploadedAt: receipt.assetUploadedAt,
+    );
+  }
+  final Map<dynamic, dynamic>? acknowledgement = _sourceAcknowledgement(app);
+  if (acknowledgement != null) {
+    return _selectedAssetDiffersFromBaseline(
+      app,
+      baselineAssetName: acknowledgement['assetName'] as String?,
+      baselineAssetUrl: acknowledgement['assetUrl'] as String?,
+      baselineDigest: acknowledgement['assetDigest'] as String?,
+      baselineUploadedAt: acknowledgement['assetUploadedAt'] as String?,
+    );
+  }
+  return false;
 }
 
 int? selectedSourceVersionCode(App app) {
@@ -555,6 +748,17 @@ App normalizeSelectedSourceVersion(App app) {
 /// One decision for labels, filters, skips, notifications, and automatic updates.
 /// Publication timestamps are intentionally absent: uploading is not installing.
 VersionDecision versionDecisionForApp(App app) {
+  final VersionDecision baseDecision = _baseVersionDecisionForApp(app);
+  if (baseDecision.relation == VersionRelation.same &&
+      effectiveTreatNewAssetSameVersionAsUpdate(app.additionalSettings) &&
+      !_selectedAssetChangesFlavor(app) &&
+      _hasChangedAssetFromInstalledBaseline(app)) {
+    return const VersionDecision(VersionRelation.older, 'rebuiltAsset');
+  }
+  return baseDecision;
+}
+
+VersionDecision _baseVersionDecisionForApp(App app) {
   final installed = app.installedVersion;
   if (installed != null && appHasNoMatchingRelease(app)) {
     // Nothing on the source matches, so there is nothing to update to: the
@@ -610,7 +814,15 @@ VersionDecision versionDecisionForApp(App app) {
       final asset = app.apkUrls.isEmpty
           ? null
           : app.apkUrls[app.preferredApkIndex.clamp(0, app.apkUrls.length - 1)];
-      if (asset?.key == receipt.assetName && asset?.value == receipt.assetUrl) {
+      if (asset?.key == receipt.assetName &&
+          asset?.value == receipt.assetUrl &&
+          !_selectedAssetDiffersFromBaseline(
+            app,
+            baselineAssetName: receipt.assetName,
+            baselineAssetUrl: receipt.assetUrl,
+            baselineDigest: receipt.assetDigest,
+            baselineUploadedAt: receipt.assetUploadedAt,
+          )) {
         return const VersionDecision(
           VersionRelation.same,
           'confirmedInstalledRelease',
@@ -626,6 +838,13 @@ VersionDecision versionDecisionForApp(App app) {
       acknowledgement['version'] == app.latestVersion &&
       acknowledgement['assetName'] == asset?.key &&
       acknowledgement['assetUrl'] == asset?.value &&
+      !_selectedAssetDiffersFromBaseline(
+        app,
+        baselineAssetName: acknowledgement['assetName'] as String?,
+        baselineAssetUrl: acknowledgement['assetUrl'] as String?,
+        baselineDigest: acknowledgement['assetDigest'] as String?,
+        baselineUploadedAt: acknowledgement['assetUploadedAt'] as String?,
+      ) &&
       direct.relation != VersionRelation.newer &&
       direct.relation != VersionRelation.same) {
     return const VersionDecision(VersionRelation.same, 'sourceAcknowledged');

@@ -15,6 +15,7 @@ import 'package:obtainium/providers/settings_provider.dart';
 import 'package:obtainium/providers/source_provider.dart';
 import 'package:obtainium/utils/min_update_age.dart';
 import 'package:obtainium/utils/update_health.dart';
+import 'package:obtainium/utils/url_utils.dart';
 import 'package:obtainium/version/app_version.dart';
 import 'package:obtainium/widgets/app_toast.dart';
 import 'package:provider/provider.dart';
@@ -1619,16 +1620,31 @@ class GitHub extends AppSource {
     // dropping it in the sync is why GitHub (and Codeberg, which delegates
     // here) apps stopped showing a size.
     int? apkSizeBytes;
+    final Map<String, String> assetDigestsByName = <String, String>{};
+    final Map<String, String> assetUploadedAtByName = <String, String>{};
     if (apkUrls.isNotEmpty) {
       final sizeAssets =
           (targetRelease['filteredAssets'] as List<dynamic>?) ?? [];
       for (final asset in sizeAssets.whereType<Map<String, dynamic>>()) {
         final assetName =
             (asset['final_url'] as MapEntry<String, String>?)?.key;
+        if (assetName == null || assetName.isEmpty) continue;
+        final Object? rawDigest = asset['digest'];
+        if (rawDigest is String && rawDigest.trim().isNotEmpty) {
+          assetDigestsByName[assetName] = rawDigest.trim();
+        }
+        final Object? rawTimestamp = asset['updated_at'] ?? asset['created_at'];
+        if (rawTimestamp is String && rawTimestamp.trim().isNotEmpty) {
+          final DateTime? parsedTimestamp = DateTime.tryParse(
+            rawTimestamp.trim(),
+          );
+          assetUploadedAtByName[assetName] = parsedTimestamp != null
+              ? parsedTimestamp.toUtc().toIso8601String()
+              : rawTimestamp.trim();
+        }
         if (assetName == apkUrls.last.key) {
           final rawSize = asset['size'];
           if (rawSize is num) apkSizeBytes = rawSize.toInt();
-          break;
         }
       }
     }
@@ -1670,8 +1686,36 @@ class GitHub extends AppSource {
       // stable. Only a cached 'error' is re-checked, since that is a
       // transient lookup failure, not a real verdict.
       final App? prevApp = previouslyCheckedApp;
+      final MapEntry<String, String>? prevPreferredEntry =
+          prevApp == null || prevApp.apkUrls.isEmpty
+          ? null
+          : prevApp.apkUrls[prevApp.preferredApkIndex.clamp(
+              0,
+              prevApp.apkUrls.length - 1,
+            )];
+      final MapEntry<String, String>? preferredUrlEntry =
+          preferredAsset?['final_url'] as MapEntry<String, String>?;
+      final Object? prevAssetMeta =
+          prevApp?.additionalSettings['sourceAssetMetadata'];
+      final Object? prevDigestsMap = prevAssetMeta is Map
+          ? prevAssetMeta['digests']
+          : null;
+      final String? prevPreferredDigest =
+          prevDigestsMap is Map && prevPreferredEntry != null
+          ? prevDigestsMap[prevPreferredEntry.key]?.toString()
+          : null;
+      final bool sameAssetForAttestation =
+          prevPreferredEntry != null &&
+          preferredUrlEntry != null &&
+          prevPreferredEntry.key == preferredUrlEntry.key &&
+          normalizeAssetUrlForComparison(prevPreferredEntry.value) ==
+              normalizeAssetUrlForComparison(preferredUrlEntry.value) &&
+          (prevPreferredDigest == null ||
+              preferredAssetDigest == null ||
+              prevPreferredDigest == preferredAssetDigest);
       final bool canReuseCachedAttestation =
           prevApp != null &&
+          sameAssetForAttestation &&
           prevApp.rawLatestVersionFromSource != null &&
           prevApp.rawLatestVersionFromSource == version &&
           prevApp.latestAttestationStatus != null &&
@@ -1717,6 +1761,8 @@ class GitHub extends AppSource {
       version,
       apkUrls,
       getAppNames(standardUrl),
+      assetDigestsByName: assetDigestsByName,
+      assetUploadedAtByName: assetUploadedAtByName,
       releaseDate: releaseDate,
       changeLog: changeLog.isEmpty ? null : changeLog,
       allAssetUrls:

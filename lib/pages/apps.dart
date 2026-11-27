@@ -712,6 +712,7 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
     s.alwaysUsePhoneLayout,
     s.appFolders.length,
     s.globalApkFilterRegEx,
+    s.treatNewAssetSameVersionAsUpdate,
     // The rows' update-health marker and the main page's Update health button
     // (D8) read these.
     updateHealthSettingsToken(s),

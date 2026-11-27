@@ -1018,5 +1018,7 @@
     "shortcutCheckUpdatesShort": "Check updates",
     "shortcutCheckUpdatesLong": "Check all for updates",
     "shortcutAddAppLong": "Add a new app",
-    "shortcutUpdatesLong": "Updates available"
+    "shortcutUpdatesLong": "Updates available",
+    "treatNewAssetSameVersionAsUpdate": "Treat a new asset with the same version as an update",
+    "version_rebuilt_asset_detail": "A newer release asset is available for this version"
 }

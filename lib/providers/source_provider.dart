@@ -614,6 +614,31 @@ class SourceProvider {
         },
       };
     }
+    additionalSettings.remove('sourceAssetMetadata');
+    if (apk.apkUrls.isNotEmpty &&
+        (apk.assetDigestsByName.isNotEmpty ||
+            apk.assetUploadedAtByName.isNotEmpty)) {
+      additionalSettings['sourceAssetMetadata'] = {
+        'sourceUrl': standardUrl,
+        'overrideSource': sourceIsOverriden
+            ? source.sourceIdentifier
+            : currentApp?.overrideSource,
+        'version': apk.version,
+        'assetUrls': {for (final asset in apk.apkUrls) asset.key: asset.value},
+        if (apk.assetDigestsByName.isNotEmpty)
+          'digests': {
+            for (final asset in apk.apkUrls)
+              if (apk.assetDigestsByName.containsKey(asset.key))
+                asset.key: apk.assetDigestsByName[asset.key],
+          },
+        if (apk.assetUploadedAtByName.isNotEmpty)
+          'uploadedAt': {
+            for (final asset in apk.apkUrls)
+              if (apk.assetUploadedAtByName.containsKey(asset.key))
+                asset.key: apk.assetUploadedAtByName[asset.key],
+          },
+      };
+    }
     // Replace the stored name with the source's readable name when the stored
     // name is missing, is exactly the app id, or merely looks like a package id
     // (e.g. 'org.example.app') while the source offers a real display name.
@@ -628,14 +653,62 @@ class SourceProvider {
       name = sourceName.isNotEmpty ? sourceName : name;
     }
     // Reuse the previous check's verification/size/icon when the resolved
-    // version is unchanged, so a skipped secondary round-trip doesn't clear them.
+    // version and preferred asset are unchanged, so a skipped secondary
+    // round-trip doesn't clear them — while a rebuilt asset under the same
+    // version refreshes its size and verification status.
     final bool sameVersionAsPrevious =
         currentApp != null && currentApp.latestVersion == apk.version;
+    final MapEntry<String, String>? previousPreferredAsset =
+        currentApp == null || currentApp.apkUrls.isEmpty
+        ? null
+        : currentApp.apkUrls[currentApp.preferredApkIndex.clamp(
+            0,
+            currentApp.apkUrls.length - 1,
+          )];
+    final MapEntry<String, String>? currentPreferredAsset = apk.apkUrls.isEmpty
+        ? null
+        : apk.apkUrls[preferredApkIndex];
+    final Object? previousAssetMeta =
+        currentApp?.additionalSettings['sourceAssetMetadata'];
+    final Object? previousDigests = previousAssetMeta is Map
+        ? previousAssetMeta['digests']
+        : null;
+    final Object? previousUploads = previousAssetMeta is Map
+        ? previousAssetMeta['uploadedAt']
+        : null;
+    final String? previousDigest =
+        previousDigests is Map && previousPreferredAsset != null
+        ? previousDigests[previousPreferredAsset.key]?.toString()
+        : null;
+    final String? currentDigest = currentPreferredAsset == null
+        ? null
+        : apk.assetDigestsByName[currentPreferredAsset.key];
+    final String? previousUploadedAt =
+        previousUploads is Map && previousPreferredAsset != null
+        ? previousUploads[previousPreferredAsset.key]?.toString()
+        : null;
+    final String? currentUploadedAt = currentPreferredAsset == null
+        ? null
+        : apk.assetUploadedAtByName[currentPreferredAsset.key];
+    final bool samePreferredAssetAsPrevious =
+        previousPreferredAsset != null &&
+        currentPreferredAsset != null &&
+        previousPreferredAsset.key == currentPreferredAsset.key &&
+        normalizeAssetUrlForComparison(previousPreferredAsset.value) ==
+            normalizeAssetUrlForComparison(currentPreferredAsset.value) &&
+        (previousDigest == null ||
+            currentDigest == null ||
+            previousDigest == currentDigest) &&
+        (previousUploadedAt == null ||
+            currentUploadedAt == null ||
+            previousUploadedAt == currentUploadedAt);
+    final bool sameVersionAndAssetAsPrevious =
+        sameVersionAsPrevious && samePreferredAssetAsPrevious;
     final String? resolvedReproducibleStatus =
         apk.reproducibleStatus ??
         (apk.isReproducible != null
             ? reproducibleBuildStatusFromBool(apk.isReproducible)
-            : sameVersionAsPrevious
+            : sameVersionAndAssetAsPrevious
             ? currentApp.latestReproducibleStatus
             : null);
     final App finalApp = App(
@@ -673,7 +746,7 @@ class SourceProvider {
       iconUrl: apk.iconUrl ?? currentApp?.iconUrl,
       apkSizeBytes:
           apk.apkSizeBytes ??
-          (sameVersionAsPrevious ? currentApp.apkSizeBytes : null),
+          (sameVersionAndAssetAsPrevious ? currentApp.apkSizeBytes : null),
       rawLatestVersionFromSource: rawLatestVersionFromSource,
       rawApkNamesFromSource: rawApkNamesFromSource,
       rawReleaseTitlesFromSource: rawReleaseTitlesFromSource,
