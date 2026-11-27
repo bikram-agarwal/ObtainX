@@ -302,6 +302,8 @@ class AddAppPageState extends State<AddAppPage> {
   final GlobalKey _urlFieldKey = GlobalKey();
   late final TextEditingController _urlFieldController;
   late final FocusNode _urlFieldFocusNode;
+  late final TextEditingController _notesController;
+  late final FocusNode _notesFocusNode;
   _AddAppLauncherDestination _selectedLauncherDestination =
       _AddAppLauncherDestination.addByUrl;
   String? _launcherDetailUrl;
@@ -517,6 +519,8 @@ class AddAppPageState extends State<AddAppPage> {
     _mode = widget._initialMode;
     _urlFieldController = TextEditingController();
     _urlFieldFocusNode = FocusNode();
+    _notesController = TextEditingController();
+    _notesFocusNode = FocusNode();
     _searchSomeSourcesController = TextEditingController();
     _searchResultFilterController = TextEditingController();
     _searchSomeSourcesFocusNode = FocusNode();
@@ -533,6 +537,8 @@ class AddAppPageState extends State<AddAppPage> {
     _customAppIdDebounce?.cancel();
     _urlFieldController.dispose();
     _urlFieldFocusNode.dispose();
+    _notesController.dispose();
+    _notesFocusNode.dispose();
     _searchSomeSourcesController.dispose();
     _searchResultFilterController.dispose();
     _searchSomeSourcesFocusNode.dispose();
@@ -763,6 +769,7 @@ class AddAppPageState extends State<AddAppPage> {
     _formCarriedSettings = {};
     pickedCategories = [];
     _urlFieldController.clear();
+    _notesController.clear();
   }
 
   void _resetAllInputStates() {
@@ -1788,8 +1795,19 @@ class AddAppPageState extends State<AddAppPage> {
           if (sameStoreListing != null) {
             throw appAlreadyAddedError(sameStoreListing);
           }
+          final String notesText = _notesController.text.trim();
+          final Map<String, dynamic> finalAdditionalSettings =
+              Map<String, dynamic>.from(app.additionalSettings);
+          if (notesText.isEmpty) {
+            finalAdditionalSettings.remove('about');
+          } else {
+            finalAdditionalSettings['about'] = notesText;
+          }
           app = await appsProvider.addNewListing(
-            app.copyWith(categories: pickedCategories),
+            app.copyWith(
+              categories: pickedCategories,
+              additionalSettings: finalAdditionalSettings,
+            ),
           );
           appWasAdded = true;
         }
@@ -2246,6 +2264,22 @@ class AddAppPageState extends State<AddAppPage> {
     );
 
     Widget getAdditionalOptsCol() {
+      final Widget notesField = TextField(
+        controller: _notesController,
+        focusNode: _notesFocusNode,
+        scrollPadding: const EdgeInsets.only(bottom: 160),
+        decoration: appPageOutlinedInputDecoration(
+          context,
+          labelText: null,
+          hintText: tr('notes'),
+          isDense: true,
+        ),
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        minLines: 3,
+        maxLines: 8,
+        textCapitalization: TextCapitalization.sentences,
+      );
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2314,6 +2348,31 @@ class AddAppPageState extends State<AddAppPage> {
                       pickedCategories = categories;
                     },
                   ),
+                ],
+              ),
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.only(top: 8, bottom: 8),
+            decoration: appPageSectionCardDecoration(context),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 10),
+                    child: appPageCardSectionHeaderLabel(context, tr('notes')),
+                  ),
+                  if (settingsProvider.isTV)
+                    TvTextFieldFocus(
+                      textFocusNode: _notesFocusNode,
+                      borderRadius: 12,
+                      child: notesField,
+                    )
+                  else
+                    notesField,
                 ],
               ),
             ),

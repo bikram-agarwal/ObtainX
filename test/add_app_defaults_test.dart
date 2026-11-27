@@ -43,12 +43,15 @@ class _Apps extends ChangeNotifier implements AppsProvider {
 
 class _Notifications extends Fake implements NotificationsProvider {}
 
-/// The real provider, except every check fails the way [error] says.
-/// (SourceProvider is a singleton, so this wraps it.)
+/// The real provider, except [getApp] returns [fetchedApp] when given or
+/// throws [error]. (SourceProvider is a singleton, so this wraps it.)
 class _FailingSourceProvider implements SourceProvider {
-  _FailingSourceProvider(this.error);
+  _FailingSourceProvider(this.error) : fetchedApp = null;
 
-  final Object error;
+  _FailingSourceProvider.returning(this.fetchedApp) : error = null;
+
+  final Object? error;
+  final App? fetchedApp;
   final SourceProvider _real = SourceProvider();
   int checks = 0;
 
@@ -95,7 +98,12 @@ class _FailingSourceProvider implements SourceProvider {
     bool inferAppIdIfOptional = false,
   }) async {
     checks++;
-    throw error;
+    if (fetchedApp != null) {
+      return fetchedApp!.copyWith(
+        additionalSettings: Map<String, dynamic>.from(additionalSettings),
+      );
+    }
+    throw error!;
   }
 }
 
@@ -275,4 +283,82 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  testWidgets('Notes card sits below Categories and saves trimmed notes', (
+    tester,
+  ) async {
+    final AddAppPageState page = await openAddApp(tester);
+    page.sourceProvider = _FailingSourceProvider.returning(
+      const App(
+        id: 'com.example.app',
+        url: 'https://github.com/example/app',
+        author: 'example',
+        name: 'Example App',
+        installedVersion: null,
+        latestVersion: '1.0.0',
+        apkUrls: [MapEntry('app.apk', 'https://example.com/app.apk')],
+        preferredApkIndex: 0,
+        additionalSettings: {},
+      ),
+    );
+    await enterUrl(tester, page, 'https://github.com/example/app');
+
+    final Finder categoriesHeader = find.text(tr('categories').toUpperCase());
+    final Finder notesHeader = find.text(tr('notes').toUpperCase());
+    await tester.ensureVisible(notesHeader);
+    expect(
+      tester.getTopLeft(notesHeader).dy,
+      greaterThan(tester.getTopLeft(categoriesHeader).dy),
+    );
+
+    final Finder notesField = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is TextField && widget.decoration?.hintText == tr('notes'),
+    );
+    await tester.ensureVisible(notesField);
+    await tester.enterText(notesField, '  Pinned to arm64 build  ');
+    await tester.pump();
+
+    await save(tester);
+
+    final App addedApp = provider.added.single;
+    expect(addedApp.additionalSettings['about'], 'Pinned to arm64 build');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('blank Notes leaves additionalSettings["about"] unset', (
+    tester,
+  ) async {
+    final AddAppPageState page = await openAddApp(tester);
+    page.sourceProvider = _FailingSourceProvider.returning(
+      const App(
+        id: 'com.example.app',
+        url: 'https://github.com/example/app',
+        author: 'example',
+        name: 'Example App',
+        installedVersion: null,
+        latestVersion: '1.0.0',
+        apkUrls: [MapEntry('app.apk', 'https://example.com/app.apk')],
+        preferredApkIndex: 0,
+        additionalSettings: {},
+      ),
+    );
+    await enterUrl(tester, page, 'https://github.com/example/app');
+
+    final Finder notesField = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is TextField && widget.decoration?.hintText == tr('notes'),
+    );
+    await tester.ensureVisible(notesField);
+    await tester.enterText(notesField, '   ');
+    await tester.pump();
+
+    await save(tester);
+
+    final App addedApp = provider.added.single;
+    expect(addedApp.additionalSettings.containsKey('about'), isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
