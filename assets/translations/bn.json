@@ -191,7 +191,7 @@
     "importX": "{} ইম্পোর্ট করুন",
     "importedX": "{} ইম্পোর্ট করা হয়েছে",
     "importedXOfYApps": "{}/{}টি অ্যাপ ইম্পোর্ট করা হয়েছে।",
-    "includeDrafts": "Include drafts (needs a token with write access to the repository)",
+    "includeDrafts": "Include drafts",
     "includePrereleases": "প্রি-রিলিজ অন্তর্ভুক্ত করুন",
     "includePrereleasesByDefault": "ডিফল্টভাবে প্রি-রিলিজ অন্তর্ভুক্ত করুন",
     "includeTarballs": "টারবল ফাইল (tar.gz ইত্যাদি) অন্তর্ভুক্ত করুন",

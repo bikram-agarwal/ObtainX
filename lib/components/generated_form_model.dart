@@ -31,6 +31,9 @@ class FormFieldDefinition {
   final TextInputType? textInputType;
   final List<String>? autoCompleteOptions;
   final String? helpUrl;
+  final String? invertToggleKey;
+  final bool invertToggleValue;
+  final String? invertToggleTooltip;
   final List<MapEntry<String, String>>? opts;
   final List<String>? disabledOptKeys;
   final bool disabledSwitch;
@@ -50,6 +53,9 @@ class FormFieldDefinition {
     this.textInputType,
     this.autoCompleteOptions,
     this.helpUrl,
+    this.invertToggleKey,
+    this.invertToggleValue = false,
+    this.invertToggleTooltip,
     this.opts,
     this.disabledOptKeys,
     this.disabledSwitch = false,
@@ -74,6 +80,9 @@ class FormFieldDefinition {
           textInputType: textInputType,
           autoCompleteOptions: autoCompleteOptions,
           helpUrl: helpUrl,
+          invertToggleKey: invertToggleKey,
+          invertToggleValue: invertToggleValue,
+          invertToggleTooltip: invertToggleTooltip,
         );
       case GeneratedFormItemType.dropdown:
         return GeneratedFormDropdown(
@@ -143,6 +152,9 @@ abstract class GeneratedFormItem {
         textInputType: self.textInputType,
         autoCompleteOptions: self.autoCompleteOptions,
         helpUrl: self.helpUrl,
+        invertToggleKey: self.invertToggleKey,
+        invertToggleValue: self.invertToggleValue,
+        invertToggleTooltip: self.invertToggleTooltip,
         validators: List.from(additionalValidators),
         belowWidgets: List.from(belowWidgets),
       );
@@ -208,10 +220,13 @@ class GeneratedFormTextField extends GeneratedFormItem {
   final TextInputType? textInputType;
   final List<String>? autoCompleteOptions;
   final String? helpUrl;
-  // Fork-only: inline assist action + custom suffix (RegEx assist, etc.).
+  // Fork-only: inline assist action + custom suffix (RegEx assist, invert, etc.).
   GeneratedFormTextFieldAssist? assistAction;
   IconData assistIcon;
   String? assistTooltip;
+  final String? invertToggleKey;
+  bool invertToggleValue;
+  final String? invertToggleTooltip;
   Widget? suffixIcon;
 
   GeneratedFormTextField(
@@ -230,8 +245,17 @@ class GeneratedFormTextField extends GeneratedFormItem {
     this.assistAction,
     this.assistIcon = Icons.auto_fix_high_outlined,
     this.assistTooltip,
+    this.invertToggleKey,
+    this.invertToggleValue = false,
+    this.invertToggleTooltip,
     this.suffixIcon,
   });
+
+  bool ensureInvertValue(dynamic candidate) {
+    if (candidate is bool) return candidate;
+    if (candidate is String) return candidate.toLowerCase() == 'true';
+    return false;
+  }
 
   @override
   String ensureType(val) {
@@ -256,6 +280,9 @@ class GeneratedFormTextField extends GeneratedFormItem {
       assistAction: assistAction,
       assistIcon: assistIcon,
       assistTooltip: assistTooltip,
+      invertToggleKey: invertToggleKey,
+      invertToggleValue: invertToggleValue,
+      invertToggleTooltip: invertToggleTooltip,
       suffixIcon: suffixIcon,
     );
   }
@@ -549,6 +576,11 @@ Map<String, dynamic> getDefaultValuesFromFormItems(
           }
         }
         entries.add(MapEntry(el.key, subFormValues));
+      } else if (el is GeneratedFormTextField) {
+        entries.add(MapEntry(el.key, el.value ?? ''));
+        if (el.invertToggleKey != null) {
+          entries.add(MapEntry(el.invertToggleKey!, el.invertToggleValue));
+        }
       } else {
         entries.add(MapEntry(el.key, el.value ?? ''));
       }

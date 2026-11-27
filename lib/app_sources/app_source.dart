@@ -474,18 +474,14 @@ abstract class AppSource {
         'apkFilterRegEx',
         label: tr('filterAPKsByRegEx'),
         required: false,
+        invertToggleKey: 'invertAPKFilter',
+        invertToggleTooltip:
+            '${tr('invertRegEx')} (${tr('filterAPKsByRegEx')})',
         additionalValidators: [
           (value) {
             return regExValidator(value);
           },
         ],
-      ),
-    ],
-    [
-      GeneratedFormSwitch(
-        'invertAPKFilter',
-        label: '${tr('invertRegEx')} (${tr('filterAPKsByRegEx')})',
-        value: false,
       ),
     ],
     [

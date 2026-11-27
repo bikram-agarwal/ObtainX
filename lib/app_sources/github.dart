@@ -321,6 +321,7 @@ class GitHub extends AppSource {
       GeneratedFormSwitch(
         'includeDrafts',
         label: tr('includeDrafts'),
+        labelTooltip: tr('includeDraftsTooltip'),
         value: false,
         turnsOffKeys: const ['verifyLatestTag'],
       ),
@@ -338,18 +339,14 @@ class GitHub extends AppSource {
         'filterReleaseTitlesByRegEx',
         label: tr('filterReleaseTitlesByRegEx'),
         required: false,
+        invertToggleKey: 'invertReleaseTitlesFilter',
+        invertToggleTooltip:
+            '${tr('invertRegEx')} (${tr('filterReleaseTitlesByRegEx')})',
         additionalValidators: [
           (value) {
             return regExValidator(value);
           },
         ],
-      ),
-    ],
-    [
-      GeneratedFormSwitch(
-        'invertReleaseTitlesFilter',
-        label: '${tr('invertRegEx')} (${tr('filterReleaseTitlesByRegEx')})',
-        value: false,
       ),
     ],
     [
@@ -357,18 +354,14 @@ class GitHub extends AppSource {
         'filterReleaseNotesByRegEx',
         label: tr('filterReleaseNotesByRegEx'),
         required: false,
+        invertToggleKey: 'invertReleaseNotesFilter',
+        invertToggleTooltip:
+            '${tr('invertRegEx')} (${tr('filterReleaseNotesByRegEx')})',
         additionalValidators: [
           (value) {
             return regExValidator(value);
           },
         ],
-      ),
-    ],
-    [
-      GeneratedFormSwitch(
-        'invertReleaseNotesFilter',
-        label: '${tr('invertRegEx')} (${tr('filterReleaseNotesByRegEx')})',
-        value: false,
       ),
     ],
     [

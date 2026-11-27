@@ -908,7 +908,7 @@
     "globalVersionExtractionRegEx": "Global version trimming regex",
     "ignoreForThisVersion": "Ignoriraj za trenutnu verziju",
     "ignorePermanently": "Trajno ignoriraj",
-    "includeDrafts": "Include drafts (needs a token with write access to the repository)",
+    "includeDrafts": "Include drafts",
     "installUpdateApps": "Instalirajte/ažurirajte aplikacije",
     "installation": "Installation",
     "updateHealth": "Ažuriranje zdravlja aplikacija",

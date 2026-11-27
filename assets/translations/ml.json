@@ -908,7 +908,7 @@
     "globalVersionExtractionRegEx": "Global version trimming regex",
     "ignoreForThisVersion": "Ignore for the current version",
     "ignorePermanently": "Ignore permanently",
-    "includeDrafts": "Include drafts (needs a token with write access to the repository)",
+    "includeDrafts": "Include drafts",
     "installUpdateApps": "ആപ്പുകൾ ഇൻസ്റ്റാൾ ചെയ്യുക/അപ്‌ഡേറ്റ് ചെയ്യുക",
     "installation": "Installation",
     "updateHealth": "Update health",

@@ -643,18 +643,14 @@ class APKMirror extends AppSource {
         'filterReleaseTitlesByRegEx',
         label: tr('filterReleaseTitlesByRegEx'),
         required: false,
+        invertToggleKey: 'invertReleaseTitlesFilter',
+        invertToggleTooltip:
+            '${tr('invertRegEx')} (${tr('filterReleaseTitlesByRegEx')})',
         additionalValidators: [
           (value) {
             return regExValidator(value);
           },
         ],
-      ),
-    ],
-    [
-      GeneratedFormSwitch(
-        'invertReleaseTitlesFilter',
-        label: '${tr('invertRegEx')} (${tr('filterReleaseTitlesByRegEx')})',
-        value: false,
       ),
     ],
   ];

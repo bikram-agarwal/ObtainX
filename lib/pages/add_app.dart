@@ -1904,6 +1904,13 @@ class AddAppPageState extends State<AddAppPage> {
       // [_formCarriedSettings]. A dropdown keeps its default unless the value
       // is one of its options.
       for (final GeneratedFormItem item in items.expand((row) => row)) {
+        if (item is GeneratedFormTextField &&
+            item.invertToggleKey != null &&
+            _formCarriedSettings.containsKey(item.invertToggleKey!)) {
+          item.invertToggleValue = item.ensureInvertValue(
+            _formCarriedSettings[item.invertToggleKey!],
+          );
+        }
         if (!_formCarriedSettings.containsKey(item.key)) continue;
         final dynamic carried = _formCarriedSettings[item.key];
         if (item is GeneratedFormDropdown &&

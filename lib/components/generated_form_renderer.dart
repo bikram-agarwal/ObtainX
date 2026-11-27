@@ -623,14 +623,21 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         formItem.labelTooltip != null && formItem.labelTooltip!.isNotEmpty
         ? HelpHintIcon(
             message: formItem.labelTooltip!,
-            size: 18,
-            padding: EdgeInsets.zero,
+            size: 20,
+            padding: const EdgeInsets.only(right: 6),
           )
         : (formItem.helpUrl != null ? _helpUrlButton(formItem.helpUrl!) : null);
     final TextStyle? dropdownTextStyle = theme.textTheme.bodyLarge?.copyWith(
       color: scheme.onSurface,
     );
     final List<MapEntry<String, String>> opts = _shownOpts(context);
+    final InputDecoration baseDecoration = _generatedFormDropdownDecoration(
+      context: context,
+      labelText: formItem.label,
+      outlined: outlinedInputFields,
+      externalLabels: showExternalFieldLabels,
+      borderRadius: outlinedFieldBorderRadius,
+    );
     final Widget field = appDropdownField<dynamic>(
       context: context,
       value: value,
@@ -641,13 +648,21 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         style: dropdownTextStyle,
       ),
       borderRadius: outlinedFieldBorderRadius,
-      decoration: _generatedFormDropdownDecoration(
-        context: context,
-        labelText: formItem.label,
-        outlined: outlinedInputFields,
-        externalLabels: showExternalFieldLabels,
-        borderRadius: outlinedFieldBorderRadius,
-      ),
+      decoration: helpIcon == null
+          ? baseDecoration
+          : baseDecoration.copyWith(
+              contentPadding: const EdgeInsetsDirectional.fromSTEB(
+                12,
+                10,
+                4,
+                10,
+              ),
+              suffixIcon: helpIcon,
+              suffixIconConstraints: const BoxConstraints(
+                minWidth: 36,
+                minHeight: 36,
+              ),
+            ),
       items: opts.map((MapEntry<String, String> option) {
         final bool enabled =
             formItem.disabledOptKeys?.contains(option.key) != true;
@@ -666,38 +681,15 @@ class _ThemePinnedDropdownFormField extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(left: 2, bottom: 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    formItem.label,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                if (helpIcon != null) ...[const SizedBox(width: 6), helpIcon],
-              ],
+            child: Text(
+              formItem.label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           field,
-        ],
-      );
-    }
-    if (helpIcon != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          field,
-          Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: helpIcon,
-            ),
-          ),
         ],
       );
     }
@@ -968,6 +960,70 @@ class _GeneratedFormState extends State<GeneratedForm> {
     _textFieldControllers.clear();
   }
 
+  Widget? _buildTextFieldTrailingActions({
+    required BuildContext context,
+    required GeneratedFormTextField formItem,
+    required _GeneratedFormState formState,
+  }) {
+    final bool hasPrimaryAction =
+        formItem.assistAction != null || formItem.helpUrl != null;
+    final bool hasInvertToggle = formItem.invertToggleKey != null;
+    if (!hasPrimaryAction && !hasInvertToggle) {
+      return null;
+    }
+    final bool compactIcons = hasPrimaryAction && hasInvertToggle;
+    final List<Widget> actionButtons = <Widget>[
+      if (formItem.assistAction != null)
+        IconButton(
+          visualDensity: compactIcons ? VisualDensity.compact : null,
+          tooltip: formItem.assistTooltip ?? tr('regexAssistTooltip'),
+          icon: Icon(formItem.assistIcon),
+          onPressed: () async {
+            await formItem.assistAction!(
+              context,
+              formState.applyTextFieldPatches,
+              formState.values,
+            );
+          },
+        )
+      else if (formItem.helpUrl != null)
+        _helpUrlButton(formItem.helpUrl!),
+      if (hasInvertToggle)
+        StatefulBuilder(
+          builder: (BuildContext buttonContext, StateSetter setButtonState) {
+            final String invertKey = formItem.invertToggleKey!;
+            final bool isInverted = formState.values[invertKey] == true;
+            return IconButton(
+              key: ValueKey<String>('invert_toggle_${formItem.key}'),
+              visualDensity: compactIcons ? VisualDensity.compact : null,
+              isSelected: isInverted,
+              tooltip: formItem.invertToggleTooltip ?? tr('invertRegEx'),
+              icon: const Icon(Icons.remove_circle_outline),
+              selectedIcon: Icon(
+                Icons.remove_circle,
+                color: Theme.of(buttonContext).colorScheme.primary,
+              ),
+              onPressed: () {
+                hapticSelection();
+                final bool nextValue = !(formState.values[invertKey] == true);
+                setButtonState(() {
+                  formState.values[invertKey] = nextValue;
+                });
+                formState.someValueChanged();
+              },
+            );
+          },
+        ),
+    ];
+    if (actionButtons.length == 1) {
+      return actionButtons.single;
+    }
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: Row(mainAxisSize: MainAxisSize.min, children: actionButtons),
+    );
+  }
+
   void applyTextFieldPatches(Map<String, String> patches) {
     setState(() {
       patches.forEach((String key, String value) {
@@ -1055,6 +1111,9 @@ class _GeneratedFormState extends State<GeneratedForm> {
           );
         } else {
           values[e.key] = e.value;
+          if (e is GeneratedFormTextField && e.invertToggleKey != null) {
+            values[e.invertToggleKey!] = e.invertToggleValue;
+          }
         }
       }
     }
@@ -1115,23 +1174,11 @@ class _GeneratedFormState extends State<GeneratedForm> {
                 decoration: baseDecoration.copyWith(
                   suffixIcon:
                       formItem.suffixIcon ??
-                      (formItem.assistAction != null
-                          ? IconButton(
-                              tooltip:
-                                  formItem.assistTooltip ??
-                                  tr('regexAssistTooltip'),
-                              icon: Icon(formItem.assistIcon),
-                              onPressed: () async {
-                                await formItem.assistAction!(
-                                  context,
-                                  formState.applyTextFieldPatches,
-                                  formState.values,
-                                );
-                              },
-                            )
-                          : (formItem.helpUrl != null
-                                ? _helpUrlButton(formItem.helpUrl!)
-                                : null)),
+                      _buildTextFieldTrailingActions(
+                        context: context,
+                        formItem: formItem,
+                        formState: formState,
+                      ),
                 ),
                 minLines: formItem.max <= 1 ? null : formItem.max,
                 maxLines: formItem.max <= 1 ? 1 : formItem.max,

@@ -274,6 +274,13 @@ class _AdditionalOptionsPageState extends State<AdditionalOptionsPage> {
             element.value = stored;
           }
         }
+        if (element is GeneratedFormTextField &&
+            element.invertToggleKey != null &&
+            appAdditionalSettings[element.invertToggleKey!] != null) {
+          element.invertToggleValue = element.ensureInvertValue(
+            appAdditionalSettings[element.invertToggleKey!],
+          );
+        }
         // Same shape as the build-verification gating below: the switch stays
         // visible but inert when VirusTotal scanning isn't usable, so people can
         // see the option exists (and, via its tooltip, what it needs) instead of

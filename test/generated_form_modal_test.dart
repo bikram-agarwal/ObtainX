@@ -126,4 +126,132 @@ void main() {
     // validators, so an untouched form doesn't open pre-marked with errors.
     expect(find.textContaining('requiredInBrackets'), findsNothing);
   });
+
+  testWidgets(
+    'regex field renders assist and inline invert buttons in order and toggles outline/filled icon',
+    (WidgetTester tester) async {
+      Map<String, dynamic> reportedValues = <String, dynamic>{};
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SettingsProvider>(
+          create: (_) => SettingsProvider(),
+          child: MaterialApp(
+            theme: ThemeData(useMaterial3: true),
+            home: Scaffold(
+              body: GeneratedForm(
+                outlinedInputFields: true,
+                items: <List<GeneratedFormItem>>[
+                  <GeneratedFormItem>[
+                    GeneratedFormTextField(
+                      'filterReleaseTitlesByRegEx',
+                      label: 'Filter release titles by regular expression',
+                      required: false,
+                      assistAction: (_, _, _) async {},
+                      invertToggleKey: 'invertReleaseTitlesFilter',
+                      invertToggleTooltip: 'Invert regular expression',
+                    ),
+                  ],
+                ],
+                onValueChanges: (values, _, _) {
+                  reportedValues = Map<String, dynamic>.from(values);
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(reportedValues['invertReleaseTitlesFilter'], isFalse);
+      final Finder assistIcon = find.byIcon(Icons.auto_fix_high_outlined);
+      final Finder outlineInvertIcon = find.byIcon(Icons.remove_circle_outline);
+      expect(assistIcon, findsOneWidget);
+      expect(outlineInvertIcon, findsOneWidget);
+      expect(find.byIcon(Icons.remove_circle), findsNothing);
+      // Assist sits to the left of the Invert button on the regex row.
+      expect(
+        tester.getTopLeft(outlineInvertIcon).dx,
+        greaterThan(tester.getTopLeft(assistIcon).dx),
+      );
+
+      await tester.tap(
+        find.byKey(
+          const ValueKey<String>('invert_toggle_filterReleaseTitlesByRegEx'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(reportedValues['invertReleaseTitlesFilter'], isTrue);
+      expect(find.byIcon(Icons.remove_circle), findsOneWidget);
+      expect(find.byIcon(Icons.remove_circle_outline), findsNothing);
+
+      await tester.tap(
+        find.byKey(
+          const ValueKey<String>('invert_toggle_filterReleaseTitlesByRegEx'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(reportedValues['invertReleaseTitlesFilter'], isFalse);
+      expect(find.byIcon(Icons.remove_circle_outline), findsOneWidget);
+      expect(find.byIcon(Icons.remove_circle), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'dropdown labelTooltip renders inline to the right of the dropdown arrow and shows tooltip without opening menu',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ChangeNotifierProvider<SettingsProvider>(
+          create: (_) => SettingsProvider(),
+          child: MaterialApp(
+            theme: ThemeData(useMaterial3: true),
+            home: Scaffold(
+              body: GeneratedForm(
+                outlinedInputFields: true,
+                items: <List<GeneratedFormItem>>[
+                  <GeneratedFormItem>[
+                    GeneratedFormDropdown(
+                      'githubBuildVerificationMode',
+                      const <MapEntry<String, String>>[
+                        MapEntry('off', 'Off'),
+                        MapEntry('audit', 'Audit'),
+                      ],
+                      label: 'GitHub build verification',
+                      value: 'off',
+                      labelTooltip: 'Verifies GitHub artifact attestations',
+                    ),
+                  ],
+                ],
+                onValueChanges: (_, _, _) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Finder dropdownArrow = find.byIcon(Icons.arrow_drop_down);
+      final Finder helpIcon = find.byIcon(Icons.help_outline_rounded);
+      final Finder decoratorBox = find.byType(InputDecorator);
+      expect(dropdownArrow, findsOneWidget);
+      expect(helpIcon, findsOneWidget);
+
+      // Help icon sits inside the same InputDecorator row, to the right of the chevron.
+      final Rect decoratorRect = tester.getRect(decoratorBox);
+      final Offset arrowCenter = tester.getCenter(dropdownArrow);
+      final Offset helpCenter = tester.getCenter(helpIcon);
+      expect(decoratorRect.contains(helpCenter), isTrue);
+      expect(helpCenter.dx, greaterThan(arrowCenter.dx));
+      expect((helpCenter.dy - arrowCenter.dy).abs(), lessThan(8));
+
+      // Tapping (?) shows the tooltip without opening the dropdown menu.
+      await tester.tap(helpIcon);
+      await tester.pump();
+      expect(
+        find.text('Verifies GitHub artifact attestations'),
+        findsOneWidget,
+      );
+      expect(find.text('Audit'), findsNothing);
+    },
+  );
 }

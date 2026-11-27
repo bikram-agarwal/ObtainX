@@ -923,7 +923,7 @@
     "globalVersionExtractionRegEx": "グローバルのバージョン文字列トリム用正規表現",
     "ignoreForThisVersion": "現在のバージョンでは無視する",
     "ignorePermanently": "無期限に無視する",
-    "includeDrafts": "Include drafts (needs a token with write access to the repository)",
+    "includeDrafts": "Include drafts",
     "installUpdateApps": "アプリのインストール/アップデート",
     "installation": "インストール",
     "updateHealth": "アップデートの健全性",

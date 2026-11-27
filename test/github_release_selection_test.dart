@@ -11,6 +11,7 @@ import 'package:device_info_plus_platform_interface/device_info_plus_platform_in
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart';
 import 'package:obtainium/app_sources/github.dart';
+import 'package:obtainium/components/generated_form_model.dart';
 import 'package:obtainium/custom_errors.dart';
 import 'package:obtainium/models/app.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
@@ -340,14 +341,36 @@ void main() {
           .toList();
       final keys = items.map((item) => item.key).toList();
       expect(keys.where((key) => key == 'verifyLatestTag'), hasLength(1));
+      expect(keys, contains('includeDrafts'));
       expect(
         keys,
-        containsAll([
-          'includeDrafts',
-          'invertReleaseTitlesFilter',
-          'invertReleaseNotesFilter',
-        ]),
+        isNot(
+          containsAll([
+            'invertReleaseTitlesFilter',
+            'invertReleaseNotesFilter',
+          ]),
+        ),
       );
+      final GeneratedFormSwitch draftsSwitch = items
+          .whereType<GeneratedFormSwitch>()
+          .singleWhere((item) => item.key == 'includeDrafts');
+      expect(draftsSwitch.labelTooltip, isNotNull);
+      expect(draftsSwitch.labelTooltip, isNotEmpty);
+
+      final GeneratedFormTextField titleRegexField = items
+          .whereType<GeneratedFormTextField>()
+          .singleWhere((item) => item.key == 'filterReleaseTitlesByRegEx');
+      final GeneratedFormTextField notesRegexField = items
+          .whereType<GeneratedFormTextField>()
+          .singleWhere((item) => item.key == 'filterReleaseNotesByRegEx');
+      expect(titleRegexField.invertToggleKey, 'invertReleaseTitlesFilter');
+      expect(notesRegexField.invertToggleKey, 'invertReleaseNotesFilter');
+
+      final Map<String, dynamic> defaults = getDefaultValuesFromFormItems(
+        GitHub().additionalSourceAppSpecificSettingFormItems,
+      );
+      expect(defaults['invertReleaseTitlesFilter'], isFalse);
+      expect(defaults['invertReleaseNotesFilter'], isFalse);
     });
   });
 

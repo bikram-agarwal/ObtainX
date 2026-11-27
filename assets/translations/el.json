@@ -191,7 +191,7 @@
     "importX": "Εισαγωγή {}",
     "importedX": "Εισήχθη {}",
     "importedXOfYApps": "Εισήχθησαν {} από {} εφαρμογές.",
-    "includeDrafts": "Include drafts (needs a token with write access to the repository)",
+    "includeDrafts": "Include drafts",
     "includePrereleases": "Συμπερίληψη προεκδόσεων",
     "includePrereleasesByDefault": "Συμπερίληψη προεκδόσεων από προεπιλογή",
     "includeTarballs": "Συμπερίληψη αρχείων tarball (tar.gz κ.λπ.)",
