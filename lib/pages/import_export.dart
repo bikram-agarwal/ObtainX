@@ -469,7 +469,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       if (Platform.isAndroid ||
-                          const bool.fromEnvironment('CAPTURE_SCREENSHOTS')) ...[
+                          const bool.fromEnvironment(
+                            'CAPTURE_SCREENSHOTS',
+                          )) ...[
                         importPageSectionTitle(
                           tr('importExportCardUpdateAssets'),
                           Icons.system_update_rounded,

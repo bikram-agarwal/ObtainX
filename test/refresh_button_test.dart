@@ -15,6 +15,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:obtainium/components/rippling_wavy_progress/linear.dart';
 import 'package:obtainium/models/app.dart';
 import 'package:obtainium/pages/apps.dart';
 import 'package:obtainium/providers/apps_provider.dart';
@@ -318,4 +319,65 @@ void main() {
     expect(find.byTooltip(tr('refresh')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'refresh progress bar starts at 0% while foreground service starts, '
+    'then reaches 100% on completion',
+    (tester) async {
+      final Completer<bool> serviceStart = Completer<bool>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('dev.imranr.obtainium/notifications'),
+            (MethodCall call) {
+              nativeCalls.add(call.method);
+              if (call.method == 'startUpdateCheckForegroundService') {
+                return serviceStart.future;
+              }
+              return Future<Object?>.value(null);
+            },
+          );
+
+      await openApps(tester);
+      await tester.fling(
+        find.byType(CustomScrollView),
+        const Offset(0, 400),
+        1000,
+      );
+      // Advance through ExpressiveRefreshIndicator's pull-settle animation
+      // until it invokes onRefresh (which starts the foreground service).
+      for (
+        int step = 0;
+        step < 20 && !nativeCalls.contains('startUpdateCheckForegroundService');
+        step++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(nativeCalls, ['startUpdateCheckForegroundService']);
+      await tester.pump();
+
+      // Before _checkUpdatesInSession sets refreshProgress = 0.0,
+      // refreshProgressNotifier.value is still null. The bar must start at 0.0,
+      // not flash 1.0 first.
+      expect(provider.refreshProgress, isNull);
+      final LinearRipplingWavyProgressIndicator initialBar = tester.widget(
+        find.byType(LinearRipplingWavyProgressIndicator),
+      );
+      expect(initialBar.value, 0.0);
+
+      serviceStart.complete(false);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Once the check finishes and resets refreshProgress to null during the
+      // 500 ms dismissal hold, the bar holds at 1.0 before unmounting.
+      final LinearRipplingWavyProgressIndicator completingBar = tester.widget(
+        find.byType(LinearRipplingWavyProgressIndicator),
+      );
+      expect(completingBar.value, 1.0);
+
+      await finishRefresh(tester);
+      expect(find.byType(LinearRipplingWavyProgressIndicator), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

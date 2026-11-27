@@ -747,10 +747,73 @@ int _appsPageSettingsRebuildToken(SettingsProvider s, String? viewSettingsId) {
 ///
 /// App metadata changes advance [AppsProvider.appsListRevision] once after the
 /// batched save, while intermediate progress stays isolated here.
-class _RefreshProgressBar extends StatelessWidget {
-  const _RefreshProgressBar({required this.refreshingSince});
+class _RefreshProgressBar extends StatefulWidget {
+  const _RefreshProgressBar({
+    required this.refreshingSince,
+    required this.refreshCheckFinished,
+  });
 
   final DateTime? refreshingSince;
+  final bool refreshCheckFinished;
+
+  @override
+  State<_RefreshProgressBar> createState() => _RefreshProgressBarState();
+}
+
+class _RefreshProgressBarState extends State<_RefreshProgressBar> {
+  ValueNotifier<double?>? _progressNotifier;
+  bool _waitingForPriorCheck = false;
+  bool _hasSeenProgress = false;
+
+  void _resetCycle(double? initialProgress) {
+    if (initialProgress == null) {
+      _waitingForPriorCheck = false;
+      _hasSeenProgress = false;
+    } else if (initialProgress == 0.0) {
+      _waitingForPriorCheck = false;
+      _hasSeenProgress = true;
+    } else {
+      _waitingForPriorCheck = true;
+      _hasSeenProgress = false;
+    }
+  }
+
+  void _syncNotifier(ValueNotifier<double?> notifier) {
+    if (identical(_progressNotifier, notifier)) return;
+    _progressNotifier?.removeListener(_onProgressChanged);
+    _progressNotifier = notifier;
+    _resetCycle(notifier.value);
+    notifier.addListener(_onProgressChanged);
+  }
+
+  void _onProgressChanged() {
+    final double? current = _progressNotifier?.value;
+    if (_waitingForPriorCheck) {
+      if (current == null || current == 0.0) {
+        _waitingForPriorCheck = false;
+        _hasSeenProgress = current != null;
+      }
+    } else if (!_hasSeenProgress && current != null) {
+      _hasSeenProgress = true;
+    }
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _RefreshProgressBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.refreshingSince != oldWidget.refreshingSince) {
+      _resetCycle(_progressNotifier?.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    _progressNotifier?.removeListener(_onProgressChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -758,19 +821,25 @@ class _RefreshProgressBar extends StatelessWidget {
         .select<AppsProvider, (bool, ValueNotifier<double?>)>(
           (p) => (p.loadingApps, p.refreshProgressNotifier),
         );
+    _syncNotifier(progressNotifier);
+    final double? refreshProgress = progressNotifier.value;
+    final double? indicatorValue;
+    if (loadingApps) {
+      indicatorValue = null;
+    } else if (_waitingForPriorCheck) {
+      indicatorValue = 0.0;
+    } else if (refreshProgress != null) {
+      indicatorValue = refreshProgress;
+    } else {
+      indicatorValue = (widget.refreshCheckFinished || _hasSeenProgress)
+          ? 1.0
+          : 0.0;
+    }
     // M3 Expressive linear progress indicator. Wavy active track with a
     // stop-dot at the end (per the M3E spec). The widget draws two
     // separate lanes (active above, track below) with a fixed gap so the
     // active and inactive segments never overlap.
-    return ValueListenableBuilder<double?>(
-      valueListenable: progressNotifier,
-      builder: (context, refreshProgress, _) =>
-          LinearRipplingWavyProgressIndicator(
-            value: loadingApps
-                ? null
-                : (refreshProgress ?? (refreshingSince != null ? 1.0 : 0.0)),
-          ),
-    );
+    return LinearRipplingWavyProgressIndicator(value: indicatorValue);
   }
 }
 
@@ -3074,6 +3143,7 @@ class AppsPageState extends State<AppsPage> {
   );
   Set<String> selectedAppIds = {};
   DateTime? refreshingSince;
+  bool _refreshCheckFinished = false;
 
   VoidCallback? openSelectionActionsSheetHandler;
   VoidCallback? runMassObtainHandler;
@@ -4114,6 +4184,7 @@ class AppsPageState extends State<AppsPage> {
       _refreshStartedByTitleTap = false;
       setState(() {
         refreshingSince = DateTime.now();
+        _refreshCheckFinished = false;
         // Note: [_appListIconWarmFutures] is intentionally NOT cleared here.
         // Clearing it caused every visible row to re-enter [updateAppIcon] on
         // every pull-to-refresh, which on 50+ apps means 50 disk reads of the
@@ -4157,6 +4228,11 @@ class AppsPageState extends State<AppsPage> {
             return <App>[];
           })
           .whenComplete(() {
+            if (mounted) {
+              setState(() {
+                _refreshCheckFinished = true;
+              });
+            }
             // Allow the progress bar to reach 100% before dismissing.
             return Future.delayed(
               LinearRipplingWavyProgressIndicator.defaultDragDuration,
@@ -4166,6 +4242,7 @@ class AppsPageState extends State<AppsPage> {
             if (!mounted) return;
             setState(() {
               refreshingSince = null;
+              _refreshCheckFinished = false;
             });
             // Defer the background store-availability scan so the user gets
             // a few seconds of unimpeded UI right after the refresh
@@ -5224,7 +5301,10 @@ class AppsPageState extends State<AppsPage> {
             // visible half-blurred line through the indicator.
             child: Padding(
               padding: const EdgeInsets.only(top: 12),
-              child: _RefreshProgressBar(refreshingSince: refreshingSince),
+              child: _RefreshProgressBar(
+                refreshingSince: refreshingSince,
+                refreshCheckFinished: _refreshCheckFinished,
+              ),
             ),
           ),
       ];
