@@ -1019,5 +1019,9 @@
     "shortcutCheckUpdatesShort": "检查更新",
     "shortcutCheckUpdatesLong": "检查全部更新",
     "shortcutAddAppLong": "添加新应用",
-    "shortcutUpdatesLong": "有可用更新"
+    "shortcutUpdatesLong": "有可用更新",
+    "treatNewAssetSameVersionAsUpdate": "将版本号相同的新发行文件视为更新",
+    "version_rebuilt_asset_detail": "此版本有更新的发行文件可用",
+    "githubUserNotFound": "找不到 GitHub 用户“{}”",
+    "githubStarListsPatHint": "在设置中添加 GitHub PAT，即可按星标清单筛选：\n• 任意用户：加载其公开的星标清单。\n• 输入你的用户名：还会包含私有列表（若令牌权限允许）。"
 }
