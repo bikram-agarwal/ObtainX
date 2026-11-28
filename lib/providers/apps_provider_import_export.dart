@@ -914,6 +914,7 @@ const Set<String> obtainXOnlySettingKeys = {
   'showDebugOpts',
   'useFGService',
   'hideBatteryOptimizationWarning',
+  SettingsProvider.savedGitHubStarUsernamesKey,
 };
 
 bool isObtainXOnlySettingKey(String key) {

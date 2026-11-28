@@ -2290,6 +2290,68 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  static const int maxSavedGitHubStarUsernames = 5;
+  static const String savedGitHubStarUsernamesKey = 'savedGitHubStarUsernames';
+
+  /// Saved GitHub usernames for quick star imports, capped at
+  /// [maxSavedGitHubStarUsernames] and deduplicated case-insensitively.
+  List<String> get savedGitHubStarUsernames {
+    final List<String>? stored = prefs?.getStringList(
+      savedGitHubStarUsernamesKey,
+    );
+    if (stored == null || stored.isEmpty) {
+      return const <String>[];
+    }
+    final List<String> normalized = <String>[];
+    final Set<String> seenLower = <String>{};
+    for (final String entry in stored) {
+      final String trimmed = entry.trim();
+      if (trimmed.isEmpty) continue;
+      if (seenLower.add(trimmed.toLowerCase())) {
+        normalized.add(trimmed);
+        if (normalized.length >= maxSavedGitHubStarUsernames) {
+          break;
+        }
+      }
+    }
+    return List<String>.unmodifiable(normalized);
+  }
+
+  /// Saves [username] at the front of the list (most recently used first),
+  /// deduplicating case-insensitively and keeping at most
+  /// [maxSavedGitHubStarUsernames] entries.
+  void addSavedGitHubStarUsername(String username) {
+    final String trimmed = username.trim();
+    if (trimmed.isEmpty) return;
+    final String lower = trimmed.toLowerCase();
+    final List<String> updated = <String>[
+      trimmed,
+      ...savedGitHubStarUsernames.where(
+        (String existing) => existing.toLowerCase() != lower,
+      ),
+    ];
+    if (updated.length > maxSavedGitHubStarUsernames) {
+      updated.removeRange(maxSavedGitHubStarUsernames, updated.length);
+    }
+    prefs?.setStringList(savedGitHubStarUsernamesKey, updated);
+    notifyListeners();
+  }
+
+  void removeSavedGitHubStarUsername(String username) {
+    final String lower = username.trim().toLowerCase();
+    if (lower.isEmpty) return;
+    final List<String> current = savedGitHubStarUsernames.toList();
+    final int previousLength = current.length;
+    current.removeWhere((String existing) => existing.toLowerCase() == lower);
+    if (current.length == previousLength) return;
+    if (current.isEmpty) {
+      prefs?.remove(savedGitHubStarUsernamesKey);
+    } else {
+      prefs?.setStringList(savedGitHubStarUsernamesKey, current);
+    }
+    notifyListeners();
+  }
+
   bool get beforeNewInstallsShareToAppVerifier {
     return prefs?.getBool('beforeNewInstallsShareToAppVerifier') ?? false;
   }

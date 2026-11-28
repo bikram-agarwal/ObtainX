@@ -4174,17 +4174,33 @@ class AboutSectionContent extends StatelessWidget {
                             color: colorScheme.onSurface,
                           );
                   return LayoutBuilder(
-                    builder: (context, constraints) => Text(
-                      headline,
-                      textAlign: TextAlign.center,
-                      maxLines: aboutHeadlineMaxLines,
-                      overflow: TextOverflow.ellipsis,
-                      style: headlineStyle.copyWith(
-                        fontSize: aboutHeadlineFontSize(
-                          context: context,
-                          text: headline,
-                          style: headlineStyle,
-                          maxWidth: constraints.maxWidth,
+                    builder: (context, constraints) => InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onLongPress: () {
+                        hapticSelection();
+                        unawaited(copyToClipboard(context, headline));
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        child: Text(
+                          headline,
+                          textAlign: TextAlign.center,
+                          maxLines: aboutHeadlineMaxLines,
+                          overflow: TextOverflow.ellipsis,
+                          style: headlineStyle.copyWith(
+                            fontSize: aboutHeadlineFontSize(
+                              context: context,
+                              text: headline,
+                              style: headlineStyle,
+                              maxWidth: (constraints.maxWidth - 16).clamp(
+                                0.0,
+                                double.infinity,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),

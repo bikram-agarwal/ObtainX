@@ -402,7 +402,7 @@ Obtainium's Add page is a single pushed screen: a URL field with an **Add** butt
         <td>✓</td>
     </tr>
     <tr>
-        <td>Import GitHub starred repositories</td>
+        <td>Import GitHub starred repos</td>
         <td>✓</td>
         <td>✓</td>
     </tr>

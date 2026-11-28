@@ -54,7 +54,7 @@
     "addApp": "Add app",
     "addAppUrl": "Add app URL",
     "bulkSearchDeviceApps": "Bulk import device apps",
-    "importGitHubStarredRepositories": "Import GitHub starred repositories",
+    "importGitHubStarredRepositories": "Import GitHub starred repos",
     "appSourceURL": "App source URL",
     "error": "Error",
     "add": "Add",
@@ -1021,5 +1021,7 @@
     "shortcutAddAppLong": "Add a new app",
     "shortcutUpdatesLong": "Updates available",
     "treatNewAssetSameVersionAsUpdate": "Treat a new asset with the same version as an update",
-    "version_rebuilt_asset_detail": "A newer release asset is available for this version"
+    "version_rebuilt_asset_detail": "A newer release asset is available for this version",
+    "githubUserNotFound": "GitHub user \"{}\" not found",
+    "githubStarListsPatHint": "Add a GitHub PAT in Settings to filter by Star Lists:\n• Any user: Loads their public Star Lists.\n• Your username: Also includes private lists (if token permissions allow)."
 }

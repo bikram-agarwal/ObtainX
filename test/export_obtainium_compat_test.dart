@@ -84,6 +84,7 @@ void main() {
       'groupNonInstalledSeparately': true,
       'enableVirusTotalScanning': true,
       'hideBatteryOptimizationWarning': true,
+      'savedGitHubStarUsernames': <String>['octocat'],
       // Converged shared keys — must NOT be treated as ObtainX-only.
       'installMethod': InstallerMode.external.name,
       'groupBy': AppsListGroupBy.category.name,
@@ -102,6 +103,10 @@ void main() {
       isFalse,
     );
     expect(split.settingsObtainX?['hideBatteryOptimizationWarning'], isTrue);
+    expect(split.settings.containsKey('savedGitHubStarUsernames'), isFalse);
+    expect(split.settingsObtainX?['savedGitHubStarUsernames'], <String>[
+      'octocat',
+    ]);
     expect(split.settings['installMethod'], InstallerMode.external.name);
     expect(split.settings['groupBy'], AppsListGroupBy.category.name);
     expect(split.settings['buryNonInstalled'], isTrue);
